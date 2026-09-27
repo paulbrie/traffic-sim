@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: traffic
+      POSTGRES_PASSWORD: traffic
+      POSTGRES_DB: traffic
+    ports:
+      - "5544:5432"
+    volumes:
+      - traffic-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U traffic -d traffic"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+volumes:
+  traffic-pg:

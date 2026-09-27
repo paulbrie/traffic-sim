@@ -1,0 +1,347 @@
+"use client";
+
+import Link from "next/link";
+import dynamic from "next/dynamic";
+import { useEffect, useState } from "react";
+import { useDeepSubject, useSubject } from "subjecto/react";
+import {
+  ArrowLeft, Box, Bus, Hand, Minus, Spline, Image as ImageIcon, Map as MapIcon, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+} from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Kbd } from "@/components/ui/kbd";
+import { savePlan } from "@/server/actions";
+import type { Network, PlanSettings } from "@/engine/types";
+import type { Underlay } from "@/lib/underlay";
+import { commit, loadPlan, network$, redo, select, setTool, settings$, stats$, ui, undo, underlay$, type Tool } from "@/state/store";
+import { simController } from "@/state/sim-controller";
+import { sendView } from "@/state/commands";
+import { startUnderlayImage } from "@/state/underlay-image";
+import * as ops from "@/state/ops";
+import { cn } from "@/lib/utils";
+import { PlanCanvas } from "./plan-canvas";
+import { Inspector } from "./inspector";
+import { TrafficPanel } from "./traffic-panel";
+import { LinesPanel } from "./lines-panel";
+import { UnderlayPanel } from "./underlay-panel";
+import { UserMenu, type MenuUser } from "@/components/auth/user-menu";
+import { Stepper } from "./fields";
+import { Compass } from "./compass";
+
+const View3D = dynamic(() => import("./view-3d").then(m => m.View3D), { ssr: false, loading: () => <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading 3D…</div> });
+
+export interface WorkspacePlan {
+  id: string; name: string; cityId: string; cityName: string;
+  network: Network; settings: PlanSettings; underlay: Underlay | null; revision: number; updatedAt: string;
+}
+
+export function Workspace({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
+  // load once per mount (the component is keyed by plan id) before children read the stores
+  useState(() => { simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay); startUnderlayImage(); return plan.id; });
+  useAutosave(plan.id);
+  useShortcuts();
+  const [view] = useDeepSubject(ui, "view");
+  const [panel, setPanel] = useDeepSubject(ui, "panel");
+
+  return (
+    <TooltipProvider>
+      <div className="flex h-dvh flex-col overflow-hidden">
+        <TopBar plan={plan} user={user} />
+        <div className="flex min-h-0 flex-1">
+          <ToolRail />
+          <div className="relative min-w-0 flex-1 bg-[var(--map-ground)]">
+            {view === "2d" ? <PlanCanvas /> : <View3D />}
+            <DraftBar />
+            <LiveBadge />
+            <Compass />
+            <StatusBar />
+          </div>
+          <aside className="flex w-80 shrink-0 flex-col border-l bg-background" aria-label="Plan details">
+            <Tabs value={panel} onValueChange={v => setPanel(v as typeof panel)} className="min-h-0 flex-1 gap-0">
+              <div className="border-b px-3 py-2">
+                <TabsList className="w-full">
+                  <TabsTrigger value="inspect">Inspect</TabsTrigger>
+                  <TabsTrigger value="traffic">Traffic</TabsTrigger>
+                  <TabsTrigger value="lines">Bus lines</TabsTrigger>
+                  <TabsTrigger value="image">Image</TabsTrigger>
+                </TabsList>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <TabsContent value="inspect"><Inspector /></TabsContent>
+                <TabsContent value="traffic"><TrafficPanel /></TabsContent>
+                <TabsContent value="lines"><LinesPanel /></TabsContent>
+                <TabsContent value="image"><UnderlayPanel /></TabsContent>
+              </div>
+            </Tabs>
+          </aside>
+        </div>
+      </div>
+    </TooltipProvider>
+  );
+}
+
+// ---------------------------------------------------------------- top bar
+function TopBar({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
+  const [view, setView] = useDeepSubject(ui, "view");
+  const [sim] = useDeepSubject(ui, "sim");
+  return (
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background px-2">
+      <Button variant="ghost" size="sm" asChild>
+        <Link href={`/cities/${plan.cityId}`} aria-label={`Back to ${plan.cityName}`}><ArrowLeft /> <span className="max-w-40 truncate">{plan.cityName}</span></Link>
+      </Button>
+      <Separator orientation="vertical" className="!h-5" />
+      <h1 className="truncate px-1 text-sm font-semibold">{plan.name}</h1>
+      <SaveIndicator planId={plan.id} />
+      <div className="ml-auto flex items-center gap-2">
+        <ToggleGroup type="single" value={view} onValueChange={v => v && setView(v as "2d" | "3d")} aria-label="View">
+          <ToggleGroupItem value="2d" aria-label="Plan view"><MapIcon /> Plan</ToggleGroupItem>
+          <ToggleGroupItem value="3d" aria-label="3D view"><Box /> 3D</ToggleGroupItem>
+        </ToggleGroup>
+        <Separator orientation="vertical" className="!h-5" />
+        <Tip label={sim.running ? "Pause traffic" : "Run traffic"} keys="P">
+          <Button size="sm" variant={sim.running ? "secondary" : "default"} onClick={() => { ui.getValue().sim.running = !sim.running; }} className="w-24">
+            {sim.running ? <><Pause /> Pause</> : <><Play /> Run</>}
+          </Button>
+        </Tip>
+        <Select value={String(sim.speed)} onValueChange={v => { ui.getValue().sim.speed = Number(v); }}>
+          <SelectTrigger size="sm" className="w-20" aria-label="Simulation speed"><SelectValue /></SelectTrigger>
+          <SelectContent>{[1, 2, 3, 5, 10, 30].map(s => <SelectItem key={s} value={String(s)}>{s}×</SelectItem>)}</SelectContent>
+        </Select>
+        <Tip label="Restart traffic (clears vehicles)">
+          <Button size="icon-sm" variant="ghost" onClick={() => { ui.getValue().sim.epoch++; }} aria-label="Restart traffic"><RotateCcw /></Button>
+        </Tip>
+        <Separator orientation="vertical" className="!h-5" />
+        <UserMenu user={user} />
+      </div>
+    </header>
+  );
+}
+
+function SaveIndicator({ planId }: { planId: string }) {
+  const [save] = useDeepSubject(ui, "save");
+  const content = {
+    saved: <><Check className="size-3.5" /> Saved</>,
+    dirty: <><span className="size-1.5 rounded-full bg-amber-500" /> Unsaved changes</>,
+    saving: <><Loader2 className="size-3.5 animate-spin" /> Saving…</>,
+    error: <><CloudOff className="size-3.5" /> {save.message || "Couldn't save"}</>,
+    conflict: <><TriangleAlert className="size-3.5" /> Changed elsewhere</>,
+  }[save.status];
+  return (
+    <div className="flex items-center gap-2">
+      <span className={cn("flex items-center gap-1.5 rounded-md px-2 py-1 text-xs", save.status === "error" || save.status === "conflict" ? "bg-destructive/10 text-destructive" : "text-muted-foreground")} role="status">{content}</span>
+      {save.status === "conflict" && (
+        <>
+          <Button size="sm" variant="outline" className="h-7" onClick={() => location.reload()}>Load theirs</Button>
+          <Button size="sm" variant="outline" className="h-7" onClick={() => doSave(planId, true)}>Keep mine</Button>
+        </>
+      )}
+      {save.status === "error" && <Button size="sm" variant="outline" className="h-7" onClick={() => doSave(planId)}>Retry</Button>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- tool rail
+const TOOLS: { id: Tool; label: string; key: string; icon: React.ReactNode }[] = [
+  { id: "select", label: "Select and move", key: "V", icon: <MousePointer2 /> },
+  { id: "road", label: "Draw roads", key: "R", icon: <Route /> },
+  { id: "stop", label: "Place bus stops", key: "B", icon: <Bus /> },
+  { id: "image", label: "Move reference image", key: "I", icon: <ImageIcon /> },
+  { id: "pan", label: "Pan", key: "H", icon: <Hand /> },
+];
+
+function ToolRail() {
+  const [tool] = useDeepSubject(ui, "tool");
+  const [view] = useDeepSubject(ui, "view");
+  const [history] = useDeepSubject(ui, "history");
+  const editDisabled = view === "3d";
+  return (
+    <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-background py-2" aria-label="Tools">
+      {TOOLS.map(t => (
+        <Tip key={t.id} label={editDisabled && t.id !== "select" ? `${t.label} (plan view)` : t.label} keys={t.key} side="right">
+          <Button
+            variant={tool === t.id ? "default" : "ghost"} size="icon" aria-pressed={tool === t.id} aria-label={t.label}
+            disabled={editDisabled && t.id !== "select"} onClick={() => { setTool(t.id); if (t.id === "image") ui.getValue().panel = "image"; }}
+          >{t.icon}</Button>
+        </Tip>
+      ))}
+      <Separator className="my-1 !w-7" />
+      <Tip label="Undo" keys="⌘Z" side="right"><Button variant="ghost" size="icon" disabled={!history.canUndo} onClick={undo} aria-label="Undo"><Undo2 /></Button></Tip>
+      <Tip label="Redo" keys="⇧⌘Z" side="right"><Button variant="ghost" size="icon" disabled={!history.canRedo} onClick={redo} aria-label="Redo"><Redo2 /></Button></Tip>
+      <div className="mt-auto flex flex-col items-center gap-1">
+        <Tip label="Zoom in" keys="+" side="right"><Button variant="ghost" size="icon" onClick={() => sendView("zoomIn")} aria-label="Zoom in"><ZoomIn /></Button></Tip>
+        <Tip label="Zoom out" keys="−" side="right"><Button variant="ghost" size="icon" onClick={() => sendView("zoomOut")} aria-label="Zoom out"><ZoomOut /></Button></Tip>
+        <Tip label="Fit plan" keys="F" side="right"><Button variant="ghost" size="icon" onClick={() => sendView("fit")} aria-label="Fit plan"><Maximize /></Button></Tip>
+      </div>
+    </nav>
+  );
+}
+
+function Tip({ label, keys, side = "bottom", children }: { label: string; keys?: string; side?: "right" | "bottom"; children: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={side} className="flex items-center gap-2">{label}{keys && <Kbd className="border-background/30 bg-background/15 text-background">{keys}</Kbd>}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// ---------------------------------------------------------------- draft options (road tool)
+function DraftBar() {
+  const [tool] = useDeepSubject(ui, "tool");
+  const [view] = useDeepSubject(ui, "view");
+  const [draft, setDraft] = useDeepSubject(ui, "draft");
+  const [snap, setSnap] = useDeepSubject(ui, "snap");
+  if (view !== "2d" || (tool !== "road" && tool !== "select")) return null;
+  return (
+    <div className="absolute top-3 left-1/2 z-10 flex w-max max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 overflow-x-auto rounded-lg border bg-background/95 px-3 py-1.5 text-sm whitespace-nowrap shadow-sm backdrop-blur">
+      {tool === "road" && (
+        <>
+          <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">New roads</span>
+          <ToggleGroup type="single" value={draft.curved ? "curved" : "straight"} onValueChange={v => v && setDraft({ ...draft, curved: v === "curved" })} aria-label="Road shape">
+            <ToggleGroupItem value="straight" className="h-7 px-2 text-xs" aria-label="Straight segments"><Minus /> Straight</ToggleGroupItem>
+            <ToggleGroupItem value="curved" className="h-7 px-2 text-xs" aria-label="Smooth curves"><Spline /> Curved</ToggleGroupItem>
+          </ToggleGroup>
+          <span className="flex items-center gap-1.5 text-xs">Forward <Stepper label="forward lanes" value={draft.lanesF} min={draft.lanesB === 0 ? 1 : 0} max={4} onChange={v => setDraft({ ...draft, lanesF: v })} /></span>
+          <span className="flex items-center gap-1.5 text-xs">Back <Stepper label="backward lanes" value={draft.lanesB} min={draft.lanesF === 0 ? 1 : 0} max={4} onChange={v => setDraft({ ...draft, lanesB: v })} /></span>
+          <Select value={String(draft.speed)} onValueChange={v => setDraft({ ...draft, speed: Number(v) })}>
+            <SelectTrigger size="sm" className="h-7 w-28" aria-label="Speed limit for new roads"><SelectValue /></SelectTrigger>
+            <SelectContent>{[30, 40, 50, 60, 70, 80, 90].map(s => <SelectItem key={s} value={String(s)}>{s} km/h</SelectItem>)}</SelectContent>
+          </Select>
+          <Separator orientation="vertical" className="!h-5" />
+        </>
+      )}
+      <label className="flex items-center gap-1.5 text-xs">
+        <Switch checked={snap.grid} onCheckedChange={v => setSnap({ ...snap, grid: v })} aria-label="Snap to grid" /> Grid
+      </label>
+      <Select value={String(snap.step)} onValueChange={v => setSnap({ ...snap, step: Number(v) })}>
+        <SelectTrigger size="sm" className="h-7 w-20" aria-label="Grid step"><SelectValue /></SelectTrigger>
+        <SelectContent>{[0.5, 1, 2, 5, 10, 20].map(s => <SelectItem key={s} value={String(s)}>{s} m</SelectItem>)}</SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- overlays
+function LiveBadge() {
+  const [stats] = useSubject(stats$);
+  const [sim] = useDeepSubject(ui, "sim");
+  const running = sim.running;
+  if (!stats) return null;
+  return (
+    <div className="pointer-events-none absolute top-3 left-3 z-10 grid grid-cols-4 gap-3 rounded-lg border bg-background/95 px-3 py-2 text-xs shadow-sm backdrop-blur">
+      {[
+        ["Vehicles", String(stats.count)],
+        ["Avg km/h", stats.avgSpeed.toFixed(1)],
+        ["Stopped", `${Math.round(stats.stopped * 100)}%`],
+        ["Trips/min", String(Math.round(stats.tripsPerMin))],
+      ].map(([k, v]) => (
+        <div key={k}><div className="font-mono text-sm font-semibold tabular">{v}</div><div className="text-muted-foreground">{k}</div></div>
+      ))}
+      {!running && <div className="col-span-4 text-muted-foreground">Paused</div>}
+    </div>
+  );
+}
+
+function StatusBar() {
+  const [cursor] = useDeepSubject(ui, "cursor");
+  const [view] = useDeepSubject(ui, "view");
+  const [tool] = useDeepSubject(ui, "tool");
+  const [calib] = useDeepSubject(ui, "calib");
+  const hint = calib.active && view === "2d" ? "Calibrating: click two points on the image whose real distance you know · Esc to cancel"
+    : view === "3d"
+    ? "Drag to orbit · right-drag to pan · scroll to zoom · click to select"
+    : tool === "road" ? "Click to place points · C toggles curved · click a road to join it · Shift for 15° · Esc to finish"
+      : tool === "stop" ? "Click the side of a road where buses should stop"
+        : tool === "image" ? "Drag the image to move · corners scale · round handle rotates (Shift: 15°)"
+        : "Double-click a road to add a bend point · scroll to pan · ⌘/Ctrl + scroll to zoom";
+  return (
+    <div className="pointer-events-none absolute right-3 bottom-3 z-10 flex items-center gap-3 rounded-md bg-background/90 px-2.5 py-1 text-[11px] text-muted-foreground shadow-sm">
+      <span>{hint}</span>
+      {view === "2d" && cursor.inside && <span className="font-mono tabular text-foreground">x {cursor.x.toFixed(1)} · y {cursor.y.toFixed(1)} m</span>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- autosave
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let saving = false, again = false;
+
+async function doSave(planId: string, force = false) {
+  if (saving) { again = true; return; }
+  saving = true;
+  const s = ui.getValue().save;
+  s.status = "saving";
+  try {
+    const res = await savePlan(planId, { network: network$.getValue(), settings: settings$.getValue(), underlay: underlay$.getValue(), revision: s.revision, force });
+    if (res.ok) {
+      s.revision = res.revision; s.savedAt = res.savedAt; s.message = "";
+      s.status = again ? "dirty" : "saved";
+    } else if (res.reason === "conflict") {
+      s.status = "conflict";
+      toast.warning("This plan was changed in another tab or window.", { description: "Choose whose version to keep." });
+    } else { s.status = "error"; s.message = "Plan no longer exists"; }
+  } catch {
+    s.status = "error"; s.message = "Couldn't save — check the database or sign in again";
+  } finally {
+    saving = false;
+    if (again) { again = false; queueSave(planId); }
+  }
+}
+
+function queueSave(planId: string) {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => doSave(planId), 900);
+}
+
+function useAutosave(planId: string) {
+  useEffect(() => {
+    const h = ui.subscribe("save/status", status => { if (status === "dirty") queueSave(planId); });
+    const unload = (e: BeforeUnloadEvent) => { const st = ui.getValue().save.status; if (st === "dirty" || st === "saving") { e.preventDefault(); } };
+    window.addEventListener("beforeunload", unload);
+    return () => { h.unsubscribe(); window.removeEventListener("beforeunload", unload); if (saveTimer) clearTimeout(saveTimer); };
+  }, [planId]);
+}
+
+// ---------------------------------------------------------------- shortcuts
+function useShortcuts() {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (el?.closest?.("input,textarea,select,[contenteditable],[role=combobox],[role=slider]")) return;
+      const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase(), u = ui.getValue();
+      if (mod && k === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+      if (mod && k === "y") { e.preventDefault(); redo(); return; }
+      if (mod) return;
+      if (k === "v") setTool("select");
+      else if (k === "r" && u.view === "2d") setTool("road");
+      else if (k === "b" && u.view === "2d") setTool("stop");
+      else if (k === "i" && u.view === "2d") { setTool("image"); u.panel = "image"; }
+      else if (k === "c" && u.tool === "road") u.draft.curved = !u.draft.curved;
+      else if (k === "h") setTool("pan");
+      else if (k === "p") u.sim.running = !u.sim.running;
+      else if (k === "f") sendView("fit");
+      else if (k === "+" || k === "=") sendView("zoomIn");
+      else if (k === "-") sendView("zoomOut");
+      else if (k === "escape") select(null);
+      else if (k === "delete" || k === "backspace") {
+        const sel = u.selection, net = network$.getValue();
+        if (!sel) return;
+        e.preventDefault();
+        if (sel.kind === "node") commit(ops.deleteNode(net, sel.id));
+        else if (sel.kind === "link") commit(ops.deleteLink(net, sel.id));
+        else if (sel.kind === "stop") commit(ops.deleteStop(net, sel.id));
+        else if (sel.kind === "line") commit(ops.deleteLine(net, sel.id));
+        else return;
+        select(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+}
