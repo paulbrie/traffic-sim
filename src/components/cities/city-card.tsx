@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, LogOut, MoreHorizontal, Pencil, Share2, Trash2, Users } from "lucide-react";
+import { Copy, Eye, LogOut, MoreHorizontal, Pencil, Share2, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { CityDialog } from "./city-dialog";
 import { ShareDialog } from "./share-dialog";
-import { deleteCity, leaveCity } from "@/server/actions";
+import { deleteCity, duplicateCity, leaveCity } from "@/server/actions";
 import { timeAgo } from "@/lib/time";
 
 export type Access = "owner" | "write" | "read";
@@ -47,6 +47,13 @@ export function CityCard({ city }: {
               <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${city.name}`}><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem disabled={pending} onSelect={() => start(async () => {
+                try {
+                  const id = await duplicateCity(city.id);
+                  toast.success(`Copied ${city.name}`, { description: owner ? undefined : "The copy is yours to edit.", action: { label: "Open", onClick: () => router.push(`/cities/${id}`) } });
+                  router.refresh();
+                } catch (e) { toast.error(e instanceof Error ? e.message : "Couldn't copy the city"); }
+              })}><Copy /> Duplicate</DropdownMenuItem>
               {owner ? (
                 <>
                   <DropdownMenuItem onSelect={() => setShare(true)}><Share2 /> Share</DropdownMenuItem>

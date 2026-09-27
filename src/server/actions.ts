@@ -76,6 +76,33 @@ export async function deleteCity(id: string) {
   revalidatePath("/");
 }
 
+/**
+ * Copies a city with all its plans (and their reference images) into a new city owned by the
+ * caller. Anyone who can view a city may copy it; sharing and history are not copied.
+ */
+export async function duplicateCity(id: string, input: { name?: string } = {}) {
+  const me = await assertUser();
+  assertId(id);
+  await assertCity(me, id, "read");
+  const [src] = await db.select().from(schema.cities).where(eq(schema.cities.id, id));
+  if (!src) throw new Error("City not found");
+  const name = clean(input.name) || `${src.name} (copy)`.slice(0, 120);
+  const cityId = await db.transaction(async tx => {
+    const [city] = await tx.insert(schema.cities).values({ ownerId: me.id, name, description: src.description }).returning({ id: schema.cities.id });
+    const plans = await tx.select().from(schema.plans).where(eq(schema.plans.cityId, id)).orderBy(asc(schema.plans.createdAt));
+    for (const p of plans) {
+      const [copy] = await tx.insert(schema.plans)
+        .values({ cityId: city.id, name: p.name, description: p.description, network: p.network, settings: p.settings, underlay: p.underlay })
+        .returning();
+      await tx.execute(sql`insert into plan_images (plan_id, mime, data, bytes) select ${copy.id}, mime, data, bytes from plan_images where plan_id = ${p.id}`);
+      await recordVersion(tx, copy.id, me.id, { revision: copy.revision, network: copy.network, settings: copy.settings, underlay: copy.underlay }, "create", `Copied from “${src.name} / ${p.name}”`);
+    }
+    return city.id;
+  });
+  revalidatePath("/");
+  return cityId;
+}
+
 // ---------------------------------------------------------------- sharing
 export type ShareResult = { ok: true } | { ok: false; error: string };
 

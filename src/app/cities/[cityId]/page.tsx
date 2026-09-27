@@ -8,6 +8,7 @@ import { PlanCardActions, PlanLink, PlanMeta } from "@/components/plans/plan-car
 import { PlanThumb } from "@/components/plans/plan-thumb";
 import { AccessBadge } from "@/components/cities/city-card";
 import { ShareButton } from "@/components/cities/share-button";
+import { DuplicateCityButton } from "@/components/cities/duplicate-city-button";
 import { DbSetupNotice } from "@/components/db-setup-notice";
 import { getCity } from "@/server/queries";
 import { tryDb } from "@/server/db-status";
@@ -25,6 +26,7 @@ export default async function CityPage({ params }: PageProps<"/cities/[cityId]">
   return (
     <>
       <AppHeader crumbs={[{ label: city.name }]}>
+        <DuplicateCityButton city={{ id: city.id, name: city.name }} label={ownerIsMe ? "Duplicate" : "Make my own copy"} />
         {access === "owner" && <ShareButton city={{ id: city.id, name: city.name }} />}
         {canEdit && <NewPlanDialog cityId={city.id} trigger={<Button size="sm"><Plus /> New plan</Button>} />}
       </AppHeader>
