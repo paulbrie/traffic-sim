@@ -218,6 +218,7 @@ export function drawScene(
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (ul && (ul.editing || (ul.u.visible && !ul.img))) drawUnderlayFrame(ctx, cam, pal, ul.u, ul.editing && !ul.u.locked, ul.hover);
   if (ov.junctions) drawJunctionTags(ctx, cam, pal, compiled, sim);
+  if (ov.labels && scale > 0.35) drawStreetNames(ctx, cam, pal, geo, net);
   if (ov.labels && scale > 1.1) {
     ctx.font = `500 11px ${pal.sans}`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
     for (const s of geo.stops) {
@@ -446,3 +447,40 @@ function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, byS
 /** true if the piece is part of the given link (for hit testing vehicles on a road) */
 export const pieceLink = (p: Piece) => (p.kind === "lane" ? p.edge.link.id : null);
 export type { Vehicle };
+
+/** street names written along the middle of each named road segment, following its curve */
+function drawStreetNames(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, geo: RoadGeo, net: Network) {
+  const names = new Map(net.links.filter(l => l.name?.trim()).map(l => [l.id, l.name.trim()]));
+  if (!names.size) return;
+  const size = Math.round(Math.max(10, Math.min(13, 9 + cam.scale * 0.8)));
+  ctx.font = `600 ${size}px ${pal.sans}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.lineJoin = "round"; ctx.lineWidth = 3;
+  const m = cam.w * 0.1;
+  for (const sf of geo.surfaces) {
+    const name = names.get(sf.linkId);
+    if (!name) continue;
+    const c = sf.center, lenPx = c.len * cam.scale;
+    const widths = [...name].map(ch => ctx.measureText(ch).width + 0.4);
+    const total = widths.reduce((a, b) => a + b, 0);
+    if (lenPx < total + 24) continue; // does not fit on this segment at this zoom
+    const mid = c.at(c.len / 2), q = toScreen(cam, mid.x, mid.y);
+    if (q.x < -m || q.y < -m || q.x > cam.w + m || q.y > cam.h + m) continue;
+    // read left to right: walk the road backwards when it points leftwards on screen
+    const t0 = c.tangent(c.len / 2), flip = t0.x < 0;
+    let s = c.len / 2 - (flip ? -1 : 1) * (total / 2) / cam.scale;
+    const glyphs: { x: number; y: number; a: number; ch: string }[] = [];
+    [...name].forEach((ch, i) => {
+      const half = widths[i] / 2 / cam.scale;
+      s += (flip ? -1 : 1) * half;
+      const p = c.at(s), t = c.tangent(s), sp = toScreen(cam, p.x, p.y);
+      glyphs.push({ x: sp.x, y: sp.y, a: Math.atan2(t.y, t.x) + (flip ? Math.PI : 0), ch });
+      s += (flip ? -1 : 1) * half;
+    });
+    for (const pass of [0, 1]) for (const g of glyphs) {
+      ctx.save(); ctx.translate(g.x, g.y); ctx.rotate(g.a);
+      if (pass === 0) { ctx.strokeStyle = "rgba(20,24,28,0.85)"; ctx.strokeText(g.ch, 0, 0); }
+      else { ctx.fillStyle = "#f4f1e8"; ctx.fillText(g.ch, 0, 0); }
+      ctx.restore();
+    }
+  }
+}

@@ -14,7 +14,7 @@ import { simController } from "@/state/sim-controller";
 import { cn } from "@/lib/utils";
 
 const LABEL: Record<LaneTurn, string> = {
-  L: "Left", LS: "Left + ahead", S: "Ahead", SR: "Ahead + right", R: "Right", LSR: "All directions",
+  L: "Left", LS: "Left + ahead", S: "Ahead", SR: "Ahead + right", R: "Right", LR: "Left + right", LSR: "All directions",
 };
 
 /** road-marking style arrow: stem from the bottom, branches for L / S / R */
@@ -176,7 +176,7 @@ export function SignGlyph({ kind, className }: { kind: ApproachSign; className?:
 
 function SignPicker({ control, sign, onSign }: { control: string; sign: ApproachSign | null; onSign: (s: ApproachSign | null) => void }) {
   if (control !== "priority") {
-    return <p className="text-[11px] text-muted-foreground">Signs apply at priority junctions; this one uses {control === "lights" ? "traffic lights" : control === "stop" ? "an all-way stop" : "a roundabout"}.</p>;
+    return <p className="text-[11px] text-muted-foreground">Signs apply at priority junctions; this one uses {control === "lights" ? "traffic lights" : control === "stop" ? "an all-way stop" : control === "free" ? "free flow (no rules)" : "a roundabout"}.</p>;
   }
   return (
     <div className="flex items-center justify-between gap-2">

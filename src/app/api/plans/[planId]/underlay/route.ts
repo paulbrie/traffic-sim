@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { UNDERLAY_MAX_BYTES } from "@/lib/underlay";
 import { getCurrentUser } from "@/server/auth";
+import { allows, planAccess } from "@/server/access";
 
 const unauthorized = () => Response.json({ error: "Sign in first" }, { status: 401 });
 
@@ -23,6 +24,7 @@ export async function GET(_req: NextRequest, ctx: RouteContext<"/api/plans/[plan
   if (!me || me.mustChangePassword) return unauthorized();
   const { planId } = await ctx.params;
   if (!UUID.test(planId)) return new Response("Not found", { status: 404 });
+  if (!allows((await planAccess(me, planId))?.access, "read")) return new Response("Not found", { status: 404 });
   const [row] = await db.select({ mime: schema.planImages.mime, data: schema.planImages.data }).from(schema.planImages).where(eq(schema.planImages.planId, planId));
   if (!row) return new Response("Not found", { status: 404 });
   return new Response(new Uint8Array(row.data), {
@@ -40,6 +42,9 @@ export async function PUT(req: NextRequest, ctx: RouteContext<"/api/plans/[planI
   if (!me || me.mustChangePassword) return unauthorized();
   const { planId } = await ctx.params;
   if (!UUID.test(planId)) return Response.json({ error: "Invalid plan" }, { status: 400 });
+  const pa = await planAccess(me, planId);
+  if (!pa?.access) return Response.json({ error: "Plan not found" }, { status: 404 });
+  if (!allows(pa.access, "write")) return Response.json({ error: "You can view this plan but not change it" }, { status: 403 });
   const declared = Number(req.headers.get("content-length") ?? 0);
   if (declared > UNDERLAY_MAX_BYTES) return Response.json({ error: "Image is larger than 25 MB" }, { status: 413 });
   const buf = new Uint8Array(await req.arrayBuffer());
@@ -63,6 +68,7 @@ export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/plans/[p
   if (!me || me.mustChangePassword) return unauthorized();
   const { planId } = await ctx.params;
   if (!UUID.test(planId)) return Response.json({ error: "Invalid plan" }, { status: 400 });
+  if (!allows((await planAccess(me, planId))?.access, "write")) return Response.json({ error: "You can view this plan but not change it" }, { status: 403 });
   await db.delete(schema.planImages).where(eq(schema.planImages.planId, planId));
   return new Response(null, { status: 204 });
 }

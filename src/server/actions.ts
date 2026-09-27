@@ -1,34 +1,66 @@
 "use server";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db, schema } from "@/db";
 import { sampleTown } from "@/engine/sample";
-import { DEFAULT_SETTINGS, emptyNetwork } from "@/engine/types";
+import { DEFAULT_SETTINGS, emptyNetwork, type Network, type PlanSettings } from "@/engine/types";
 import { sanitizeNetwork, sanitizeSettings } from "@/engine/validate";
-import { sanitizeUnderlay } from "@/lib/underlay";
+import { sanitizeUnderlay, type Underlay } from "@/lib/underlay";
 import { assertUser } from "./auth";
+import { assertCity, assertPlan } from "./access";
 
-// Every action checks for a signed-in user (see src/server/auth.ts).
+// Every action checks for a signed-in user and their access to the map (src/server/access.ts).
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const clean = (s: unknown, max = 120) => (typeof s === "string" ? s.trim().slice(0, max) : "");
 function assertId(id: unknown): asserts id is string {
   if (typeof id !== "string" || !UUID.test(id)) throw new Error("Invalid id");
 }
 
+// ---------------------------------------------------------------- history
+/** autosaves by the same person within this window update the newest version instead of adding one */
+const SESSION_MS = 3 * 60_000;
+/** versions kept per plan (the oldest are dropped) */
+const KEEP_VERSIONS = 300;
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+interface Snapshot { revision: number; network: Network; settings: PlanSettings; underlay: Underlay | null }
+
+async function recordVersion(tx: Tx, planId: string, userId: string, snap: Snapshot, kind: "create" | "save" | "restore", note = "") {
+  const now = new Date();
+  if (kind === "save") {
+    const [last] = await tx
+      .select({ id: schema.planVersions.id, userId: schema.planVersions.userId, kind: schema.planVersions.kind, createdAt: schema.planVersions.createdAt })
+      .from(schema.planVersions).where(eq(schema.planVersions.planId, planId)).orderBy(desc(schema.planVersions.createdAt)).limit(1);
+    if (last && last.kind === "save" && last.userId === userId && now.getTime() - last.createdAt.getTime() < SESSION_MS) {
+      await tx.update(schema.planVersions).set({ ...snap, updatedAt: now }).where(eq(schema.planVersions.id, last.id));
+      return;
+    }
+  }
+  await tx.insert(schema.planVersions).values({ planId, userId, kind, note, ...snap, createdAt: now, updatedAt: now });
+  // keep the newest KEEP_VERSIONS
+  const [cut] = await tx
+    .select({ createdAt: schema.planVersions.createdAt })
+    .from(schema.planVersions).where(eq(schema.planVersions.planId, planId)).orderBy(desc(schema.planVersions.createdAt)).offset(KEEP_VERSIONS).limit(1);
+  if (cut) await tx.delete(schema.planVersions).where(and(eq(schema.planVersions.planId, planId), lt(schema.planVersions.createdAt, sql`${cut.createdAt}::timestamptz + interval '1 millisecond'`)));
+}
+
+// ---------------------------------------------------------------- cities (maps)
 export async function createCity(input: { name: string; description?: string }) {
-  await assertUser();
+  const me = await assertUser();
   const name = clean(input.name);
   if (!name) throw new Error("Give the city a name.");
-  const [city] = await db.insert(schema.cities).values({ name, description: clean(input.description, 500) }).returning({ id: schema.cities.id });
+  const [city] = await db.insert(schema.cities).values({ ownerId: me.id, name, description: clean(input.description, 500) }).returning({ id: schema.cities.id });
   revalidatePath("/");
   return city.id;
 }
 
 export async function updateCity(id: string, input: { name: string; description?: string }) {
-  await assertUser();
+  const me = await assertUser();
   assertId(id);
+  await assertCity(me, id, "owner");
   const name = clean(input.name);
   if (!name) throw new Error("Give the city a name.");
   await db.update(schema.cities).set({ name, description: clean(input.description, 500), updatedAt: new Date() }).where(eq(schema.cities.id, id));
@@ -37,45 +69,130 @@ export async function updateCity(id: string, input: { name: string; description?
 }
 
 export async function deleteCity(id: string) {
-  await assertUser();
+  const me = await assertUser();
   assertId(id);
+  await assertCity(me, id, "owner");
   await db.delete(schema.cities).where(eq(schema.cities.id, id));
   revalidatePath("/");
 }
 
+// ---------------------------------------------------------------- sharing
+export type ShareResult = { ok: true } | { ok: false; error: string };
+
+/** Shares a map with an existing account, or changes the access it already has. Owners only. */
+export async function shareCity(cityId: string, input: { email: string; access: "read" | "write" }): Promise<ShareResult> {
+  const me = await assertUser();
+  assertId(cityId);
+  await assertCity(me, cityId, "owner");
+  const email = clean(input.email, 200).toLowerCase();
+  if (!EMAIL.test(email)) return { ok: false, error: "Enter a valid email address." };
+  const access = input.access === "write" ? "write" : "read";
+  const [target] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, email));
+  if (!target) return { ok: false, error: `No account for ${email}. They can create a free one on the sign-in page, then you can share with them.` };
+  const [city] = await db.select({ ownerId: schema.cities.ownerId }).from(schema.cities).where(eq(schema.cities.id, cityId));
+  if (city?.ownerId === target.id) return { ok: false, error: "That's the owner of this map." };
+  await db.insert(schema.cityShares).values({ cityId, userId: target.id, access })
+    .onConflictDoUpdate({ target: [schema.cityShares.cityId, schema.cityShares.userId], set: { access } });
+  revalidatePath(`/cities/${cityId}`);
+  return { ok: true };
+}
+
+/** Owners remove anyone; anyone can remove themselves (leave a shared map). */
+export async function unshareCity(cityId: string, userId: string): Promise<ShareResult> {
+  const me = await assertUser();
+  assertId(cityId); assertId(userId);
+  if (userId !== me.id) await assertCity(me, cityId, "owner");
+  await db.delete(schema.cityShares).where(and(eq(schema.cityShares.cityId, cityId), eq(schema.cityShares.userId, userId)));
+  revalidatePath(`/cities/${cityId}`);
+  revalidatePath("/");
+  return { ok: true };
+}
+
+/** Removes a map someone shared with you from your list. */
+export async function leaveCity(cityId: string): Promise<ShareResult> {
+  const me = await assertUser();
+  assertId(cityId);
+  await db.delete(schema.cityShares).where(and(eq(schema.cityShares.cityId, cityId), eq(schema.cityShares.userId, me.id)));
+  revalidatePath("/");
+  return { ok: true };
+}
+
+export async function listShares(cityId: string) {
+  const me = await assertUser();
+  assertId(cityId);
+  await assertCity(me, cityId, "read");
+  return db
+    .select({ userId: schema.users.id, email: schema.users.email, name: schema.users.name, access: schema.cityShares.access })
+    .from(schema.cityShares)
+    .innerJoin(schema.users, eq(schema.users.id, schema.cityShares.userId))
+    .where(eq(schema.cityShares.cityId, cityId))
+    .orderBy(asc(schema.users.email));
+}
+
+/** Admins: hand a map to another account (the previous owner keeps edit access). */
+export async function transferCity(cityId: string, newOwnerId: string): Promise<ShareResult> {
+  await assertUser("admin");
+  assertId(cityId); assertId(newOwnerId);
+  const [city] = await db.select({ ownerId: schema.cities.ownerId }).from(schema.cities).where(eq(schema.cities.id, cityId));
+  if (!city) return { ok: false, error: "Map not found." };
+  const [target] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, newOwnerId));
+  if (!target) return { ok: false, error: "User not found." };
+  await db.transaction(async tx => {
+    await tx.update(schema.cities).set({ ownerId: newOwnerId }).where(eq(schema.cities.id, cityId));
+    await tx.delete(schema.cityShares).where(and(eq(schema.cityShares.cityId, cityId), eq(schema.cityShares.userId, newOwnerId)));
+    if (city.ownerId && city.ownerId !== newOwnerId) {
+      await tx.insert(schema.cityShares).values({ cityId, userId: city.ownerId, access: "write" }).onConflictDoNothing();
+    }
+  });
+  revalidatePath("/admin/maps");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------- plans
 export async function createPlan(input: { cityId: string; name: string; description?: string; template: "blank" | "sample" }) {
-  await assertUser();
+  const me = await assertUser();
   assertId(input.cityId);
+  await assertCity(me, input.cityId, "write");
   const name = clean(input.name) || "Untitled plan";
   const network = input.template === "sample" ? sampleTown() : emptyNetwork();
-  const [plan] = await db
-    .insert(schema.plans)
-    .values({ cityId: input.cityId, name, description: clean(input.description, 500), network, settings: DEFAULT_SETTINGS })
-    .returning({ id: schema.plans.id });
-  await db.update(schema.cities).set({ updatedAt: new Date() }).where(eq(schema.cities.id, input.cityId));
+  const id = await db.transaction(async tx => {
+    const [plan] = await tx
+      .insert(schema.plans)
+      .values({ cityId: input.cityId, name, description: clean(input.description, 500), network, settings: DEFAULT_SETTINGS })
+      .returning();
+    await recordVersion(tx, plan.id, me.id, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: null }, "create", "Created");
+    await tx.update(schema.cities).set({ updatedAt: new Date() }).where(eq(schema.cities.id, input.cityId));
+    return plan.id;
+  });
   revalidatePath(`/cities/${input.cityId}`);
   revalidatePath("/");
-  return plan.id;
+  return id;
 }
 
 export async function duplicatePlan(id: string) {
-  await assertUser();
+  const me = await assertUser();
   assertId(id);
+  await assertPlan(me, id, "write");
   const [src] = await db.select().from(schema.plans).where(eq(schema.plans.id, id));
   if (!src) throw new Error("Plan not found");
-  const [plan] = await db
-    .insert(schema.plans)
-    .values({ cityId: src.cityId, name: `${src.name} (copy)`.slice(0, 120), description: src.description, network: src.network, settings: src.settings, underlay: src.underlay })
-    .returning({ id: schema.plans.id });
-  // copy the reference image with the plan
-  await db.execute(sql`insert into plan_images (plan_id, mime, data, bytes) select ${plan.id}, mime, data, bytes from plan_images where plan_id = ${id}`);
+  const planId = await db.transaction(async tx => {
+    const [plan] = await tx
+      .insert(schema.plans)
+      .values({ cityId: src.cityId, name: `${src.name} (copy)`.slice(0, 120), description: src.description, network: src.network, settings: src.settings, underlay: src.underlay })
+      .returning();
+    // copy the reference image with the plan
+    await tx.execute(sql`insert into plan_images (plan_id, mime, data, bytes) select ${plan.id}, mime, data, bytes from plan_images where plan_id = ${id}`);
+    await recordVersion(tx, plan.id, me.id, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: plan.underlay }, "create", `Copied from “${src.name}”`);
+    return plan.id;
+  });
   revalidatePath(`/cities/${src.cityId}`);
-  return plan.id;
+  return planId;
 }
 
 export async function updatePlanInfo(id: string, input: { name: string; description?: string }) {
-  await assertUser();
+  const me = await assertUser();
   assertId(id);
+  await assertPlan(me, id, "write");
   const name = clean(input.name);
   if (!name) throw new Error("Give the plan a name.");
   const [row] = await db.update(schema.plans).set({ name, description: clean(input.description, 500), updatedAt: new Date() }).where(eq(schema.plans.id, id)).returning({ cityId: schema.plans.cityId });
@@ -83,33 +200,95 @@ export async function updatePlanInfo(id: string, input: { name: string; descript
   revalidatePath(`/plans/${id}`);
 }
 
+/** Deleting also drops the plan's history, so only the map's owner may do it. */
 export async function deletePlan(id: string) {
-  await assertUser();
+  const me = await assertUser();
   assertId(id);
+  await assertPlan(me, id, "owner");
   const [row] = await db.delete(schema.plans).where(eq(schema.plans.id, id)).returning({ cityId: schema.plans.cityId });
   if (row) revalidatePath(`/cities/${row.cityId}`);
 }
 
-export type SaveResult = { ok: true; revision: number; savedAt: string } | { ok: false; reason: "conflict" | "missing"; revision?: number };
+export type SaveResult = { ok: true; revision: number; savedAt: string } | { ok: false; reason: "conflict" | "missing" | "forbidden"; revision?: number };
 
-/** Saves the plan if nobody else saved in between (optimistic concurrency on `revision`). */
+/** Saves the plan if nobody else saved in between (optimistic concurrency on `revision`), and records it in the history. */
 export async function savePlan(id: string, input: { network: unknown; settings: unknown; underlay?: unknown; revision: number; force?: boolean }): Promise<SaveResult> {
-  await assertUser();
+  const me = await assertUser();
   assertId(id);
+  try { await assertPlan(me, id, "write"); } catch { return { ok: false, reason: "forbidden" }; }
   const network = sanitizeNetwork(input.network);
   const settings = sanitizeSettings(input.settings);
   const underlay = sanitizeUnderlay(input.underlay);
   const now = new Date();
   const where = input.force ? eq(schema.plans.id, id) : and(eq(schema.plans.id, id), eq(schema.plans.revision, input.revision));
-  const [row] = await db
-    .update(schema.plans)
-    .set({ network, settings, underlay, revision: sql`${schema.plans.revision} + 1`, updatedAt: now })
-    .where(where)
-    .returning({ revision: schema.plans.revision, cityId: schema.plans.cityId });
-  if (row) {
-    await db.update(schema.cities).set({ updatedAt: now }).where(eq(schema.cities.id, row.cityId));
-    return { ok: true, revision: row.revision, savedAt: now.toISOString() };
-  }
+  const row = await db.transaction(async tx => {
+    const [r] = await tx
+      .update(schema.plans)
+      .set({ network, settings, underlay, revision: sql`${schema.plans.revision} + 1`, updatedAt: now })
+      .where(where)
+      .returning({ revision: schema.plans.revision, cityId: schema.plans.cityId });
+    if (!r) return null;
+    await recordVersion(tx, id, me.id, { revision: r.revision, network, settings, underlay }, "save");
+    await tx.update(schema.cities).set({ updatedAt: now }).where(eq(schema.cities.id, r.cityId));
+    return r;
+  });
+  if (row) return { ok: true, revision: row.revision, savedAt: now.toISOString() };
   const [cur] = await db.select({ revision: schema.plans.revision }).from(schema.plans).where(eq(schema.plans.id, id));
   return cur ? { ok: false, reason: "conflict", revision: cur.revision } : { ok: false, reason: "missing" };
+}
+
+// ---------------------------------------------------------------- history / rollback
+export interface VersionRow {
+  id: string; revision: number; kind: string; note: string; by: string | null;
+  createdAt: string; updatedAt: string; roads: number; nodes: number; stops: number; lines: number;
+}
+
+export async function listPlanVersions(planId: string): Promise<VersionRow[]> {
+  const me = await assertUser();
+  assertId(planId);
+  await assertPlan(me, planId, "read");
+  const v = schema.planVersions;
+  const rows = await db
+    .select({
+      id: v.id, revision: v.revision, kind: v.kind, note: v.note, createdAt: v.createdAt, updatedAt: v.updatedAt,
+      byName: schema.users.name, byEmail: schema.users.email,
+      roads: sql<number>`jsonb_array_length(${v.network}->'links')`,
+      nodes: sql<number>`jsonb_array_length(${v.network}->'nodes')`,
+      stops: sql<number>`jsonb_array_length(${v.network}->'stops')`,
+      lines: sql<number>`jsonb_array_length(${v.network}->'lines')`,
+    })
+    .from(v)
+    .leftJoin(schema.users, eq(schema.users.id, v.userId))
+    .where(eq(v.planId, planId))
+    .orderBy(desc(v.createdAt))
+    .limit(KEEP_VERSIONS);
+  return rows.map(r => ({
+    id: r.id, revision: r.revision, kind: r.kind, note: r.note, by: r.byName || r.byEmail || null,
+    createdAt: r.createdAt.toISOString(), updatedAt: r.updatedAt.toISOString(),
+    roads: r.roads ?? 0, nodes: r.nodes ?? 0, stops: r.stops ?? 0, lines: r.lines ?? 0,
+  }));
+}
+
+/** Puts a saved version back as the plan's current state (itself recorded, so a restore can be undone). */
+export async function restorePlanVersion(planId: string, versionId: string): Promise<{ ok: true; revision: number } | { ok: false; error: string }> {
+  const me = await assertUser();
+  assertId(planId); assertId(versionId);
+  await assertPlan(me, planId, "write");
+  const [ver] = await db.select().from(schema.planVersions).where(and(eq(schema.planVersions.id, versionId), eq(schema.planVersions.planId, planId)));
+  if (!ver) return { ok: false, error: "That version no longer exists." };
+  const network = sanitizeNetwork(ver.network), settings = sanitizeSettings(ver.settings), underlay = sanitizeUnderlay(ver.underlay);
+  const now = new Date();
+  const when = ver.updatedAt.toISOString().slice(0, 16).replace("T", " ");
+  const revision = await db.transaction(async tx => {
+    const [r] = await tx.update(schema.plans)
+      .set({ network, settings, underlay, revision: sql`${schema.plans.revision} + 1`, updatedAt: now })
+      .where(eq(schema.plans.id, planId)).returning({ revision: schema.plans.revision, cityId: schema.plans.cityId });
+    if (!r) return null;
+    await recordVersion(tx, planId, me.id, { revision: r.revision, network, settings, underlay }, "restore", `Restored the version from ${when} UTC (revision ${ver.revision})`);
+    await tx.update(schema.cities).set({ updatedAt: now }).where(eq(schema.cities.id, r.cityId));
+    return r.revision;
+  });
+  if (revision == null) return { ok: false, error: "Plan not found." };
+  revalidatePath(`/plans/${planId}`);
+  return { ok: true, revision };
 }

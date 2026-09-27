@@ -40,6 +40,8 @@ export interface UiState {
   /** scale calibration: pick two points on the reference image, then type their real distance */
   calib: { active: boolean; a: Vec | null; b: Vec | null };
   history: { canUndo: boolean; canRedo: boolean };
+  /** opened with view-only access: edits are blocked and nothing is saved */
+  readOnly: boolean;
 }
 
 export const ui = new DeepSubject<UiState>(
@@ -59,6 +61,7 @@ export const ui = new DeepSubject<UiState>(
     eventLog: { all: false, nodes: [] },
     calib: { active: false, a: null, b: null },
     history: { canUndo: false, canRedo: false },
+    readOnly: false,
   },
   { name: "ui" },
 );
@@ -83,6 +86,7 @@ function syncHistoryFlags() {
 }
 
 function markDirty() {
+  if (ui.getValue().readOnly) return;
   const s = ui.getValue().save;
   if (s.status !== "dirty") s.status = "dirty";
 }
@@ -92,6 +96,7 @@ function markDirty() {
  * node drag, typing in a field) collapse into one undo step.
  */
 export function commit(next: Network, key?: string) {
+  if (ui.getValue().readOnly) return;
   const prev = network$.getValue();
   if (next === prev) return;
   const now = performance.now();
@@ -146,11 +151,12 @@ export function setUnderlay(next: Underlay | null | ((cur: Underlay) => Underlay
 }
 
 /** Load a plan into the stores (clears history). */
-export function loadPlan(planId: string, network: Network, settings: PlanSettings, revision: number, savedAt: string, underlay: Underlay | null = null) {
+export function loadPlan(planId: string, network: Network, settings: PlanSettings, revision: number, savedAt: string, underlay: Underlay | null = null, readOnly = false) {
   past.length = 0; future.length = 0; coalesceKey = null;
   batch(() => {
     const u = ui.getValue();
     u.planId = planId;
+    u.readOnly = readOnly;
     u.selection = null;
     u.tool = "select";
     u.sim.running = false;

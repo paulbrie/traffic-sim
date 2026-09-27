@@ -62,6 +62,8 @@ export interface CNode {
   ringR: number;
   polygon: Vec[];
   phases: number[][];              // arm indices that share a green
+  /** fixed-time plan when the junction belongs to a coordinated signal group */
+  coord: SignalPlan | null;
   moves: Map<number, Movement[]>;  // by in-edge idx
   conns: Map<string, Conn>;
   ring: RingArm[] | null;
@@ -69,6 +71,15 @@ export interface CNode {
 
 export interface CStop { def: StopDef; edge: Edge; s: number; waiting: number }
 export interface CLine { def: LineDef; stops: CStop[] }
+
+/** one junction's share of a coordinated group: phase `seq[0]` turns green at `offset` s into each `cycle` */
+export interface SignalPlan {
+  group: string; groupName: string; cycle: number; offset: number;
+  seq: { phase: number; green: number }[];
+  yellow: number; allRed: number;
+  /** the cycle had to be lengthened to fit every phase (s); 0 = fits */
+  stretched: number;
+}
 
 export interface Compiled {
   nodes: CNode[]; edges: Edge[]; pieces: Piece[];
@@ -119,7 +130,7 @@ export function compile(net: Network): Compiled {
   for (const def of net.nodes) {
     const n: CNode = {
       idx: nodes.length, def, pos: { x: def.x, y: def.y }, arms: [], degree: 0,
-      controlled: false, gateway: false, deadEnd: false, ringR: 0, polygon: [], phases: [],
+      controlled: false, gateway: false, deadEnd: false, ringR: 0, polygon: [], phases: [], coord: null,
       moves: new Map(), conns: new Map(), ring: null,
     };
     nodes.push(n); nodeById.set(def.id, n);
@@ -230,7 +241,8 @@ export function compile(net: Network): Compiled {
       const r = { x: -a.u.y, y: a.u.x };
       pts.push({ x: m.x + r.x * a.lo, y: m.y + r.y * a.lo }, { x: m.x + r.x * a.hi, y: m.y + r.y * a.hi });
     }
-    if (n.degree >= 2) { pts.push(n.pos); n.polygon = hull(pts); }
+    if (n.degree >= 2 && n.def.smooth && !n.ringR) n.polygon = smoothOutline(n);
+    else if (n.degree >= 2) { pts.push(n.pos); n.polygon = hull(pts); }
     else n.polygon = pts;
 
     for (const ain of n.arms) {
@@ -358,6 +370,23 @@ export function compile(net: Network): Compiled {
       pieces.push(ring[k].between);
     }
     n.ring = ring;
+  }
+
+  // ---- coordinated signal groups ----
+  for (const g of net.signalGroups ?? []) for (const m of g.members) {
+    const n = nodeById.get(m.node);
+    if (!n || !n.controlled || n.def.control !== "lights" || n.phases.length < 2) continue;
+    const k = n.phases.length, { yellow, allRed } = n.def.signal;
+    const MIN = 5;
+    const need = k * (yellow + allRed + MIN);
+    const cycle = Math.max(g.cycle, need);
+    const greens = cycle - k * (yellow + allRed);
+    const p0 = Math.min(k - 1, Math.max(0, m.phase));
+    const main = Math.max(MIN, Math.min(greens - (k - 1) * MIN, greens * m.share));
+    const rest = (greens - main) / (k - 1);
+    const seq = Array.from({ length: k }, (_, i) => ({ phase: (p0 + i) % k, green: i === 0 ? main : rest }));
+    n.coord = { group: g.id, groupName: g.name, cycle, offset: ((m.offset % cycle) + cycle) % cycle, seq, yellow, allRed, stretched: cycle > g.cycle ? cycle : 0 };
+    if (cycle > g.cycle) warnings.push(`Signal group "${g.name}": a ${g.cycle} s cycle is too short for a junction with ${k} phases; it runs ${Math.ceil(cycle)} s there, so it drifts out of sync.`);
   }
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -499,3 +528,36 @@ export function conflicts(A: Conn, B: Conn): boolean {
   return c;
 }
 export const clearConflictCache = () => confCache.clear();
+
+/**
+ * Junction outline with rounded kerbs: each road's mouth, joined to the next road (going round
+ * the node) by a curve that leaves along one road's kerb and arrives along the other's. Between
+ * two roads at a shallow angle (a slip road joining) this gives the pointed "gore" of a merge
+ * instead of a boxy wedge.
+ */
+function smoothOutline(n: CNode): Vec[] {
+  const out: Vec[] = [];
+  const arms = n.arms, k = arms.length;
+  const corner = (a: Arm, side: number) => {
+    const m = { x: n.pos.x + a.u.x * a.setback, y: n.pos.y + a.u.y * a.setback };
+    return { x: m.x - a.u.y * side, y: m.y + a.u.x * side };
+  };
+  for (let i = 0; i < k; i++) {
+    const a = arms[i], b = arms[(i + 1) % k];
+    const p0 = corner(a, a.lo), p1 = corner(a, a.hi), p3 = corner(b, b.lo);
+    out.push(p0, p1);
+    const chord = Math.hypot(p3.x - p1.x, p3.y - p1.y);
+    // handles run back along each kerb toward the node, never past it
+    const ha = Math.min(chord * 0.55, a.setback * 0.9 + 1), hb = Math.min(chord * 0.55, b.setback * 0.9 + 1);
+    const c1 = { x: p1.x - a.u.x * ha, y: p1.y - a.u.y * ha }, c2 = { x: p3.x - b.u.x * hb, y: p3.y - b.u.y * hb };
+    const seg = Math.max(4, Math.min(16, Math.ceil(chord / 1.5)));
+    for (let s = 1; s < seg; s++) {
+      const t = s / seg, mt = 1 - t;
+      out.push({
+        x: mt * mt * mt * p1.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p3.x,
+        y: mt * mt * mt * p1.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p3.y,
+      });
+    }
+  }
+  return out;
+}

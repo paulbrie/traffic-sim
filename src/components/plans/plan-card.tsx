@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { deletePlan, duplicatePlan, updatePlanInfo } from "@/server/actions";
 import { timeAgo } from "@/lib/time";
 
-export function PlanCardActions({ plan }: { plan: { id: string; name: string; description: string } }) {
+export function PlanCardActions({ plan, canDelete = true }: { plan: { id: string; name: string; description: string }; canDelete?: boolean }) {
   const [edit, setEdit] = useState(false);
   const [del, setDel] = useState(false);
   const [pending, start] = useTransition();
@@ -31,8 +31,8 @@ export function PlanCardActions({ plan }: { plan: { id: string; name: string; de
           <DropdownMenuItem onSelect={() => start(async () => { const id = await duplicatePlan(plan.id); toast.success("Plan duplicated", { action: { label: "Open", onClick: () => router.push(`/plans/${id}`) } }); router.refresh(); })}>
             <Copy /> Duplicate
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" onSelect={() => setDel(true)}><Trash2 /> Delete</DropdownMenuItem>
+          {canDelete && <DropdownMenuSeparator />}
+          {canDelete && <DropdownMenuItem variant="destructive" onSelect={() => setDel(true)}><Trash2 /> Delete</DropdownMenuItem>}
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog open={edit} onOpenChange={setEdit}>
@@ -56,7 +56,7 @@ export function PlanCardActions({ plan }: { plan: { id: string; name: string; de
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete “{plan.name}”?</AlertDialogTitle>
-            <AlertDialogDescription>The plan and its street network will be removed. This can&apos;t be undone.</AlertDialogDescription>
+            <AlertDialogDescription>The plan, its street network and its history will be removed. This can&apos;t be undone.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep plan</AlertDialogCancel>

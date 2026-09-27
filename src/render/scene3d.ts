@@ -18,7 +18,9 @@ class Batch {
     }
   }
   polygon(pts: Vec[], h: number) {
-    for (let k = 1; k < pts.length - 1; k++) this.push(pts[0].x, pts[0].y, pts[k].x, pts[k].y, pts[k + 1].x, pts[k + 1].y, h);
+    // ear clipping, so rounded (concave) junction outlines fill correctly too
+    const contour = pts.map(p => new THREE.Vector2(p.x, p.y));
+    for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(contour, [])) this.push(pts[a].x, pts[a].y, pts[b].x, pts[b].y, pts[c].x, pts[c].y, h);
   }
   disk(c: Vec, r: number, h: number, seg = 48) {
     for (let k = 0; k < seg; k++) {

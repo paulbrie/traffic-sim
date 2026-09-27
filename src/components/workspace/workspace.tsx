@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, Bus, Hand, Minus, Spline, Image as ImageIcon, Map as MapIcon, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, Eye, Bus, Hand, Minus, Spline, Image as ImageIcon, Map as MapIcon, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -33,17 +33,20 @@ import { UnderlayPanel } from "./underlay-panel";
 import { UserMenu, type MenuUser } from "@/components/auth/user-menu";
 import { Stepper } from "./fields";
 import { Compass } from "./compass";
+import { HistoryButton } from "./history-dialog";
 
 const View3D = dynamic(() => import("./view-3d").then(m => m.View3D), { ssr: false, loading: () => <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading 3D…</div> });
 
 export interface WorkspacePlan {
   id: string; name: string; cityId: string; cityName: string;
   network: Network; settings: PlanSettings; underlay: Underlay | null; revision: number; updatedAt: string;
+  /** what the signed-in user may do: owner / write edit and save, read only views and simulates */
+  access: "owner" | "write" | "read";
 }
 
 export function Workspace({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
   // load once per mount (the component is keyed by plan id) before children read the stores
-  useState(() => { simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay); startUnderlayImage(); return plan.id; });
+  useState(() => { simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read"); startUnderlayImage(); return plan.id; });
   useAutosave(plan.id);
   useShortcuts();
   const [view] = useDeepSubject(ui, "view");
@@ -97,7 +100,10 @@ function TopBar({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
       </Button>
       <Separator orientation="vertical" className="!h-5" />
       <h1 className="truncate px-1 text-sm font-semibold">{plan.name}</h1>
-      <SaveIndicator planId={plan.id} />
+      {plan.access === "read"
+        ? <span className="flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground" title="You can simulate and try things, but nothing is saved"><Eye className="size-3.5" /> View only</span>
+        : <SaveIndicator planId={plan.id} />}
+      <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} />
       <div className="ml-auto flex items-center gap-2">
         <ToggleGroup type="single" value={view} onValueChange={v => v && setView(v as "2d" | "3d")} aria-label="View">
           <ToggleGroupItem value="2d" aria-label="Plan view"><MapIcon /> Plan</ToggleGroupItem>
@@ -159,10 +165,12 @@ function ToolRail() {
   const [tool] = useDeepSubject(ui, "tool");
   const [view] = useDeepSubject(ui, "view");
   const [history] = useDeepSubject(ui, "history");
+  const [readOnly] = useDeepSubject(ui, "readOnly");
   const editDisabled = view === "3d";
+  const tools = readOnly ? TOOLS.filter(t => t.id === "select" || t.id === "pan") : TOOLS;
   return (
     <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-background py-2" aria-label="Tools">
-      {TOOLS.map(t => (
+      {tools.map(t => (
         <Tip key={t.id} label={editDisabled && t.id !== "select" ? `${t.label} (plan view)` : t.label} keys={t.key} side="right">
           <Button
             variant={tool === t.id ? "default" : "ghost"} size="icon" aria-pressed={tool === t.id} aria-label={t.label}
@@ -170,9 +178,9 @@ function ToolRail() {
           >{t.icon}</Button>
         </Tip>
       ))}
-      <Separator className="my-1 !w-7" />
-      <Tip label="Undo" keys="⌘Z" side="right"><Button variant="ghost" size="icon" disabled={!history.canUndo} onClick={undo} aria-label="Undo"><Undo2 /></Button></Tip>
-      <Tip label="Redo" keys="⇧⌘Z" side="right"><Button variant="ghost" size="icon" disabled={!history.canRedo} onClick={redo} aria-label="Redo"><Redo2 /></Button></Tip>
+      {!readOnly && <Separator className="my-1 !w-7" />}
+      {!readOnly && <><Tip label="Undo" keys="⌘Z" side="right"><Button variant="ghost" size="icon" disabled={!history.canUndo} onClick={undo} aria-label="Undo"><Undo2 /></Button></Tip>
+      <Tip label="Redo" keys="⇧⌘Z" side="right"><Button variant="ghost" size="icon" disabled={!history.canRedo} onClick={redo} aria-label="Redo"><Redo2 /></Button></Tip></>}
       <div className="mt-auto flex flex-col items-center gap-1">
         <Tip label="Zoom in" keys="+" side="right"><Button variant="ghost" size="icon" onClick={() => sendView("zoomIn")} aria-label="Zoom in"><ZoomIn /></Button></Tip>
         <Tip label="Zoom out" keys="−" side="right"><Button variant="ghost" size="icon" onClick={() => sendView("zoomOut")} aria-label="Zoom out"><ZoomOut /></Button></Tip>
@@ -282,9 +290,11 @@ async function doSave(planId: string, force = false) {
     if (res.ok) {
       s.revision = res.revision; s.savedAt = res.savedAt; s.message = "";
       s.status = again ? "dirty" : "saved";
+    } else if (res.reason === "forbidden") {
+      s.status = "error"; s.message = "You no longer have edit access";
     } else if (res.reason === "conflict") {
       s.status = "conflict";
-      toast.warning("This plan was changed in another tab or window.", { description: "Choose whose version to keep." });
+      toast.warning("Someone else saved this plan in the meantime (another person, tab or window).", { description: "Choose whose version to keep. Theirs stays in the history either way." });
     } else { s.status = "error"; s.message = "Plan no longer exists"; }
   } catch {
     s.status = "error"; s.message = "Couldn't save — check the database or sign in again";
@@ -319,9 +329,9 @@ function useShortcuts() {
       if (mod && k === "y") { e.preventDefault(); redo(); return; }
       if (mod) return;
       if (k === "v") setTool("select");
-      else if (k === "r" && u.view === "2d") setTool("road");
-      else if (k === "b" && u.view === "2d") setTool("stop");
-      else if (k === "i" && u.view === "2d") { setTool("image"); u.panel = "image"; }
+      else if (k === "r" && u.view === "2d" && !u.readOnly) setTool("road");
+      else if (k === "b" && u.view === "2d" && !u.readOnly) setTool("stop");
+      else if (k === "i" && u.view === "2d" && !u.readOnly) { setTool("image"); u.panel = "image"; }
       else if (k === "c" && u.tool === "road") u.draft.curved = !u.draft.curved;
       else if (k === "h") setTool("pan");
       else if (k === "p") u.sim.running = !u.sim.running;

@@ -3,13 +3,13 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { and, count, eq, ne } from "drizzle-orm";
+import { and, count, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { db, schema } from "@/db";
-import { assertUser, createSession, destroySession, getCurrentUser } from "./auth";
+import { assertUser, createSession, destroySession, getCurrentUser, signupOpen } from "./auth";
 import { generatePassword, hashPassword, passwordProblem, verifyPassword } from "./password";
 import { diagnoseDbError } from "./db-status";
 
-export type FormState = { error?: string; ok?: string; email?: string } | undefined;
+export type FormState = { error?: string; ok?: string; email?: string; name?: string } | undefined;
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -62,6 +62,42 @@ export async function login(_: FormState, form: FormData): Promise<FormState> {
   await db.update(schema.users).set({ lastLoginAt: new Date() }).where(eq(schema.users.id, user.id));
   await createSession(user.id);
   redirect(user.mustChangePassword ? "/account/password" : next);
+}
+
+// --- sign-up throttling: 5 new accounts per IP per hour (in memory, per server process)
+const signups = new Map<string, number[]>();
+
+export async function signup(_: FormState, form: FormData): Promise<FormState> {
+  if (!signupOpen()) return { error: "Sign-up is closed. Ask an admin for an account." };
+  const name = text(form.get("name"), 120);
+  const email = text(form.get("email")).toLowerCase();
+  const password = typeof form.get("password") === "string" ? (form.get("password") as string) : "";
+  const confirm = typeof form.get("confirm") === "string" ? (form.get("confirm") as string) : "";
+  const keep = { email, name };
+  if (!EMAIL.test(email)) return { error: "Enter a valid email address.", ...keep };
+  const problem = passwordProblem(password);
+  if (problem) return { error: problem, ...keep };
+  if (password !== confirm) return { error: "The passwords don't match.", ...keep };
+  const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  const recent = (signups.get(ip) ?? []).filter(t => t > Date.now() - 3600_000);
+  if (recent.length >= 5) return { error: "Too many new accounts from this network. Try again later.", ...keep };
+  let id: string;
+  try {
+    const [exists] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, email));
+    if (exists) return { error: "An account with this email already exists. Sign in instead.", ...keep };
+    const [row] = await db.insert(schema.users)
+      .values({ email, name: name || email.split("@")[0], role: "user", passwordHash: await hashPassword(password), lastLoginAt: new Date() })
+      .onConflictDoNothing()
+      .returning({ id: schema.users.id });
+    if (!row) return { error: "An account with this email already exists. Sign in instead.", ...keep };
+    id = row.id;
+  } catch (e) {
+    const p = diagnoseDbError(e);
+    return { error: p.kind === "not-migrated" ? "The database needs migrating: npm run db:migrate" : `Database error: ${p.detail}`, ...keep };
+  }
+  signups.set(ip, [...recent, Date.now()]);
+  await createSession(id);
+  redirect("/");
 }
 
 export async function logout() {
@@ -141,7 +177,13 @@ export async function deleteUser(id: string): Promise<{ ok: true } | { ok: false
   if (id === me.id) return { ok: false, error: "You can't delete your own account." };
   const [target] = await db.select({ role: schema.users.role }).from(schema.users).where(eq(schema.users.id, id));
   if (target?.role === "admin" && (await adminCount()) <= 1) return { ok: false, error: "Keep at least one admin." };
-  await db.delete(schema.users).where(and(eq(schema.users.id, id), ne(schema.users.id, me.id)));
+  await db.transaction(async tx => {
+    // their maps go to the admin who removes them (nothing is lost; hand them on from Admin → Maps)
+    await tx.execute(sql`delete from city_shares where user_id = ${me.id} and city_id in (select id from cities where owner_id = ${id})`);
+    await tx.update(schema.cities).set({ ownerId: me.id }).where(or(eq(schema.cities.ownerId, id), isNull(schema.cities.ownerId)));
+    await tx.delete(schema.users).where(and(eq(schema.users.id, id), ne(schema.users.id, me.id)));
+  });
   revalidatePath("/admin/users");
+  revalidatePath("/admin/maps");
   return { ok: true };
 }

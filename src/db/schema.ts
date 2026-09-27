@@ -1,16 +1,37 @@
-import { boolean, customType, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, customType, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 import type { Network, PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
-export const cities = pgTable("cities", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name").notNull(),
-  description: text("description").notNull().default(""),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+/** A city (map) belongs to the user who created it; others see it through city_shares. */
+export const cities = pgTable(
+  "cities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** null only for maps whose owner was removed without a hand-over: admins still manage them */
+    ownerId: uuid("owner_id").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("cities_owner_idx").on(t.ownerId)],
+);
+
+export const shareAccess = pgEnum("share_access", ["read", "write"]);
+
+/** read = open and simulate; write = also edit, add and rename plans */
+export const cityShares = pgTable(
+  "city_shares",
+  {
+    cityId: uuid("city_id").notNull().references(() => cities.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references((): AnyPgColumn => users.id, { onDelete: "cascade" }),
+    access: shareAccess("access").notNull().default("read"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.cityId, t.userId] }), index("city_shares_user_idx").on(t.userId)],
+);
 
 export const plans = pgTable(
   "plans",
@@ -31,6 +52,30 @@ export const plans = pgTable(
   (t) => [index("plans_city_idx").on(t.cityId)],
 );
 
+/**
+ * Saved states of a plan, for rolling back. Autosaves by the same person within a few minutes
+ * update the newest row instead of adding one, so each row is a short editing session.
+ */
+export const planVersions = pgTable(
+  "plan_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    planId: uuid("plan_id").notNull().references(() => plans.id, { onDelete: "cascade" }),
+    /** plans.revision this row holds */
+    revision: integer("revision").notNull(),
+    /** create | baseline (state before the first tracked save) | save | restore */
+    kind: text("kind").notNull().default("save"),
+    note: text("note").notNull().default(""),
+    network: jsonb("network").$type<Network>().notNull(),
+    settings: jsonb("settings").$type<PlanSettings>().notNull(),
+    underlay: jsonb("underlay").$type<Underlay>(),
+    userId: uuid("user_id").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("plan_versions_plan_idx").on(t.planId, t.createdAt)],
+);
+
 /** Reference image bytes, one per plan (kept apart so plan saves stay small). */
 export const planImages = pgTable("plan_images", {
   planId: uuid("plan_id").primaryKey().references(() => plans.id, { onDelete: "cascade" }),
@@ -42,7 +87,7 @@ export const planImages = pgTable("plan_images", {
 
 export const userRole = pgEnum("user_role", ["admin", "user"]);
 
-/** People who can sign in. Admins also manage users; both roles can edit cities and plans. */
+/** People who can sign in. Admins also manage users and every map; users manage their own maps and those shared with them. */
 export const users = pgTable(
   "users",
   {
@@ -75,6 +120,8 @@ export const sessions = pgTable(
 );
 
 export type City = typeof cities.$inferSelect;
+export type PlanVersion = typeof planVersions.$inferSelect;
+export type ShareAccess = (typeof shareAccess.enumValues)[number];
 export type Plan = typeof plans.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Role = (typeof userRole.enumValues)[number];

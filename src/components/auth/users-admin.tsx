@@ -115,7 +115,7 @@ export function UsersAdmin({ users, meId }: { users: AdminUserRow[]; meId: strin
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {confirmDelete?.email}?</AlertDialogTitle>
-            <AlertDialogDescription>They lose access immediately. Cities and plans they worked on are kept.</AlertDialogDescription>
+            <AlertDialogDescription>They lose access immediately. Maps they own are handed to you (reassign them under Admin → Maps); their edits stay in plan history.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

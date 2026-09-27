@@ -5,7 +5,8 @@
 
 export type Vec = { x: number; y: number };
 
-export type Control = "priority" | "stop" | "lights" | "roundabout";
+/** free = no rules: a vehicle goes whenever its path through the junction is clear */
+export type Control = "priority" | "free" | "stop" | "lights" | "roundabout";
 
 export interface SignalTiming {
   /** green time per phase (s) */
@@ -31,6 +32,8 @@ export interface NodeDef {
   signal: SignalTiming;
   /** make a point where only two roads meet a real junction (e.g. traffic lights at a crossing) */
   junction?: boolean;
+  /** draw the junction with rounded kerbs that follow the roads (merges, slip roads, shallow angles) */
+  smooth?: boolean;
   /**
    * Entry points only: vehicles per minute entering here. null/undefined = automatic
    * (entries share the plan's car and truck totals); 0 = nothing enters, vehicles only leave.
@@ -79,9 +82,9 @@ export interface LinkDef {
 
 export type ApproachSign = "yield" | "stop";
 
-export type LaneTurn = "L" | "LS" | "S" | "SR" | "R" | "LSR";
+export type LaneTurn = "L" | "LS" | "S" | "SR" | "R" | "LR" | "LSR";
 export type LaneTurns = LaneTurn[];
-export const LANE_TURNS: LaneTurn[] = ["L", "LS", "S", "SR", "R", "LSR"];
+export const LANE_TURNS: LaneTurn[] = ["L", "LS", "S", "SR", "R", "LR", "LSR"];
 
 export interface StopDef {
   id: string;
@@ -101,12 +104,40 @@ export interface LineDef {
   buses: number;
 }
 
+/** A junction in a coordinated group. */
+export interface SignalGroupMember {
+  node: string;
+  /** seconds into the group cycle at which this junction's coordinated phase turns green */
+  offset: number;
+  /** index of the junction's phase that is coordinated (the corridor direction) */
+  phase: number;
+  /** share of the cycle's green time given to the coordinated phase (0.2–0.85); the rest is split evenly */
+  share: number;
+}
+
+/**
+ * Traffic lights that run together: every member uses the same fixed cycle, and its coordinated
+ * phase starts green at its own offset into that cycle (a "green wave" when offsets follow the
+ * travel time between junctions). Members ignore their own green / actuated settings.
+ */
+export interface SignalGroup {
+  id: string;
+  name: string;
+  /** cycle length shared by every member (s) */
+  cycle: number;
+  /** progression speed used to compute green-wave offsets (km/h) */
+  speed: number;
+  /** in corridor order */
+  members: SignalGroupMember[];
+}
+
 export interface Network {
   version: 1;
   nodes: NodeDef[];
   links: LinkDef[];
   stops: StopDef[];
   lines: LineDef[];
+  signalGroups?: SignalGroup[];
 }
 
 export interface PlanSettings {

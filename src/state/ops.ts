@@ -1,6 +1,8 @@
 /** Pure network edit operations. Each returns a new Network (never mutates). */
 import { newId, makeNode } from "@/engine/sample";
-import type { LineDef, LinkDef, Network, NodeDef, StopDef, Vec } from "@/engine/types";
+import type { LineDef, LinkDef, Network, NodeDef, SignalGroup, SignalGroupMember, StopDef, Vec } from "@/engine/types";
+import type { Compiled } from "@/engine/compile";
+import { greenWaveOffsets } from "@/engine/signals";
 
 export const nodeById = (net: Network, id: string) => net.nodes.find(n => n.id === id);
 export const linkById = (net: Network, id: string) => net.links.find(l => l.id === id);
@@ -131,11 +133,15 @@ function pruneRefs(net: Network): Network {
   const stops = net.stops.filter(s => linkIds.has(s.link));
   const stopIds = new Set(stops.map(s => s.id));
   const used = new Set(net.links.flatMap(l => [l.from, l.to]));
+  const nodes = net.nodes.filter(n => used.has(n.id));
+  const nodeIds = new Set(nodes.map(n => n.id));
+  const groups = net.signalGroups?.map(g => ({ ...g, members: g.members.filter(m => nodeIds.has(m.node)) })).filter(g => g.members.length);
   return {
     ...net,
-    nodes: net.nodes.filter(n => used.has(n.id)),
+    nodes,
     stops,
     lines: net.lines.map(l => ({ ...l, stops: l.stops.filter(s => stopIds.has(s)) })),
+    ...(net.signalGroups ? { signalGroups: groups } : {}),
   };
 }
 
@@ -298,4 +304,56 @@ export function setLanes(net: Network, id: string, along: number, against: numbe
   const lanesF = aligned ? along : against, lanesB = aligned ? against : along;
   const n2 = updateLink(net, id, { lanesF, lanesB, busF: l.busF && lanesF > 0, busB: l.busB && lanesB > 0, turnsF: lanesF === l.lanesF ? l.turnsF : null, turnsB: lanesB === l.lanesB ? l.turnsB : null });
   return fixStops(n2, id, false);
+}
+
+// ---------------------------------------------------------------- coordinated signal groups
+export const groupOf = (net: Network, nodeId: string) => net.signalGroups?.find(g => g.members.some(m => m.node === nodeId)) ?? null;
+
+const withGroups = (net: Network, groups: SignalGroup[]): Network => ({ ...net, signalGroups: groups.filter(g => g.members.length) });
+
+/** Puts a junction in a group (leaving any other group); creates the group when `groupId` is null. */
+export function joinGroup(net: Network, nodeId: string, groupId: string | null): [Network, string] {
+  const groups = (net.signalGroups ?? []).map(g => ({ ...g, members: g.members.filter(m => m.node !== nodeId) }));
+  const member = { node: nodeId, offset: 0, phase: 0, share: 0.5 };
+  let id = groupId;
+  if (id && groups.some(g => g.id === id)) {
+    return [withGroups(net, groups.map(g => (g.id === id ? { ...g, members: [...g.members, member] } : g))), id];
+  }
+  id = newId("g");
+  const n = (net.signalGroups?.length ?? 0) + 1;
+  return [withGroups(net, [...groups, { id, name: `Signal group ${n}`, cycle: 90, speed: 50, members: [member] }]), id];
+}
+
+export function leaveGroup(net: Network, nodeId: string): Network {
+  return withGroups(net, (net.signalGroups ?? []).map(g => ({ ...g, members: g.members.filter(m => m.node !== nodeId) })));
+}
+
+export function updateGroup(net: Network, id: string, patch: Partial<Omit<SignalGroup, "id" | "members">>): Network {
+  return withGroups(net, (net.signalGroups ?? []).map(g => (g.id === id ? { ...g, ...patch } : g)));
+}
+
+export function updateMember(net: Network, nodeId: string, patch: Partial<Omit<SignalGroupMember, "node">>): Network {
+  return withGroups(net, (net.signalGroups ?? []).map(g => ({ ...g, members: g.members.map(m => (m.node === nodeId ? { ...m, ...patch } : m)) })));
+}
+
+/** Moves a junction one place up (-1) or down (+1) in its group's corridor order. */
+export function moveMember(net: Network, nodeId: string, dir: -1 | 1): Network {
+  return withGroups(net, (net.signalGroups ?? []).map(g => {
+    const i = g.members.findIndex(m => m.node === nodeId), j = i + dir;
+    if (i < 0 || j < 0 || j >= g.members.length) return g;
+    const members = [...g.members]; [members[i], members[j]] = [members[j], members[i]];
+    return { ...g, members };
+  }));
+}
+
+export function deleteGroup(net: Network, id: string): Network {
+  return withGroups(net, (net.signalGroups ?? []).filter(g => g.id !== id));
+}
+
+/** Sets every member's offset from the travel time between junctions (see engine/signals.ts). */
+export function applyGreenWave(net: Network, compiled: Compiled, id: string): Network {
+  const g = net.signalGroups?.find(x => x.id === id);
+  if (!g) return net;
+  const { offsets } = greenWaveOffsets(compiled, g);
+  return withGroups(net, (net.signalGroups ?? []).map(x => (x.id === id ? { ...x, members: x.members.map((m, i) => ({ ...m, offset: offsets[i] })) } : x)));
 }

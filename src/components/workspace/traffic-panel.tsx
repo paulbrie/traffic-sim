@@ -121,7 +121,7 @@ function JunctionTable() {
   if (!refs.size) return null;
   const rows = c.nodes.filter(n => refs.has(n.def.id)).map(n => ({ n, ref: refs.get(n.def.id)!, st: sim ? sim.junctionStats(n.idx) : null }));
   if (sim) rows.sort((a, b) => b.st!.waiting - a.st!.waiting);
-  const ctl = { priority: "priority", stop: "all-way stop", lights: "lights", roundabout: "roundabout" } as const;
+  const ctl = { priority: "priority", free: "free", stop: "all-way stop", lights: "lights", roundabout: "roundabout" } as const;
   return (
     <Section title="Junctions">
       <div className="overflow-hidden rounded-md border text-xs">

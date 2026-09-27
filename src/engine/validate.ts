@@ -27,9 +27,10 @@ export function sanitizeNetwork(input: unknown): Network {
     const s = (n.signal ?? {}) as Record<string, unknown>;
     return {
       id: str(n.id), x: num(n.x, -1e6, 1e6, 0), y: num(n.y, -1e6, 1e6, 0),
-      control: (["priority", "stop", "lights", "roundabout"].includes(n.control as string) ? n.control : "priority") as Network["nodes"][number]["control"],
+      control: (["priority", "free", "stop", "lights", "roundabout"].includes(n.control as string) ? n.control : "priority") as Network["nodes"][number]["control"],
       gateway: n.gateway !== false,
       junction: n.junction === true,
+      smooth: n.smooth === true,
       inflow: typeof n.inflow === "number" && isFinite(n.inflow) ? Math.min(120, Math.max(0, n.inflow)) : null,
       exitWeight: typeof n.exitWeight === "number" && isFinite(n.exitWeight) ? Math.min(100, Math.max(0, n.exitWeight)) : null,
       signal: {
@@ -59,7 +60,17 @@ export function sanitizeNetwork(input: unknown): Network {
     stops: (Array.isArray(l.stops) ? l.stops : []).filter((x: unknown) => typeof x === "string" && stopIds.has(x)) as string[],
     buses: Math.round(num(l.buses, 0, 30, 2)),
   }));
-  return { version: 1, nodes, links, stops, lines };
+  // coordinated signal groups: members must be existing junctions, each in at most one group
+  const nodeIds = new Set(nodes.map(n => n.id)), taken = new Set<string>();
+  const signalGroups = arr("signalGroups").filter(g => typeof g.id === "string").map(g => ({
+    id: str(g.id, "", 64), name: str(g.name, "Signal group", 80),
+    cycle: Math.round(num(g.cycle, 20, 240, 90)),
+    speed: num(g.speed, 10, 130, 50),
+    members: (Array.isArray(g.members) ? g.members : [])
+      .filter((m: Record<string, unknown>) => m && typeof m.node === "string" && nodeIds.has(m.node) && !taken.has(m.node) && (taken.add(m.node), true))
+      .map((m: Record<string, unknown>) => ({ node: m.node as string, offset: num(m.offset, 0, 240, 0), phase: Math.round(num(m.phase, 0, 7, 0)), share: num(m.share, 0.2, 0.85, 0.5) })),
+  }));
+  return { version: 1, nodes, links, stops, lines, ...(signalGroups.length ? { signalGroups } : {}) };
 }
 
 export function sanitizeSettings(input: unknown): PlanSettings {

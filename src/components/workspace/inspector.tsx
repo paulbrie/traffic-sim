@@ -16,11 +16,12 @@ import { simController } from "@/state/sim-controller";
 import * as ops from "@/state/ops";
 import type { Control, LinkDef, Network, NodeDef } from "@/engine/types";
 import { NumberField, Section, Stepper, compass } from "./fields";
+import { SignalGroupSection } from "./signal-groups";
 import { LaneArrowsEditor } from "./lane-arrows";
 import { junctionRefs } from "@/engine/refs";
 import { JunctionEventLog } from "./event-log";
 
-const CONTROL_LABEL: Record<Control, string> = { priority: "Priority (first come)", stop: "All-way stop", lights: "Traffic lights", roundabout: "Roundabout" };
+const CONTROL_LABEL: Record<Control, string> = { priority: "Priority (first come)", free: "Free (go when clear)", stop: "All-way stop", lights: "Traffic lights", roundabout: "Roundabout" };
 const SPEEDS = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 130];
 
 export function Inspector() {
@@ -138,14 +139,22 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
               </label>
             </div>
           )}
+          {node.control !== "roundabout" && degree >= 3 && (
+            <label className="flex items-center justify-between gap-2 text-sm">
+              <span>Rounded kerbs <span className="text-muted-foreground">(merges, slip roads)</span></span>
+              <Switch checked={!!node.smooth} onCheckedChange={v => set({ smooth: v })} aria-label="Rounded kerbs" />
+            </label>
+          )}
           {node.control === "roundabout" && <p className="text-xs text-muted-foreground">Ring radius {cn?.ringR.toFixed(1)} m. Entering traffic yields to the ring.</p>}
           {node.control === "stop" && <p className="text-xs text-muted-foreground">Every approach stops at the line, then vehicles go in arrival order.</p>}
+          {node.control === "free" && <p className="text-xs text-muted-foreground">No signs, no queue order: any vehicle enters as soon as its path through the junction and its exit are clear, closest first.</p>}
           {node.control === "priority" && <p className="text-xs text-muted-foreground">Vehicles reserve their path through the junction first come, first served.</p>}
           {crossing && (
             <Button variant="outline" size="sm" onClick={() => set({ junction: false, control: "priority" })}><Minus /> Back to a plain road point</Button>
           )}
         </Section>
       )}
+      {(degree >= 3 || crossing) && <SignalGroupSection net={net} node={node} />}
       {ref && cn && <JunctionLive net={net} nodeIdx={cn.idx} />}
       {degree === 2 && !crossing && (
         <Section title="Road joint">

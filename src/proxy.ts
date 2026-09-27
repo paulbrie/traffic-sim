@@ -4,7 +4,7 @@ import { NextResponse, type NextRequest } from "next/server";
 // Pages, server actions and route handlers verify the session against the database themselves.
 export function proxy(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
-  if (pathname === "/login") return NextResponse.next();
+  if (pathname === "/login" || pathname === "/signup") return NextResponse.next();
   if (req.cookies.get("gl_session")?.value) return NextResponse.next();
   const url = new URL("/login", req.url);
   if (pathname !== "/") url.searchParams.set("next", pathname + search);

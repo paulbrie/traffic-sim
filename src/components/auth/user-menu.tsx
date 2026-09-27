@@ -27,7 +27,7 @@ export function UserMenu({ user }: { user: MenuUser }) {
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         {user.role === "admin" && (
-          <DropdownMenuItem asChild><Link href="/admin/users"><Users /> Manage users</Link></DropdownMenuItem>
+          <DropdownMenuItem asChild><Link href="/admin/users"><Users /> Admin</Link></DropdownMenuItem>
         )}
         <DropdownMenuItem asChild><Link href="/account/password"><KeyRound /> Change password</Link></DropdownMenuItem>
         <DropdownMenuSeparator />

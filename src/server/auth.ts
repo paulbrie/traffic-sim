@@ -7,6 +7,9 @@ import { and, eq, gt } from "drizzle-orm";
 import { db, schema } from "@/db";
 
 export const SESSION_COOKIE = "gl_session";
+
+/** anyone can create a free account unless ALLOW_SIGNUP=false */
+export const signupOpen = () => process.env.ALLOW_SIGNUP !== "false";
 const SESSION_DAYS = 30;
 
 export type CurrentUser = Pick<schema.User, "id" | "email" | "name" | "role" | "mustChangePassword">;

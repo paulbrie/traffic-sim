@@ -372,12 +372,13 @@ export class Sim {
 
   private spawnBus(line: CLine, k: number): boolean {
     if (line.stops.length < 2) return false;
-    const stop = line.stops[k % line.stops.length];
+    k = this.lineStart(line, k);
+    const stop = line.stops[k];
     const e = stop.edge, lane = e.n - 1, piece = e.lanes[lane];
     const s = stop.s * (piece.len / Math.max(1e-6, e.length));
     if (!this.laneClear(piece, s, 16)) return false;
     const v = this.makeVehicle("bus");
-    v.line = line; v.stopIdx = k % line.stops.length;
+    v.line = line; v.stopIdx = k;
     v.route = [e]; v.ri = 0; v.piece = piece; v.s = s; v.lane = lane; v.dest = { kind: "stop", stop };
     v.dwell = 2;
     this.vehicles.push(v); this.addToIndex(v);
@@ -411,10 +412,51 @@ export class Sim {
     for (const v of this.vehicles) if (!v.dead) this.addToIndex(v);
   }
 
+  /** where a coordinated junction is in its fixed cycle at the current time */
+  private planState(n: CNode): { phase: number; stage: 0 | 1 | 2; t: number } {
+    const p = n.coord!;
+    let tc = (((this.tick * DT - p.offset) % p.cycle) + p.cycle) % p.cycle;
+    for (const s of p.seq) {
+      if (tc < s.green) return { phase: s.phase, stage: 0, t: tc };
+      tc -= s.green;
+      if (tc < p.yellow) return { phase: s.phase, stage: 1, t: tc };
+      tc -= p.yellow;
+      if (tc < p.allRed) return { phase: s.phase, stage: 2, t: tc };
+      tc -= p.allRed;
+    }
+    const last = p.seq[p.seq.length - 1];
+    return { phase: last.phase, stage: 2, t: 0 };
+  }
+
+  /** bookkeeping when a light changes: close the cycle of the phase that ends, start the new green */
+  private enterStage(st: NodeState, phase: number, stage: 0 | 1 | 2) {
+    const n = st.node;
+    if (stage === 2 && !(st.stage === 2 && st.phase === phase)) {
+      for (const a of n.phases[phase]) {
+        const c = st.cyc[a];
+        c.hist.push({ n: c.count, green: (this.tick - c.greenAt) * DT, at: this.tick * DT });
+        if (c.hist.length > 30) c.hist.shift();
+        c.count = 0;
+      }
+    }
+    const newGreen = stage === 0 && !(st.stage === 0 && st.phase === phase);
+    st.phase = phase; st.stage = stage;
+    if (newGreen) {
+      if (this.logging(n)) this.ev(n, null, "signal", `green for ${n.phases[phase].map(a => n.arms[a].inEdge?.link.name || n.arms[a].link.id).join(" + ") || "nobody (all red)"}${n.coord ? ` (${n.coord.groupName})` : ""}`);
+      for (const a of n.phases[phase]) { st.cyc[a].greenAt = this.tick; st.cyc[a].count = 0; }
+    }
+  }
+
   private updateSignals() {
     for (const st of this.ns) {
       const n = st.node;
       if (!n.controlled || n.def.control !== "lights" || n.phases.length < 2) continue;
+      if (n.coord) {
+        const s = this.planState(n);
+        if (s.phase !== st.phase || s.stage !== st.stage) this.enterStage(st, s.phase, s.stage);
+        st.t = s.t;
+        continue;
+      }
       const sig = n.def.signal;
       st.t += DT;
       if (st.stage === 0) {
@@ -422,20 +464,9 @@ export class Sim {
         const other = st.demand.some((d, i) => i !== st.phase && (this.tick - d) * DT < 1);
         if ((sig.actuated && st.t > sig.minGreen && idle && other) || st.t >= sig.green) { st.stage = 1; st.t = 0; }
       } else if (st.stage === 1) {
-        if (st.t >= sig.yellow) {
-          st.stage = 2; st.t = 0;
-          // close the cycle for the approaches that just had green
-          for (const a of n.phases[st.phase]) {
-            const c = st.cyc[a];
-            c.hist.push({ n: c.count, green: (this.tick - c.greenAt) * DT, at: this.tick * DT });
-            if (c.hist.length > 30) c.hist.shift();
-            c.count = 0;
-          }
-        }
+        if (st.t >= sig.yellow) { this.enterStage(st, st.phase, 2); st.t = 0; }
       } else if (st.t >= sig.allRed) {
-        st.stage = 0; st.t = 0; st.phase = (st.phase + 1) % n.phases.length;
-        if (this.logging(n)) this.ev(n, null, "signal", `green for ${n.phases[st.phase].map(a => n.arms[a].inEdge?.link.name || n.arms[a].link.id).join(" + ") || "nobody (all red)"}`);
-        for (const a of n.phases[st.phase]) { st.cyc[a].greenAt = this.tick; st.cyc[a].count = 0; }
+        this.enterStage(st, (st.phase + 1) % n.phases.length, 0); st.t = 0;
       }
     }
   }
@@ -449,7 +480,14 @@ export class Sim {
     if (p !== st.phase) return "red";
     return st.stage === 0 ? "green" : st.stage === 1 ? "yellow" : "red";
   }
-  nodeState(nodeIdx: number) { const st = this.ns[nodeIdx]; return { phase: st.phase, stage: st.stage, t: st.t, occupied: st.occ.length, phases: st.node.phases.length }; }
+  nodeState(nodeIdx: number) {
+    const st = this.ns[nodeIdx], c = st.node.coord;
+    return {
+      phase: st.phase, stage: st.stage, t: st.t, occupied: st.occ.length, phases: st.node.phases.length,
+      /** position in the group cycle (s), for coordinated junctions */
+      cycleAt: c ? (((this.tick * DT - c.offset) % c.cycle) + c.cycle) % c.cycle : null,
+    };
+  }
   reservations(): Conn[] { const out: Conn[] = []; for (const st of this.ns) for (const o of st.occ) out.push(o.conn); return out; }
 
   private spawnLoop() {
@@ -932,7 +970,10 @@ export class Sim {
     const reqs = [...st.req.values()];
     st.req.clear();
     const n = st.node, lights = n.def.control === "lights" && n.phases.length >= 2;
+    // free: no queue order, whoever is closest to the junction goes first if its path is clear
+    const free = n.def.control === "free";
     if (lights) reqs.sort((a, b) => (a.conn.move.turn === "L" ? 1 : 0) - (b.conn.move.turn === "L" ? 1 : 0) || a.at - b.at || a.v.id - b.v.id);
+    else if (free) reqs.sort((a, b) => a.d - b.d || a.v.id - b.v.id);
     else reqs.sort((a, b) => a.at - b.at || a.v.id - b.v.id);
     // priority junction with signed approaches: majors go first, minors wait for a gap
     const signed = signedNode;
@@ -959,20 +1000,23 @@ export class Sim {
           && r.d < 4 && r.v.v < 1 && this.tick - r.at > 30;
         if (sig !== "green" && !sneak && !this.mustGoOnSignal(r.v, r.d, sig)) { deny(r.v, `${sig} light`); continue; }
       }
-      let ok = true, why = "";
+      let ok = true, why = "", yielded = false;
       for (const o of st.occ) if (conflicts(c, o.conn)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : ""; break; }
       if (ok) for (const b of blockers) if (conflicts(c, b)) { ok = false; why = log ? `crosses the path of a vehicle ahead in the queue (${this.mv(b)})` : ""; break; }
       if (ok && signed && this.minor(n, c.inEdge)) {
         // giving way means not crossing *or* joining the road in front of priority traffic
         const clash = (b: Conn) => conflicts(c, b) || b.outEdge === c.outEdge;
-        for (const b of major) if (clash(b)) { ok = false; why = log ? `gives way to priority traffic (${this.mv(b)})` : ""; break; }
-        if (ok) for (const o of st.occ) if (!o.conn.inEdge.sign && clash(o.conn)) { ok = false; why = log ? `gives way to #${o.v.id} (${this.mv(o.conn)})` : ""; break; }
+        for (const b of major) if (clash(b)) { ok = false; yielded = true; why = log ? `gives way to priority traffic (${this.mv(b)})` : ""; break; }
+        if (ok) for (const o of st.occ) if (!o.conn.inEdge.sign && clash(o.conn)) { ok = false; yielded = true; why = log ? `gives way to #${o.v.id} (${this.mv(o.conn)})` : ""; break; }
       }
-      if (ok && !this.exitRoom(st, c, r.v)) { ok = false; why = log ? `no room on the exit (${c.outEdge.link.name || c.outEdge.link.id} lane ${c.outLane + 1})` : ""; }
+      // a vehicle that can't go because its exit is full, or because it gives way, does not hold up
+      // the others behind it in arrival order (keep the junction moving: "don't block the box")
+      let holdsQueue = !yielded;
+      if (ok && !this.exitRoom(st, c, r.v)) { ok = false; holdsQueue = false; why = log ? `no room on the exit (${c.outEdge.link.name || c.outEdge.link.id} lane ${c.outLane + 1})` : ""; }
       if (ok) {
         r.v.conn = c; r.v.granted = true; st.occ.push({ v: r.v, conn: c, entered: false, sneak });
         if (log) { this.lastDeny.delete(r.v.id); this.ev(n, r.v, "grant", `${this.mv(c)} · ${r.d.toFixed(0)} m from the line, waited ${((this.tick - r.at) / 10).toFixed(1)} s${sneak ? " · clears on the change (oncoming stopped)" : ""}`, this.md(c.move, c.inLane, c.outLane)); }
-      } else { blockers.push(c); deny(r.v, why); }
+      } else { if (!free && holdsQueue) blockers.push(c); deny(r.v, why); }
     }
   }
 
@@ -981,6 +1025,7 @@ export class Sim {
     let rear = Infinity;
     const list = this.index.get(out.id);
     // room that will be there by the time we arrive: a vehicle already driving away frees space
+    // (only when it has free road ahead of it: one about to stop at a queue frees nothing)
     if (list) for (const u of list) rear = Math.min(rear, u.s - u.len + (u.v > 1.5 ? u.v * 2 : 0));
     let need = v.len + 1.5;
     for (const o of st.occ) if (!o.entered && o.conn.outEdge === c.outEdge && o.conn.outLane === c.outLane) need += o.v.len + 2;
@@ -1122,14 +1167,39 @@ export class Sim {
     v.dwell = 0;
     const line = v.line;
     if (!line || line.stops.length < 2) { v.dwell = 5; return; }
-    v.stopIdx = (v.stopIdx + 1) % line.stops.length;
-    const next = line.stops[v.stopIdx];
-    v.dest = { kind: "stop", stop: next };
     const e = v.route[v.ri];
-    if (next.edge === e && next.s * (v.piece.len / e.length) > v.s + 5) { v.route = v.route.slice(0, v.ri + 1); return; }
-    const rest = this.plan(e, v.dest, { bus: true });
-    if (rest) v.route = [...v.route.slice(0, v.ri + 1), ...rest];
-    else v.dwell = 5;
+    // next stop on the line; a stop that can't be reached from here (typically the first stop
+    // again, when the line runs one way along roads that end at the edge of the map) is skipped
+    for (let k = 1; k < line.stops.length; k++) {
+      const idx = (v.stopIdx + k) % line.stops.length, next = line.stops[idx];
+      if (next.edge === e && next.s * (v.piece.len / e.length) > v.s + 5) {
+        v.stopIdx = idx; v.dest = { kind: "stop", stop: next }; v.route = v.route.slice(0, v.ri + 1); return;
+      }
+      const rest = this.plan(e, { kind: "stop", stop: next }, { bus: true });
+      if (rest) { v.stopIdx = idx; v.dest = { kind: "stop", stop: next }; v.route = [...v.route.slice(0, v.ri + 1), ...rest]; return; }
+    }
+    // end of the line: drive on to the edge of the map and leave there, like a car (a new bus
+    // starts the line). The exit is the one reached by the shortest drive, which is normally
+    // straight on along the road the bus is on.
+    let best: Edge[] | null = null, bestG: CNode | null = null, bestLen = Infinity;
+    for (const g of this.gateways) {
+      if (e.to === g) { best = []; bestG = g; break; }
+      const r = this.plan(e, { kind: "gateway", node: g }, { bus: true });
+      const len = r ? r.reduce((a, x) => a + x.length, 0) : Infinity;
+      if (r && len < bestLen) { best = r; bestG = g; bestLen = len; }
+    }
+    if (best && bestG) { v.dest = { kind: "gateway", node: bestG }; v.route = [...v.route.slice(0, v.ri + 1), ...best]; v.line = null; v.state = "end of line"; return; }
+    this.kill(v, "removed");
+  }
+
+  /** first stop index from which the line can carry on (used when placing new buses) */
+  private lineStart(line: CLine, k: number): number {
+    const n = line.stops.length;
+    for (let j = 0; j < n; j++) {
+      const i = (k + j) % n, a = line.stops[i], b = line.stops[(i + 1) % n];
+      if ((a.edge === b.edge && b.s > a.s + 5) || this.plan(a.edge, { kind: "stop", stop: b }, { bus: true })) return i;
+    }
+    return k % n;
   }
 
   private housekeeping() {
