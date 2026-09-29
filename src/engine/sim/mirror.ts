@@ -10,7 +10,7 @@ import type { CNode, Compiled } from "../compile";
 import { isJunction } from "../refs";
 import { signalAspect, type Aspect } from "../signals";
 import type { JunctionEvent, Kind, Stats, Vehicle } from "./base";
-import type { Sim } from "./index";
+import type { CounterStats, FlowStats, Sim } from "./index";
 
 const KINDS: Kind[] = ["car", "truck", "bus"];
 /** floats per vehicle in `Snapshot.geo`: front x, y, rear x, y, speed, desired speed, length, width, blinker */
@@ -60,6 +60,10 @@ export interface Snapshot {
   cycles?: [number, LightCycles][];
   turnCounts?: [string, number][];
   entered?: [string, number][];
+  /** traffic counters by edge key ("linkId:dir") */
+  counters?: [string, CounterStats][];
+  /** transit flows by flow id */
+  flows?: [string, FlowStats][];
   /** reserved paths as x, y pairs (when watched) */
   reservations?: Float32Array[];
   vehicle?: VehicleDetail | null;
@@ -113,6 +117,8 @@ export class SnapshotWriter {
       snap.junctions = sim.net.nodes.map(nd => (isJunction(nd) ? sim.junctionStats(nd.idx) : null));
       snap.turnCounts = [...sim.turnCounts];
       snap.entered = [...sim.entered];
+      snap.flows = sim.net.flows.map(f => [f.def.id, sim.flowStats(f.idx)!]);
+      snap.counters = sim.net.edges.flatMap(e => { const c = sim.counterStats(e.idx); return c ? [[e.key, c] as [string, CounterStats]] : []; });
     }
     snap.cycles = watch.nodes.filter(k => k >= 0 && k < N).map(k => [k, sim.lightCycles(k)]);
     if (watch.reservations) {
@@ -161,6 +167,8 @@ export class SimMirror {
   events: JunctionEvent[] = [];
   turnCounts = new Map<string, number>();
   entered = new Map<string, number>();
+  counters = new Map<string, CounterStats>();
+  flows = new Map<string, FlowStats>();
   vehicle: VehicleDetail | null = null;
   private snap: Snapshot | null = null;
   private junctions: (JunctionStats | null)[] = [];
@@ -187,6 +195,8 @@ export class SimMirror {
     if (s.junctions) this.junctions = s.junctions;
     if (s.turnCounts) this.turnCounts = new Map(s.turnCounts);
     if (s.entered) this.entered = new Map(s.entered);
+    if (s.counters) this.counters = new Map(s.counters);
+    if (s.flows) this.flows = new Map(s.flows);
     if (s.cycles) this.cycles = new Map(s.cycles);
     this.reserved = s.reservations ?? [];
     if (s.vehicle !== undefined) this.vehicle = s.vehicle;
@@ -226,6 +236,12 @@ export class SimMirror {
 
   /** reserved paths through junctions as x, y pairs (when the page asked for them) */
   reservations(): Float32Array[] { return this.reserved; }
+
+  /** readings of the traffic counter on one direction of a road (null = none, or no reading yet) */
+  counter(linkId: string, dir: 1 | -1): CounterStats | null { return this.counters.get(`${linkId}:${dir}`) ?? null; }
+
+  /** results of a transit flow (by its id; null before the first reading) */
+  flow(id: string): FlowStats | null { return this.flows.get(id) ?? null; }
 
   /** route ahead of the watched vehicle as x, y pairs */
   routeAhead(v: VehicleView): number[] { return this.vehicle && this.vehicle.id === v.id ? this.vehicle.route : []; }

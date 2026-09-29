@@ -71,6 +71,16 @@ own). Turns across oncoming traffic still give way when the oncoming lanes are g
 phases in a row stays green through the change. Each lane then gets its own signal head. **Back to automatic**
 returns to the worked-out phases.
 
+Transit flows: select an entry / exit point and **Add a flow from here** to send vehicles from it to a chosen exit
+(vehicles per hour, share of trucks), e.g. through traffic crossing the area. They come on top of the car and truck
+totals and keep their exit (turning shares don't apply to them). While traffic runs you see how many were sent,
+arrived (with the average travel time), are still driving or are waiting to enter; **Traffic → Transit flows** lists
+them all, and the selected entry point's flows are drawn on the map.
+
+Traffic counters: select a road and switch on **Count traffic on this road** (off by default). While traffic runs,
+the inspector shows each direction's vehicles counted at the middle of the road, the rate per hour (last 5 minutes) and
+their average speed; counted roads get a badge on the map and are listed under **Traffic → Traffic counters**.
+
 Optimise (top bar): improves the junctions you choose by simulation. It may change their control (priority, all-way
 stop, lights, roundabout), lane arrows (dedicated left / right lanes), protected left-turn phases and green times,
 whichever you allow. Each candidate runs this plan's traffic on several random seeds (the same seeds for every

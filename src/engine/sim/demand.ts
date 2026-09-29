@@ -1,4 +1,4 @@
-import type { CLine, CNode, Edge } from "../compile";
+import type { CFlow, CLine, CNode, Edge } from "../compile";
 import { DT, KIND_PARAMS, type Kind, type Dest, type Vehicle } from "./base";
 import { SimMotion } from "./motion";
 
@@ -15,7 +15,7 @@ export abstract class SimDemand extends SimMotion {
       enterT: this.tick, bornT: this.tick, gap: Infinity, leader: null, v0: 10,
       reroutes: 0, laneChanges: 0, lcCool: 0, lcOff: 0, lcT: 0,
       reqAt: 0, reqFor: null, stoppedAt: null, fixedAt: null, rerouteAt: null,
-      line: null, stopIdx: 0, pax: 0, cap: 50, dwell: 0, dead: false, metered: false,
+      line: null, stopIdx: 0, pax: 0, cap: 50, dwell: 0, dead: false, metered: false, flow: -1,
     };
   }
   protected randomEdge(): Edge | null {
@@ -47,7 +47,8 @@ export abstract class SimDemand extends SimMotion {
     if (typeof t === "number") return t;
     return this.placeCum.length ? 0.3 : leaving ? 0.6 : 0.65;
   }
-  protected spawnGeneral(kind: Kind, gate?: CNode): boolean {
+  /** a vehicle entering the plan; with `flow`, at that transit flow's entry point, bound for its exit */
+  protected spawnGeneral(kind: Kind, gate?: CNode, flow?: CFlow): boolean {
     const r = this.rng;
     let edge: Edge | null = null, s = 0, v0 = 0;
     const auto = this.gateways.filter(g => g.def.inflow == null);
@@ -68,8 +69,9 @@ export abstract class SimDemand extends SimMotion {
     const sOnLane = s * (piece.len / Math.max(1e-6, edge.length));
     if (!this.laneClear(piece, sOnLane, fromGate ? 14 : 12)) return false;
     let dest: Dest;
-    const exits = this.gateways.filter(g => g !== edge!.from && (g.def.exitWeight ?? 1) > 0);
-    if (exits.length && r() < this.throughShare(true)) dest = { kind: "gateway", node: this.pickWeighted(exits, g => g.def.exitWeight ?? 1) };
+    const exits = flow ? [] : this.gateways.filter(g => g !== edge!.from && (g.def.exitWeight ?? 1) > 0);
+    if (flow) dest = { kind: "gateway", node: flow.to };
+    else if (exits.length && r() < this.throughShare(true)) dest = { kind: "gateway", node: this.pickWeighted(exits, g => g.def.exitWeight ?? 1) };
     else {
       const at = this.randomPlace(); if (!at || at.edge.length < 8 || at.edge.busOnly) return false;
       dest = { kind: "edge", edge: at.edge, s: at.s };
@@ -78,12 +80,13 @@ export abstract class SimDemand extends SimMotion {
     if (dest.kind === "edge" && dest.edge === edge && dest.s > sOnLane + 10) route = [edge];
     else {
       const rest = this.plan(edge, dest);
-      if (!rest) return false;
+      if (!rest) { if (flow) this.flowState[flow.idx].noRoute++; return false; }
       route = [edge, ...rest];
     }
     const v = this.makeVehicle(kind);
     v.route = route; v.ri = 0; v.piece = piece; v.s = sOnLane; v.v = v0; v.lane = lane; v.dest = dest;
     v.metered = !!gate;
+    if (flow) { v.flow = flow.idx; this.flowState[flow.idx].sent++; }
     this.applySplit(v);
     this.vehicles.push(v); this.addToIndex(v);
     if (fromGate) { const id = edge.from.def.id; this.entered.set(id, (this.entered.get(id) ?? 0) + 1); }
@@ -99,6 +102,13 @@ export abstract class SimDemand extends SimMotion {
       if (this.rng() < (rate / 60) * DT) q = Math.min(30, q + 1);
       if (q > 0 && this.vehicles.length < 30000 && this.spawnGeneral(this.rng() < share ? "truck" : "car", g)) q--;
       this.backlog.set(g, q);
+    }
+    // transit flows: Poisson arrivals at the entry point, queued while its lane is full
+    for (const f of this.net.flows) {
+      const st = this.flowState[f.idx];
+      if (f.def.rate <= 0) continue;
+      if (this.rng() < (f.def.rate / 3600) * DT) st.backlog = Math.min(200, st.backlog + 1);
+      if (st.backlog > 0 && this.vehicles.length < 30000 && this.spawnGeneral(this.rng() < (f.def.trucks ?? 0) ? "truck" : "car", f.from, f)) st.backlog--;
     }
   }
   protected spawnBus(line: CLine, k: number): boolean {

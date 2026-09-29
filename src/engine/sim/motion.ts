@@ -282,6 +282,11 @@ export abstract class SimMotion extends SimJunctions {
     if (v.dwell > 0) { v.dwell -= DT; if (v.dwell <= 0) this.busDepart(v); return; }
     v.v = Math.max(0, v.v + v.acc * DT);
     v.s += v.v * DT;
+    // traffic counter at the middle of a counted road
+    if (v.piece.kind === "lane" && this.counters[v.piece.edge.idx]) {
+      const mid = v.piece.len / 2;
+      if (v.s >= mid && v.s - v.v * DT < mid) this.countPass(v, v.piece.edge.idx);
+    }
     let guard = 0;
     while (v.s >= v.piece.len && guard++ < 8) {
       const p = v.piece;

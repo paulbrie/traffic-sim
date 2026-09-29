@@ -13,7 +13,8 @@ import { simController } from "@/state/sim-controller";
 import { sendView } from "@/state/commands";
 import { junctionRefs } from "@/engine/refs";
 import { EventLogPanel } from "./event-log";
-import { NumberField, Section } from "./fields";
+import { FlowsTable } from "./flows";
+import { NumberField, Section, compass } from "./fields";
 
 /** share of trips crossing the plan boundary (automatic, or set by hand) */
 function ThroughField() {
@@ -83,6 +84,8 @@ export function TrafficPanel() {
           </>
         ) : <p className="text-sm text-muted-foreground">Press play to run traffic on this plan.</p>}
       </Section>
+      <FlowsTable />
+      <CountersTable />
       <JunctionTable />
       <Section title="Event log"><EventLogPanel /></Section>
       <Section title="Display">
@@ -138,6 +141,41 @@ function Spark({ data }: { data: number[] }) {
 }
 
 /** every junction with its reference and live numbers; click a row to jump to it */
+/** every road with a traffic counter, each direction on its own row */
+function CountersTable() {
+  const [net] = useSubject(network$);
+  useSubject(stats$); // live readings (~4×/s)
+  const sim = simController.sim;
+  const byId = new Map(net.nodes.map(n => [n.id, n]));
+  const rows = net.links.filter(l => l.counter).flatMap(l => {
+    const A = byId.get(l.from), B = byId.get(l.to);
+    if (!A || !B) return [];
+    return ([[1, l.lanesF, compass(B.x - A.x, B.y - A.y).name], [-1, l.lanesB, compass(A.x - B.x, A.y - B.y).name]] as const)
+      .filter(([, lanes]) => lanes > 0)
+      .map(([d, , towards]) => ({ l, d, towards, c: sim?.counter(l.id, d) ?? null }));
+  });
+  if (!rows.length) return null;
+  return (
+    <Section title="Traffic counters">
+      <table className="w-full text-sm">
+        <thead><tr className="text-xs text-muted-foreground"><th className="pb-1 text-left font-normal">Road</th><th className="pb-1 text-right font-normal">Vehicles</th><th className="pb-1 text-right font-normal">/h</th><th className="pb-1 text-right font-normal">km/h</th></tr></thead>
+        <tbody>
+          {rows.map(({ l, d, towards, c }) => (
+            <tr key={`${l.id}:${d}`} className="cursor-pointer border-t hover:bg-accent" title={c ? `${c.cars} cars, ${c.trucks} trucks, ${c.buses} buses` : undefined}
+              onClick={() => { select({ kind: "link", id: l.id }); ui.getValue().panel = "inspect"; }}>
+              <td className="max-w-40 truncate py-1">{l.name || "Unnamed road"} <span className="text-muted-foreground">→ {towards}</span></td>
+              <td className="py-1 text-right font-mono tabular">{c?.total ?? 0}</td>
+              <td className="py-1 text-right font-mono tabular">{c ? Math.round(c.perHour) : 0}</td>
+              <td className="py-1 text-right font-mono tabular">{c && c.total ? c.avgSpeed.toFixed(0) : "–"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!sim && <p className="text-xs text-muted-foreground">Run traffic to see the readings.</p>}
+    </Section>
+  );
+}
+
 function JunctionTable() {
   useSubject(stats$);
   const sim = simController.sim, c = simController.compiled;

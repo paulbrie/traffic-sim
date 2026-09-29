@@ -97,3 +97,46 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   console.log("worker mirror:", checks, "checks,", diffs, "differences");
   if (diffs) process.exit(1);
 }
+
+// traffic counters only observe: switching them on everywhere changes nothing, and the mirror reports them
+{
+  const plain = sampleTown();
+  const counted = { ...plain, links: plain.links.map(l => ({ ...l, counter: true })) };
+  const a = new Sim(compile(plain), { cars: 140, trucks: 14, seed: 7 }), b = new Sim(compile(counted), { cars: 140, trucks: 14, seed: 7 });
+  a.run(3000); b.run(3000);
+  const same = a.stats.trips === b.stats.trips && a.stats.towed === b.stats.towed && a.vehicles.length === b.vehicles.length
+    && a.vehicles.every((v, i) => v.id === b.vehicles[i].id && v.s === b.vehicles[i].s && v.piece.id === b.vehicles[i].piece.id);
+  const readings = b.net.edges.map(e => b.counterStats(e.idx)!);
+  const total = readings.reduce((s, r) => s + r.total, 0), mixOk = readings.every(r => r.cars + r.trucks + r.buses === r.total);
+  const { SnapshotWriter, SimMirror } = mirrorModule;
+  const m = new SimMirror(compile(counted));
+  m.apply(structuredClone(new SnapshotWriter().write(b, { vehicle: null, nodes: [], reservations: false }, 0).snap));
+  const mirrorOk = b.net.edges.every(e => JSON.stringify(m.counter(e.link.id, e.dir)) === JSON.stringify(b.counterStats(e.idx)));
+  console.log("traffic counters: identical run", same, "| passes counted", total, "| by kind adds up", mixOk, "| mirror matches", mirrorOk);
+  if (!same || !total || !mixOk || !mirrorOk) process.exit(1);
+}
+
+// transit flows: vehicles enter at one entry point at the set rate and leave at the other
+{
+  const town = sampleTown(), c0 = compile(town);
+  const gates = c0.nodes.filter(n => n.gateway);
+  // the two entry points farthest apart
+  let a = gates[0], b = gates[1], far = 0;
+  for (const g of gates) for (const h of gates) { const d = Math.hypot(g.pos.x - h.pos.x, g.pos.y - h.pos.y); if (d > far) { far = d; a = g; b = h; } }
+  const net = { ...town, flows: [{ id: "f1", from: a.def.id, to: b.def.id, rate: 600, trucks: 0.1 }] };
+  const sim = new Sim(compile(net), { cars: 140, trucks: 14, seed: 7 });
+  let wrongDest = 0;
+  for (let t = 0; t < 3000; t++) {
+    sim.step();
+    for (const v of sim.vehicles) if (!v.dead && v.flow === 0 && !(v.dest.kind === "gateway" && v.dest.node.def.id === b.def.id)) wrongDest++;
+  }
+  const f = sim.flowStats(0)!;
+  const accounted = f.sent === f.arrived + f.diverted + f.towed + f.inPlan;
+  const expected = (600 * 300) / 3600, came = f.sent + f.backlog;
+  const { SnapshotWriter, SimMirror } = mirrorModule;
+  const m = new SimMirror(compile(net));
+  m.apply(structuredClone(new SnapshotWriter().write(sim, { vehicle: null, nodes: [], reservations: false }, 0).snap));
+  const mirrorOk = JSON.stringify(m.flow("f1")) === JSON.stringify(f);
+  console.log(`transit flow: ${came} arrivals for ~${expected} expected, sent ${f.sent}, arrived ${f.arrived} (avg ${f.avgTravel.toFixed(0)} s), diverted ${f.diverted}, towed ${f.towed}, driving ${f.inPlan}, queued ${f.backlog} | accounted ${accounted}, off course ${wrongDest}, mirror ${mirrorOk}`);
+  if (!accounted || !mirrorOk || !f.arrived || Math.abs(came - expected) > 4 * Math.sqrt(expected)) process.exit(1);
+}

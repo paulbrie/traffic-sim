@@ -5,7 +5,7 @@
  * and bus stops. The simulator and both renderers read this structure.
  */
 import { Poly, connectorPoints, signedAngle, normAngle, hull, dist } from "./geom";
-import type { LinkDef, Network, NodeDef, StopDef, LineDef, Vec } from "./types";
+import type { FlowDef, LinkDef, Network, NodeDef, StopDef, LineDef, Vec } from "./types";
 import { attachBuildings, type Place } from "./buildings";
 
 export const LW = 3.2;          // lane width (m)
@@ -82,6 +82,8 @@ export interface CNode {
   ring: RingArm[] | null;
 }
 
+export interface CFlow { idx: number; def: FlowDef; from: CNode; to: CNode }
+
 export interface CStop { def: StopDef; edge: Edge; s: number; waiting: number }
 export interface CLine { def: LineDef; stops: CStop[] }
 
@@ -100,6 +102,8 @@ export interface Compiled {
   stops: CStop[]; stopById: Map<string, CStop>; lines: CLine[];
   /** building access points (trip origins and destinations inside the plan) */
   places: Place[];
+  /** transit flows between entry points (those whose ends are both entry points) */
+  flows: CFlow[];
   warnings: string[];
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
   getConn(move: Movement, a: number, b: number): Conn;
@@ -440,6 +444,15 @@ export function compile(net: Network): Compiled {
 
   const places = attachBuildings(net.buildings ?? [], [...linkInfo.values()]);
 
+  // ---- transit flows: both ends must be entry points
+  const flows: CFlow[] = [];
+  for (const def of net.flows ?? []) {
+    const from = nodeById.get(def.from), to = nodeById.get(def.to);
+    if (!from || !to) continue;
+    if (!from.gateway || !to.gateway) { warnings.push(`Transit flow: both ends must be entry / exit points (dead ends where traffic comes and goes).`); continue; }
+    flows.push({ idx: flows.length, def, from, to });
+  }
+
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const b of net.buildings ?? []) for (const p of b.pts) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
   for (const n of net.nodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); }
@@ -447,7 +460,7 @@ export function compile(net: Network): Compiled {
   if (!isFinite(minX)) { minX = -200; minY = -150; maxX = 200; maxY = 150; }
 
   const compiled: Compiled = {
-    nodes, edges, pieces, nodeById, edgeByKey, stops, stopById, lines, places, warnings,
+    nodes, edges, pieces, nodeById, edgeByKey, stops, stopById, lines, places, flows, warnings,
     bounds: { minX, minY, maxX, maxY },
     getConn(move, a, b) {
       const cache = (move.conns ??= []), k = a * 8 + b;

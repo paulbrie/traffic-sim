@@ -277,6 +277,8 @@ export function drawScene(
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (ul && (ul.editing || (ul.u.visible && !ul.img))) drawUnderlayFrame(ctx, cam, pal, ul.u, ul.editing && !ul.u.locked, ul.hover);
   if (ov.junctions) drawJunctionTags(ctx, cam, pal, compiled, sim);
+  drawCounters(ctx, cam, pal, net, compiled, sim);
+  if (ov.selection?.kind === "node") drawFlows(ctx, cam, pal, net, ov.selection.id);
   if (ov.labels && scale > 0.35) drawStreetNames(ctx, cam, pal, geo, net);
   if (ov.labels && scale > 1.1) {
     ctx.font = `500 11px ${pal.sans}`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
@@ -399,6 +401,55 @@ function drawJunctionTags(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palet
     const w = ctx.measureText(text).width + 10, x = q.x + 12, y = q.y - 16;
     ctx.fillStyle = hot ? pal.stop : pal.fg; roundRect(ctx, x, y - 9, w, 18, 4); ctx.fill();
     ctx.fillStyle = hot ? "#fff" : pal.bg; ctx.fillText(text, x + 5, y + 0.5);
+  }
+}
+
+/** transit flows starting or ending at the selected entry point: dashed arrows with their rate */
+function drawFlows(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, net: Network, nodeId: string) {
+  const flows = (net.flows ?? []).filter(f => f.from === nodeId || f.to === nodeId);
+  if (!flows.length) return;
+  const at = (id: string) => { const n = net.nodes.find(x => x.id === id); return n ? toScreen(cam, n.x, n.y) : null; };
+  ctx.font = `600 11px ${pal.mono}`; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  for (const f of flows) {
+    const a = at(f.from), b = at(f.to);
+    if (!a || !b) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+    // bow the line a little so flows in both directions between two points don't overlap
+    const bow = Math.min(60, L * 0.15), cx = (a.x + b.x) / 2 - uy * bow, cy = (a.y + b.y) / 2 + ux * bow;
+    const out = f.from === nodeId;
+    ctx.strokeStyle = out ? pal.primary : pal.slow; ctx.lineWidth = 2; ctx.setLineDash([8, 6]);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(cx, cy, b.x - ux * 8, b.y - uy * 8); ctx.stroke();
+    ctx.setLineDash([]);
+    // arrowhead along the curve's end tangent
+    const tx = b.x - cx, ty = b.y - cy, tl = Math.hypot(tx, ty) || 1, hx = tx / tl, hy = ty / tl;
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - hx * 12 - hy * 6, b.y - hy * 12 + hx * 6); ctx.lineTo(b.x - hx * 12 + hy * 6, b.y - hy * 12 - hx * 6); ctx.closePath(); ctx.fill();
+    const text = `${f.rate}/h`, w = ctx.measureText(text).width + 10, lx = (a.x + 2 * cx + b.x) / 4, ly = (a.y + 2 * cy + b.y) / 4;
+    roundRect(ctx, lx - w / 2, ly - 9, w, 18, 4); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.fillText(text, lx - w / 2 + 5, ly + 0.5);
+  }
+}
+
+/** traffic counters: a marker where vehicles are counted (the middle of the road) and the readings */
+function drawCounters(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, net: Network, compiled: Compiled, sim: Sim | null) {
+  ctx.font = `600 11px ${pal.mono}`; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  for (const l of net.links) {
+    if (!l.counter) continue;
+    const e = compiled.edgeByKey.get(`${l.id}:1`) ?? compiled.edgeByKey.get(`${l.id}:-1`);
+    if (!e) continue;
+    const p = e.center.at(e.center.len / 2), q = toScreen(cam, p.x, p.y);
+    if (q.x < -120 || q.y < -40 || q.x > cam.w + 120 || q.y > cam.h + 40) continue;
+    let text = "⇅ counter";
+    if (sim) {
+      const f = sim.counter(l.id, 1), b = sim.counter(l.id, -1);
+      const total = (f?.total ?? 0) + (b?.total ?? 0), rate = (f?.perHour ?? 0) + (b?.perHour ?? 0);
+      text = `⇅ ${total} · ${Math.round(rate)}/h`;
+    }
+    ctx.fillStyle = pal.primary; ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = pal.bg; ctx.lineWidth = 1.5; ctx.stroke();
+    const w = ctx.measureText(text).width + 10, x = q.x + 8, y = q.y - 14;
+    ctx.fillStyle = pal.primary; roundRect(ctx, x, y - 9, w, 18, 4); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.fillText(text, x + 5, y + 0.5);
   }
 }
 

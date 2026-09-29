@@ -19,6 +19,7 @@ import { FLOOR_HEIGHT, USE_LABEL, polyArea, tripWeight } from "@/engine/building
 import { NumberField, Section, Stepper, compass } from "./fields";
 import { SignalGroupSection } from "./signal-groups";
 import { PhaseEditor } from "./phase-editor";
+import { FlowsSection } from "./flows";
 import { LaneArrowsEditor } from "./lane-arrows";
 import { junctionRefs } from "@/engine/refs";
 import { JunctionEventLog } from "./event-log";
@@ -187,6 +188,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
         </Section>
       )}
       {degree === 1 && node.gateway && <InflowSection node={node} set={set} />}
+      {degree === 1 && node.gateway && <FlowsSection net={net} node={node} />}
     </div>
   );
 }
@@ -403,6 +405,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
           {laneArrows}
         </Section>
       )}
+      <CounterSection link={link} towards={[dir.name, back.name]} onChange={on => set({ counter: on || undefined })} />
       <Section title="Speed limit">
         <Select value={String(link.speed)} onValueChange={v => set({ speed: Number(v) })}>
           <SelectTrigger className="w-full" aria-label="Speed limit"><SelectValue /></SelectTrigger>
@@ -480,6 +483,42 @@ function StopInspector({ net, id }: { net: Network; id: string }) {
         })}
       </Section>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- traffic counter
+/** switch a road's traffic counter on or off, and show its readings while traffic runs */
+function CounterSection({ link, towards, onChange }: { link: LinkDef; towards: [string, string]; onChange: (on: boolean) => void }) {
+  useSubject(stats$); // live readings (~4×/s)
+  const sim = simController.sim;
+  const on = link.counter === true;
+  const dirs = ([[1, link.lanesF, towards[0]], [-1, link.lanesB, towards[1]]] as const).filter(([, lanes]) => lanes > 0);
+  return (
+    <Section title="Traffic counter">
+      <label className="flex items-center justify-between gap-2 text-sm">
+        <span>Count traffic on this road</span>
+        <Switch checked={on} onCheckedChange={onChange} aria-label="Count traffic on this road" />
+      </label>
+      {on && (sim ? (
+        <table className="w-full text-sm">
+          <thead><tr className="text-xs text-muted-foreground"><th className="pb-1 text-left font-normal">Towards</th><th className="pb-1 text-right font-normal">Vehicles</th><th className="pb-1 text-right font-normal">Per hour</th><th className="pb-1 text-right font-normal">km/h</th></tr></thead>
+          <tbody>
+            {dirs.map(([d, , name]) => {
+              const c = sim.counter(link.id, d);
+              return (
+                <tr key={d} className="border-t" title={c ? `${c.cars} cars, ${c.trucks} trucks, ${c.buses} buses` : undefined}>
+                  <td className="py-1">{name}</td>
+                  <td className="py-1 text-right font-mono tabular">{c?.total ?? 0}</td>
+                  <td className="py-1 text-right font-mono tabular">{c ? Math.round(c.perHour) : 0}</td>
+                  <td className="py-1 text-right font-mono tabular">{c && c.total ? c.avgSpeed.toFixed(0) : "–"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : <p className="text-xs text-muted-foreground">Counts the vehicles passing the middle of the road, each direction apart. Run traffic to see the readings.</p>)}
+      {on && sim && <p className="text-[11px] text-muted-foreground">Per hour: the rate over the last 5 minutes. Hover a row for cars, trucks and buses.</p>}
+    </Section>
   );
 }
 

@@ -101,6 +101,8 @@ export interface LinkDef {
    */
   greenF?: number[][] | null;
   greenB?: number[][] | null;
+  /** count the vehicles passing the middle of this road (a traffic counter; off by default) */
+  counter?: boolean;
 }
 
 export type ApproachSign = "yield" | "stop";
@@ -174,6 +176,20 @@ export interface BuildingDef {
   trips?: number | null;
 }
 
+/**
+ * Transit: vehicles entering at one entry point and leaving at another, at a set rate (on top of
+ * the plan's car and truck totals).
+ */
+export interface FlowDef {
+  id: string;
+  /** entry point where the vehicles come in, and the one they leave by (node ids) */
+  from: string; to: string;
+  /** vehicles per hour (arrivals are random around this average) */
+  rate: number;
+  /** share of trucks (0..1) */
+  trucks?: number;
+}
+
 /** Where the plan sits on Earth: the latitude/longitude of world point (0, 0). */
 export interface GeoRef { lat: number; lon: number }
 
@@ -188,6 +204,8 @@ export interface Network {
   lines: LineDef[];
   signalGroups?: SignalGroup[];
   buildings?: BuildingDef[];
+  /** transit flows between entry points */
+  flows?: FlowDef[];
   /** set for plans imported from a map, so later imports line up; `areas` are the frames imported so far */
   geo?: (GeoRef & { areas?: GeoArea[] }) | null;
 }

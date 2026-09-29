@@ -67,6 +67,7 @@ export function sanitizeNetwork(input: unknown): Network {
     turnsF: turns(l.turnsF, num(l.lanesF, 0, 4, 1)), turnsB: turns(l.turnsB, num(l.lanesB, 0, 4, 1)),
     signF: sign(l.signF), signB: sign(l.signB), splitF: split(l.splitF), splitB: split(l.splitB),
     greenF: greens(l.greenF, num(l.lanesF, 0, 4, 1)), greenB: greens(l.greenB, num(l.lanesB, 0, 4, 1)),
+    ...(l.counter === true ? { counter: true } : {}),
   })).filter(l => l.lanesF + l.lanesB > 0);
   const linkIds = new Set(links.map(l => l.id));
   const stops = arr("stops").filter(s => linkIds.has(s.link as string)).map(s => ({
@@ -88,9 +89,13 @@ export function sanitizeNetwork(input: unknown): Network {
       .filter((m: Record<string, unknown>) => m && typeof m.node === "string" && nodeIds.has(m.node) && !taken.has(m.node) && (taken.add(m.node), true))
       .map((m: Record<string, unknown>) => ({ node: m.node as string, offset: num(m.offset, 0, 240, 0), phase: Math.round(num(m.phase, 0, 7, 0)), share: num(m.share, 0.2, 0.85, 0.5) })),
   }));
+  const flows = arr("flows").filter(f => typeof f.id === "string" && nodeIds.has(f.from as string) && nodeIds.has(f.to as string) && f.from !== f.to).slice(0, 200).map(f => ({
+    id: str(f.id, "", 64), from: str(f.from), to: str(f.to), rate: Math.round(num(f.rate, 0, 10000, 300)),
+    ...(typeof f.trucks === "number" && isFinite(f.trucks) && f.trucks > 0 ? { trucks: Math.min(1, f.trucks) } : {}),
+  }));
   const buildings = sanitizeBuildings(src.buildings);
   const geo = sanitizeGeo(src.geo);
-  return { version: 1, nodes, links, stops, lines, ...(signalGroups.length ? { signalGroups } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
+  return { version: 1, nodes, links, stops, lines, ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
 }
 
 /** most buildings a plan keeps (an imported district of a few km²) */

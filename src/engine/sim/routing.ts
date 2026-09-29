@@ -161,7 +161,8 @@ export abstract class SimRouting extends SimBase {
    * can still get there, otherwise heading for the nearest way out).
    */
   protected applySplit(v: Vehicle) {
-    if (v.kind === "bus") return;
+    // buses follow their line, transit vehicles their own exit
+    if (v.kind === "bus" || v.flow >= 0) return;
     // decide this junction and the next one, so there is a whole road to get into the right lane
     this.applySplitAt(v, v.ri);
     this.applySplitAt(v, v.ri + 1);

@@ -1,6 +1,6 @@
 /** Pure network edit operations. Each returns a new Network (never mutates). */
 import { newId, makeNode } from "@/engine/sample";
-import { MAX_PHASES, type BuildingDef, type LineDef, type LinkDef, type Network, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec } from "@/engine/types";
+import { MAX_PHASES, type BuildingDef, type FlowDef, type LineDef, type LinkDef, type Network, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec } from "@/engine/types";
 import type { Compiled } from "@/engine/compile";
 import { greenWaveOffsets, withCustomPhases } from "@/engine/signals";
 
@@ -100,7 +100,9 @@ export function mergeNodes(net: Network, keep: string, drop: string): Network {
   const links = net.links
     .map(l => ({ ...l, from: l.from === drop ? keep : l.from, to: l.to === drop ? keep : l.to }))
     .filter(l => l.from !== l.to);
-  return pruneRefs({ ...net, nodes: net.nodes.filter(n => n.id !== drop), links });
+  // flows follow the merged node (and are dropped if both ends end up the same)
+  const flows = net.flows?.map(f => ({ ...f, from: f.from === drop ? keep : f.from, to: f.to === drop ? keep : f.to })).filter(f => f.from !== f.to);
+  return pruneRefs({ ...net, nodes: net.nodes.filter(n => n.id !== drop), links, ...(flows ? { flows } : {}) });
 }
 
 export function addStop(net: Network, link: string, dir: 1 | -1, pos: number): [Network, StopDef] {
@@ -136,12 +138,14 @@ function pruneRefs(net: Network): Network {
   const nodes = net.nodes.filter(n => used.has(n.id));
   const nodeIds = new Set(nodes.map(n => n.id));
   const groups = net.signalGroups?.map(g => ({ ...g, members: g.members.filter(m => nodeIds.has(m.node)) })).filter(g => g.members.length);
+  const flows = net.flows?.filter(f => nodeIds.has(f.from) && nodeIds.has(f.to));
   return {
     ...net,
     nodes,
     stops,
     lines: net.lines.map(l => ({ ...l, stops: l.stops.filter(s => stopIds.has(s)) })),
     ...(net.signalGroups ? { signalGroups: groups } : {}),
+    ...(net.flows ? { flows } : {}),
   };
 }
 
@@ -632,4 +636,28 @@ export function setLaneGreen(net: Network, linkId: string, dir: 1 | -1, lane: nu
     g[lane] = on ? [...new Set([...g[lane], phase])].sort((a, b) => a - b) : g[lane].filter(x => x !== phase);
     return dir === 1 ? { ...l, greenF: g } : { ...l, greenB: g };
   });
+}
+
+// ---------------------------------------------------------------- transit flows
+/** entry points: dead ends where traffic enters and leaves the plan */
+export const entryPoints = (net: Network) => {
+  const deg = new Map<string, number>();
+  for (const l of net.links) for (const k of [l.from, l.to]) deg.set(k, (deg.get(k) ?? 0) + 1);
+  return net.nodes.filter(n => n.gateway && deg.get(n.id) === 1);
+};
+
+/** A flow from an entry point, to the entry point farthest from it (change it afterwards). */
+export function addFlow(net: Network, from: string): [Network, FlowDef | null] {
+  const A = nodeById(net, from);
+  const others = entryPoints(net).filter(n => n.id !== from);
+  if (!A || !others.length) return [net, null];
+  const to = others.reduce((a, b) => (Math.hypot(b.x - A.x, b.y - A.y) > Math.hypot(a.x - A.x, a.y - A.y) ? b : a));
+  const flow: FlowDef = { id: newId("f"), from, to: to.id, rate: 300 };
+  return [{ ...net, flows: [...(net.flows ?? []), flow] }, flow];
+}
+export function updateFlow(net: Network, id: string, patch: Partial<FlowDef>): Network {
+  return { ...net, flows: (net.flows ?? []).map(f => (f.id === id ? { ...f, ...patch } : f)) };
+}
+export function deleteFlow(net: Network, id: string): Network {
+  return { ...net, flows: (net.flows ?? []).filter(f => f.id !== id) };
 }

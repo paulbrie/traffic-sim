@@ -31,6 +31,8 @@ export interface Vehicle {
   dead: boolean;
   /** spawned by an entry point with a set flow (not counted against the car/truck totals) */
   metered: boolean;
+  /** index of the transit flow the vehicle belongs to (-1 = none) */
+  flow: number;
   /** turning-proportion decisions already drawn, by edge index */
   splits?: Map<number, Edge>;
 }
@@ -57,6 +59,27 @@ export interface NodeState {
   demand: number[];
   /** per arm: vehicles through during the current green, when it started, and past cycles */
   cyc: { count: number; greenAt: number; hist: { n: number; green: number; at: number }[] }[];
+}
+
+/** what happened to a transit flow's vehicles */
+export interface FlowState {
+  /** entered the plan, reached the flow's exit, left by another exit, removed when stuck */
+  sent: number; arrived: number; diverted: number; towed: number;
+  /** sum of the arrived vehicles' travel times (s) */
+  travelSum: number;
+  /** arrivals waiting to get onto the road at the entry point */
+  backlog: number;
+  /** spawn attempts that found no route to the exit */
+  noRoute: number;
+}
+
+/** a traffic counter on one direction of a road: vehicles passing the middle of the road */
+export interface Counter {
+  total: number; cars: number; trucks: number; buses: number;
+  /** sum of passing speeds (m/s), for the average */
+  speedSum: number;
+  /** ticks of recent passes (last 5 minutes) */
+  recent: number[];
 }
 
 export interface Stats {
@@ -125,6 +148,10 @@ export abstract class SimBase {
    * a handful of vehicles instead of every vehicle in the plan.
    */
   protected ringClaims = new Map<CNode, Vehicle[]>();
+  /** transit flows, parallel to net.flows */
+  protected flowState: FlowState[] = [];
+  /** traffic counters by edge index (roads with `counter` on; null elsewhere) */
+  protected counters: (Counter | null)[] = [];
   /** vehicles that crossed each node so far, and the ticks of recent crossings (last minute) */
   protected nodeThrough: number[] = [];
   protected nodeRecent: number[][] = [];
@@ -161,6 +188,8 @@ export abstract class SimBase {
     let acc = 0;
     this.net.places.forEach((p, i) => (this.placeCum[i] = acc += p.w));
     this.maxSpeed = Math.max(13.9, ...this.net.edges.map(e => e.speed));
+    this.flowState = this.net.flows.map(() => ({ sent: 0, arrived: 0, diverted: 0, towed: 0, travelSum: 0, backlog: 0, noRoute: 0 }));
+    this.counters = this.net.edges.map(e => (e.link.counter ? { total: 0, cars: 0, trucks: 0, buses: 0, speedSum: 0, recent: [] } : null));
   }
   get time() { return this.tick * DT; }
   // ------------------------------------------------------------ helpers
@@ -224,11 +253,27 @@ export abstract class SimBase {
     // lanes are numbered from 1 = leftmost (next to the centre line), as in the inspector
     return `${m.turn} from ${m.in.link.name || m.in.link.id}${inL !== undefined ? ` lane ${inL + 1}` : ""} to ${m.out.link.name || m.out.link.id}${outL !== undefined ? ` lane ${outL + 1}` : ""}`;
   }
+  /** a vehicle passed the middle of a counted road (only observes: nothing here affects traffic) */
+  protected countPass(v: Vehicle, edgeIdx: number) {
+    const c = this.counters[edgeIdx];
+    if (!c) return;
+    c.total++; c.speedSum += v.v;
+    if (v.kind === "car") c.cars++; else if (v.kind === "truck") c.trucks++; else c.buses++;
+    c.recent.push(this.tick);
+    const since = this.tick - 3000;
+    while (c.recent.length && c.recent[0] < since) c.recent.shift();
+  }
   protected kill(v: Vehicle, why: "exit" | "arrived" | "towed" | "removed") {
     if (v.dead) return;
     v.dead = true;
     if (why === "exit" || why === "arrived") { this.stats.trips++; this.tripLog.push(this.tick); }
     else if (why === "towed") this.stats.towed++;
+    if (v.flow >= 0) {
+      const f = this.flowState[v.flow], to = this.net.flows[v.flow].to;
+      if (why === "exit" && v.dest.kind === "gateway" && v.dest.node === to) { f.arrived++; f.travelSum += (this.tick - v.bornT) * DT; }
+      else if (why === "exit") f.diverted++;
+      else if (why === "towed") f.towed++;
+    }
   }
   protected exitRoom(st: NodeState, c: Conn, v: Vehicle) {
     const out = c.outEdge.lanes[c.outLane];

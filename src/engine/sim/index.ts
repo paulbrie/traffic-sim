@@ -17,6 +17,12 @@ import type { Vehicle } from "./base";
 import { SimDemand } from "./demand";
 
 export { DT, type Kind, type Dest, type Vehicle, type JunctionEvent, type Stats } from "./base";
+
+/** a transit flow's results: vehicles sent, arrived at its exit, diverted to another exit, removed when stuck, waiting to enter, still driving; average travel time (s); failed spawns for lack of a route */
+export interface FlowStats { sent: number; arrived: number; diverted: number; towed: number; backlog: number; inPlan: number; avgTravel: number; noRoute: number }
+
+/** a traffic counter's readings: vehicles passing so far (by kind), their average speed (km/h), and the recent rate (vehicles per hour, last 5 minutes) */
+export interface CounterStats { total: number; cars: number; trucks: number; buses: number; avgSpeed: number; perHour: number }
 export { LW } from "../compile";
 
 export class Sim extends SimDemand {
@@ -59,6 +65,25 @@ export class Sim extends SimDemand {
     S.history.push({ t: this.time, speed: S.avgSpeed, stopped: S.stopped });
     if (S.history.length > 180) S.history.shift();
   }
+  // ------------------------------------------------------------ transit flows
+  /** what happened to transit flow `i`'s vehicles so far (average travel time in s, 0 before any arrived) */
+  flowStats(i: number): FlowStats | null {
+    const f = this.flowState[i];
+    if (!f) return null;
+    return { sent: f.sent, arrived: f.arrived, diverted: f.diverted, towed: f.towed, backlog: f.backlog, noRoute: f.noRoute, avgTravel: f.arrived ? f.travelSum / f.arrived : 0, inPlan: f.sent - f.arrived - f.diverted - f.towed };
+  }
+
+  // ------------------------------------------------------------ traffic counters
+  /** readings of the counter on edge `edgeIdx` (null = no counter there) */
+  counterStats(edgeIdx: number): CounterStats | null {
+    const c = this.counters[edgeIdx];
+    if (!c) return null;
+    const since = this.tick - 3000;
+    while (c.recent.length && c.recent[0] < since) c.recent.shift();
+    const window = Math.min(300, Math.max(1, this.time));
+    return { total: c.total, cars: c.cars, trucks: c.trucks, buses: c.buses, avgSpeed: c.total ? (c.speedSum / c.total) * 3.6 : 0, perHour: (c.recent.length * 3600) / window };
+  }
+
   // ------------------------------------------------------------ queries for renderers
   /** front and rear of the vehicle body in world metres (with lane-change smoothing) */
   /**
