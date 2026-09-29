@@ -6,6 +6,7 @@ import { buildRoadGeo, type RoadGeo } from "@/render/geometry";
 import { buildPaths, drawScene, toScreen, toWorld, underlayHandles, type Camera, type Overlay, type PathCache, type UnderlayHandle } from "@/render/draw2d";
 import { readPalette, type Palette } from "@/render/palette";
 import { linkExtent } from "@/engine/compile";
+import { pointInPoly } from "@/engine/buildings";
 import type { Network, Vec } from "@/engine/types";
 import { commit, endGesture, network$, select, setUnderlay, ui, underlay$, type UiState } from "@/state/store";
 import { simController } from "@/state/sim-controller";
@@ -127,6 +128,16 @@ export function PlanCanvas() {
       const near = (p: Vec) => { const q = toScreen(cam, p.x, p.y); return Math.hypot(q.x - sx, q.y - sy) < HIT_HANDLE; };
       if (l.c1 && l.c2) { if (near(l.c1)) return "c1"; if (near(l.c2)) return "c2"; return null; }
       return near({ x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 }) ? "bend" : null;
+    }
+    function hitBuilding(p: Vec): string | null {
+      if (!u.display.buildings) return null;
+      for (const b of net.buildings ?? []) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const q of b.pts) { if (q.x < minX) minX = q.x; if (q.x > maxX) maxX = q.x; if (q.y < minY) minY = q.y; if (q.y > maxY) maxY = q.y; }
+        if (p.x < minX || p.x > maxX || p.y < minY || p.y > maxY) continue;
+        if (pointInPoly(b.pts, p.x, p.y)) return b.id;
+      }
+      return null;
     }
     function hitStop(p: Vec): string | null {
       if (!geo) return null;
@@ -292,6 +303,8 @@ export function PlanCanvas() {
       }
       const l = hitLink(w);
       if (l) { select({ kind: "link", id: l.id }); return; }
+      const b = hitBuilding(w);
+      if (b) { select({ kind: "building", id: b }); drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: false }; return; }
       drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: true };
     }
 
@@ -425,11 +438,10 @@ export function PlanCanvas() {
     window.addEventListener("keyup", onKey, true);
 
     // ------------------------------------------------------------ render loop
-    let raf = 0, last = performance.now(), lastTool = u.tool;
-    const frame = (now: number) => {
-      const dt = (now - last) / 1000; last = now;
+    let raf = 0, lastTool = u.tool;
+    const frame = () => {
       if (u.tool !== lastTool) { if (u.tool !== "road") pending = null; lastTool = u.tool; }
-      const moved = u.view === "2d" ? simController.advance(dt) : false;
+      const moved = u.view === "2d" ? simController.advance() : false;
       if (u.view === "2d" && (dirty || moved || u.sim.running)) {
         ensureGeo();
         let draftOv: Overlay["draft"] = null;
@@ -458,6 +470,7 @@ export function PlanCanvas() {
           snapStep: u.snap.step, gridOn: u.snap.grid,
           underlay: ul ? { u: ul, img: ulImg, editing: u.tool === "image" && !u.calib.active, hover: ulHover } : null,
           calib: u.calib.active ? { a: u.calib.a, b: u.calib.b, cursor: cursorWorld } : null,
+          buildings: u.display.buildings,
           alsoSelected: u.tool === "segment" && u.segScope === "road" && u.selection?.kind === "link" ? ops.chainLinks(net, u.selection.id).map(c => c.id).slice(1) : [],
         });
         viewport.cx = cam.cx; viewport.cy = cam.cy; viewport.wm = cam.w / cam.scale; viewport.hm = cam.h / cam.scale;

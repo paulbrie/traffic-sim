@@ -1,7 +1,8 @@
-import { Plus } from "lucide-react";
+import { Earth, Plus } from "lucide-react";
 import { AppHeader } from "@/components/app-header";
 import { CityCard } from "@/components/cities/city-card";
 import { CityDialog } from "@/components/cities/city-dialog";
+import { OsmImportDialog } from "@/components/osm/osm-import-dialog";
 import { Button } from "@/components/ui/button";
 import { DbSetupNotice } from "@/components/db-setup-notice";
 import { listCities } from "@/server/queries";
@@ -15,6 +16,7 @@ export default async function Home() {
   return (
     <>
       <AppHeader>
+        <OsmImportDialog mode={{ kind: "city" }} trigger={<Button size="sm" variant="outline"><Earth /> Import from map</Button>} />
         <CityDialog trigger={<Button size="sm"><Plus /> New city</Button>} />
       </AppHeader>
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
@@ -25,8 +27,11 @@ export default async function Home() {
         {mine.length === 0 ? (
           <div className="grid place-items-center rounded-xl border border-dashed py-20 text-center">
             <p className="mb-1 font-medium">No cities yet</p>
-            <p className="mb-4 max-w-sm text-sm text-muted-foreground">Create a city, then add plans to draw its streets lane by lane and run traffic through them.</p>
-            <CityDialog trigger={<Button><Plus /> Create your first city</Button>} />
+            <p className="mb-4 max-w-sm text-sm text-muted-foreground">Create a city, then add plans to draw its streets lane by lane and run traffic through them, or import a real one from OpenStreetMap.</p>
+            <div className="flex flex-wrap justify-center gap-2">
+              <CityDialog trigger={<Button><Plus /> Create your first city</Button>} />
+              <OsmImportDialog mode={{ kind: "city" }} trigger={<Button variant="outline"><Earth /> Import from map</Button>} />
+            </div>
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

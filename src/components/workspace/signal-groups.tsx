@@ -16,9 +16,11 @@ import { NumberField, Section, compass } from "./fields";
 
 const NEW = "__new__", NONE = "__none__";
 
-/** phase label from the directions its approaches come from, e.g. "N + S" */
-export const phaseName = (cn: CNode, p: number) =>
-  cn.phases[p]?.length ? cn.phases[p].map(i => compass(cn.arms[i].u.x, cn.arms[i].u.y).name).join(" + ") : "All red";
+/** phase label from the directions its approaches come from, e.g. "N + S" (custom phases: "phase 2 (N + S)") */
+export const phaseName = (cn: CNode, p: number) => {
+  const dirs = cn.phases[p]?.length ? cn.phases[p].map(i => compass(cn.arms[i].u.x, cn.arms[i].u.y).name).join(" + ") : "All red";
+  return cn.customPhases ? `phase ${p + 1} (${dirs})` : dirs;
+};
 
 /**
  * Coordination of a traffic-light junction with others: pick or create a group, then set which

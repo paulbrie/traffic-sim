@@ -4,9 +4,12 @@ import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db, schema } from "@/db";
 import { sampleTown } from "@/engine/sample";
-import { DEFAULT_SETTINGS, emptyNetwork, type Network, type PlanSettings } from "@/engine/types";
+import { DEFAULT_SETTINGS, emptyNetwork, type GeoRef, type Network, type PlanSettings } from "@/engine/types";
 import { sanitizeNetwork, sanitizeSettings } from "@/engine/validate";
 import { sanitizeUnderlay, type Underlay } from "@/lib/underlay";
+import { bboxCenter, bboxProblem, bboxSize, ROAD_CLASSES, type BBox, type ImportOptions, type RoadClass } from "@/lib/osm/area";
+import { convertOsm, suggestSettings, type ImportStats } from "@/lib/osm/convert";
+import { fetchOsm, OsmError } from "./osm";
 import { assertUser } from "./auth";
 import { assertCity, assertPlan } from "./access";
 
@@ -103,6 +106,78 @@ export async function duplicateCity(id: string, input: { name?: string } = {}) {
   return cityId;
 }
 
+// ---------------------------------------------------------------- OpenStreetMap import
+export interface OsmAreaInput { bbox: BBox; roads: RoadClass[]; buildings: boolean }
+export type OsmImportTarget = { kind: "city"; name: string } | { kind: "plan"; cityId: string; name: string };
+export type OsmImportResult = { ok: true; cityId: string; planId: string; stats: ImportStats } | { ok: false; error: string };
+export type OsmLoadResult = { ok: true; network: Network; stats: ImportStats } | { ok: false; error: string };
+
+function osmOptions(input: OsmAreaInput): ImportOptions | string {
+  const b = input?.bbox;
+  const bbox: BBox = { south: Number(b?.south), west: Number(b?.west), north: Number(b?.north), east: Number(b?.east) };
+  const problem = bboxProblem(bbox);
+  if (problem) return problem;
+  const roads = ROAD_CLASSES.map(c => c.id).filter(id => Array.isArray(input.roads) && input.roads.includes(id));
+  const buildings = input.buildings === true;
+  if (!roads.length && !buildings) return "Choose at least one kind of road, or buildings.";
+  return { bbox, roads, buildings };
+}
+
+/** download and convert an area; the plan's (0, 0) is at `origin` (default: the area's centre) */
+async function loadArea(opts: ImportOptions, origin: GeoRef): Promise<OsmLoadResult> {
+  let data;
+  try { data = await fetchOsm(opts); } catch (e) {
+    if (e instanceof OsmError) return { ok: false, error: e.message };
+    throw e;
+  }
+  const { network, stats } = convertOsm(data, { ...opts, origin });
+  if (!network.links.length && !network.buildings?.length) return { ok: false, error: "OpenStreetMap has no roads or buildings of the chosen kinds in this area." };
+  return { ok: true, network: sanitizeNetwork(network), stats };
+}
+
+const osmNote = (opts: ImportOptions) => {
+  const { w, h } = bboxSize(opts.bbox);
+  return `Imported from OpenStreetMap on ${new Date().toISOString().slice(0, 10)} (${(w / 1000).toFixed(1)} × ${(h / 1000).toFixed(1)} km). Map data © OpenStreetMap contributors, ODbL.`;
+};
+
+/** Creates a plan (in a new city, or an existing one) from an area of OpenStreetMap. */
+export async function importOsm(input: OsmAreaInput & { target: OsmImportTarget }): Promise<OsmImportResult> {
+  const me = await assertUser();
+  const target = input.target;
+  if (target?.kind === "plan") { assertId(target.cityId); await assertCity(me, target.cityId, "write"); }
+  else if (target?.kind !== "city") throw new Error("Invalid target");
+  const name = clean(target.name);
+  if (!name) return { ok: false, error: target.kind === "city" ? "Give the city a name." : "Give the plan a name." };
+  const opts = osmOptions(input);
+  if (typeof opts === "string") return { ok: false, error: opts };
+  const res = await loadArea(opts, bboxCenter(opts.bbox));
+  if (!res.ok) return res;
+  const note = osmNote(opts);
+  const ids = await db.transaction(async tx => {
+    const cityId = target.kind === "plan" ? target.cityId
+      : (await tx.insert(schema.cities).values({ ownerId: me.id, name, description: "Imported from OpenStreetMap" }).returning({ id: schema.cities.id }))[0].id;
+    const [plan] = await tx.insert(schema.plans)
+      .values({ cityId, name: target.kind === "plan" ? name : "Current layout", description: note.slice(0, 500), network: res.network, settings: suggestSettings(res.network) })
+      .returning();
+    await recordVersion(tx, plan.id, me.id, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: null }, "create", "Imported from OpenStreetMap");
+    await tx.update(schema.cities).set({ updatedAt: new Date() }).where(eq(schema.cities.id, cityId));
+    return { cityId, planId: plan.id };
+  });
+  revalidatePath("/");
+  revalidatePath(`/cities/${ids.cityId}`);
+  return { ok: true, ...ids, stats: res.stats };
+}
+
+/** Downloads an area for merging into the plan being edited (the editor places and saves it). */
+export async function loadOsmArea(input: OsmAreaInput & { origin?: GeoRef | null }): Promise<OsmLoadResult> {
+  await assertUser();
+  const opts = osmOptions(input);
+  if (typeof opts === "string") return { ok: false, error: opts };
+  const o = input.origin;
+  const origin = o && Number.isFinite(o.lat) && Number.isFinite(o.lon) && Math.abs(o.lat) <= 85 && Math.abs(o.lon) <= 180 ? { lat: o.lat, lon: o.lon } : bboxCenter(opts.bbox);
+  return loadArea(opts, origin);
+}
+
 // ---------------------------------------------------------------- sharing
 export type ShareResult = { ok: true } | { ok: false; error: string };
 
@@ -196,6 +271,23 @@ export async function createPlan(input: { cityId: string; name: string; descript
   return id;
 }
 
+/** Creates a plan next to an existing one from a network the editor produced (e.g. optimised signal timings). */
+export async function createPlanFrom(sourceId: string, input: { name: string; description?: string; network: unknown; settings: unknown }) {
+  const me = await assertUser();
+  assertId(sourceId);
+  const { cityId } = await assertPlan(me, sourceId, "write");
+  const network = sanitizeNetwork(input.network), settings = sanitizeSettings(input.settings);
+  const name = clean(input.name) || "Untitled plan";
+  const id = await db.transaction(async tx => {
+    const [plan] = await tx.insert(schema.plans).values({ cityId, name, description: clean(input.description, 500), network, settings }).returning();
+    await recordVersion(tx, plan.id, me.id, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: null }, "create", clean(input.description, 200) || "Created");
+    await tx.update(schema.cities).set({ updatedAt: new Date() }).where(eq(schema.cities.id, cityId));
+    return plan.id;
+  });
+  revalidatePath(`/cities/${cityId}`);
+  return id;
+}
+
 export async function duplicatePlan(id: string) {
   const me = await assertUser();
   assertId(id);
@@ -239,11 +331,21 @@ export async function deletePlan(id: string) {
 export type SaveResult = { ok: true; revision: number; savedAt: string } | { ok: false; reason: "conflict" | "missing" | "forbidden"; revision?: number };
 
 /** Saves the plan if nobody else saved in between (optimistic concurrency on `revision`), and records it in the history. */
-export async function savePlan(id: string, input: { network: unknown; settings: unknown; underlay?: unknown; revision: number; force?: boolean }): Promise<SaveResult> {
+/**
+ * Saves the open plan. With `keepBuildings` the client left the (unchanged) buildings out of
+ * `network`, and the ones already stored are kept, so large imported plans save quickly.
+ */
+export async function savePlan(id: string, input: { network: unknown; keepBuildings?: boolean; settings: unknown; underlay?: unknown; revision: number; force?: boolean }): Promise<SaveResult> {
   const me = await assertUser();
   assertId(id);
   try { await assertPlan(me, id, "write"); } catch { return { ok: false, reason: "forbidden" }; }
   const network = sanitizeNetwork(input.network);
+  if (input.keepBuildings) {
+    const [cur] = await db.select({ buildings: sql`${schema.plans.network}->'buildings'`.mapWith(schema.plans.network) }).from(schema.plans).where(eq(schema.plans.id, id));
+    // stored plans were sanitised when they were saved
+    const kept = cur?.buildings as unknown as Network["buildings"] | null;
+    if (Array.isArray(kept) && kept.length) network.buildings = kept;
+  }
   const settings = sanitizeSettings(input.settings);
   const underlay = sanitizeUnderlay(input.underlay);
   const now = new Date();

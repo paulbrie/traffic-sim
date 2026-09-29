@@ -1,9 +1,9 @@
 /** Builds three.js meshes for roads, junctions and street furniture from the shared road geometry. */
 import * as THREE from "three";
 import type { Poly } from "@/engine/geom";
-import type { Vec } from "@/engine/types";
+import type { BuildingDef, Vec } from "@/engine/types";
 import type { RoadGeo, Strip } from "./geometry";
-import type { Palette } from "./palette";
+import { buildingColor, type Palette } from "./palette";
 
 class Batch {
   pos: number[] = [];
@@ -55,7 +55,7 @@ class Batch {
 
 export interface Furniture {
   group: THREE.Group;
-  heads: { mesh: THREE.Mesh; nodeIdx: number; arm: number }[];
+  heads: { mesh: THREE.Mesh; nodeIdx: number; arm: number; lane?: number }[];
   labels: { sprite: THREE.Sprite; canvas: HTMLCanvasElement; tex: THREE.CanvasTexture; id: string }[];
 }
 
@@ -102,7 +102,27 @@ export function buildFurniture(geo: RoadGeo, pal: Palette, sigMats: Record<"gree
   const heads: Furniture["heads"] = [];
   const labels: Furniture["labels"] = [];
   const pole = new THREE.MeshLambertMaterial({ color: "#3e444b" });
+  const masts = new Set<string>();
   for (const s of geo.signals) {
+    if (s.kind === "lights" && s.lane !== undefined && s.pole) {
+      // mast at the kerb with an arm over the lanes; one head above each lane
+      const key = `${s.nodeIdx}:${s.arm}`;
+      if (!masts.has(key)) {
+        masts.add(key);
+        const lanes = geo.signals.filter(x => x.nodeIdx === s.nodeIdx && x.arm === s.arm && x.lane !== undefined);
+        const far = lanes.reduce((a, x) => (Math.hypot(x.p.x - s.pole!.x, x.p.y - s.pole!.y) > Math.hypot(a.p.x - s.pole!.x, a.p.y - s.pole!.y) ? x : a), s);
+        const p = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 6.2, 6), pole); p.position.set(s.pole.x, 3.1, s.pole.y); p.castShadow = true;
+        const dx = far.p.x - s.pole.x, dy = far.p.y - s.pole.y, len = Math.hypot(dx, dy) + 0.6;
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(len, 0.16, 0.16), pole);
+        bar.position.set(s.pole.x + dx / 2, 6.1, s.pole.y + dy / 2); bar.rotation.y = -Math.atan2(dy, dx); bar.castShadow = true;
+        group.add(p, bar);
+      }
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.3, 0.6), pole); box.position.set(s.p.x, 5.35, s.p.y); box.castShadow = true;
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.42, 0.66), sigMats.off); lamp.position.set(s.p.x, 5.45, s.p.y);
+      group.add(box, lamp);
+      heads.push({ mesh: lamp, nodeIdx: s.nodeIdx, arm: s.arm, lane: s.lane });
+      continue;
+    }
     if (s.kind === "lights") {
       const p = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 5, 6), pole); p.position.set(s.p.x, 2.5, s.p.y); p.castShadow = true;
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.7, 0.7), pole); box.position.set(s.p.x, 5.2, s.p.y); box.castShadow = true;
@@ -136,4 +156,57 @@ export function buildFurniture(geo: RoadGeo, pal: Palette, sigMats: Record<"gree
     labels.push({ sprite, canvas, tex, id: s.id });
   }
   return { group, heads, labels };
+}
+
+/** walls and roof of one footprint, as triangles (x, height, y) */
+function extrude(b: BuildingDef, pos: number[], lift = 0, grow = 0) {
+  let pts = b.pts;
+  if (grow) {
+    const cx = pts.reduce((a, p) => a + p.x, 0) / pts.length, cy = pts.reduce((a, p) => a + p.y, 0) / pts.length;
+    pts = pts.map(p => { const d = Math.hypot(p.x - cx, p.y - cy) || 1; return { x: p.x + ((p.x - cx) / d) * grow, y: p.y + ((p.y - cy) / d) * grow }; });
+  }
+  const h = b.height + lift, n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const a = pts[i], c = pts[(i + 1) % n];
+    pos.push(a.x, 0, a.y, c.x, 0, c.y, c.x, h, c.y, a.x, 0, a.y, c.x, h, c.y, a.x, h, a.y);
+  }
+  const tris = THREE.ShapeUtils.triangulateShape(pts.map(p => new THREE.Vector2(p.x, p.y)), []);
+  for (const [i, j, k] of tris) pos.push(pts[i].x, h, pts[i].y, pts[j].x, h, pts[j].y, pts[k].x, h, pts[k].y);
+  return 2 * n + tris.length;
+}
+
+/**
+ * All buildings as one mesh (walls a shade darker than roofs). `owner[t]` is the index of the
+ * building triangle t belongs to, for picking.
+ */
+export function buildBuildings(list: BuildingDef[], pal: Palette): { mesh: THREE.Mesh; owner: Int32Array } {
+  const pos: number[] = [], col: number[] = [], owner: number[] = [];
+  const roof = new THREE.Color(), wall = new THREE.Color();
+  list.forEach((b, bi) => {
+    const start = pos.length / 9;
+    const nWallTris = 2 * b.pts.length;
+    const tris = extrude(b, pos);
+    roof.set(buildingColor(pal, b.use)); wall.copy(roof).multiplyScalar(0.86);
+    for (let t = 0; t < tris; t++) {
+      const c = t < nWallTris ? wall : roof;
+      col.push(c.r, c.g, c.b, c.r, c.g, c.b, c.r, c.g, c.b);
+      owner[start + t] = bi;
+    }
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  return { mesh, owner: Int32Array.from(owner) };
+}
+
+/** slightly larger shell around one building, for the selection highlight */
+export function buildingShell(b: BuildingDef): THREE.BufferGeometry {
+  const pos: number[] = [];
+  extrude(b, pos, 0.4, 0.4);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  return g;
 }

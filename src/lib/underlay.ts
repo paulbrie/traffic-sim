@@ -1,3 +1,5 @@
+import { basePath } from "./base-path";
+
 /**
  * Reference image placed under the plan (a map screenshot, an aerial photo, a survey drawing).
  * The image bytes live in `plan_images`; this transform lives on the plan row and autosaves with it.
@@ -62,4 +64,4 @@ export function underlayCorners(u: Underlay) {
   return [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([x, y]) => ({ x: u.x + x * c - y * s, y: u.y + x * s + y * c }));
 }
 
-export const underlayUrl = (planId: string, v: number) => `/api/plans/${planId}/underlay?v=${v}`;
+export const underlayUrl = (planId: string, v: number) => `${basePath}/api/plans/${planId}/underlay?v=${v}`;

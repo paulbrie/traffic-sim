@@ -1,0 +1,205 @@
+import { conflicts, conflictEnd, type CNode, type Conn, type Edge } from "../compile";
+import type { Vehicle, Occ, NodeState } from "./base";
+import { SimSignals } from "./signals";
+
+/** Junctions: who may enter (reservations of conflicting paths, stop and give-way signs, lights), roundabout entry, per-junction statistics. */
+export abstract class SimJunctions extends SimSignals {
+  /** all-way stop, or a stop sign on this approach to a priority junction */
+  protected mustStop(node: CNode, e: Edge) {
+    if (!node.controlled || node.degree < 2) return false;
+    return node.def.control === "stop" || (node.def.control === "priority" && e.sign === "stop");
+  }
+  /** at a priority junction, approaches with a yield or stop sign give way to the others */
+  protected minor(node: CNode, e: Edge) { return node.def.control === "priority" && !!e.sign; }
+  /**
+   * Crossings that vehicles on the major (unsigned) approaches of `node` will use within the
+   * next few seconds. Minor approaches must not start a conflicting move in front of them.
+   */
+  protected majorTraffic(node: CNode): Conn[] {
+    const out: Conn[] = [];
+    for (const arm of node.arms) {
+      const e = arm.inEdge;
+      if (!e || e.sign) continue;
+      for (const lp of e.lanes) {
+        const list = this.index.get(lp.id); if (!list) continue;
+        for (const u of list) {
+          if (u.dead || u.route[u.ri] !== e) continue;
+          // queued priority traffic that is standing still lets minor traffic in (zip merging)
+          if (u.v < 3 && !u.granted) continue;
+          const dist = lp.len - u.s, eta = dist / Math.max(u.v, 2);
+          if (dist > 70 || eta > 4.5) continue;
+          const cross = this.crossingFor(u, u.ri, u.lane);
+          if (cross && cross[0].kind === "conn") out.push(cross[0] as Conn);
+        }
+      }
+    }
+    return out;
+  }
+  /** gap acceptance for joining a roundabout ring at entry `c` */
+  protected canEnterRing(v: Vehicle, c: Conn): boolean {
+    const n = c.node, ring = n.ring!, m = ring.length, k = c.arm;
+    // only the front vehicle of its lane may commit
+    for (const u of this.index.get(v.piece.id) || []) if (u !== v && u.s > v.s) return false;
+    // one vehicle at a time per arm: nobody else entering or committed to enter here
+    for (const u of this.ringClaims.get(n) ?? []) {
+      if (u === v || u.dead) continue;
+      if (u.piece.kind === "conn" && u.piece.role === "entry" && u.piece.node === n && u.piece.arm === k) return false;
+      if (u.granted && u.conn && u.conn.role === "entry" && u.conn.node === n && u.conn.arm === k && u.piece.kind === "lane") return false;
+    }
+    // keep the ring from filling up (it would lock itself)
+    let onRing = 0, circ = 0;
+    for (const ra of ring) { circ += ra.pass.len + ra.between.len; onRing += (this.index.get(ra.pass.id)?.length || 0) + (this.index.get(ra.between.id)?.length || 0); }
+    if (onRing + 1 > Math.max(2, Math.floor(circ / 11))) return false;
+    const pass = ring[k].pass, prevBetween = ring[(k + 1) % m].between;
+    const critical = 3.2;
+    for (const u of this.index.get(pass.id) || []) {
+      const d = pass.len - u.s;
+      if (d < 8 || d / Math.max(u.v, 1) < critical) return false;
+    }
+    for (const u of this.index.get(prevBetween.id) || []) {
+      const nextPiece = u.queue[0];
+      if (nextPiece && nextPiece.kind === "conn" && nextPiece.role === "exit" && nextPiece.arm === k) continue; // leaving before us
+      const d = prevBetween.len - u.s + pass.len;
+      if (d < 8 || d / Math.max(u.v, 1) < critical) return false;
+    }
+    // room just after the merge point
+    const between = ring[k].between;
+    for (const u of this.index.get(between.id) || []) if (u.s - u.len < v.len + 2) return false;
+    return true;
+  }
+  // ------------------------------------------------------------ junctions
+  protected arbitrate(st: NodeState) {
+    st.occ = st.occ.filter(o => {
+      const v = o.v;
+      if (v.dead) return false;
+      // someone cut in ahead of a waiting grant holder (a late lane change): it must queue again
+      if (!o.entered && v.piece.kind === "lane" && v.piece.edge === o.conn.inEdge) {
+        const ahead = (this.index.get(v.piece.id) ?? []).some(u => u !== v && !u.dead && u.s > v.s && !(u.granted && u.conn));
+        if (ahead) { this.ev(st.node, v, "revoke", "a vehicle cut in ahead in the same lane"); v.granted = false; v.conn = null; return false; }
+      }
+      if (v.piece === o.conn) { o.entered = true; return true; }
+      if (!o.entered) return v.conn === o.conn && v.granted;
+      return v.piece.kind === "lane" && v.piece.edge === o.conn.outEdge && v.trail[0] === o.conn && v.s <= v.len + 1;
+    });
+    // at traffic lights a green-light grant is only a promise: if the light changes before the
+    // vehicle reaches the stop line, it must stop unless it is too close to do so safely
+    if (st.node.def.control === "lights" && st.node.phases.length >= 2) {
+      st.occ = st.occ.filter(o => {
+        if (o.entered || o.sneak) return true;
+        const v = o.v;
+        if (v.piece.kind !== "lane" || v.piece.edge !== o.conn.inEdge) return true;
+        const arm = this.armOf(st.node, o.conn.inEdge);
+        const sig = this.signalFor(st.node.idx, arm, o.conn.inLane);
+        if (sig === "green" || sig === null) return true;
+        const d = v.piece.len - v.s;
+        if (!this.mustGoOnSignal(v, d, sig)) { this.ev(st.node, v, "revoke", `light turned ${sig} ${d.toFixed(0)} m before the line; stops`); v.granted = false; v.conn = null; return false; }
+        return true;
+      });
+    }
+    // give way / stop: a minor-road grant is withdrawn if priority traffic turns up before the
+    // vehicle has committed (it can still stop comfortably at the line)
+    const n0 = st.node;
+    const signedNode = n0.def.control === "priority" && n0.arms.some(a => a.inEdge?.sign);
+    const majorNow = signedNode ? this.majorTraffic(n0) : [];
+    if (majorNow.length) {
+      st.occ = st.occ.filter(o => {
+        if (o.entered || !this.minor(n0, o.conn.inEdge)) return true;
+        const v = o.v;
+        if (v.piece.kind !== "lane" || v.piece.edge !== o.conn.inEdge) return true;
+        if (!majorNow.some(b => conflicts(o.conn, b) || b.outEdge === o.conn.outEdge)) return true;
+        if (this.mustGoOnSignal(v, v.piece.len - v.s, "yellow")) return true;
+        this.ev(n0, v, "revoke", "priority traffic arrived; waits again"); v.granted = false; v.conn = null; return false;
+      });
+    }
+    if (!st.req.size) return;
+    const reqs = [...st.req.values()];
+    st.req.clear();
+    const n = st.node, lights = n.def.control === "lights" && n.phases.length >= 2;
+    // free: no queue order, whoever is closest to the junction goes first if its path is clear
+    const free = n.def.control === "free";
+    if (lights) reqs.sort((a, b) => (a.conn.move.turn === "L" ? 1 : 0) - (b.conn.move.turn === "L" ? 1 : 0) || a.at - b.at || a.v.id - b.v.id);
+    else if (free) reqs.sort((a, b) => a.d - b.d || a.v.id - b.v.id);
+    else reqs.sort((a, b) => a.at - b.at || a.v.id - b.v.id);
+    // priority junction with signed approaches: majors go first, minors wait for a gap
+    const signed = signedNode;
+    if (signed) reqs.sort((a, b) => (this.minor(n, a.conn.inEdge) ? 1 : 0) - (this.minor(n, b.conn.inEdge) ? 1 : 0));
+    const major = majorNow;
+    const blockers: Conn[] = [];
+    const log = this.logging(n);
+    const deny = (v: Vehicle, why: string) => {
+      if (!log || this.lastDeny.get(v.id) === why) return;
+      this.lastDeny.set(v.id, why);
+      const code = why.startsWith("path") ? "conflict" : why.startsWith("crosses") ? "queue-conflict" : why.startsWith("gives") ? "give-way" : why.startsWith("no room") ? "exit-full" : why.includes("light") ? "signal" : "other";
+      this.ev(n, v, "deny", why, { code });
+    };
+    const who = (c: Conn) => { const o = st.occ.find(x => x.conn === c); return o ? `#${o.v.id} (${this.mv(c)})` : this.mv(c); };
+    for (const r of reqs) {
+      const c = r.conn;
+      let sneak = false;
+      if (lights) {
+        const arm = this.armOf(n, c.inEdge);
+        const sig = this.signalFor(n.idx, arm, c.inLane);
+        // a permissive turn waiting at the line for oncoming traffic clears on the yellow / all-red
+        // of its own phase, once oncoming traffic has stopped (the conflict checks below still apply)
+        sneak = sig !== "green" && this.lanePhases(n, arm, c.inLane).includes(st.phase) && (c.move.turn === "L" || c.move.turn === "U")
+          && r.d < 4 && r.v.v < 1 && this.tick - r.at > 30;
+        if (sig !== "green" && !sneak && !this.mustGoOnSignal(r.v, r.d, sig)) { deny(r.v, `${sig} light`); continue; }
+      }
+      let ok = true, why = "", yielded = false;
+      for (const o of st.occ) if (conflicts(c, o.conn) && !this.pastConflict(o, c)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : ""; break; }
+      if (ok) for (const b of blockers) if (conflicts(c, b)) { ok = false; why = log ? `crosses the path of a vehicle ahead in the queue (${this.mv(b)})` : ""; break; }
+      if (ok && signed && this.minor(n, c.inEdge)) {
+        // giving way means not crossing *or* joining the road in front of priority traffic
+        const clash = (b: Conn) => conflicts(c, b) || b.outEdge === c.outEdge;
+        for (const b of major) if (clash(b)) { ok = false; yielded = true; why = log ? `gives way to priority traffic (${this.mv(b)})` : ""; break; }
+        if (ok) for (const o of st.occ) if (!o.conn.inEdge.sign && clash(o.conn)) { ok = false; yielded = true; why = log ? `gives way to #${o.v.id} (${this.mv(o.conn)})` : ""; break; }
+      }
+      // a vehicle that can't go because its exit is full, or because it gives way, does not hold up
+      // the others behind it in arrival order (keep the junction moving: "don't block the box")
+      let holdsQueue = !yielded;
+      if (ok && !this.exitRoom(st, c, r.v)) { ok = false; holdsQueue = false; why = log ? `no room on the exit (${c.outEdge.link.name || c.outEdge.link.id} lane ${c.outLane + 1})` : ""; }
+      if (ok) {
+        r.v.conn = c; r.v.granted = true; st.occ.push({ v: r.v, conn: c, entered: false, sneak });
+        if (log) { this.lastDeny.delete(r.v.id); this.ev(n, r.v, "grant", `${this.mv(c)} · ${r.d.toFixed(0)} m from the line, waited ${((this.tick - r.at) / 10).toFixed(1)} s${sneak ? " · clears on the change (oncoming stopped)" : ""}`, this.md(c.move, c.inLane, c.outLane)); }
+      } else { if (!free && holdsQueue) blockers.push(c); deny(r.v, why); }
+    }
+  }
+  /**
+   * The vehicle holding `o` has already driven past the part of its path that crosses `c` (its rear
+   * is beyond it), so `c` is free as far as it is concerned: traffic on a green may go behind it
+   * instead of waiting for it to leave the junction.
+   */
+  protected pastConflict(o: Occ, c: Conn): boolean {
+    if (!o.entered) return false;
+    const v = o.v, end = conflictEnd(o.conn, c);
+    if (!isFinite(end)) return false;
+    const front = v.piece === o.conn ? v.s : v.trail[0] === o.conn ? o.conn.len + v.s : -Infinity;
+    return front - v.len > end + 1;
+  }
+  reservations(): Conn[] { const out: Conn[] = []; for (const st of this.ns) for (const o of st.occ) out.push(o.conn); return out; }
+  /** live numbers for one junction (for labels and the inspector) */
+  junctionStats(nodeIdx: number) {
+    const n = this.net.nodes[nodeIdx];
+    const recent = this.nodeRecent[nodeIdx] ?? [];
+    const since = this.tick - 600;
+    while (recent.length && recent[0] < since) recent.shift();
+    const window = Math.min(60, Math.max(1, this.time));
+    const approaches = n.arms.filter(a => a.inEdge).map(a => {
+      const e = a.inEdge!;
+      let waiting = 0, queueM = 0;
+      for (const lp of e.lanes) for (const v of this.index.get(lp.id) ?? []) {
+        if (v.dead || v.v > 1.5) continue;
+        const d = lp.len - v.s;
+        if (d > 250) continue;
+        waiting++; queueM = Math.max(queueM, d + v.len);
+      }
+      return { link: e.link, dir: e.dir, waiting, queueM };
+    });
+    return {
+      through: this.nodeThrough[nodeIdx] ?? 0,
+      perMin: (recent.length * 60) / window,
+      waiting: approaches.reduce((s, a) => s + a.waiting, 0),
+      approaches,
+    };
+  }
+}

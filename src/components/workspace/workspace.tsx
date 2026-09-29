@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, Eye, Bus, Hand, Minus, Spline, Image as ImageIcon, Map as MapIcon, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, Eye, Bus, Hand, Minus, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -19,9 +19,12 @@ import { Kbd } from "@/components/ui/kbd";
 import { savePlan } from "@/server/actions";
 import type { Network, PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
-import { commit, loadPlan, network$, redo, select, setTool, settings$, stats$, ui, undo, underlay$, type Tool } from "@/state/store";
+import { commit, loadPlan, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type Tool } from "@/state/store";
 import { simController } from "@/state/sim-controller";
-import { sendView } from "@/state/commands";
+import { sendView, viewport } from "@/state/commands";
+import { OsmImportDialog, describeStats, type OsmImportMode } from "@/components/osm/osm-import-dialog";
+import { bboxCenter, unproject, type BBox } from "@/lib/osm/area";
+import { suggestSettings } from "@/lib/osm/convert";
 import { startUnderlayImage } from "@/state/underlay-image";
 import * as ops from "@/state/ops";
 import { cn } from "@/lib/utils";
@@ -34,6 +37,7 @@ import { UserMenu, type MenuUser } from "@/components/auth/user-menu";
 import { Stepper } from "./fields";
 import { Compass } from "./compass";
 import { HistoryButton } from "./history-dialog";
+import { OptimizeButton } from "./optimize-dialog";
 
 const View3D = dynamic(() => import("./view-3d").then(m => m.View3D), { ssr: false, loading: () => <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading 3D…</div> });
 
@@ -46,7 +50,7 @@ export interface WorkspacePlan {
 
 export function Workspace({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
   // load once per mount (the component is keyed by plan id) before children read the stores
-  useState(() => { simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read"); startUnderlayImage(); return plan.id; });
+  useState(() => { simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read"); setSavedBuildings(plan.network.buildings); startUnderlayImage(); return plan.id; });
   useAutosave(plan.id);
   useShortcuts();
   const [view] = useDeepSubject(ui, "view");
@@ -104,6 +108,7 @@ function TopBar({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
         ? <span className="flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground" title="You can simulate and try things, but nothing is saved"><Eye className="size-3.5" /> View only</span>
         : <SaveIndicator planId={plan.id} />}
       <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} />
+      <OptimizeButton planId={plan.id} planName={plan.name} />
       <div className="ml-auto flex items-center gap-2">
         <ToggleGroup type="single" value={view} onValueChange={v => v && setView(v as "2d" | "3d")} aria-label="View">
           <ToggleGroupItem value="2d" aria-label="Plan view"><MapIcon /> Plan</ToggleGroupItem>
@@ -179,6 +184,7 @@ function ToolRail() {
         </Tip>
       ))}
       {!readOnly && <Separator className="my-1 !w-7" />}
+      {!readOnly && <ImportAreaButton />}
       {!readOnly && <><Tip label="Undo" keys="⌘Z" side="right"><Button variant="ghost" size="icon" disabled={!history.canUndo} onClick={undo} aria-label="Undo"><Undo2 /></Button></Tip>
       <Tip label="Redo" keys="⇧⌘Z" side="right"><Button variant="ghost" size="icon" disabled={!history.canRedo} onClick={redo} aria-label="Redo"><Redo2 /></Button></Tip></>}
       <div className="mt-auto flex flex-col items-center gap-1">
@@ -187,6 +193,48 @@ function ToolRail() {
         <Tip label="Fit plan" keys="F" side="right"><Button variant="ghost" size="icon" onClick={() => sendView("fit")} aria-label="Fit plan"><Maximize /></Button></Tip>
       </div>
     </nav>
+  );
+}
+
+/** Add an OpenStreetMap area to the open plan (lined up with earlier imports when there are any). */
+function ImportAreaButton() {
+  const [net] = useSubject(network$);
+  const geo = net.geo ?? null;
+  const empty = !net.nodes.length && !net.buildings?.length;
+  // the frames imported so far (or, for a plan placed on the map by hand, the extent of its content)
+  let existing: BBox[] = geo?.areas ?? [];
+  if (geo && !empty && !existing.length) {
+    const b = simController.compiled.bounds;
+    const nw = unproject(geo, { x: b.minX, y: b.minY }), se = unproject(geo, { x: b.maxX, y: b.maxY });
+    existing = [{ south: se.lat, west: nw.lon, north: nw.lat, east: se.lon }];
+  }
+  const last = existing[existing.length - 1];
+  const mode: OsmImportMode = {
+    kind: "merge",
+    center: last ? bboxCenter(last) : geo,
+    existing,
+    // plan point (0, 0): kept from earlier imports; for a hand-drawn plan, the new area lands in the middle of the view
+    origin: area => geo ?? (empty ? bboxCenter(area) : unproject(bboxCenter(area), { x: -viewport.cx, y: -viewport.cy })),
+    onLoaded: (add, stats) => {
+      const cur = network$.getValue();
+      const wasEmpty = !cur.nodes.length && !cur.buildings?.length;
+      const [merged, rep] = ops.mergeNetwork(cur, add);
+      commit(merged);
+      if (wasEmpty) setSettings({ ...suggestSettings(merged), seed: settings$.getValue().seed });
+      sendView("fit");
+      toast.success(`Added ${rep.roads} road${rep.roads === 1 ? "" : "s"} and ${rep.buildings} building${rep.buildings === 1 ? "" : "s"}`, {
+        description: [
+          rep.joined ? `${rep.joined} joined to the plan's entry roads.` : "",
+          rep.skippedRoads || rep.skippedBuildings ? `Skipped ${rep.skippedRoads} roads and ${rep.skippedBuildings} buildings already in the plan.` : "",
+          `Area: ${describeStats(stats)}.`,
+        ].filter(Boolean).join(" "),
+      });
+    },
+  };
+  return (
+    <OsmImportDialog mode={mode} trigger={
+      <Button variant="ghost" size="icon" aria-label="Add an area from OpenStreetMap" title="Add an area from OpenStreetMap"><MapPlus /></Button>
+    } />
   );
 }
 
@@ -277,17 +325,39 @@ function StatusBar() {
 }
 
 // ---------------------------------------------------------------- autosave
+// Small plans save ~1 s after a change. Large plans (imported districts) save once editing pauses
+// for a few seconds, at least every 30 s while editing continues, and right away when the tab is
+// hidden. Buildings are only sent when they changed: the server keeps the ones it has.
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let saving = false, again = false;
+/** when the oldest unsaved change was made (0 = none) */
+let dirtySince = 0;
+/** the buildings the server has for the open plan (same array = unchanged) */
+let savedBuildings: Network["buildings"] = undefined;
+export const setSavedBuildings = (b: Network["buildings"]) => { savedBuildings = b; };
+
+const MAX_WAIT = 30_000;
+function saveDelay() {
+  const n = network$.getValue();
+  return (n.buildings?.length ?? 0) > 2000 || n.links.length > 1500 ? 4000 : 900;
+}
 
 async function doSave(planId: string, force = false) {
   if (saving) { again = true; return; }
-  saving = true;
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  saving = true; dirtySince = 0;
   const s = ui.getValue().save;
   s.status = "saving";
   try {
-    const res = await savePlan(planId, { network: network$.getValue(), settings: settings$.getValue(), underlay: underlay$.getValue(), revision: s.revision, force });
+    const net = network$.getValue();
+    // after a conflict ("keep mine") everything is sent, so their building edits can't survive
+    const keepBuildings = !force && !!net.buildings?.length && net.buildings === savedBuildings;
+    const res = await savePlan(planId, {
+      network: keepBuildings ? { ...net, buildings: undefined } : net, keepBuildings,
+      settings: settings$.getValue(), underlay: underlay$.getValue(), revision: s.revision, force,
+    });
     if (res.ok) {
+      savedBuildings = net.buildings;
       s.revision = res.revision; s.savedAt = res.savedAt; s.message = "";
       s.status = again ? "dirty" : "saved";
     } else if (res.reason === "forbidden") {
@@ -304,17 +374,29 @@ async function doSave(planId: string, force = false) {
   }
 }
 
+/** (re)start the countdown to the next save; each change pushes it back, up to MAX_WAIT after the first */
 function queueSave(planId: string) {
+  if (!dirtySince) dirtySince = Date.now();
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => doSave(planId), 900);
+  const wait = Math.max(0, Math.min(saveDelay(), dirtySince + MAX_WAIT - Date.now()));
+  saveTimer = setTimeout(() => { saveTimer = null; doSave(planId); }, wait);
 }
 
 function useAutosave(planId: string) {
   useEffect(() => {
-    const h = ui.subscribe("save/status", status => { if (status === "dirty") queueSave(planId); });
+    const onChange = () => { if (ui.getValue().save.status === "dirty") queueSave(planId); };
+    const subs = [ui.subscribe("save/status", onChange), network$.subscribe(onChange), settings$.subscribe(onChange), underlay$.subscribe(onChange)];
+    const hide = () => { if (document.hidden && ui.getValue().save.status === "dirty") doSave(planId); };
     const unload = (e: BeforeUnloadEvent) => { const st = ui.getValue().save.status; if (st === "dirty" || st === "saving") { e.preventDefault(); } };
+    document.addEventListener("visibilitychange", hide);
     window.addEventListener("beforeunload", unload);
-    return () => { h.unsubscribe(); window.removeEventListener("beforeunload", unload); if (saveTimer) clearTimeout(saveTimer); };
+    return () => {
+      subs.forEach(x => x.unsubscribe());
+      document.removeEventListener("visibilitychange", hide);
+      window.removeEventListener("beforeunload", unload);
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = null; dirtySince = 0;
+    };
   }, [planId]);
 }
 
@@ -347,6 +429,7 @@ function useShortcuts() {
         else if (sel.kind === "link") commit(ops.deleteLink(net, sel.id));
         else if (sel.kind === "stop") commit(ops.deleteStop(net, sel.id));
         else if (sel.kind === "line") commit(ops.deleteLine(net, sel.id));
+        else if (sel.kind === "building") commit(ops.deleteBuilding(net, sel.id));
         else return;
         select(null);
       }

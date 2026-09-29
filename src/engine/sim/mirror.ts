@@ -1,0 +1,232 @@
+/**
+ * Running the simulation in a Web Worker: the worker owns the `Sim` and sends snapshots of what the
+ * user interface shows (vehicle poses, signal states, statistics, new junction events, details of
+ * what is selected); the page keeps a `SimMirror` that answers the same questions the renderers and
+ * panels ask a `Sim` (`vehicles`, `pose`, `signalFor`, `junctionStats`, …) from the latest snapshot.
+ *
+ * Framework-free, so both sides can be tested in Node.
+ */
+import type { CNode, Compiled } from "../compile";
+import { isJunction } from "../refs";
+import { signalAspect, type Aspect } from "../signals";
+import type { JunctionEvent, Kind, Stats, Vehicle } from "./base";
+import type { Sim } from "./index";
+
+const KINDS: Kind[] = ["car", "truck", "bus"];
+/** floats per vehicle in `Snapshot.geo`: front x, y, rear x, y, speed, desired speed, length, width, blinker */
+const G = 9;
+
+export type JunctionStats = ReturnType<Sim["junctionStats"]>;
+export type LightCycles = ReturnType<Sim["lightCycles"]>;
+export type NodeState = ReturnType<Sim["nodeState"]>;
+
+/** what the inspector shows about one vehicle (worked out where the vehicle is) */
+export interface VehicleDetail {
+  id: number; kind: Kind; state: string;
+  v: number; v0: number; acc: number; gap: number;
+  road: string; lane: number | null; lanes: number | null;
+  heading: string; wait: number; laneChanges: number; reroutes: number;
+  a: number; b: number; pax: number; cap: number;
+  nextTurn: { node: string; turn: "L" | "S" | "R" | "U"; lo: number; hi: number } | null;
+  /** route ahead as x, y pairs */
+  route: number[];
+}
+
+/** what the page wants beyond the vehicles and lights */
+export interface Watch {
+  /** vehicle whose details to send */
+  vehicle: number | null;
+  /** junctions whose light cycles to send */
+  nodes: number[];
+  /** send the reserved paths through junctions */
+  reservations: boolean;
+}
+
+export interface Snapshot {
+  tick: number;
+  stats: Stats;
+  ids: Int32Array; kinds: Uint8Array; tints: Uint8Array; states: Uint16Array;
+  /** state names used by `states` */
+  stateNames: string[];
+  geo: Float32Array;
+  /** per node: phase, stage, time in stage, vehicles in the junction, position in the group cycle (NaN = none) */
+  phase: Int16Array; stage: Int8Array; stageT: Float32Array; occupied: Int16Array; cycleAt: Float32Array;
+  /** passengers waiting at each stop (compiled order) */
+  waiting: Float32Array;
+  /** junction events since the previous snapshot; `resetEvents` = replace the list instead */
+  events: JunctionEvent[]; resetEvents: boolean;
+  /** sent every half second or so (absent = unchanged) */
+  junctions?: (JunctionStats | null)[];
+  cycles?: [number, LightCycles][];
+  turnCounts?: [string, number][];
+  entered?: [string, number][];
+  /** reserved paths as x, y pairs (when watched) */
+  reservations?: Float32Array[];
+  vehicle?: VehicleDetail | null;
+}
+
+// ---------------------------------------------------------------- worker side
+
+/** remembers what was sent already, to send only what is new */
+export class SnapshotWriter {
+  private lastEvent: JunctionEvent | null = null;
+  private periodicAt = -Infinity;
+
+  write(sim: Sim, watch: Watch, now: number): { snap: Snapshot; transfer: ArrayBuffer[] } {
+    const live = sim.vehicles.filter(v => !v.dead), n = live.length;
+    const ids = new Int32Array(n), kinds = new Uint8Array(n), tints = new Uint8Array(n), states = new Uint16Array(n), geo = new Float32Array(n * G);
+    const stateNames: string[] = [], stateIdx = new Map<string, number>();
+    live.forEach((v, i) => {
+      ids[i] = v.id; kinds[i] = KINDS.indexOf(v.kind); tints[i] = v.tint;
+      let si = stateIdx.get(v.state);
+      if (si === undefined) { si = stateNames.length; stateNames.push(v.state); stateIdx.set(v.state, si); }
+      states[i] = si;
+      const p = sim.pose(v), o = i * G;
+      geo[o] = p.fx; geo[o + 1] = p.fy; geo[o + 2] = p.rx; geo[o + 3] = p.ry;
+      geo[o + 4] = v.v; geo[o + 5] = v.v0; geo[o + 6] = v.len; geo[o + 7] = v.width; geo[o + 8] = sim.blinker(v);
+    });
+    const N = sim.net.nodes.length;
+    const phase = new Int16Array(N), stage = new Int8Array(N), stageT = new Float32Array(N), occupied = new Int16Array(N), cycleAt = new Float32Array(N);
+    for (let k = 0; k < N; k++) {
+      const st = sim.nodeState(k);
+      phase[k] = st.phase; stage[k] = st.stage; stageT[k] = st.t; occupied[k] = st.occupied; cycleAt[k] = st.cycleAt ?? NaN;
+    }
+    const waiting = Float32Array.from(sim.net.stops, s => s.waiting);
+    // new events: those after the last one sent (the log drops old entries when it gets long)
+    const all = sim.events;
+    let from = 0, resetEvents = false;
+    if (this.lastEvent) {
+      const at = all.lastIndexOf(this.lastEvent);
+      if (at >= 0) from = at + 1; else resetEvents = true;
+    } else resetEvents = true;
+    const events = all.slice(from);
+    this.lastEvent = all.length ? all[all.length - 1] : null;
+
+    const snap: Snapshot = {
+      tick: sim.tick, stats: { ...sim.stats, history: sim.stats.history.slice() },
+      ids, kinds, tints, states, stateNames, geo, phase, stage, stageT, occupied, cycleAt, waiting, events, resetEvents,
+    };
+    const transfer = [ids.buffer, kinds.buffer, tints.buffer, states.buffer, geo.buffer, phase.buffer, stage.buffer, stageT.buffer, occupied.buffer, cycleAt.buffer, waiting.buffer] as ArrayBuffer[];
+
+    if (now - this.periodicAt > 450) {
+      this.periodicAt = now;
+      snap.junctions = sim.net.nodes.map(nd => (isJunction(nd) ? sim.junctionStats(nd.idx) : null));
+      snap.turnCounts = [...sim.turnCounts];
+      snap.entered = [...sim.entered];
+    }
+    snap.cycles = watch.nodes.filter(k => k >= 0 && k < N).map(k => [k, sim.lightCycles(k)]);
+    if (watch.reservations) {
+      snap.reservations = sim.reservations().map(c => Float32Array.from(c.poly.pts));
+      transfer.push(...snap.reservations.map(r => r.buffer as ArrayBuffer));
+    }
+    if (watch.vehicle !== null) {
+      const v = live.find(x => x.id === watch.vehicle);
+      snap.vehicle = v ? vehicleDetail(sim, v) : null;
+    }
+    return { snap, transfer };
+  }
+
+  /** forget what was sent (a new simulation, or the log was cleared) */
+  reset() { this.lastEvent = null; this.periodicAt = -Infinity; }
+}
+
+function vehicleDetail(sim: Sim, v: Vehicle): VehicleDetail {
+  const e = v.piece.kind === "lane" ? v.piece.edge : null;
+  const nt = sim.nextTurn(v);
+  return {
+    id: v.id, kind: v.kind, state: v.state, v: v.v, v0: v.v0, acc: v.acc, gap: v.gap,
+    road: e ? e.link.name || "unnamed" : v.piece.kind === "ring" ? "roundabout" : "junction",
+    lane: e ? v.lane : null, lanes: e ? e.n : null,
+    heading: v.dest.kind === "gateway" ? "leaving the plan" : v.dest.kind === "stop" ? `stop ${v.dest.stop.def.name}` : `${v.dest.edge.link.name || "a road"}`,
+    wait: v.wait, laneChanges: v.laneChanges, reroutes: v.reroutes, a: v.a, b: v.b, pax: v.pax, cap: v.cap,
+    nextTurn: nt ? { node: nt.node.def.id, turn: nt.move.turn, lo: nt.move.lo, hi: nt.move.hi } : null,
+    route: sim.routeAhead(v, 800),
+  };
+}
+
+// ---------------------------------------------------------------- page side
+
+/** a vehicle as the page sees it (a view into the latest snapshot) */
+export interface VehicleView {
+  id: number; kind: Kind; tint: number; state: string; dead: false;
+  v: number; v0: number; len: number; width: number;
+  fx: number; fy: number; rx: number; ry: number; blink: -1 | 0 | 1;
+}
+
+/** Answers the page's questions about the running simulation from the latest snapshot. */
+export class SimMirror {
+  tick = 0;
+  stats: Stats = { count: 0, cars: 0, trucks: 0, buses: 0, avgSpeed: 0, stopped: 0, tripsPerMin: 0, trips: 0, towed: 0, boarded: 0, laneChanges: 0, history: [] };
+  vehicles: VehicleView[] = [];
+  events: JunctionEvent[] = [];
+  turnCounts = new Map<string, number>();
+  entered = new Map<string, number>();
+  vehicle: VehicleDetail | null = null;
+  private snap: Snapshot | null = null;
+  private junctions: (JunctionStats | null)[] = [];
+  private cycles = new Map<number, LightCycles>();
+  private reserved: Float32Array[] = [];
+
+  constructor(readonly net: Compiled) {}
+
+  get time() { return this.tick * 0.1; }
+
+  apply(s: Snapshot) {
+    this.snap = s; this.tick = s.tick; this.stats = s.stats;
+    const n = s.ids.length, list = this.vehicles;
+    list.length = n;
+    for (let i = 0; i < n; i++) {
+      const o = i * G, v = list[i] ?? (list[i] = {} as VehicleView);
+      v.id = s.ids[i]; v.kind = KINDS[s.kinds[i]]; v.tint = s.tints[i]; v.state = s.stateNames[s.states[i]]; v.dead = false;
+      v.fx = s.geo[o]; v.fy = s.geo[o + 1]; v.rx = s.geo[o + 2]; v.ry = s.geo[o + 3];
+      v.v = s.geo[o + 4]; v.v0 = s.geo[o + 5]; v.len = s.geo[o + 6]; v.width = s.geo[o + 7]; v.blink = s.geo[o + 8] as -1 | 0 | 1;
+    }
+    this.net.stops.forEach((st, i) => { st.waiting = s.waiting[i] ?? st.waiting; });
+    if (s.resetEvents) this.events = [];
+    if (s.events.length) { this.events.push(...s.events); if (this.events.length > 60000) this.events.splice(0, this.events.length - 50000); }
+    if (s.junctions) this.junctions = s.junctions;
+    if (s.turnCounts) this.turnCounts = new Map(s.turnCounts);
+    if (s.entered) this.entered = new Map(s.entered);
+    if (s.cycles) this.cycles = new Map(s.cycles);
+    this.reserved = s.reservations ?? [];
+    if (s.vehicle !== undefined) this.vehicle = s.vehicle;
+  }
+
+  pose(v: VehicleView) { return { fx: v.fx, fy: v.fy, rx: v.rx, ry: v.ry }; }
+  blinker(v: VehicleView) { return v.blink; }
+
+  vehicleNear(x: number, y: number, radius = 6): VehicleView | null {
+    let best: VehicleView | null = null, bd = radius;
+    for (const v of this.vehicles) {
+      const d = Math.hypot((v.fx + v.rx) / 2 - x, (v.fy + v.ry) / 2 - y);
+      if (d < bd) { bd = d; best = v; }
+    }
+    return best;
+  }
+
+  signalFor(nodeIdx: number, armIdx: number, lane?: number): Aspect | null {
+    const s = this.snap, n: CNode | undefined = this.net.nodes[nodeIdx];
+    if (!s || !n) return null;
+    return signalAspect(n, s.phase[nodeIdx], s.stage[nodeIdx], armIdx, lane);
+  }
+
+  nodeState(nodeIdx: number): NodeState {
+    const s = this.snap, n = this.net.nodes[nodeIdx];
+    if (!s) return { phase: 0, stage: 0, t: 0, occupied: 0, phases: n?.phases.length ?? 0, cycleAt: null };
+    const c = s.cycleAt[nodeIdx];
+    return { phase: s.phase[nodeIdx], stage: s.stage[nodeIdx] as 0 | 1 | 2, t: s.stageT[nodeIdx], occupied: s.occupied[nodeIdx], phases: n.phases.length, cycleAt: Number.isNaN(c) ? null : c };
+  }
+
+  junctionStats(nodeIdx: number): JunctionStats {
+    return this.junctions[nodeIdx] ?? { through: 0, perMin: 0, waiting: 0, approaches: [] };
+  }
+
+  /** light cycles of a junction the page watches (empty until the next snapshot after it asked) */
+  lightCycles(nodeIdx: number): LightCycles { return this.cycles.get(nodeIdx) ?? []; }
+
+  /** reserved paths through junctions as x, y pairs (when the page asked for them) */
+  reservations(): Float32Array[] { return this.reserved; }
+
+  /** route ahead of the watched vehicle as x, y pairs */
+  routeAhead(v: VehicleView): number[] { return this.vehicle && this.vehicle.id === v.id ? this.vehicle.route : []; }
+}

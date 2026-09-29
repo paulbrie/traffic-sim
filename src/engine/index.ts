@@ -3,3 +3,5 @@ export * from "./geom";
 export * from "./compile";
 export * from "./sim";
 export * from "./sample";
+export * from "./buildings";
+export * from "./optimize";

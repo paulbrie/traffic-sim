@@ -18,6 +18,7 @@ export type Selection =
   | { kind: "link"; id: string }
   | { kind: "stop"; id: string }
   | { kind: "line"; id: string }
+  | { kind: "building"; id: string }
   | { kind: "vehicle"; id: string };
 export type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
 
@@ -52,7 +53,7 @@ export const ui = new DeepSubject<UiState>(
     view: "2d",
     snap: { grid: true, step: 5, angle: true },
     draft: { lanesF: 1, lanesB: 1, busF: false, busB: false, speed: 50, curved: false },
-    display: { bySpeed: false, reservations: true, labels: true, buildings: false, junctions: false },
+    display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false },
     sim: { running: false, speed: 3, epoch: 0 },
     save: { status: "saved", revision: 1, savedAt: null, message: "" },
     cursor: { x: 0, y: 0, inside: false },
@@ -188,7 +189,8 @@ function pruneSelection(net: Network) {
       : sel.kind === "link" ? net.links.some(l => l.id === sel.id)
         : sel.kind === "stop" ? net.stops.some(s => s.id === sel.id)
           : sel.kind === "line" ? net.lines.some(l => l.id === sel.id)
-            : true;
+            : sel.kind === "building" ? (net.buildings ?? []).some(b => b.id === sel.id)
+              : true;
   if (!exists) ui.getValue().selection = null;
 }
 

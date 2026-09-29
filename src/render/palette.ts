@@ -1,8 +1,10 @@
+import type { BuildingUse } from "@/engine/types";
+
 export interface Palette {
   ground: string; grid: string; gridMajor: string; asphalt: string; curb: string; mark: string; divider: string;
   bus: string; island: string; select: string; car: string; truck: string; busVeh: string;
   go: string; slow: string; stop: string; fg: string; muted: string; bg: string; primary: string;
-  sans: string; mono: string; sky: string;
+  sans: string; mono: string; sky: string; building: string; buildingEdge: string;
 }
 
 export function readPalette(el: Element = document.documentElement): Palette {
@@ -15,7 +17,7 @@ export function readPalette(el: Element = document.documentElement): Palette {
     select: g("--map-select", "#1f7a5a"), car: g("--veh-car", "#f4f5f2"), truck: g("--veh-truck", "#3d6c8c"), busVeh: g("--veh-bus", "#d99800"),
     go: g("--sig-go", "#23a566"), slow: g("--sig-slow", "#e8a300"), stop: g("--sig-stop", "#d9403f"),
     fg: g("--foreground", "#222"), muted: g("--muted-foreground", "#666"), bg: g("--background", "#fff"), primary: g("--primary", "#1f7a5a"),
-    sky: g("--map-sky", "#dfe7e4"), sans: g("--font-geist-sans", "system-ui, sans-serif"), mono: g("--font-geist-mono", "ui-monospace, monospace"),
+    sky: g("--map-sky", "#dfe7e4"), building: g("--map-building", "#d6d3c9"), buildingEdge: g("--map-building-edge", "#b4b0a3"), sans: g("--font-geist-sans", "system-ui, sans-serif"), mono: g("--font-geist-mono", "ui-monospace, monospace"),
   };
 }
 
@@ -35,4 +37,13 @@ export function mix(a: string, b: string, f: number) {
 export function speedColor(p: Palette, r: number) {
   r = Math.max(0, Math.min(1, r));
   return r < 0.5 ? mix(p.stop, p.slow, r * 2) : mix(p.slow, p.go, (r - 0.5) * 2);
+}
+
+/** a hint of colour per building use, over the neutral building tone */
+const USE_TINT: Record<BuildingUse, string | null> = {
+  home: "#c79a6b", shop: "#d9784a", office: "#5f86b3", industry: "#8a7fa3", school: "#d6ad2e", civic: "#5e9e6e", other: null, minor: null,
+};
+export function buildingColor(p: Palette, use: BuildingUse): string {
+  const t = USE_TINT[use];
+  return t ? mix(p.building, t, 0.32) : use === "minor" ? mix(p.building, p.buildingEdge, 0.5) : p.building;
 }

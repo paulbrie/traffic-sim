@@ -2,6 +2,7 @@ import "server-only";
 import { connection } from "next/server";
 import { and, asc, desc, eq, or, sql } from "drizzle-orm";
 import { db, schema } from "@/db";
+import type { Network } from "@/engine/types";
 import type { CurrentUser } from "./auth";
 import { cityAccess, planAccess, type Access } from "./access";
 
@@ -67,7 +68,8 @@ export async function getCity(id: string, user: CurrentUser) {
       description: schema.plans.description,
       updatedAt: schema.plans.updatedAt,
       revision: schema.plans.revision,
-      network: schema.plans.network,
+      // for the thumbnails: without buildings, which can run to megabytes on imported plans
+      network: sql<Network>`(${schema.plans.network} - 'buildings')`.mapWith(schema.plans.network),
       nodes: sql<number>`jsonb_array_length(${schema.plans.network}->'nodes')`,
       links: sql<number>`jsonb_array_length(${schema.plans.network}->'links')`,
       stops: sql<number>`jsonb_array_length(${schema.plans.network}->'stops')`,

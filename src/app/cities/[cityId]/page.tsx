@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Earth, Plus } from "lucide-react";
 import { AppHeader } from "@/components/app-header";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { PlanThumb } from "@/components/plans/plan-thumb";
 import { AccessBadge } from "@/components/cities/city-card";
 import { ShareButton } from "@/components/cities/share-button";
 import { DuplicateCityButton } from "@/components/cities/duplicate-city-button";
+import { OsmImportDialog } from "@/components/osm/osm-import-dialog";
 import { DbSetupNotice } from "@/components/db-setup-notice";
 import { getCity } from "@/server/queries";
 import { tryDb } from "@/server/db-status";
@@ -28,6 +29,7 @@ export default async function CityPage({ params }: PageProps<"/cities/[cityId]">
       <AppHeader crumbs={[{ label: city.name }]}>
         <DuplicateCityButton city={{ id: city.id, name: city.name }} label={ownerIsMe ? "Duplicate" : "Make my own copy"} />
         {access === "owner" && <ShareButton city={{ id: city.id, name: city.name }} />}
+        {canEdit && <OsmImportDialog mode={{ kind: "plan", cityId: city.id }} trigger={<Button size="sm" variant="outline"><Earth /> Import from map</Button>} />}
         {canEdit && <NewPlanDialog cityId={city.id} trigger={<Button size="sm"><Plus /> New plan</Button>} />}
       </AppHeader>
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
@@ -44,8 +46,11 @@ export default async function CityPage({ params }: PageProps<"/cities/[cityId]">
             <p className="mb-1 font-medium">No plans yet</p>
             {canEdit ? (
               <>
-                <p className="mb-4 max-w-sm text-sm text-muted-foreground">Start blank to draw streets from scratch, or from the sample district to try the simulator.</p>
-                <NewPlanDialog cityId={city.id} trigger={<Button><Plus /> New plan</Button>} />
+                <p className="mb-4 max-w-sm text-sm text-muted-foreground">Start blank to draw streets from scratch, from the sample district to try the simulator, or import the real streets from OpenStreetMap.</p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <NewPlanDialog cityId={city.id} trigger={<Button><Plus /> New plan</Button>} />
+                  <OsmImportDialog mode={{ kind: "plan", cityId: city.id }} trigger={<Button variant="outline"><Earth /> Import from map</Button>} />
+                </div>
               </>
             ) : <p className="max-w-sm text-sm text-muted-foreground">The owner hasn&apos;t added any plans yet.</p>}
           </div>

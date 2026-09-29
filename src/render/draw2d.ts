@@ -1,10 +1,10 @@
 /** Canvas 2D renderer for the plan view (world units = metres). */
 import type { Compiled, Piece } from "@/engine/compile";
 import type { Poly } from "@/engine/geom";
-import type { Sim, Vehicle } from "@/engine/sim";
-import type { LinkDef, Network, Vec } from "@/engine/types";
+import type { SimMirror as Sim, VehicleView as Vehicle } from "@/engine/sim/mirror";
+import type { BuildingDef, BuildingUse, LinkDef, Network, Vec } from "@/engine/types";
 import type { RoadGeo, Strip } from "./geometry";
-import { speedColor, type Palette } from "./palette";
+import { buildingColor, speedColor, type Palette } from "./palette";
 import { underlayCorners, type Underlay } from "@/lib/underlay";
 import { junctionRefs } from "@/engine/refs";
 
@@ -94,6 +94,50 @@ export interface Overlay {
   junctions: boolean;
   /** extra links to highlight with the selection (segment tool, whole-road scope) */
   alsoSelected: string[];
+  buildings: boolean;
+}
+
+/** building footprints as one path per use, cached per buildings array (it only changes on edits) */
+const buildingCache = new WeakMap<BuildingDef[], { fills: Map<BuildingUse, Path2D>; edges: Path2D }>();
+function buildingPaths(list: BuildingDef[]) {
+  let c = buildingCache.get(list);
+  if (!c) {
+    c = { fills: new Map(), edges: new Path2D() };
+    for (const b of list) {
+      let f = c.fills.get(b.use); if (!f) c.fills.set(b.use, (f = new Path2D()));
+      const p = new Path2D();
+      p.moveTo(b.pts[0].x, b.pts[0].y);
+      for (let i = 1; i < b.pts.length; i++) p.lineTo(b.pts[i].x, b.pts[i].y);
+      p.closePath();
+      f.addPath(p); c.edges.addPath(p);
+    }
+    buildingCache.set(list, c);
+  }
+  return c;
+}
+
+function drawBuildings(ctx: CanvasRenderingContext2D, pal: Palette, list: BuildingDef[], px: number) {
+  const c = buildingPaths(list);
+  for (const [use, path] of c.fills) { ctx.fillStyle = buildingColor(pal, use); ctx.fill(path); }
+  ctx.strokeStyle = pal.buildingEdge; ctx.lineWidth = Math.max(0.15, px); ctx.lineJoin = "miter";
+  ctx.stroke(c.edges);
+}
+
+/** selected building: outline, and a dashed line to where its traffic joins the road */
+function drawBuildingSelection(ctx: CanvasRenderingContext2D, pal: Palette, compiled: Compiled, b: BuildingDef, px: number) {
+  ctx.beginPath();
+  ctx.moveTo(b.pts[0].x, b.pts[0].y);
+  for (let i = 1; i < b.pts.length; i++) ctx.lineTo(b.pts[i].x, b.pts[i].y);
+  ctx.closePath();
+  ctx.globalAlpha = 0.22; ctx.fillStyle = pal.select; ctx.fill(); ctx.globalAlpha = 1;
+  ctx.strokeStyle = pal.select; ctx.lineWidth = px * 2.5; ctx.stroke();
+  const place = compiled.places.find(p => p.building.id === b.id);
+  if (!place) return;
+  ctx.setLineDash([px * 5, px * 4]); ctx.lineWidth = px * 2;
+  ctx.beginPath(); ctx.moveTo(place.door.x, place.door.y); ctx.lineTo(place.road.x, place.road.y); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = pal.select;
+  ctx.beginPath(); ctx.arc(place.road.x, place.road.y, px * 4.5, 0, Math.PI * 2); ctx.fill();
 }
 
 export type UnderlayHandle = "move" | "rotate" | "c0" | "c1" | "c2" | "c3";
@@ -134,6 +178,8 @@ export function drawScene(
     ctx.restore();
   }
 
+  if (ov.buildings && net.buildings?.length) drawBuildings(ctx, pal, net.buildings, px);
+
   ctx.fillStyle = pal.curb; ctx.fill(paths.curb, "nonzero");
   ctx.fillStyle = pal.asphalt; ctx.fill(paths.asphalt, "nonzero");
   ctx.fillStyle = pal.bus; ctx.fill(paths.bus);
@@ -162,19 +208,30 @@ export function drawScene(
     if (p) { ctx.strokeStyle = pal.select; ctx.globalAlpha = 0.6; ctx.lineWidth = px * 1.5; ctx.stroke(p); ctx.globalAlpha = 1; }
   }
 
+  if (ov.selection?.kind === "building") {
+    const b = net.buildings?.find(x => x.id === ov.selection!.id);
+    if (b) drawBuildingSelection(ctx, pal, compiled, b, px);
+  }
+
   // reservations and selected vehicle route
   if (sim) {
     if (ov.reservations) {
       ctx.strokeStyle = pal.select; ctx.globalAlpha = 0.5; ctx.lineWidth = 1.1; ctx.lineCap = "round";
-      for (const c of sim.reservations()) strokePoly(ctx, c.poly);
+      for (const pts of sim.reservations()) {
+        ctx.beginPath(); ctx.moveTo(pts[0], pts[1]);
+        for (let k = 2; k < pts.length; k += 2) ctx.lineTo(pts[k], pts[k + 1]);
+        ctx.stroke();
+      }
       ctx.globalAlpha = 1;
     }
     const sv = ov.selection?.kind === "vehicle" ? sim.vehicles.find(v => String(v.id) === ov.selection!.id && !v.dead) : null;
     if (sv) {
-      const pts = sim.routeAhead(sv, 800);
+      const pts = sim.routeAhead(sv);
+      if (pts.length >= 4) {
       ctx.strokeStyle = pal.select; ctx.lineWidth = Math.max(0.6, px * 2); ctx.setLineDash([2, 1.5]);
       ctx.beginPath(); ctx.moveTo(pts[0], pts[1]); for (let k = 2; k < pts.length; k += 2) ctx.lineTo(pts[k], pts[k + 1]); ctx.stroke();
       ctx.setLineDash([]);
+      }
     }
     drawVehicles(ctx, pal, sim, ov.bySpeed, px);
     if (sv) {
@@ -187,10 +244,12 @@ export function drawScene(
   // signals & stop signs
   for (const s of geo.signals) {
     if (s.kind === "lights") {
-      const st = sim ? sim.signalFor(s.nodeIdx, s.arm) : null;
-      ctx.fillStyle = pal.asphalt; ctx.beginPath(); ctx.arc(s.p.x, s.p.y, 1.25, 0, Math.PI * 2); ctx.fill();
+      const st = sim ? sim.signalFor(s.nodeIdx, s.arm, s.lane) : null;
+      // per-lane heads (custom phases) sit on the lane, just before the stop line, and are smaller
+      const R = s.lane === undefined ? 1.25 : 0.8;
+      ctx.fillStyle = pal.asphalt; ctx.beginPath(); ctx.arc(s.p.x, s.p.y, R, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = st === "green" ? pal.go : st === "yellow" ? pal.slow : st === "red" ? pal.stop : pal.muted;
-      ctx.beginPath(); ctx.arc(s.p.x, s.p.y, 0.85, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(s.p.x, s.p.y, R * 0.68, 0, Math.PI * 2); ctx.fill();
     } else if (s.kind === "yield") {
       // give-way triangle, point towards the junction the driver faces
       const t = s.dir, r = { x: -t.y, y: t.x }, R = 1.35;
@@ -362,10 +421,6 @@ function drawTravelArrows(ctx: CanvasRenderingContext2D, pal: Palette, compiled:
     }
   }
   ctx.stroke();
-}
-
-function strokePoly(ctx: CanvasRenderingContext2D, poly: Poly) {
-  const a = poly.pts; ctx.beginPath(); ctx.moveTo(a[0], a[1]); for (let k = 2; k < a.length; k += 2) ctx.lineTo(a[k], a[k + 1]); ctx.stroke();
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {

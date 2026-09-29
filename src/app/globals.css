@@ -35,6 +35,8 @@
   --map-bus: #9a4a40;
   --map-island: #86ad74;
   --map-select: #1f7a5a;
+  --map-building: #d6d3c9;
+  --map-building-edge: #b4b0a3;
   --veh-car: #f4f5f2;
   --veh-truck: #3d6c8c;
   --veh-bus: #d99800;
@@ -74,6 +76,8 @@
     --map-bus: #6a322c;
     --map-island: #3e6a45;
     --map-select: #3ebb8b;
+    --map-building: #3a3f3b;
+    --map-building-edge: #4b524c;
     --veh-car: #e8ebe6;
     --veh-truck: #7faacb;
     --veh-bus: #edb42e;

@@ -103,7 +103,7 @@ export function EventLogPanel() {
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!n} onClick={() => sim && downloadEvents(sim.events, "csv", "junction-events")}><Download /> CSV</Button>
         <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!n} onClick={() => sim && downloadEvents(sim.events, "jsonl", "junction-events")}><Download /> JSON</Button>
-        <Button variant="ghost" size="sm" className="h-7 text-xs" disabled={!n} onClick={() => { if (sim) sim.events.length = 0; stats$.next(stats$.getValue()); }}><Trash2 /> Clear</Button>
+        <Button variant="ghost" size="sm" className="h-7 text-xs" disabled={!n} onClick={() => { simController.clearEvents(); stats$.next(stats$.getValue()); }}><Trash2 /> Clear</Button>
         <span className="text-[10px] text-muted-foreground tabular">{n} events</span>
       </div>
     </div>

@@ -1,6 +1,7 @@
 /** Loads the reference image for the open plan and handles uploads. */
 import { Subject } from "subjecto";
 import { UNDERLAY_MAX_BYTES, UNDERLAY_MIMES, underlayUrl, type Underlay } from "@/lib/underlay";
+import { basePath } from "@/lib/base-path";
 import { setUnderlay, ui, underlay$ } from "./store";
 import { viewport } from "./commands";
 
@@ -63,7 +64,7 @@ async function prepare(file: File): Promise<{ blob: Blob; w: number; h: number }
 export async function uploadUnderlay(planId: string, file: File): Promise<void> {
   if (!file.type.startsWith("image/")) throw new Error("Choose an image file (PNG, JPEG or WebP).");
   const { blob, w, h } = await prepare(file);
-  const res = await fetch(`/api/plans/${planId}/underlay`, { method: "PUT", body: blob, headers: { "Content-Type": blob.type || "application/octet-stream" } });
+  const res = await fetch(`${basePath}/api/plans/${planId}/underlay`, { method: "PUT", body: blob, headers: { "Content-Type": blob.type || "application/octet-stream" } });
   if (!res.ok) {
     const msg = await res.json().then((j: { error?: string }) => j.error).catch(() => null);
     throw new Error(msg ?? `Upload failed (${res.status})`);
@@ -90,7 +91,7 @@ export async function uploadUnderlay(planId: string, file: File): Promise<void> 
 }
 
 export async function removeUnderlay(planId: string): Promise<void> {
-  const res = await fetch(`/api/plans/${planId}/underlay`, { method: "DELETE" });
+  const res = await fetch(`${basePath}/api/plans/${planId}/underlay`, { method: "DELETE" });
   if (!res.ok && res.status !== 404) throw new Error(`Couldn't remove the image (${res.status})`);
   setUnderlay(null);
 }

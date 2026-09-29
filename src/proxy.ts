@@ -6,7 +6,10 @@ export function proxy(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   if (pathname === "/login" || pathname === "/signup") return NextResponse.next();
   if (req.cookies.get("gl_session")?.value) return NextResponse.next();
-  const url = new URL("/login", req.url);
+  // clone nextUrl (not new URL(req.url)) so the redirect keeps basePath; pathname here excludes it
+  const url = req.nextUrl.clone();
+  url.pathname = "/login";
+  url.search = "";
   if (pathname !== "/") url.searchParams.set("next", pathname + search);
   return NextResponse.redirect(url);
 }

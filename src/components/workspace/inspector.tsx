@@ -14,9 +14,11 @@ import { Kbd } from "@/components/ui/kbd";
 import { commit, network$, select, stats$, ui } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import * as ops from "@/state/ops";
-import type { Control, LinkDef, Network, NodeDef } from "@/engine/types";
+import { BUILDING_USES, type BuildingDef, type BuildingUse, type Control, type LinkDef, type Network, type NodeDef } from "@/engine/types";
+import { FLOOR_HEIGHT, USE_LABEL, polyArea, tripWeight } from "@/engine/buildings";
 import { NumberField, Section, Stepper, compass } from "./fields";
 import { SignalGroupSection } from "./signal-groups";
+import { PhaseEditor } from "./phase-editor";
 import { LaneArrowsEditor } from "./lane-arrows";
 import { junctionRefs } from "@/engine/refs";
 import { JunctionEventLog } from "./event-log";
@@ -31,6 +33,7 @@ export function Inspector() {
   if (sel.kind === "node") { const n = ops.nodeById(net, sel.id); return n ? <NodeInspector net={net} node={n} /> : <PlanSummary net={net} />; }
   if (sel.kind === "link") { const l = ops.linkById(net, sel.id); return l ? <LinkInspector net={net} link={l} /> : <PlanSummary net={net} />; }
   if (sel.kind === "stop") { const s = net.stops.find(x => x.id === sel.id); return s ? <StopInspector net={net} id={s.id} /> : <PlanSummary net={net} />; }
+  if (sel.kind === "building") { const b = net.buildings?.find(x => x.id === sel.id); return b ? <BuildingInspector net={net} b={b} /> : <PlanSummary net={net} />; }
   if (sel.kind === "vehicle") return <VehicleInspector id={sel.id} />;
   return <PlanSummary net={net} />;
 }
@@ -68,6 +71,7 @@ function PlanSummary({ net }: { net: Network }) {
           <dt className="text-muted-foreground">· stop signs</dt><dd className="text-right tabular">{count("stop")}</dd>
           <dt className="text-muted-foreground">Entry / exit points</dt><dd className="text-right tabular">{c.nodes.filter(n => n.gateway).length}</dd>
           <dt className="text-muted-foreground">Bus stops</dt><dd className="text-right tabular">{net.stops.length}</dd>
+          {!!net.buildings?.length && <><dt className="text-muted-foreground">Buildings</dt><dd className="text-right tabular">{net.buildings.length}</dd></>}
         </dl>
       </Section>
       {c.warnings.length > 0 && (
@@ -99,6 +103,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
   const ref = cn ? junctionRefs(simController.compiled).get(node.id) : undefined;
   const kind = (ref ? `${ref} · ` : "") + (degree >= 3 ? `${degree}-way junction` : crossing ? "Junction on a road" : degree === 2 ? "Road joint" : degree === 1 ? (node.gateway ? "Entry / exit point" : "Dead end") : "Point");
   const sig = node.signal;
+  const customLights = node.control === "lights" && (node.phases?.length ?? 0) >= 2;
   return (
     <div>
       <Header kind={kind} title={`${node.x.toFixed(1)}, ${node.y.toFixed(1)}`} onDelete={() => { commit(ops.deleteNode(net, node.id)); select(null); }} />
@@ -117,17 +122,19 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
           {node.control === "lights" && (
             <div className="grid gap-3">
               <p className="text-xs text-muted-foreground">
-                {crossing
+                {customLights
+                  ? "Custom phases, set lane by lane below. Yellow and all-red apply between every phase."
+                  : crossing
                   ? "Both directions get green together, then everyone stops for the red phase (e.g. a pedestrian crossing). Min green sets how long the red phase lasts when Actuated is on."
                   : `${cn?.phases.length ?? 0} phases: ${cn?.phases.map(g => g.length === 0 ? "all red" : g.map(i => compass(cn.arms[i].u.x, cn.arms[i].u.y).name).join(" + ")).join(" → ")}. ${sig.separate ? "Each approach gets its own green." : "Opposite approaches share a green; left turns yield to oncoming traffic."}`}
               </p>
               <div className="grid grid-cols-2 gap-2">
-                <NumberField id="sg" label="Green" unit="s" value={sig.green} min={3} max={180} step={1} digits={0} onCommit={v => set({ signal: { ...sig, green: v } }, `sg:${node.id}`)} />
-                <NumberField id="smg" label="Min green" unit="s" value={sig.minGreen} min={1} max={120} step={1} digits={0} onCommit={v => set({ signal: { ...sig, minGreen: v } }, `smg:${node.id}`)} />
+                {!customLights && <NumberField id="sg" label="Green" unit="s" value={sig.green} min={3} max={180} step={1} digits={0} onCommit={v => set({ signal: { ...sig, green: v } }, `sg:${node.id}`)} />}
+                {!customLights && <NumberField id="smg" label="Min green" unit="s" value={sig.minGreen} min={1} max={120} step={1} digits={0} onCommit={v => set({ signal: { ...sig, minGreen: v } }, `smg:${node.id}`)} />}
                 <NumberField id="sy" label="Yellow" unit="s" value={sig.yellow} min={1} max={10} step={0.5} digits={1} onCommit={v => set({ signal: { ...sig, yellow: v } }, `sy:${node.id}`)} />
                 <NumberField id="sr" label="All red" unit="s" value={sig.allRed} min={0} max={10} step={0.5} digits={1} onCommit={v => set({ signal: { ...sig, allRed: v } }, `sr:${node.id}`)} />
               </div>
-              {!crossing && (
+              {!crossing && !customLights && (
                 <label className="flex items-center justify-between gap-2 text-sm">
                   <span>Separate green per approach</span>
                   <Switch checked={!!sig.separate} onCheckedChange={v => set({ signal: { ...sig, separate: v } })} />
@@ -154,6 +161,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
           )}
         </Section>
       )}
+      {(degree >= 3 || crossing) && node.control === "lights" && cn && cn.controlled && <PhaseEditor net={net} node={node} cn={cn} />}
       {(degree >= 3 || crossing) && <SignalGroupSection net={net} node={node} />}
       {ref && cn && <JunctionLive net={net} nodeIdx={cn.idx} />}
       {degree === 2 && !crossing && (
@@ -382,8 +390,8 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
         </div>
       </Section>
       <Section title="Lanes">
-        {lanesRow(`Towards ${dir.name} (${dir.deg.toFixed(0)}°)`, link.lanesF, link.busF, n => set({ lanesF: n, busF: n >= 1 && link.busF, turnsF: null }), b => set({ busF: b }), link.lanesB)}
-        {lanesRow(`Towards ${back.name} (${back.deg.toFixed(0)}°)`, link.lanesB, link.busB, n => set({ lanesB: n, busB: n >= 1 && link.busB, turnsB: null }), b => set({ busB: b }), link.lanesF)}
+        {lanesRow(`Towards ${dir.name} (${dir.deg.toFixed(0)}°)`, link.lanesF, link.busF, n => set({ lanesF: n, busF: n >= 1 && link.busF, turnsF: null, greenF: ops.resizeGreens(link.greenF, n) }), b => set({ busF: b }), link.lanesB)}
+        {lanesRow(`Towards ${back.name} (${back.deg.toFixed(0)}°)`, link.lanesB, link.busB, n => set({ lanesB: n, busB: n >= 1 && link.busB, turnsB: null, greenB: ops.resizeGreens(link.greenB, n) }), b => set({ busB: b }), link.lanesF)}
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-muted-foreground">{link.lanesF === 0 || link.lanesB === 0 ? "One-way street" : `${link.lanesF}:${link.lanesB} lanes`}</span>
           <Button variant="outline" size="sm" onClick={() => commit(ops.reverseLink(net, link.id))}><ArrowLeftRight /> Swap sides</Button>
@@ -475,38 +483,86 @@ function StopInspector({ net, id }: { net: Network; id: string }) {
   );
 }
 
+// ---------------------------------------------------------------- building
+function BuildingInspector({ net, b }: { net: Network; b: BuildingDef }) {
+  const set = (patch: Partial<BuildingDef>, key?: string) => commit(ops.updateBuilding(net, b.id, patch), key);
+  const c = simController.compiled;
+  const place = c.places.find(p => p.building.id === b.id);
+  const total = c.places.reduce((a, p) => a + p.w, 0);
+  const auto = tripWeight({ ...b, trips: null });
+  const floors = Math.max(1, Math.round(b.height / FLOOR_HEIGHT));
+  const osm = /^([wr])(\d+)/.exec(b.id);
+  return (
+    <div>
+      <Header kind="Building" title={b.name || USE_LABEL[b.use]} onDelete={() => { commit(ops.deleteBuilding(net, b.id)); select(null); }} />
+      <Section>
+        <div className="grid gap-1.5">
+          <Label htmlFor="buse" className="text-xs text-muted-foreground">Use</Label>
+          <Select value={b.use} onValueChange={v => set({ use: v as BuildingUse })}>
+            <SelectTrigger id="buse" size="sm" className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>{BUILDING_USES.map(u => <SelectItem key={u} value={u}>{USE_LABEL[u]}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <NumberField id="bheight" label="Height" unit="m" value={b.height} digits={1} min={2} max={400} onCommit={v => set({ height: v })} />
+          <div className="grid gap-1.5">
+            <span className="text-xs text-muted-foreground">Footprint</span>
+            <span className="flex h-8 items-center font-mono text-sm tabular">{Math.round(polyArea(b.pts))} m² · {floors} fl.</span>
+          </div>
+        </div>
+      </Section>
+      <Section title="Traffic">
+        <label className="flex items-center justify-between gap-2 text-sm">
+          <span>Set trips by hand</span>
+          <Switch checked={typeof b.trips === "number"} onCheckedChange={v => set({ trips: v ? auto : null })} />
+        </label>
+        {typeof b.trips === "number"
+          ? <NumberField id="btrips" label="Trip weight (0 = no traffic)" value={b.trips} digits={1} min={0} max={100000} onCommit={v => set({ trips: v })} />
+          : <p className="text-sm text-muted-foreground">Trip weight {auto} (from use and floor area).</p>}
+        {place
+          ? <p className="text-sm text-muted-foreground">{total > 0 ? `${((place.w / total) * 100).toFixed(place.w / total < 0.01 ? 2 : 1)}% of trips inside the plan start or end here` : ""}, on {place.opts[0].edge.link.name || "an unnamed road"} (dashed line).</p>
+          : <p className="text-sm text-muted-foreground">{tripWeight(b) > 0 ? "No road within 150 m that cars can stop on, so no trips start or end here." : "Generates no traffic."}</p>}
+      </Section>
+      {osm && (
+        <Section>
+          <a className="text-sm text-primary underline-offset-4 hover:underline" href={`https://www.openstreetmap.org/${osm[1] === "w" ? "way" : "relation"}/${osm[2]}`} target="_blank" rel="noreferrer">View on OpenStreetMap</a>
+        </Section>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- vehicle
 function VehicleInspector({ id }: { id: string }) {
   useSubject(stats$); // re-render with the stats cadence (~4×/s)
   const sim = simController.sim;
-  const v = sim?.vehicles.find(x => String(x.id) === id && !x.dead);
+  // details come with the simulation's snapshots (the worker sends them for the selected vehicle)
+  const v = sim?.vehicle && String(sim.vehicle.id) === id && sim.vehicles.some(x => x.id === sim.vehicle!.id) ? sim.vehicle : null;
   if (!v) return (
     <div>
       <Header kind="Vehicle" title={`#${id}`} />
-      <Section><p className="text-sm text-muted-foreground">This vehicle has left the plan.</p></Section>
+      <Section><p className="text-sm text-muted-foreground">{sim?.vehicles.some(x => String(x.id) === id) ? "Loading…" : "This vehicle has left the plan."}</p></Section>
     </div>
   );
-  const e = v.piece.kind === "lane" ? v.piece.edge : null;
-  const dest = v.dest.kind === "gateway" ? "leaving the plan" : v.dest.kind === "stop" ? `stop ${v.dest.stop.def.name}` : `${v.dest.edge.link.name || "a road"}`;
   const rows: [string, string][] = [
     ["Speed", `${(v.v * 3.6).toFixed(1)} km/h`],
     ["Desired here", `${(v.v0 * 3.6).toFixed(0)} km/h`],
     ["Acceleration", `${v.acc.toFixed(2)} m/s²`],
     ["Gap ahead", Number.isFinite(v.gap) && v.gap < 100 ? `${v.gap.toFixed(1)} m` : "clear"],
-    ["Road", e ? e.link.name || "unnamed" : v.piece.kind === "ring" ? "roundabout" : "junction"],
-    ["Lane", e ? `${v.lane + 1} of ${e.n}` : "–"],
-    ["Heading to", dest],
+    ["Road", v.road],
+    ["Lane", v.lane !== null && v.lanes !== null ? `${v.lane + 1} of ${v.lanes}` : "–"],
+    ["Heading to", v.heading],
     ["Waiting", `${v.wait.toFixed(0)} s`],
     ["Lane changes", String(v.laneChanges)],
     ["Re-routes", String(v.reroutes)],
     ["Max accel / braking", `${v.a.toFixed(1)} / ${v.b.toFixed(1)} m/s²`],
   ];
   if (v.kind === "bus") rows.push(["Passengers", `${v.pax} / ${v.cap}`]);
-  const nt = sim!.nextTurn(v);
+  const nt = v.nextTurn;
   if (nt) {
-    const ref = junctionRefs(simController.compiled).get(nt.node.def.id);
-    const turn = ({ L: "left", S: "ahead", R: "right", U: "U-turn" } as const)[nt.move.turn];
-    rows.splice(6, 0, ["Next turn", `${turn}${ref ? ` at ${ref}` : ""}`], ["Lanes for it", nt.move.lo === nt.move.hi ? `${nt.move.lo + 1}` : `${nt.move.lo + 1}–${nt.move.hi + 1}`]);
+    const ref = junctionRefs(simController.compiled).get(nt.node);
+    const turn = ({ L: "left", S: "ahead", R: "right", U: "U-turn" } as const)[nt.turn];
+    rows.splice(6, 0, ["Next turn", `${turn}${ref ? ` at ${ref}` : ""}`], ["Lanes for it", nt.lo === nt.hi ? `${nt.lo + 1}` : `${nt.lo + 1}–${nt.hi + 1}`]);
   }
   const myEvents = sim!.events.filter(x => x.veh === v.id).slice(-12).reverse();
   return (

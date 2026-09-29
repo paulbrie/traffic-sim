@@ -6,6 +6,7 @@
  */
 import { Poly, connectorPoints, signedAngle, normAngle, hull, dist } from "./geom";
 import type { LinkDef, Network, NodeDef, StopDef, LineDef, Vec } from "./types";
+import { attachBuildings, type Place } from "./buildings";
 
 export const LW = 3.2;          // lane width (m)
 export const CURB = 0.6;        // kerb / shoulder beyond the outer lane (m)
@@ -41,6 +42,8 @@ export interface Edge {
   lanes: LanePiece[];
   length: number;        // trimmed centreline length
   reverse: Edge | null;
+  /** index of the arm this edge arrives on at `to`, and leaves from at `from` */
+  inArm: number; outArm: number;
 }
 
 export interface Arm {
@@ -53,6 +56,9 @@ export interface Arm {
 export interface Movement {
   node: CNode; in: Edge; out: Edge; turn: Turn; delta: number;
   lo: number; hi: number; rank: number;
+  /** connectors and crossings built for this movement, by inLane * 8 + outLane (filled lazily) */
+  conns?: (Conn | undefined)[];
+  crossings?: (readonly Piece[] | undefined)[];
 }
 
 export interface CNode {
@@ -61,11 +67,18 @@ export interface CNode {
   controlled: boolean; gateway: boolean; deadEnd: boolean;
   ringR: number;
   polygon: Vec[];
-  phases: number[][];              // arm indices that share a green
+  phases: number[][];              // arm indices that share a green (an arm is listed when any of its lanes is green)
+  /** per arm, per lane of its approach: the phases in which that lane has green */
+  lanePhases: number[][][];
+  /** green and minimum green time of each phase (s) */
+  phaseGreen: number[]; phaseMinGreen: number[];
+  /** the junction runs custom (per-lane) phases */
+  customPhases: boolean;
   /** fixed-time plan when the junction belongs to a coordinated signal group */
   coord: SignalPlan | null;
   moves: Map<number, Movement[]>;  // by in-edge idx
-  conns: Map<string, Conn>;
+  /** connectors built so far, by numeric key (see getConn / ringEntry / crossing) */
+  conns: Map<number, Conn>;
   ring: RingArm[] | null;
 }
 
@@ -85,11 +98,14 @@ export interface Compiled {
   nodes: CNode[]; edges: Edge[]; pieces: Piece[];
   nodeById: Map<string, CNode>; edgeByKey: Map<string, Edge>;
   stops: CStop[]; stopById: Map<string, CStop>; lines: CLine[];
+  /** building access points (trip origins and destinations inside the plan) */
+  places: Place[];
   warnings: string[];
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
   getConn(move: Movement, a: number, b: number): Conn;
-  /** pieces a vehicle drives through to cross a junction (1 connector, or entry + ring + exit) */
-  crossing(move: Movement, a: number, b: number): Piece[];
+  /** pieces a vehicle drives through to cross a junction (1 connector, or entry + ring + exit); shared, don't modify */
+  crossing(move: Movement, a: number, b: number): readonly Piece[];
+  buildCrossing(move: Movement, a: number, b: number): Piece[];
   ringEntry(move: Movement, a: number): Conn;
 }
 
@@ -130,7 +146,7 @@ export function compile(net: Network): Compiled {
   for (const def of net.nodes) {
     const n: CNode = {
       idx: nodes.length, def, pos: { x: def.x, y: def.y }, arms: [], degree: 0,
-      controlled: false, gateway: false, deadEnd: false, ringR: 0, polygon: [], phases: [], coord: null,
+      controlled: false, gateway: false, deadEnd: false, ringR: 0, polygon: [], phases: [], lanePhases: [], phaseGreen: [], phaseMinGreen: [], customPhases: false, coord: null,
       moves: new Map(), conns: new Map(), ring: null,
     };
     nodes.push(n); nodeById.set(def.id, n);
@@ -139,7 +155,7 @@ export function compile(net: Network): Compiled {
   // ---- edges (directed) ----
   const edges: Edge[] = [];
   const edgeByKey = new Map<string, Edge>();
-  const linkInfo = new Map<string, { center: Poly; A: CNode; B: CNode; ef: Edge | null; eb: Edge | null }>();
+  const linkInfo = new Map<string, { link: LinkDef; center: Poly; A: CNode; B: CNode; ef: Edge | null; eb: Edge | null }>();
   for (const link of net.links) {
     const A = nodeById.get(link.from), B = nodeById.get(link.to);
     if (!A || !B || A === B) { warnings.push(`Road "${link.name || link.id}" is not connected to two different junctions.`); continue; }
@@ -153,14 +169,14 @@ export function compile(net: Network): Compiled {
         from: dir === 1 ? A : B, to: dir === 1 ? B : A,
         n: Math.min(4, n), bus: (dir === 1 ? link.busF : link.busB) && n >= 2, busOnly: (dir === 1 ? link.busF : link.busB) && n === 1, sign: (dir === 1 ? link.signF : link.signB) ?? null,
         speed: Math.max(10, link.speed || 50) / 3.6, base: laneBase(n, nOther),
-        center: dir === 1 ? center : center.reversed(), trimA: 0, trimB: 0, lanes: [], length: 0, reverse: null,
+        center: dir === 1 ? center : center.reversed(), trimA: 0, trimB: 0, lanes: [], length: 0, reverse: null, inArm: -1, outArm: -1,
       };
       edges.push(e); edgeByKey.set(e.key, e);
       return e;
     };
     const ef = mk(1), eb = mk(-1);
     if (ef && eb) { ef.reverse = eb; eb.reverse = ef; }
-    linkInfo.set(link.id, { center, A, B, ef, eb });
+    linkInfo.set(link.id, { link, center, A, B, ef, eb });
     const [lo, hi] = linkExtent(link);
     // arms: outward direction from each end
     const tA = center.tangent(0), tB = center.tangent(center.len);
@@ -173,6 +189,7 @@ export function compile(net: Network): Compiled {
   // ---- node classification, setbacks ----
   for (const n of nodes) {
     n.arms.sort((a, b) => a.angle - b.angle);
+    n.arms.forEach((a, i) => { if (a.inEdge) a.inEdge.inArm = i; if (a.outEdge) a.outEdge.outArm = i; });
     n.degree = n.arms.length;
     n.gateway = n.degree === 1 && n.def.gateway;
     n.deadEnd = n.degree === 1 && !n.def.gateway;
@@ -300,6 +317,9 @@ export function compile(net: Network): Compiled {
           list.length = 0; list.push(...next);
         }
       }
+      // general traffic never drives in the bus lane (the kerb lane): a turn that only the bus lane
+      // could make is also allowed from the lane beside it, so cars turn from there
+      if (ein.bus) for (const m of list) if (m.lo === nl - 1) m.lo = nl - 2;
       n.moves.set(ein.idx, list);
     }
 
@@ -331,6 +351,35 @@ export function compile(net: Network): Compiled {
         const only = n.phases[0];
         n.phases = only.length >= 2 ? only.map(i => [i]) : [only, []];
       }
+    }
+    // per-lane view of the phases: custom lights read it from the roads, automatic ones give
+    // every lane of an approach its approach's phase
+    const sig = n.def.signal, custom = n.controlled && n.def.control === "lights" && (n.def.phases?.length ?? 0) >= 2;
+    if (custom) {
+      const defs = n.def.phases!, k = defs.length;
+      n.customPhases = true;
+      n.lanePhases = n.arms.map(a => {
+        const e = a.inEdge;
+        if (!e) return [];
+        const g = (e.dir === 1 ? e.link.greenF : e.link.greenB) ?? [];
+        return Array.from({ length: e.n }, (_, lane) => (g[lane] ?? []).filter(p => p < k));
+      });
+      n.phases = defs.map((_, p) => n.arms.map((_, i) => i).filter(i => n.lanePhases[i].some(ps => ps.includes(p))));
+      n.phaseGreen = defs.map(d => d.green);
+      n.phaseMinGreen = defs.map(d => d.minGreen ?? sig.minGreen);
+      n.arms.forEach(a => {
+        const e = a.inEdge;
+        if (!e) return;
+        const dark = n.lanePhases[n.arms.indexOf(a)].map((ps, lane) => (ps.length ? -1 : lane)).filter(l => l >= 0);
+        if (dark.length) warnings.push(`Traffic lights: lane${dark.length > 1 ? "s" : ""} ${dark.map(l => l + 1).join(", ")} of ${e.link.name || "an unnamed road"} never get${dark.length > 1 ? "" : "s"} green; set ${dark.length > 1 ? "them" : "it"} in the junction's phases.`);
+      });
+    } else {
+      n.lanePhases = n.arms.map((a, i) => {
+        const p = n.phases.findIndex(g => g.includes(i));
+        return a.inEdge ? Array.from({ length: a.inEdge.n }, () => (p >= 0 ? [p] : [])) : [];
+      });
+      n.phaseGreen = n.phases.map(() => sig.green);
+      n.phaseMinGreen = n.phases.map(() => sig.minGreen);
     }
   }
 
@@ -389,27 +438,30 @@ export function compile(net: Network): Compiled {
     if (cycle > g.cycle) warnings.push(`Signal group "${g.name}": a ${g.cycle} s cycle is too short for a junction with ${k} phases; it runs ${Math.ceil(cycle)} s there, so it drifts out of sync.`);
   }
 
+  const places = attachBuildings(net.buildings ?? [], [...linkInfo.values()]);
+
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const b of net.buildings ?? []) for (const p of b.pts) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
   for (const n of net.nodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); }
   for (const l of net.links) for (const c of [l.c1, l.c2]) if (c) { minX = Math.min(minX, c.x); minY = Math.min(minY, c.y); maxX = Math.max(maxX, c.x); maxY = Math.max(maxY, c.y); }
   if (!isFinite(minX)) { minX = -200; minY = -150; maxX = 200; maxY = 150; }
 
   const compiled: Compiled = {
-    nodes, edges, pieces, nodeById, edgeByKey, stops, stopById, lines, warnings,
+    nodes, edges, pieces, nodeById, edgeByKey, stops, stopById, lines, places, warnings,
     bounds: { minX, minY, maxX, maxY },
     getConn(move, a, b) {
-      const n = move.node, key = `${move.in.idx}:${a}:${move.out.idx}:${b}`;
-      let c = n.conns.get(key);
+      const cache = (move.conns ??= []), k = a * 8 + b;
+      let c = cache[k];
       if (c) return c;
-      c = buildConn(n, move, a, b, pieces.length);
-      pieces.push(c); n.conns.set(key, c);
+      c = buildConn(move.node, move, a, b, pieces.length);
+      pieces.push(c); cache[k] = c;
       return c;
     },
     ringEntry(move, a) {
-      const n = move.node, key = `E:${move.in.idx}:${a}`;
+      const n = move.node, key = -(move.in.idx * 8 + a) - 1;
       let c = n.conns.get(key);
       if (c) return c;
-      const arm = n.arms.findIndex(x => x.inEdge === move.in), ra = n.ring![arm];
+      const arm = move.in.inArm, ra = n.ring![arm];
       const lin = move.in.lanes[Math.min(a, move.in.lanes.length - 1)];
       const th = ra.angle - Math.min(0.32, (Math.PI / n.arms.length) * 0.45);
       const pts = connectorPoints(lin.poly.at(lin.len), lin.poly.tangent(lin.len), ra.J, { x: Math.sin(th), y: -Math.cos(th) }, 10);
@@ -419,13 +471,17 @@ export function compile(net: Network): Compiled {
       return c;
     },
     crossing(move, a, b) {
+      const cache = (move.crossings ??= []), k = a * 8 + b;
+      return (cache[k] ??= this.buildCrossing(move, a, b));
+    },
+    buildCrossing(move, a, b) {
       const n = move.node;
       if (!n.ring) return [this.getConn(move, a, b)];
-      const m = n.arms.length, ai = n.arms.findIndex(x => x.inEdge === move.in), ao = n.arms.findIndex(x => x.outEdge === move.out);
+      const m = n.arms.length, ai = move.in.inArm, ao = move.out.outArm;
       const out: Piece[] = [this.ringEntry(move, a), n.ring[ai].between];
       let k = (ai - 1 + m) % m, guard = 0;
       while (k !== ao && guard++ < m + 1) { out.push(n.ring[k].pass, n.ring[k].between); k = (k - 1 + m) % m; }
-      const key = `X:${move.out.idx}:${b}`;
+      const key = -(edges.length * 8 + move.out.idx * 8 + b) - 1;
       let x = n.conns.get(key);
       if (!x) {
         const ra = n.ring[ao], lout = move.out.lanes[Math.min(b, move.out.lanes.length - 1)];
@@ -527,7 +583,36 @@ export function conflicts(A: Conn, B: Conn): boolean {
   confCache.set(key, c);
   return c;
 }
-export const clearConflictCache = () => confCache.clear();
+/**
+ * How far along A (m from its start) its conflict with B ends: past this point A's centre line
+ * stays more than CLEAR m from B's (wider than the conflict test, so that vehicle bodies, up to a
+ * bus's width, are clear of each other). Infinity when the conflict lasts to the end (both end in the same
+ * exit lane, or roundabout rings), so a vehicle on A only frees B once it has left the junction.
+ */
+const confEndCache = new Map<number, number>();
+const CLEAR = 3.5;
+export function conflictEnd(A: Conn, B: Conn): number {
+  const key = A.id * 1_000_003 + B.id;
+  const hit = confEndCache.get(key);
+  if (hit !== undefined) return hit;
+  let end = Infinity;
+  if (!(A.outEdge === B.outEdge && A.outLane === B.outLane) && !(A.ring && B.ring)) {
+    const a = A.poly.pts, b = B.poly.pts;
+    let along = 0, last = -1;
+    for (let p = 0; p < a.length; p += 2) {
+      if (p > 0) along += Math.hypot(a[p] - a[p - 2], a[p + 1] - a[p - 1]);
+      for (let q = 0; q < b.length; q += 2) {
+        const dx = a[p] - b[q], dy = a[p + 1] - b[q + 1];
+        if (dx * dx + dy * dy < CLEAR * CLEAR) { last = along; break; }
+      }
+    }
+    // the samples are a few metres apart: count up to the next one
+    if (last >= 0) end = Math.min(A.len, last + A.len / Math.max(1, a.length / 2 - 1));
+  }
+  confEndCache.set(key, end);
+  return end;
+}
+export const clearConflictCache = () => { confCache.clear(); confEndCache.clear(); };
 
 /**
  * Junction outline with rounded kerbs: each road's mouth, joined to the next road (going round

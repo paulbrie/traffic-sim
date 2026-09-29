@@ -4,7 +4,8 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { buildRoadGeo } from "@/render/geometry";
-import { buildFurniture, buildRoads, type Furniture } from "@/render/scene3d";
+import { buildBuildings, buildFurniture, buildRoads, buildingShell, type Furniture } from "@/render/scene3d";
+import type { BuildingDef } from "@/engine/types";
 import { readPalette, speedColor, type Palette } from "@/render/palette";
 import { linkExtent } from "@/engine/compile";
 import { network$, select, ui, underlay$, type UiState } from "@/state/store";
@@ -45,8 +46,20 @@ export function View3D() {
       red: new THREE.MeshBasicMaterial({ color: pal.stop }), off: new THREE.MeshLambertMaterial({ color: "#555" }),
     };
     let roads: THREE.Group | null = null, furniture: Furniture | null = null, builtVersion = -1;
+    // buildings are rebuilt only when the buildings themselves (or the theme) change
+    let houses: { mesh: THREE.Mesh; owner: Int32Array; list: BuildingDef[] } | null = null;
+    function syncBuildings(force = false) {
+      const list = network$.getValue().buildings ?? [];
+      if (houses && houses.list === list && !force) { houses.mesh.visible = u.display.buildings; return; }
+      if (houses) { scene.remove(houses.mesh); houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); houses = null; }
+      if (!list.length) return;
+      const b = buildBuildings(list, pal);
+      houses = { ...b, list };
+      houses.mesh.visible = u.display.buildings;
+      scene.add(houses.mesh);
+    }
     const box = new THREE.BoxGeometry(1, 1, 1); box.translate(0, 0.5, 0);
-    const MAXV = 14000; // body boxes (a truck uses two)
+    const MAXV = 50000; // body boxes (a truck uses two)
     const body = new THREE.InstancedMesh(box, new THREE.MeshLambertMaterial({ color: 0xffffff }), MAXV);
     const glass = new THREE.InstancedMesh(box, new THREE.MeshLambertMaterial({ color: 0x1e2830 }), MAXV);
     const white = new THREE.Color(1, 1, 1);
@@ -55,7 +68,7 @@ export function View3D() {
     scene.add(body, glass);
     // turn signals: small amber lamps at the front and rear corners
     const lampGeo = new THREE.BoxGeometry(0.28, 0.22, 0.2);
-    const lamps = new THREE.InstancedMesh(lampGeo, new THREE.MeshBasicMaterial({ color: 0xffab1a }), 4000);
+    const lamps = new THREE.InstancedMesh(lampGeo, new THREE.MeshBasicMaterial({ color: 0xffab1a }), 16000);
     lamps.frustumCulled = false; lamps.count = 0; scene.add(lamps);
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 48), new THREE.MeshBasicMaterial({ color: pal.select, side: THREE.DoubleSide }));
     ring.rotation.x = -Math.PI / 2; ring.visible = false; scene.add(ring);
@@ -108,6 +121,7 @@ export function View3D() {
       const dark = matchMedia("(prefers-color-scheme: dark)").matches;
       hemi.intensity = dark ? 0.9 : 1.15; sun.intensity = dark ? 1.0 : 1.5;
       builtVersion = -1;
+      syncBuildings(true);
     }
     applyTheme();
 
@@ -117,6 +131,7 @@ export function View3D() {
       const geo = buildRoadGeo(simController.compiled, network$.getValue());
       roads = buildRoads(geo, pal); scene.add(roads);
       furniture = buildFurniture(geo, pal, sigMats); scene.add(furniture.group);
+      syncBuildings();
       builtVersion = simController.version;
       const b = simController.compiled.bounds;
       const cx = (b.minX + b.maxX) / 2, cz = (b.minY + b.maxY) / 2, span = Math.max(200, b.maxX - b.minX, b.maxY - b.minY);
@@ -140,7 +155,7 @@ export function View3D() {
     const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
 
     const subs = [
-      ui.subscribe("**", () => { u = ui.getValue(); }),
+      ui.subscribe("**", () => { u = ui.getValue(); if (houses) houses.mesh.visible = u.display.buildings; }),
       underlay$.subscribe(syncUnderlay),
       underlayImg$.subscribe(syncUnderlay),
       viewCmd$.subscribe(c => {
@@ -180,6 +195,13 @@ export function View3D() {
       if (v) return select({ kind: "vehicle", id: String(v.id) });
       const node = net.nodes.find(n => Math.hypot(n.x - p.x, n.y - p.y) < tol * 1.5);
       if (node) return select({ kind: "node", id: node.id });
+      if (houses?.mesh.visible) {
+        const h = ray.intersectObject(houses.mesh, false)[0];
+        if (h && h.faceIndex != null && h.distance < ray.ray.origin.distanceTo(hit)) {
+          const b = houses.list[houses.owner[h.faceIndex]];
+          if (b) return select({ kind: "building", id: b.id });
+        }
+      }
       let best: { id: string; d: number } | null = null;
       for (const l of net.links) {
         const A = ops.nodeById(net, l.from), B = ops.nodeById(net, l.to); if (!A || !B) continue;
@@ -191,12 +213,11 @@ export function View3D() {
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointerup", onUp);
 
-    let raf = 0, last = performance.now(), hlFor = "", lastHeading = NaN;
+    let raf = 0, hlFor = "", lastHeading = NaN;
     const compassEl = () => wrap.parentElement?.querySelector<HTMLElement>("[data-compass]");
     const frame = (now: number) => {
-      const dt = (now - last) / 1000; last = now;
       if (u.view === "3d") {
-        simController.advance(dt);
+        simController.advance();
         if (builtVersion !== simController.version) { rebuild(); hlFor = ""; }
         if (homed !== u.planId) { homed = u.planId; home(); }
         const sim = simController.sim;
@@ -228,7 +249,7 @@ export function View3D() {
         let nl = 0;
         if (sim && Math.floor(now / 380) % 2 === 0) for (const v of sim.vehicles) {
           const b = sim.blinker(v);
-          if (!b || nl + 2 > 4000) continue;
+          if (!b || nl + 2 > 16000) continue;
           const q = sim.pose(v), mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
           const dx = q.fx - q.rx, dz = q.fy - q.ry, m = Math.hypot(dx, dz) || 1, ux = dx / m, uz = dz / m;
           const nx = -uz * b, nz = ux * b, half = v.len / 2 - 0.15, side = v.width / 2 + 0.02, h = v.kind === "car" ? 0.6 : 0.9;
@@ -244,7 +265,7 @@ export function View3D() {
         if (body.instanceColor) body.instanceColor.needsUpdate = true;
         // signals and stop labels
         if (furniture) {
-          for (const h of furniture.heads) h.mesh.material = sim ? sigMats[sim.signalFor(h.nodeIdx, h.arm) ?? "red"] : sigMats.off;
+          for (const h of furniture.heads) h.mesh.material = sim ? sigMats[sim.signalFor(h.nodeIdx, h.arm, h.lane) ?? "red"] : sigMats.off;
           for (const L of furniture.labels) {
             const st = simController.compiled.stopById.get(L.id);
             const text = st ? `${st.def.name}${sim ? ` · ${Math.floor(st.waiting)}` : ""}` : "";
@@ -266,12 +287,14 @@ export function View3D() {
           const nd = net.nodes.find(x => x.id === sel.id);
           if (nd) { ring.position.set(nd.x, 0.12, nd.y); ring.scale.set(12, 12, 12); ring.visible = true; }
         }
-        const key = sel?.kind === "link" ? `${sel.id}:${simController.version}` : "";
+        const key = sel?.kind === "link" || sel?.kind === "building" ? `${sel.kind}:${sel.id}:${simController.version}` : "";
         if (key !== hlFor) {
           hlFor = key;
           hl.geometry.dispose();
-          const geo = new THREE.BufferGeometry();
-          if (sel?.kind === "link") {
+          let geo = new THREE.BufferGeometry();
+          const bld = sel?.kind === "building" ? net.buildings?.find(b => b.id === sel.id) : undefined;
+          if (bld) geo = buildingShell(bld);
+          else if (sel?.kind === "link") {
             const s = buildRoadGeo(simController.compiled, net).surfaces.find(x => x.linkId === sel.id);
             if (s) {
               const L = s.curb.left.pts, R = s.curb.right.pts, pos: number[] = [];
@@ -302,6 +325,7 @@ export function View3D() {
       renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointerup", onUp);
       controls.dispose();
+      if (houses) { houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); }
       ulMat.map?.dispose(); ulMat.dispose(); ulMesh.geometry.dispose();
       renderer.dispose();
       wrap.removeChild(renderer.domElement);

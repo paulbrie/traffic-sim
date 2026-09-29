@@ -12,7 +12,8 @@ export interface RoadGeo {
   lines: LineGeo[];
   stopLines: { a: Vec; b: Vec; kind: "stop" | "yield" | "signal" | "priority" }[];
   arrows: { p: Vec; dir: Vec; turns: string }[];
-  signals: { nodeIdx: number; arm: number; p: Vec; dir: Vec; kind: "lights" | "stop" | "yield" }[];
+  /** `lane` set: one head per lane (junctions with custom phases), hung from a mast at `pole` */
+  signals: { nodeIdx: number; arm: number; p: Vec; dir: Vec; kind: "lights" | "stop" | "yield"; lane?: number; pole?: Vec }[];
   stops: { id: string; name: string; p: Vec; dir: Vec; color: string }[];
 }
 
@@ -67,8 +68,14 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
         const signed = ctl === "priority" && !!e.sign;
         const b0 = e.base + 0.2, b1 = e.base + e.n * LW - 0.2;
         geo.stopLines.push({ a: { x: end.x + r.x * b0, y: end.y + r.y * b0 }, b: { x: end.x + r.x * b1, y: end.y + r.y * b1 }, kind });
-        const arm = node.arms.findIndex(a => a.inEdge === e);
-        if ((kind === "signal" || kind === "stop" || (kind === "yield" && signed)) && arm >= 0) {
+        const arm = e.inArm;
+        if (kind === "signal" && arm >= 0 && node.customPhases) {
+          const off = e.base + e.n * LW + 1.4, pole = { x: end.x + r.x * off - t.x * 0.8, y: end.y + r.y * off - t.y * 0.8 };
+          for (let k = 0; k < e.n; k++) {
+            const lo = e.base + (k + 0.5) * LW;
+            geo.signals.push({ nodeIdx: node.idx, arm, lane: k, pole, p: { x: end.x + r.x * lo - t.x * 1.4, y: end.y + r.y * lo - t.y * 1.4 }, dir: t, kind: "lights" });
+          }
+        } else if ((kind === "signal" || kind === "stop" || (kind === "yield" && signed)) && arm >= 0) {
           const off = e.base + e.n * LW + 1.4;
           geo.signals.push({ nodeIdx: node.idx, arm, p: { x: end.x + r.x * off - t.x * 0.8, y: end.y + r.y * off - t.y * 0.8 }, dir: t, kind: kind === "signal" ? "lights" : kind === "yield" ? "yield" : "stop" });
         }

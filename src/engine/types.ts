@@ -41,7 +41,24 @@ export interface NodeDef {
   inflow?: number | null;
   /** Entry points only: relative share of trips that end here (1 = normal, 0 = nobody leaves here). */
   exitWeight?: number | null;
+  /**
+   * Traffic lights only: custom phases, run in this order (null/undefined = worked out automatically).
+   * Which lanes get green in each phase is stored on the roads arriving here (`greenF` / `greenB`).
+   */
+  phases?: SignalPhase[] | null;
 }
+
+/** One green phase of a junction with custom lights. */
+export interface SignalPhase {
+  name?: string;
+  /** green time (s) */
+  green: number;
+  /** minimum green before an idle phase may be cut short (s); default: the junction's */
+  minGreen?: number | null;
+}
+
+/** most phases a junction may have */
+export const MAX_PHASES = 8;
 
 export interface LinkDef {
   id: string;
@@ -78,6 +95,12 @@ export interface LinkDef {
    */
   splitF?: Record<string, number> | null;
   splitB?: Record<string, number> | null;
+  /**
+   * Custom traffic lights at the junction ahead (when it has `phases`): for each lane of that
+   * direction (0 = leftmost), the phases in which it has green. A lane in no phase never gets green.
+   */
+  greenF?: number[][] | null;
+  greenB?: number[][] | null;
 }
 
 export type ApproachSign = "yield" | "stop";
@@ -131,6 +154,32 @@ export interface SignalGroup {
   members: SignalGroupMember[];
 }
 
+/** What a building is used for; decides how much traffic it generates per m² of floor. */
+export type BuildingUse = "home" | "shop" | "office" | "industry" | "school" | "civic" | "other" | "minor";
+export const BUILDING_USES: BuildingUse[] = ["home", "shop", "office", "industry", "school", "civic", "other", "minor"];
+
+/**
+ * A building footprint. Trips inside the plan start and end at buildings (on the nearest road),
+ * in proportion to their trip weight.
+ */
+export interface BuildingDef {
+  id: string;
+  /** outline, not closed (the last point connects back to the first) */
+  pts: Vec[];
+  /** metres */
+  height: number;
+  use: BuildingUse;
+  name?: string;
+  /** relative trip weight; null/undefined = worked out from use and floor area, 0 = no traffic */
+  trips?: number | null;
+}
+
+/** Where the plan sits on Earth: the latitude/longitude of world point (0, 0). */
+export interface GeoRef { lat: number; lon: number }
+
+/** a latitude/longitude rectangle */
+export interface GeoArea { south: number; west: number; north: number; east: number }
+
 export interface Network {
   version: 1;
   nodes: NodeDef[];
@@ -138,12 +187,20 @@ export interface Network {
   stops: StopDef[];
   lines: LineDef[];
   signalGroups?: SignalGroup[];
+  buildings?: BuildingDef[];
+  /** set for plans imported from a map, so later imports line up; `areas` are the frames imported so far */
+  geo?: (GeoRef & { areas?: GeoArea[] }) | null;
 }
 
 export interface PlanSettings {
   cars: number;
   trucks: number;
   seed: number;
+  /**
+   * Share of trips that enter or leave through entry points (0..1); the rest start and end inside
+   * the plan (at buildings when there are any). null/undefined = automatic.
+   */
+  through?: number | null;
 }
 
 export const DEFAULT_SIGNAL: SignalTiming = { green: 18, yellow: 3, allRed: 2, minGreen: 6, actuated: true };

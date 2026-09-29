@@ -8,15 +8,37 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { select, setSettings, settings$, stats$, ui } from "@/state/store";
+import { network$, select, setSettings, settings$, stats$, ui } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { sendView } from "@/state/commands";
 import { junctionRefs } from "@/engine/refs";
 import { EventLogPanel } from "./event-log";
 import { NumberField, Section } from "./fields";
 
+/** share of trips crossing the plan boundary (automatic, or set by hand) */
+function ThroughField() {
+  const [settings] = useSubject(settings$);
+  const [net] = useSubject(network$);
+  const manual = typeof settings.through === "number";
+  const autoPct = net.buildings?.length ? 30 : 65;
+  const pct = manual ? Math.round(settings.through! * 100) : autoPct;
+  return (
+    <div className="grid gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor="through" className="text-sm">Through traffic</Label>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          Auto <Switch checked={!manual} onCheckedChange={v => setSettings({ ...settings, through: v ? null : autoPct / 100 })} aria-label="Automatic through traffic" />
+        </label>
+      </div>
+      <Slider id="through" disabled={!manual} min={0} max={100} step={5} value={[pct]} onValueChange={([v]) => setSettings({ ...settings, through: v / 100 })} />
+      <p className="text-xs text-muted-foreground">{pct}% of trips come in or leave through entry points; the rest start and end {net.buildings?.length ? "at buildings" : "along roads"} inside the plan.</p>
+    </div>
+  );
+}
+
 export function TrafficPanel() {
   const [settings] = useSubject(settings$);
+  const [net] = useSubject(network$);
   const [display, setDisplay] = useDeepSubject(ui, "display");
   const [stats] = useSubject(stats$);
   // slider for quick changes, plus a box to type any amount up to `hardMax`
@@ -37,13 +59,14 @@ export function TrafficPanel() {
   return (
     <div>
       <Section title="Demand">
-        {slider("cars", "Cars in the plan", settings.cars, 2000, 10, 5000, v => setSettings({ ...settings, cars: v }))}
-        {slider("trucks", "Trucks", settings.trucks, 400, 2, 1000, v => setSettings({ ...settings, trucks: v }))}
+        {slider("cars", "Cars in the plan", settings.cars, 5000, 10, 20000, v => setSettings({ ...settings, cars: v }))}
+        {slider("trucks", "Trucks", settings.trucks, 1000, 2, 4000, v => setSettings({ ...settings, trucks: v }))}
         <div className="grid grid-cols-[1fr_auto] items-end gap-2">
           <NumberField id="seed" label="Random seed" value={settings.seed} digits={0} min={1} onCommit={v => setSettings({ ...settings, seed: Math.round(v) })} />
           <Button variant="outline" size="sm" className="h-8" onClick={() => { ui.getValue().sim.epoch++; }}><RotateCcw /> Restart</Button>
         </div>
-        <p className="text-xs text-muted-foreground">Vehicles enter at the square entry points and at random along roads. Same seed and same plan give the same run.</p>
+        <ThroughField />
+        <p className="text-xs text-muted-foreground">Vehicles enter at the square entry points and {net.buildings?.length ? "at buildings (by use and floor area)" : "at random along roads"}. Same seed and same plan give the same run.</p>
       </Section>
       <Section title="Live">
         {stats ? (
@@ -68,6 +91,7 @@ export function TrafficPanel() {
           ["reservations", "Show junction reservations"],
           ["labels", "Show stop names"],
           ["junctions", "Show junction numbers and stats"],
+          ...(net.buildings?.length ? [["buildings", "Show buildings"] as const] : []),
         ] as const).map(([k, label]) => (
           <label key={k} className="flex items-center justify-between gap-2 text-sm">
             <span>{label}</span>

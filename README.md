@@ -27,8 +27,14 @@ migration (for example the reference image support), run `npm run db:migrate` ag
 
 Using your own Postgres instead of Docker: point `DATABASE_URL` in `.env` at it and skip `db:up`.
 
+Serving under a sub-path (behind a proxy that forwards e.g. `/projects/trafficsim/…` unchanged): set
+`NEXT_PUBLIC_BASE_PATH=/projects/trafficsim` in `.env.local` and restart the dev server. It is empty by default.
+
 Other scripts: `npm run typecheck`, `npm run lint`, `npm run db:studio` (Drizzle Studio),
-`npm run db:generate` (after changing `src/db/schema.ts`), `npm run engine:check` (headless simulation run).
+`npm run db:generate` (after changing `src/db/schema.ts`), `npm run engine:check` (headless simulation run),
+`npm run osm:check -- <south> <west> <north> <east>` (imports an OpenStreetMap area headlessly and runs traffic on it),
+`npm run engine:baseline` (the engine must reproduce stored fingerprints of 9 scenarios exactly; `-- --update` after an
+intended behaviour change), `npx tsx scripts/engine-bench.ts` (ms per simulation step on loaded networks).
 
 ## Using the editor
 
@@ -58,19 +64,57 @@ Junctions (3+ roads): priority (first come, first served), all-way stop, actuate
 (green / yellow / all-red / minimum green per junction), or roundabout. Dead ends are entry/exit points
 where traffic comes from and leaves to the rest of the city (toggle to make them turn-arounds).
 
+Traffic lights per lane: select a junction with lights and use **Set lights per lane** (Inspect → Lanes and phases).
+The junction then runs your own phases, in order, each with its own green and minimum green time; tap a lane of
+an arriving road to give it green in a phase (e.g. a protected left-turn arrow: the left lane green in a phase of its
+own). Turns across oncoming traffic still give way when the oncoming lanes are green too, and a lane green in two
+phases in a row stays green through the change. Each lane then gets its own signal head. **Back to automatic**
+returns to the worked-out phases.
+
+Optimise (top bar): improves the junctions you choose by simulation. It may change their control (priority, all-way
+stop, lights, roundabout), lane arrows (dedicated left / right lanes), protected left-turn phases and green times,
+whichever you allow. Each candidate runs this plan's traffic on several random seeds (the same seeds for every
+candidate); a change is kept only when it clearly beats the current plan and wins again on a second set of seeds, and
+the result is checked on fresh seeds before you decide: apply it (one undo step) or save it as a new plan. It runs in
+the browser on spare CPU cores (Web Workers). More effort = more seeds and longer runs, which tells real gains from luck
+better. Headless: `npx tsx scripts/optimize-check.ts <planId> [J2,J3|all] [quick|standard|thorough]
+[greens,control,lefts,lanes|everything]` (reads the plan from the database in `.env.local`).
+
 Changes save automatically. If the same plan was saved from another tab, you choose whose version to keep.
-Duplicate a plan from the city page to compare alternatives.
+Duplicate a plan from the city page to compare alternatives, or **Duplicate** a whole city (all its plans).
+
+## Importing from OpenStreetMap
+
+**Import from map** (cities list: new city · city page: new plan) opens an OpenStreetMap map: search for a place, pan
+and zoom until the frame covers the streets you want (up to 6 km across / 20 km²), choose road classes and whether to
+include buildings. Data comes from the public Overpass API (with fallback mirrors) and is © OpenStreetMap contributors (ODbL).
+
+- Roads are clipped to the frame; roads leaving it become entry points. Lanes, one-way, speed limits, names, bus lanes,
+  traffic signals, stop / give-way signs and small roundabouts are taken from the tags. Junction points a few metres
+  apart (dual carriageways) become one junction, opposite one-way carriageways become one two-way road, and road
+  shapes are fitted with the editor's straight and curved links, so everything stays editable.
+- Buildings are drawn in the plan view and extruded in 3D (height from `height` / `building:levels`). Trips inside the
+  plan start and end at buildings, weighted by use (homes, shops, offices, …) × floor area; select a building to change
+  its use, height or trip weight. **Traffic → Through traffic** sets how many trips use the entry points instead.
+- In the editor, the map-plus button in the tool rail **adds an area to the open plan**. Imported plans remember where
+  they are on Earth, so a new area lines up with the earlier ones: its frame snaps to the edge of the area already
+  imported, roads crossing the seam are joined, and roads or buildings already in the plan are skipped. That way a
+  city can be imported part by part. The whole import is one undo step.
 
 ## Code map
 
 - `src/engine/` — headless, deterministic simulator (no React, no DOM)
   - `types.ts` plan data model (what is stored as JSON in `plans.network`)
   - `compile.ts` turns nodes + links into lanes, junction areas, turn movements with lane rules, connectors, signal phases, roundabout rings
-  - `sim.ts` vehicles (cars, trucks, buses), IDM car-following, MOBIL-style lane changes, junction reservations with conflict checks, roundabout gap acceptance, A* routing with congestion
+  - `sim/` the simulator, in layers each extending the one below: `base` (state, vehicle index, logging) → `routing` (A* with congestion, lanes through junctions) → `signals` → `junctions` (reservations with conflict checks, give-way, roundabout gap acceptance) → `motion` (IDM car-following, MOBIL-style lane changes, buses) → `demand` (spawning) → `index` (the tick, queries for renderers); `mirror.ts` snapshots for running it in a Web Worker
+  - `buildings.ts` building footprints, trip weights, and where each building's traffic joins the road network
+  - `optimize.ts` junction optimiser (control, lane arrows, protected lefts, green times; judged by simulation)
   - `validate.ts` sanitises plan JSON on the server
-- `src/state/` — subjecto stores (`ui` DeepSubject, `network$`/`settings$`/`stats$` Subjects), undo history, edit operations, simulation controller
+- `src/lib/osm/` — OpenStreetMap import: area, projection and Overpass query (`area.ts`), OSM → plan conversion (`convert.ts`)
+- `src/state/` — subjecto stores (`ui` DeepSubject, `network$`/`settings$`/`stats$` Subjects), undo history, edit operations, simulation controller (the live simulation runs in `sim.worker.ts`; the page reads a mirror of it)
 - `src/render/` — shared road geometry, Canvas 2D renderer, three.js scene builders
 - `src/components/workspace/` — editor UI: canvas, 3D view, inspector, traffic and bus-line panels
+- `src/components/osm/` — the import dialog and its Leaflet map
 - `src/server/` — queries and server actions (Drizzle) · `src/db/` schema and client · `drizzle/` migrations
 
 This app has no authentication; it is meant to run locally.
