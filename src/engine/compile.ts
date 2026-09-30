@@ -318,11 +318,15 @@ export function compile(net: Network): Compiled {
       const nbrs = n.degree === 2 ? [n.arms[1 - i]] : [n.arms[(i + 1) % n.degree], n.arms[(i - 1 + n.degree) % n.degree]];
       let d = 0;
       for (const o of nbrs) {
-        const th = Math.abs(normAngle(o.angle - arm.angle));
+        const rel = normAngle(o.angle - arm.angle), th = Math.abs(rel);
+        // the edges that face each other: a neighbour turned toward this arm's right-normal side
+        // meets its `hi` edge with its own `lo` edge, and the other way round (roads can be lopsided:
+        // a lane that has ended, different lanes each way)
+        const wa = rel > 0 ? arm.hi : -arm.lo, wo = rel > 0 ? -o.lo : o.hi;
         let dd: number;
         if (th > 2.9) dd = 0.5;
         else if (th < 0.2) dd = 40;
-        else dd = (o.w + arm.w * Math.cos(th)) / Math.sin(th);
+        else dd = (wo + wa * Math.cos(th)) / Math.sin(th);
         d = Math.max(d, dd);
       }
       arm.setback = Math.max(n.degree === 2 ? 0.5 : 2, Math.min(40, d + (n.degree === 2 ? 0.5 : 1.5)));
