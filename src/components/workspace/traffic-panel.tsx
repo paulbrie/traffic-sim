@@ -15,6 +15,7 @@ import { junctionRefs } from "@/engine/refs";
 import { EventLogPanel } from "./event-log";
 import { FlowsTable } from "./flows";
 import { RouteTracer } from "./route-tracer";
+import { SimSettingsButton } from "./sim-settings";
 import { ZonesSection } from "./zones";
 import { NumberField, Section, compass } from "./fields";
 
@@ -69,6 +70,7 @@ export function TrafficPanel() {
           <Button variant="outline" size="sm" className="h-8" onClick={() => { ui.getValue().sim.epoch++; }}><RotateCcw /> Restart</Button>
         </div>
         <ThroughField />
+        <SimSettingsButton />
         <p className="text-xs text-muted-foreground">Vehicles enter at the square entry points and {net.buildings?.length ? "at buildings (by use and floor area)" : "at random along roads"}. Same seed and same plan give the same run.</p>
       </Section>
       <Section title="Live">

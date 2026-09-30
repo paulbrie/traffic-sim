@@ -1,5 +1,5 @@
 import type { CLine, CNode, Conn, Edge, LanePiece, Piece } from "../compile";
-import { DT, LOOK, REQUEST_DIST, NO_PIECES, type Dest, type Vehicle } from "./base";
+import { DT, LOOK, NO_PIECES, type Dest, type Vehicle } from "./base";
 import { SimJunctions } from "./junctions";
 
 /** Driving: each vehicle's acceleration against what lies ahead (IDM), lane changes (MOBIL-style), moving along pieces, buses at their stops. */
@@ -92,8 +92,9 @@ export abstract class SimMotion extends SimJunctions {
     const fr = v.v / Math.max(curLim, 0.5), fr2 = fr * fr, free = 1 - fr2 * fr2;
     let a = this.idm(v, gap, lv, curLim);
     if (stopKind) {
-      const g2 = stopD - (stopKind === "stop" ? 0 : 0.8);
-      const ss = (stopKind === "stop" ? 0.2 : 0.5) + Math.max(0, v.v * v.T * 0.6 + (v.v * v.v) / sq);
+      // a junction: pull up with the front about 0.4 m short of the line (0.2 + 0.2 at a standstill)
+      const g2 = stopD - (stopKind === "stop" ? 0 : 0.2);
+      const ss = 0.2 + Math.max(0, v.v * v.T * 0.6 + (v.v * v.v) / sq);
       const q2 = ss / Math.max(g2, 0.2);
       const a2 = v.a * (free - q2 * q2);
       if (a2 < a) a = a2;
@@ -184,7 +185,7 @@ export abstract class SimMotion extends SimJunctions {
           this.ev(node, v, "grant", `gap in the roundabout · ${this.mv(m, v.lane)}`, this.md(m, v.lane));
         }
         v.state = v.v < 0.6 && pendD < 8 ? "yielding" : leader && gap < 30 ? "following" : "free";
-        if (v.wait > 150 && !(leader && leader.piece === v.piece && gap < 12)) { this.ev(node, v, "towed", `stuck 150 s waiting to enter the roundabout`); this.kill(v, "towed"); }
+        if (v.wait > this.P.towAfter && !(leader && leader.piece === v.piece && gap < 12)) { this.ev(node, v, "towed", `stuck ${this.P.towAfter} s waiting to enter the roundabout`); this.kill(v, "towed"); }
         return;
       }
       const stopFirst = this.mustStop(node, e);
@@ -192,7 +193,7 @@ export abstract class SimMotion extends SimJunctions {
       const mayAsk = (!stopFirst || v.stoppedAt === pendConn) && laneOk;
       // only the first vehicle in a lane (or one following a vehicle that may go) asks for the junction
       const behindWaiting = !!leader && leader.piece === v.piece && !(leader.granted && leader.conn);
-      if (pendD < REQUEST_DIST && mayAsk && !behindWaiting) {
+      if (pendD < this.P.requestDist && mayAsk && !behindWaiting) {
         if (v.reqFor !== pendConn) {
           v.reqFor = pendConn; v.reqAt = this.tick;
           this.ev(node, v, "request", `${node.ring ? this.mv(m, v.lane) : this.mv(pendConn)} · ${pendD.toFixed(0)} m from the line, ${(v.v * 3.6).toFixed(0)} km/h${stopFirst ? " · after stopping" : ""}`);
@@ -216,8 +217,8 @@ export abstract class SimMotion extends SimJunctions {
 
     // towing clears a vehicle that is itself stuck; one waiting in a queue behind others is left alone
     const inQueue = !!leader && leader.piece === v.piece && gap < 12;
-    if (v.wait > 150 && !inQueue) { if (pendConn) this.ev(pendConn.node, v, "towed", `stuck 150 s waiting for ${this.mv(pendConn)}`); this.kill(v, "towed"); }
-    else if (v.wait > 40 && pendConn && v.rerouteAt !== pendConn.inEdge && v.kind !== "bus" && !v.splits?.has(pendConn.inEdge.idx)) {
+    if (v.wait > this.P.towAfter && !inQueue) { if (pendConn) this.ev(pendConn.node, v, "towed", `stuck ${this.P.towAfter} s waiting for ${this.mv(pendConn)}`); this.kill(v, "towed"); }
+    else if (v.wait > this.P.rerouteAfter && pendConn && v.rerouteAt !== pendConn.inEdge && v.kind !== "bus" && !v.splits?.has(pendConn.inEdge.idx)) {
       v.rerouteAt = pendConn.inEdge;
       const e = pendConn.inEdge, node = pendConn.node;
       const ok = new Set((node.moves.get(e.idx) || []).filter(x => v.lane >= x.lo && v.lane <= x.hi).map(x => x.out));
@@ -257,8 +258,9 @@ export abstract class SimMotion extends SimJunctions {
     if (m) {
       const many = (e.to.moves.get(e.idx)?.length || 0) > 1 || e.to.controlled;
       if (many && (m.lo > lo || m.hi < hi)) { lo = Math.max(lo, m.lo); hi = Math.min(hi, m.hi); urgent = toEnd; }
-      const cap = e.left + m.out.thru - 1;
-      if (!e.to.controlled && cap < hi) { hi = cap; urgent = toEnd; }
+      // lanes dropping at a plain road point: be in one that carries on
+      const first = e.left + (m.skip ?? 0), cap = first + m.out.thru - 1;
+      if (!e.to.controlled && (cap < hi || first > lo)) { lo = Math.max(lo, first); hi = Math.min(hi, cap); urgent = toEnd; }
     }
     // a lane that ends: leave it (the nearer its end, the more urgently)
     if (e.dropLane >= 0) {
@@ -329,14 +331,14 @@ export abstract class SimMotion extends SimJunctions {
       if (mandatory) gain += need.urgent < 60 ? 5 : 1;
       // getting to a turn bay (across to it, then into its queue): any safe gap will do
       if (mandatory && bayRoad) gain = Math.max(gain, 0.01);
-      if (gain > (mandatory ? 0 : 0.3) && gain > bestGain) { best = c; bestGain = gain; bestMandatory = mandatory; }
+      if (gain > (mandatory ? 0 : this.P.laneChangeGain) && gain > bestGain) { best = c; bestGain = gain; bestMandatory = mandatory; }
     }
     if (best < 0) return;
     const np = e.lanes[best];
     v.s = Math.min(np.len - 0.01, v.s * (np.len / p.len));
     v.lcOff = (v.lcT > 0 ? v.lcOff * v.lcT : 0) + (p.offset - np.offset);
     // on a road with turn bays, the steps across to a bay come quickly one after the other
-    v.lcT = 1; v.lcCool = bestMandatory && (e.left || e.right || e.dropLane >= 0) ? 1.5 : 3.5; v.laneChanges++; this.stats.laneChanges++;
+    v.lcT = 1; v.lcCool = bestMandatory && (e.left || e.right || e.dropLane >= 0) ? 1.5 : this.P.laneChangeCooldown; v.laneChanges++; this.stats.laneChanges++;
     this.evRoad(e, v, "lane", `→ lane ${best + 1} ${(p.len - v.s).toFixed(0)} m before the end${bestMandatory ? ` (must: needs lanes ${this.neededLanes(v).lo + 1}-${this.neededLanes(v).hi + 1})` : " (faster)"} at ${(v.v * 3.6).toFixed(0)} km/h`);
     if (e.to.controlled && p.len - v.s < 150) this.ev(e.to, v, "lane", `lane ${v.lane + 1} → ${best + 1} ${(p.len - v.s).toFixed(0)} m before the junction${this.neededLanes(v).lo !== 0 || this.neededLanes(v).hi !== e.n - 1 ? ` (needs lanes ${this.neededLanes(v).lo + 1}-${this.neededLanes(v).hi + 1})` : ""}`);
     v.piece = np; v.lane = best;

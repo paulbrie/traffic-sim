@@ -215,6 +215,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
           <p className="text-xs text-muted-foreground">{node.gateway ? "This point connects the plan to the rest of the city." : "Vehicles turn around here."}</p>
         </Section>
       )}
+      {degree === 1 && node.gateway && <GateCounter node={node} />}
       {degree === 1 && node.gateway && <InflowSection node={node} set={set} />}
       {degree === 1 && node.gateway && <FlowsSection net={net} node={node} />}
       {degree === 1 && node.gateway && <Section title="Zone"><ZonePicker net={net} kind="entry" id={node.id} /></Section>}
@@ -223,10 +224,6 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
 }
 
 function InflowSection({ node, set }: { node: NodeDef; set: (patch: Partial<NodeDef>, key?: string) => void }) {
-  useSubject(stats$); // refresh the measured flow while traffic runs
-  const sim = simController.sim;
-  const entered = sim?.entered.get(node.id) ?? 0;
-  const minutes = sim ? sim.time / 60 : 0;
   const manual = node.inflow != null;
   return (
     <Section title="Traffic in and out">
@@ -249,9 +246,34 @@ function InflowSection({ node, set }: { node: NodeDef; set: (patch: Partial<Node
         onCommit={v => set({ exitWeight: v === 1 ? null : v }, `exitw:${node.id}`)}
       />
       <p className="text-xs text-muted-foreground">1 = normal. 3 means three times as many trips end here as at a normal exit; 0 means nobody leaves here.</p>
-      {sim && minutes > 0.2 && (
-        <p className="text-xs tabular">Entered so far: <span className="font-mono">{entered}</span> · <span className="font-mono">{(entered / minutes).toFixed(1)}</span> veh/min</p>
-      )}
+    </Section>
+  );
+}
+
+/** live counts at an entry / exit point: vehicles that came in and left, in total and per hour */
+function GateCounter({ node }: { node: NodeDef }) {
+  useSubject(stats$); // live readings (~4×/s)
+  const sim = simController.sim;
+  if (!sim) return <Section title="Counter"><p className="text-xs text-muted-foreground">Run traffic to count the vehicles entering and leaving here.</p></Section>;
+  const [inH, outH] = sim.gateRates.get(node.id) ?? [0, 0];
+  const hours = sim.time / 3600;
+  const rows = [["Entered", sim.entered.get(node.id) ?? 0, inH], ["Left", sim.exited.get(node.id) ?? 0, outH]] as const;
+  return (
+    <Section title="Counter">
+      <table className="w-full text-sm">
+        <thead><tr className="text-xs text-muted-foreground"><th className="pb-1 text-left font-normal" /><th className="pb-1 text-right font-normal">Vehicles</th><th className="pb-1 text-right font-normal">Per hour</th><th className="pb-1 text-right font-normal">Average / h</th></tr></thead>
+        <tbody>
+          {rows.map(([label, total, perH]) => (
+            <tr key={label} className="border-t">
+              <td className="py-1">{label}</td>
+              <td className="py-1 text-right font-mono tabular">{total}</td>
+              <td className="py-1 text-right font-mono tabular">{Math.round(perH)}</td>
+              <td className="py-1 text-right font-mono tabular">{hours > 0.01 ? Math.round(total / hours) : "–"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="text-[11px] text-muted-foreground">Per hour: the rate over the last 5 minutes. Average: since the start of the run.</p>
     </Section>
   );
 }

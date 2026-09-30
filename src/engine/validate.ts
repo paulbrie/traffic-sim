@@ -1,4 +1,5 @@
 import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type PlanSettings } from "./types";
+import { sanitizeParams } from "./params";
 
 const num = (v: unknown, lo: number, hi: number, def: number) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
 const str = (v: unknown, def = "", max = 200) => (typeof v === "string" ? v.slice(0, max) : def);
@@ -180,10 +181,12 @@ function sanitizeGeo(v: unknown): Network["geo"] {
 
 export function sanitizeSettings(input: unknown): PlanSettings {
   const s = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const params = sanitizeParams(s.params);
   return {
     cars: Math.round(num(s.cars, 0, 20000, DEFAULT_SETTINGS.cars)),
     trucks: Math.round(num(s.trucks, 0, 4000, DEFAULT_SETTINGS.trucks)),
     seed: Math.round(num(s.seed, 1, 1e9, DEFAULT_SETTINGS.seed)),
     ...(typeof s.through === "number" && isFinite(s.through) ? { through: Math.min(1, Math.max(0, s.through)) } : {}),
+    ...(params ? { params } : {}),
   };
 }

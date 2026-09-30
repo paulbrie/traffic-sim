@@ -2,396 +2,396 @@
  "sample-140": [
   {
    "tick": 500,
-   "hash": "054b9a87",
-   "vehicles": 137,
+   "hash": "9e3d55c4",
+   "vehicles": 141,
    "trips": 6,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "19e5e5ad",
+   "hash": "cd2a6635",
    "vehicles": 157,
-   "trips": 31,
+   "trips": 39,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "bff33bbc",
+   "hash": "85c7599a",
    "vehicles": 157,
-   "trips": 73,
+   "trips": 83,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "f7304fb4",
+   "hash": "af40d46d",
    "vehicles": 157,
-   "trips": 124,
+   "trips": 122,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "7bae276b",
+   "hash": "7c8aa5bc",
    "vehicles": 157,
-   "trips": 160,
+   "trips": 173,
    "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "194ea1fe",
-   "vehicles": 157,
-   "trips": 198,
+   "hash": "62cae98d",
+   "vehicles": 156,
+   "trips": 211,
    "towed": 1
   }
  ],
  "sample-220": [
   {
    "tick": 500,
-   "hash": "e71a9c7b",
-   "vehicles": 163,
+   "hash": "ca7d56a1",
+   "vehicles": 169,
    "trips": 9,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "be71cf9f",
-   "vehicles": 243,
-   "trips": 43,
+   "hash": "1cb6e1cf",
+   "vehicles": 242,
+   "trips": 45,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "c3af910b",
+   "hash": "ebd525ae",
    "vehicles": 243,
-   "trips": 92,
+   "trips": 89,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "5cd90dc8",
+   "hash": "caa5bbe5",
    "vehicles": 242,
-   "trips": 135,
+   "trips": 131,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "f1209a1c",
-   "vehicles": 243,
-   "trips": 176,
+   "hash": "5c862b14",
+   "vehicles": 242,
+   "trips": 170,
    "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "78234f55",
-   "vehicles": 242,
-   "trips": 218,
-   "towed": 1
+   "hash": "6f85e6a3",
+   "vehicles": 243,
+   "trips": 215,
+   "towed": 0
   }
  ],
  "sample-custom-phases": [
   {
    "tick": 500,
-   "hash": "784baffa",
-   "vehicles": 138,
-   "trips": 3,
+   "hash": "34375d16",
+   "vehicles": 144,
+   "trips": 5,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "0ffdda02",
+   "hash": "7928b7cb",
    "vehicles": 157,
-   "trips": 31,
+   "trips": 34,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "b3d89d7c",
+   "hash": "a99fe4d5",
    "vehicles": 157,
-   "trips": 66,
+   "trips": 72,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "0102e096",
+   "hash": "feeea49d",
    "vehicles": 157,
-   "trips": 96,
+   "trips": 107,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "f22c45e8",
+   "hash": "84e77d6b",
    "vehicles": 157,
-   "trips": 131,
+   "trips": 145,
    "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "0655a39c",
+   "hash": "8184867f",
    "vehicles": 157,
-   "trips": 167,
+   "trips": 181,
    "towed": 0
   }
  ],
  "sample-green-wave": [
   {
    "tick": 500,
-   "hash": "a2803088",
-   "vehicles": 145,
+   "hash": "7b90e169",
+   "vehicles": 150,
    "trips": 7,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "f8aac20b",
-   "vehicles": 173,
+   "hash": "fd2de05c",
+   "vehicles": 172,
    "trips": 31,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "90620013",
+   "hash": "43a5a545",
    "vehicles": 173,
-   "trips": 66,
+   "trips": 63,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "c5a2175a",
+   "hash": "ea140498",
    "vehicles": 172,
    "trips": 116,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "a3b65a80",
+   "hash": "cdcc34f9",
    "vehicles": 173,
-   "trips": 153,
+   "trips": 151,
    "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "287ba0e5",
+   "hash": "e097f53a",
    "vehicles": 173,
-   "trips": 180,
+   "trips": 181,
    "towed": 0
   }
  ],
  "sample-metered": [
   {
    "tick": 500,
-   "hash": "60c4a43e",
-   "vehicles": 139,
-   "trips": 4,
+   "hash": "39e5d912",
+   "vehicles": 138,
+   "trips": 7,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "6d6fafa2",
-   "vehicles": 151,
-   "trips": 33,
+   "hash": "ca143b1b",
+   "vehicles": 149,
+   "trips": 32,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "038b6234",
+   "hash": "541498bc",
    "vehicles": 151,
-   "trips": 71,
+   "trips": 65,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "c097b8e7",
+   "hash": "cecb7b0a",
    "vehicles": 153,
-   "trips": 121,
+   "trips": 113,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "d5879a11",
+   "hash": "bdff724f",
    "vehicles": 156,
-   "trips": 156,
+   "trips": 168,
    "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "1b75b7dc",
-   "vehicles": 153,
-   "trips": 199,
-   "towed": 1
+   "hash": "8099aec8",
+   "vehicles": 163,
+   "trips": 212,
+   "towed": 0
   }
  ],
  "sample-event-log": [
   {
    "tick": 500,
-   "hash": "84ebe637",
-   "vehicles": 144,
-   "trips": 10,
+   "hash": "e33747d8",
+   "vehicles": 151,
+   "trips": 11,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "d177dfed",
+   "hash": "4a317349",
    "vehicles": 157,
-   "trips": 40,
+   "trips": 42,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "cd07b0e7",
+   "hash": "b7ba5e68",
    "vehicles": 157,
-   "trips": 85,
+   "trips": 83,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "887fea04",
+   "hash": "6d145e41",
    "vehicles": 157,
-   "trips": 130,
+   "trips": 128,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "e084996f",
+   "hash": "25f49cdf",
    "vehicles": 157,
-   "trips": 167,
+   "trips": 166,
    "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "e7a3a732",
+   "hash": "8d8cf31b",
    "vehicles": 157,
-   "trips": 199,
-   "towed": 0
+   "trips": 211,
+   "towed": 1
   }
  ],
  "claude-tests-640": [
   {
    "tick": 500,
-   "hash": "44ab4d4f",
-   "vehicles": 284,
-   "trips": 14,
+   "hash": "3f4311f4",
+   "vehicles": 281,
+   "trips": 12,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "cb266cf8",
-   "vehicles": 394,
-   "trips": 54,
+   "hash": "eeaba25d",
+   "vehicles": 391,
+   "trips": 51,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "507effca",
-   "vehicles": 431,
-   "trips": 98,
+   "hash": "c0df87de",
+   "vehicles": 438,
+   "trips": 89,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "a4dce75b",
-   "vehicles": 469,
+   "hash": "ff9ec599",
+   "vehicles": 466,
    "trips": 143,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "b16219de",
-   "vehicles": 493,
-   "trips": 191,
+   "hash": "8663770a",
+   "vehicles": 483,
+   "trips": 199,
    "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "facbd7a4",
-   "vehicles": 500,
-   "trips": 241,
+   "hash": "bcfdae25",
+   "vehicles": 499,
+   "trips": 248,
    "towed": 1
   }
  ],
  "osm-cluj": [
   {
    "tick": 500,
-   "hash": "d73b2992",
-   "vehicles": 181,
-   "trips": 14,
+   "hash": "b9872e06",
+   "vehicles": 185,
+   "trips": 10,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "57507c4a",
+   "hash": "2c2da9a1",
    "vehicles": 249,
-   "trips": 35,
+   "trips": 33,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "d2b59455",
-   "vehicles": 299,
-   "trips": 67,
+   "hash": "f66de6e2",
+   "vehicles": 310,
+   "trips": 59,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "dc364e65",
+   "hash": "6b261e6a",
    "vehicles": 316,
-   "trips": 110,
+   "trips": 99,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "779393aa",
-   "vehicles": 316,
-   "trips": 153,
-   "towed": 1
+   "hash": "4677cc9a",
+   "vehicles": 318,
+   "trips": 152,
+   "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "f9700f70",
-   "vehicles": 315,
-   "trips": 193,
-   "towed": 3
+   "hash": "201956ba",
+   "vehicles": 318,
+   "trips": 196,
+   "towed": 0
   }
  ],
  "osm-milton-keynes": [
   {
    "tick": 500,
-   "hash": "690c7c79",
-   "vehicles": 209,
-   "trips": 2,
+   "hash": "8d572ced",
+   "vehicles": 205,
+   "trips": 1,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "dd5fbc4b",
-   "vehicles": 299,
-   "trips": 21,
+   "hash": "96fcb6d8",
+   "vehicles": 306,
+   "trips": 25,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "d21b82da",
-   "vehicles": 353,
-   "trips": 50,
+   "hash": "dbfdefcf",
+   "vehicles": 348,
+   "trips": 60,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "f638c70b",
-   "vehicles": 388,
-   "trips": 94,
+   "hash": "8d27531e",
+   "vehicles": 380,
+   "trips": 107,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "6d73792d",
-   "vehicles": 411,
-   "trips": 140,
+   "hash": "1cd99641",
+   "vehicles": 400,
+   "trips": 150,
    "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "6988fd73",
-   "vehicles": 423,
-   "trips": 193,
+   "hash": "97aec8d5",
+   "vehicles": 422,
+   "trips": 200,
    "towed": 0
   }
  ]

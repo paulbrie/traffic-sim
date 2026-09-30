@@ -1,3 +1,4 @@
+import type { SimParams } from "./params";
 /**
  * Plan data model — what the editor produces and what gets stored in Postgres.
  * All coordinates are in metres, x to the east and y to the south (screen convention).
@@ -308,6 +309,8 @@ export interface PlanSettings {
    * the plan (at buildings when there are any). null/undefined = automatic.
    */
   through?: number | null;
+  /** tuned simulation parameters (only those that differ from the defaults; see params.ts) */
+  params?: Partial<SimParams>;
 }
 
 export const DEFAULT_SIGNAL: SignalTiming = { green: 18, yellow: 3, allRed: 2, minGreen: 6, actuated: true };

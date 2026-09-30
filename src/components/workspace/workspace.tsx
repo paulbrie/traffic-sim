@@ -318,14 +318,20 @@ function DraftBar() {
 }
 
 // ---------------------------------------------------------------- overlays
+/** simulated time as m:ss, or h:mm:ss from an hour on */
+const clock = (t: number) => {
+  const s = Math.floor(t), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+};
 function LiveBadge() {
   const [stats] = useSubject(stats$);
   const [sim] = useDeepSubject(ui, "sim");
   const running = sim.running;
   if (!stats) return null;
   return (
-    <div className="pointer-events-none absolute top-3 left-3 z-10 grid grid-cols-4 gap-3 rounded-lg border bg-background/95 px-3 py-2 text-xs shadow-sm backdrop-blur">
+    <div className="pointer-events-none absolute top-3 left-3 z-10 grid grid-cols-5 gap-3 rounded-lg border bg-background/95 px-3 py-2 text-xs shadow-sm backdrop-blur">
       {[
+        ["Elapsed", clock(simController.sim?.time ?? 0)],
         ["Vehicles", String(stats.count)],
         ["Avg km/h", stats.avgSpeed.toFixed(1)],
         ["Stopped", `${Math.round(stats.stopped * 100)}%`],
@@ -333,7 +339,7 @@ function LiveBadge() {
       ].map(([k, v]) => (
         <div key={k}><div className="font-mono text-sm font-semibold tabular">{v}</div><div className="text-muted-foreground">{k}</div></div>
       ))}
-      {!running && <div className="col-span-4 text-muted-foreground">Paused</div>}
+      {!running && <div className="col-span-5 text-muted-foreground">Paused</div>}
     </div>
   );
 }

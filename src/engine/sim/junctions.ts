@@ -2,9 +2,6 @@ import { conflicts, conflictEnd, zipFrom, type CNode, type Conn, type Edge } fro
 import { DT, type Vehicle, type Occ, type NodeState, type PedCross, type Req } from "./base";
 import { SimSignals } from "./signals";
 
-const PED_WALK = 8, PED_YIELD = 5;
-/** at a free junction, requests this close to the line are "waiting" and keep their turn */
-const FREE_LINE = 12;
 
 /** Junctions: who may enter (reservations of conflicting paths, stop and give-way signs, lights), roundabout entry, per-junction statistics. */
 export abstract class SimJunctions extends SimSignals {
@@ -14,7 +11,7 @@ export abstract class SimJunctions extends SimSignals {
     return node.def.control === "stop" || (node.def.control === "priority" && e.sign === "stop");
   }
   // ------------------------------------------------------------ pedestrians
-  // (PED_WALK: seconds at the start of a red in which pedestrians may step out; PED_YIELD: seconds
+  // (P.pedWalk: seconds at the start of a red in which pedestrians may step out; P.pedYield: seconds
   // held-up traffic gets at a zebra before the next group)
   /** the crossing of arm `k` at node `n` (a zebra on a plain road has one crossing for both sides) */
   protected pedCross(n: CNode, k: number): PedCross | undefined {
@@ -45,7 +42,7 @@ export abstract class SimJunctions extends SimSignals {
         if (!p.waiting || p.crossing) { p.claim = false; return; }
         // at lights: only in the walk time at the start of this road's red (both sides of a crossing
         // on a plain road); elsewhere: not until the traffic held up by the last group has had a go
-        const allowed = lights ? red && (this.tick - p.redSince) * DT < PED_WALK : this.tick >= p.until + PED_YIELD / DT;
+        const allowed = lights ? red && (this.tick - p.redSince) * DT < this.P.pedWalk : this.tick >= p.until + this.P.pedYield / DT;
         p.claim = allowed;
         if (!allowed) return;
         const busy = st.occ.some(o => arms.includes(o.conn.inEdge.inArm) || arms.includes(o.conn.outEdge.outArm));
@@ -95,7 +92,7 @@ export abstract class SimJunctions extends SimSignals {
           // queued priority traffic that is standing still lets minor traffic in (zip merging)
           if (u.v < 3 && !u.granted) continue;
           const dist = lp.len - u.s, eta = dist / Math.max(u.v, 2);
-          if (dist > 70 || eta > 4.5) continue;
+          if (dist > 70 || eta > this.P.priorityHorizon) continue;
           const cross = this.crossingFor(u, u.ri, u.lane);
           if (cross && cross[0].kind === "conn") out.push(cross[0] as Conn);
         }
@@ -120,7 +117,7 @@ export abstract class SimJunctions extends SimSignals {
     for (const ra of ring) { circ += ra.pass.len + ra.between.len; onRing += (this.index.get(ra.pass.id)?.length || 0) + (this.index.get(ra.between.id)?.length || 0); }
     if (onRing + 1 > Math.max(2, Math.floor(circ / 11))) return false;
     const pass = ring[k].pass, prevBetween = ring[(k + 1) % m].between;
-    const critical = 3.2;
+    const critical = this.P.ringGap;
     for (const u of this.index.get(pass.id) || []) {
       const d = pass.len - u.s;
       if (d < 8 || d / Math.max(u.v, 1) < critical) return false;
@@ -187,7 +184,7 @@ export abstract class SimJunctions extends SimSignals {
     // free: vehicles waiting at the line take turns in arrival order (every entering lane gets its
     // go, like a zip), then the rest by distance; one still on its way can't jump the waiting ones
     const free = n.def.control === "free";
-    const atLine = (r: Req) => r.d < FREE_LINE;
+    const atLine = (r: Req) => r.d < this.P.freeQueue;
     if (lights) reqs.sort((a, b) => (a.conn.move.turn === "L" ? 1 : 0) - (b.conn.move.turn === "L" ? 1 : 0) || a.at - b.at || a.v.id - b.v.id);
     else if (free) reqs.sort((a, b) => +!atLine(a) - +!atLine(b) || (atLine(a) ? a.at - b.at : a.d - b.d) || a.v.id - b.v.id);
     else reqs.sort((a, b) => a.at - b.at || a.v.id - b.v.id);
@@ -246,15 +243,12 @@ export abstract class SimJunctions extends SimSignals {
   protected pastConflict(o: Occ, c: Conn, r?: Req): boolean {
     if (!o.entered) return false;
     const v = o.v;
-    // free junction, both joining the same exit lane: follow it in (zip) once it is into the shared
-    // part and far enough ahead, counted in distance to the exit lane as the car-following does
-    if (r && c.node.def.control === "free") {
-      const zip = zipFrom(o.conn, c);
-      if (isFinite(zip)) {
-        const front = v.piece === o.conn ? v.s : v.trail[0] === o.conn ? o.conn.len + v.s : -Infinity;
-        const gap = c.len + r.d - (o.conn.len - front) - v.len;
-        return front - v.len > zip + 2 && gap > 2 + 1.5 * r.v.v;
-      }
+    // free junction, both joining the same exit lane: follow it in (zip) once it is far enough
+    // ahead, counted in distance to the exit lane as the car-following does
+    if (r && c.node.def.control === "free" && isFinite(zipFrom(o.conn, c))) {
+      const front = v.piece === o.conn ? v.s : v.trail[0] === o.conn ? o.conn.len + v.s : -Infinity;
+      const gap = c.len + r.d - (o.conn.len - front) - v.len;
+      return gap > 2 + this.P.zipHeadway * r.v.v;
     }
     const end = conflictEnd(o.conn, c);
     if (!isFinite(end)) return false;

@@ -82,6 +82,12 @@ export interface Movement {
   lo: number; hi: number; rank: number;
   /** two roads merging into one: the side this one joins from (its lanes feed that side of the road ahead) */
   merge?: "left" | "right";
+  /** lanes dropping at a plain road point: how many of the approach's left through lanes end there
+   *  (the ones that carry on are those lined up with the road ahead) */
+  skip?: number;
+  /** lanes added at a plain road point: how many of the exit's left through lanes are new (the
+   *  approach's lanes feed the ones they are lined up with) */
+  shift?: number;
   /** connectors and crossings built for this movement, by inLane * 8 + outLane (filled lazily) */
   conns?: (Conn | undefined)[];
   crossings?: (readonly Piece[] | undefined)[];
@@ -519,6 +525,25 @@ export function compile(net: Network): Compiled {
         sorted[0].merge = "left"; sorted[sorted.length - 1].merge = "right";
       }
     }
+    // a plain road point where the number of lanes changes: lanes carry on into the ones they are
+    // lined up with (not always the left ones); the others end there, or open there
+    if (!n.controlled && n.degree === 2) for (const list of n.moves.values()) for (const m of list) {
+      const ein = m.in, eout = m.out;
+      if (m.turn === "U" || ein.dropLane >= 0 || eout.thru === ein.thru) continue;
+      const fewer = Math.min(ein.thru, eout.thru), spare = Math.abs(ein.thru - eout.thru);
+      let best = 0, bestCost = Infinity;
+      for (let w = 0; w <= spare; w++) {
+        let cost = 0;
+        for (let j = 0; j < fewer; j++) {
+          const a = ein.lanes[ein.left + j + (ein.thru > eout.thru ? w : 0)], b = eout.lanes[eout.left + j + (ein.thru > eout.thru ? 0 : w)];
+          const p = a.poly.at(a.len), q = b.poly.at(0);
+          cost += Math.hypot(p.x - q.x, p.y - q.y);
+        }
+        // (a clear difference only: evenly placed lanes keep the left ones, as before)
+        if (cost < bestCost - 0.5) { bestCost = cost; best = w; }
+      }
+      if (best) { if (ein.thru > eout.thru) m.skip = best; else m.shift = best; }
+    }
     // signal phases: group arms that face each other
     if (n.controlled && n.degree === 2) {
       // both directions share one green; the second phase is all-red (e.g. pedestrians crossing)
@@ -802,7 +827,7 @@ export function exitLane(move: Movement, a: number, isBus: boolean): number {
   if (move.turn === "U") b = 0;
   else if (move.turn === "L" || move.merge === "left") b = Math.min(Math.max(0, a - move.lo), nOut - 1);
   else if (move.turn === "R" || move.merge === "right") b = Math.max(0, nOut - 1 - (move.hi - a));
-  else b = Math.max(0, Math.min(a - move.in.left - (move.in.dropLane === move.in.left ? 1 : 0), nOut - 1));
+  else b = Math.max(0, Math.min(a - move.in.left - (move.in.dropLane === move.in.left ? 1 : 0) - (move.skip ?? 0) + (move.shift ?? 0), nOut - 1));
   if (out.bus) {
     if (isBus && move.in.bus && a === move.in.kerb) b = nOut - 1;
     else if (!isBus && b >= nOut - 1) b = Math.max(0, nOut - 2);

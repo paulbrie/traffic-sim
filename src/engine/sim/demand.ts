@@ -8,7 +8,7 @@ export abstract class SimDemand extends SimMotion {
   // ------------------------------------------------------------ spawning
   protected makeVehicle(kind: Kind): Vehicle {
     const r = this.rng;
-    const P = KIND_PARAMS(kind, r);
+    const P = KIND_PARAMS(kind, r, this.P);
     return {
       id: this.nextId++, kind, ...P, tint: (r() * 6) | 0,
       route: [], ri: 0, piece: this.net.pieces[0], s: 0, v: 0, acc: 0, lane: 0, queue: [], trail: [],
@@ -83,7 +83,7 @@ export abstract class SimDemand extends SimMotion {
     v.route = route; v.ri = 0; v.piece = piece; v.s = sOnLane; v.v = v0; v.lane = lane; v.dest = dest;
     v.metered = true; v.zflow = f.idx; v.goal = dest; st.sent++;
     this.vehicles.push(v); this.addToIndex(v); this.logAppear(v);
-    if ("gate" in o) { const id = edge.from.def.id; this.entered.set(id, (this.entered.get(id) ?? 0) + 1); }
+    if ("gate" in o) this.countGate(edge.from.def.id, "in");
     return true;
   }
 
@@ -165,7 +165,7 @@ export abstract class SimDemand extends SimMotion {
     if (flow) { v.flow = flow.idx; this.flowState[flow.idx].sent++; }
     this.applySplit(v);
     this.vehicles.push(v); this.addToIndex(v); this.logAppear(v);
-    if (fromGate) { const id = edge.from.def.id; this.entered.set(id, (this.entered.get(id) ?? 0) + 1); }
+    if (fromGate) this.countGate(edge.from.def.id, "in");
     return true;
   }
   /** entry points with a set flow: Poisson arrivals, queued while the entry lane is full */

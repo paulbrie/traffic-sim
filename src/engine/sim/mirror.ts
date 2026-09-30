@@ -65,6 +65,9 @@ export interface Snapshot {
   cycles?: [number, LightCycles][];
   turnCounts?: [string, number][];
   entered?: [string, number][];
+  exited?: [string, number][];
+  /** per entry / exit point: vehicles per hour in and out (last 5 minutes) */
+  gateRates?: [string, number, number][];
   /** traffic counters by edge key ("linkId:dir") */
   counters?: [string, CounterStats][];
   /** transit flows by flow id */
@@ -134,6 +137,8 @@ export class SnapshotWriter {
       snap.junctions = sim.net.nodes.map(nd => (isJunction(nd) ? sim.junctionStats(nd.idx) : null));
       snap.turnCounts = [...sim.turnCounts];
       snap.entered = [...sim.entered];
+      snap.exited = [...sim.exited];
+      snap.gateRates = sim.gateRates();
       snap.flows = sim.net.flows.map(f => [f.def.id, sim.flowStats(f.idx)!]);
       snap.zoneFlows = sim.net.zoneFlows.map(f => [f.def.id, sim.zoneFlowStats(f.idx)!]);
       snap.tests = sim.tests.map(t => ({ ...t }));
@@ -197,6 +202,8 @@ export class SimMirror {
   events: JunctionEvent[] = [];
   turnCounts = new Map<string, number>();
   entered = new Map<string, number>();
+  exited = new Map<string, number>();
+  gateRates = new Map<string, [number, number]>();
   counters = new Map<string, CounterStats>();
   flows = new Map<string, FlowStats>();
   zoneFlows = new Map<string, FlowStats>();
@@ -231,6 +238,8 @@ export class SimMirror {
     if (s.junctions) this.junctions = s.junctions;
     if (s.turnCounts) this.turnCounts = new Map(s.turnCounts);
     if (s.entered) this.entered = new Map(s.entered);
+    if (s.exited) this.exited = new Map(s.exited);
+    if (s.gateRates) this.gateRates = new Map(s.gateRates.map(([id, a, b]) => [id, [a, b]]));
     if (s.counters) this.counters = new Map(s.counters);
     if (s.flows) this.flows = new Map(s.flows);
     if (s.zoneFlows) this.zoneFlows = new Map(s.zoneFlows);

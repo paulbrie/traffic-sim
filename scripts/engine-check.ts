@@ -1,8 +1,9 @@
-import { Sim, sampleTown, compile, connectorPreview, measureRun, optimizeSignals } from "../src/engine";
+import { Sim, sampleTown, compile, connectorPreview, exitLane, measureRun, optimizeSignals } from "../src/engine";
 import { makeLink, makeNode } from "../src/engine/sample";
 import * as mirrorModule from "../src/engine/sim/mirror";
 import { readFileSync } from "fs";
-import { sanitizeNetwork } from "../src/engine/validate";
+import { sanitizeNetwork, sanitizeSettings } from "../src/engine/validate";
+import { DEFAULT_PARAMS } from "../src/engine/params";
 import { polyCentroid } from "../src/engine/buildings";
 import type { Network } from "../src/engine/types";
 import { customizePhases, addPhase, approachesTo, setLaneGreen, reverseLink, splitLink, linkPoint, nodeById, addSlipLane, mergeLinks, smoothBetween } from "../src/state/ops";
@@ -433,5 +434,43 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const counts = [...grants.values()], total = counts.reduce((s, n) => s + n, 0);
   const ok = grants.size === 4 && counts.every(n => n > total / 8) && maxWait < 60 && overlap === 0 && sim.stats.towed === 0;
   console.log(`free junction: ${total} through, per entering lane ${counts.join("/")}, longest wait ${maxWait.toFixed(0)} s; ${overlap} overlaps, ${sim.stats.towed} towed | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// simulation settings: the defaults are the engine's own values (stored settings keep only changes),
+// a changed value changes the run, and new settings reach a running simulation
+{
+  const network = sampleTown(), settings = { cars: 150, trucks: 10, seed: 5 };
+  const run = (params?: object) => { const s = new Sim(network, { ...settings, ...(params ? { params } : {}) }); s.run(1500); return s; };
+  const a = run(), b = run({ ...DEFAULT_PARAMS }), fast = run({ junctionSpeed: 1.6, carHeadway: 0.6 });
+  const stored = sanitizeSettings({ ...settings, params: { ...DEFAULT_PARAMS, towAfter: 90, bogus: 3, ringGap: 99 } }).params;
+  const live = new Sim(network, settings); live.settings = { ...settings, params: { towAfter: 60 } };
+  const ok = a.stats.trips === b.stats.trips && a.stats.laneChanges === b.stats.laneChanges && fast.stats.trips !== a.stats.trips
+    && JSON.stringify(stored) === JSON.stringify({ ringGap: 6, towAfter: 90 }) && live.P.towAfter === 60 && live.P.ringGap === DEFAULT_PARAMS.ringGap;
+  console.log(`simulation settings: defaults ${a.stats.trips} = ${b.stats.trips} trips, faster junctions + shorter gaps ${fast.stats.trips}; stored ${JSON.stringify(stored)}; live update ${live.P.towAfter} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// lanes added at a plain road point: a two-way road's lane (right of its centre line) carries on into
+// the right lane of a two-lane one-way road, not across into its left lane; the reverse drop too
+{
+  const A = makeNode(-200, 0), P = makeNode(0, 0, "priority", false), B = makeNode(200, 0);
+  const into = compile(sanitizeNetwork({ version: 1, nodes: [A, P, B], stops: [], lines: [], links: [makeLink(A, P, 1, 1), makeLink(P, B, 2, 0)] }));
+  const mIn = [...into.nodeById.get(P.id)!.moves.values()].flat().find(m => m.out.n === 2)!;
+  const outOf = compile(sanitizeNetwork({ version: 1, nodes: [A, P, B], stops: [], lines: [], links: [makeLink(A, P, 2, 0), makeLink(P, B, 1, 1)] }));
+  const mOut = [...outOf.nodeById.get(P.id)!.moves.values()].flat().find(m => m.in.n === 2)!;
+  const ok = exitLane(mIn, 0, false) === 1 && exitLane(mOut, 1, false) === 0 && mOut.skip === 1;
+  console.log(`lanes added / dropped at a road point: 1 lane → right lane of 2: ${exitLane(mIn, 0, false) === 1}; 2 → 1 keeps the right lane: ${mOut.skip === 1} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// entry / exit point counters: every vehicle coming in or leaving through one is counted, with a rate per hour
+{
+  const s = new Sim(sampleTown(), { cars: 150, trucks: 10, seed: 5 });
+  s.run(4000);
+  const ins = [...s.entered.values()].reduce((a, b) => a + b, 0), outs = [...s.exited.values()].reduce((a, b) => a + b, 0);
+  const rates = s.gateRates(), anyIn = rates.some(([, a]) => a > 0), anyOut = rates.some(([, , b]) => b > 0);
+  const ok = ins > 20 && outs > 20 && outs <= s.stats.trips && anyIn && anyOut;
+  console.log(`entry / exit counters: ${ins} entered, ${outs} left (${s.stats.trips} trips); busiest ${Math.round(Math.max(...rates.map(r => r[1])))}/h in | ok ${ok}`);
   if (!ok) process.exit(1);
 }

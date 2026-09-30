@@ -2,10 +2,12 @@
 import { compile, type CLine, type CNode, type Compiled, type Conn, type CStop, type Edge, type Movement, type Piece } from "../compile";
 import { mulberry32 } from "../geom";
 import type { Network, PlanSettings } from "../types";
+import { resolveParams, type SimParams } from "../params";
 
 export const DT = 0.1;
 export const LOOK = 110;
-export const REQUEST_DIST = 42;
+/** entry / exit point rates: over the last 5 minutes (ticks) */
+const GATE_WINDOW = 3000;
 export const NO_PIECES: readonly Piece[] = [];
 
 export type Kind = "car" | "truck" | "bus";
@@ -118,11 +120,11 @@ export interface Stats {
   history: { t: number; speed: number; stopped: number }[];
 }
 
-export const KIND_PARAMS = (kind: Kind, r: () => number) =>
+export const KIND_PARAMS = (kind: Kind, r: () => number, P: SimParams = resolveParams()) =>
   kind === "car"
-    ? { len: 4.6, width: 1.9, pref: 0.88 + r() * 0.22, a: 2.0 + r() * 0.5, b: 2.4, bmax: 9, T: 0.9 + r() * 0.4, s0: 1.6, politeness: 0.1 + r() * 0.4 }
+    ? { len: 4.6, width: 1.9, pref: P.speedPref + r() * 0.22, a: P.carAccel + r() * 0.5, b: P.carBrake, bmax: 9, T: P.carHeadway + r() * 0.4, s0: P.carMinGap, politeness: P.politeness + r() * 0.4 }
     : kind === "truck"
-      ? { len: 10 + r() * 2, width: 2.5, pref: 0.8 + r() * 0.08, a: 0.75 + r() * 0.2, b: 1.5, bmax: 6.5, T: 1.6 + r() * 0.3, s0: 3, politeness: 0.5 }
+      ? { len: 10 + r() * 2, width: 2.5, pref: 0.8 + r() * 0.08, a: P.truckAccel + r() * 0.2, b: 1.5, bmax: 6.5, T: P.truckHeadway + r() * 0.3, s0: 3, politeness: 0.5 }
       : { len: 12, width: 2.55, pref: 0.85, a: 0.9, b: 1.6, bmax: 7, T: 1.5, s0: 2.5, politeness: 0.5 };
 
 /**
@@ -145,7 +147,11 @@ export class PieceIndex {
 /** State, the vehicle index, logging and helpers shared by every layer. */
 export abstract class SimBase {
   readonly net: Compiled;
-  settings: PlanSettings;
+  private _settings!: PlanSettings;
+  /** the run's parameters (defaults plus the plan's own), kept in step with `settings` */
+  P: SimParams = resolveParams();
+  get settings(): PlanSettings { return this._settings; }
+  set settings(s: PlanSettings) { this._settings = s; this.P = resolveParams(s.params); }
   tick = 0;
   vehicles: Vehicle[] = [];
   stats: Stats = { count: 0, cars: 0, trucks: 0, buses: 0, avgSpeed: 0, stopped: 0, tripsPerMin: 0, trips: 0, towed: 0, boarded: 0, laneChanges: 0, history: [] };
@@ -203,6 +209,10 @@ export abstract class SimBase {
   turnCounts = new Map<string, number>();
   /** vehicles that entered through each entry point so far (by node id) */
   entered = new Map<string, number>();
+  /** vehicles that left the plan through each exit point so far (by node id) */
+  exited = new Map<string, number>();
+  /** when vehicles entered / left at each entry point lately (ticks, the last GATE_WINDOW) */
+  private gateRecent = new Map<string, { in: number[]; out: number[] }>();
   /** arrivals waiting to get onto the road at metered entry points */
   protected backlog = new Map<CNode, number>();
   constructor(network: Network | Compiled, settings: PlanSettings) {
@@ -240,7 +250,7 @@ export abstract class SimBase {
   protected armOf(node: CNode, e: Edge) { return e.to === node ? e.inArm : -1; }
   /** highest lane index a general-traffic vehicle may use on edge e */
   protected maxLane(v: Vehicle, e: Edge) { return v.kind !== "bus" && e.bus ? e.n - 2 : e.n - 1; }
-  protected lim(v: Vehicle, p: Piece) { return p.kind === "lane" ? Math.min(p.vmax, p.edge.speed * v.pref) : p.vmax; }
+  protected lim(v: Vehicle, p: Piece) { return p.kind === "lane" ? Math.min(p.vmax, p.edge.speed * v.pref) : p.vmax * this.P.junctionSpeed; }
   protected pick<T>(arr: T[]) { return arr[(this.rng() * arr.length) | 0]; }
   /** a copy in random order (Fisher–Yates; every order equally likely) */
   protected shuffled<T>(arr: readonly T[]): T[] {
@@ -313,8 +323,24 @@ export abstract class SimBase {
     const since = this.tick - 3000;
     while (c.recent.length && c.recent[0] < since) c.recent.shift();
   }
+  protected countGate(id: string, dir: "in" | "out") {
+    const total = dir === "in" ? this.entered : this.exited;
+    total.set(id, (total.get(id) ?? 0) + 1);
+    let r = this.gateRecent.get(id);
+    if (!r) this.gateRecent.set(id, (r = { in: [], out: [] }));
+    const list = r[dir];
+    list.push(this.tick);
+    if (list.length > 64 && list[0] < this.tick - GATE_WINDOW) list.splice(0, list.findIndex(t => t >= this.tick - GATE_WINDOW));
+  }
+  /** per entry / exit point: vehicles per hour in and out, over the last 5 minutes (or since the start) */
+  gateRates(): [string, number, number][] {
+    const since = this.tick - GATE_WINDOW, span = Math.max(1, Math.min(GATE_WINDOW, this.tick)) * DT;
+    const rate = (l: number[]) => { let k = 0; while (k < l.length && l[k] < since) k++; return ((l.length - k) / span) * 3600; };
+    return [...this.gateRecent].map(([id, r]) => [id, rate(r.in), rate(r.out)]);
+  }
   protected kill(v: Vehicle, why: "exit" | "arrived" | "towed" | "removed") {
     if (v.dead) return;
+    if (why === "exit" && v.piece.kind === "lane") this.countGate(v.piece.edge.to.def.id, "out");
     if (v.piece.kind === "lane") this.evRoad(v.piece.edge, v, why === "exit" ? "exit" : why === "arrived" ? "arrive" : why === "towed" ? "towed" : "leave-road",
       why === "exit" ? "leaves the plan" : why === "arrived" ? "reached its destination" : why === "towed" ? `removed after ${v.wait.toFixed(0)} s stuck (${v.state})` : "removed (no way on)");
     v.dead = true;

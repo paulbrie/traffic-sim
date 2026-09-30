@@ -140,6 +140,11 @@ lanes and lane connectors can be selected and inspected. The table button next t
 sortable, filterable table of the chosen layer under the map, with live columns while traffic runs; click a row to
 select and focus the object, double-click an underlined cell (or use its list / checkbox) to edit it (undoable).
 
+**Simulation settings** (Traffic panel → Simulation settings): every tunable number of the simulation, grouped
+(drivers, trucks, lane changes, junctions, pedestrians, stuck vehicles), each with its default and a reset. They are
+saved with the plan (only the changed ones) and reach the running simulation at once; driver and truck values apply to
+vehicles entering from then on. Defined in `src/engine/params.ts`; the defaults are the engine's own values.
+
 Optimise (top bar): improves the junctions you choose by simulation. It may change their control (priority, all-way
 stop, lights, roundabout), lane arrows (dedicated left / right lanes), protected left-turn phases and green times,
 whichever you allow. Each candidate runs this plan's traffic on several random seeds (the same seeds for every

@@ -139,6 +139,9 @@ export function Dataview() {
           { key: "exitw", label: "Exit share ×", width: 90, align: "right", value: n => n.exitWeight ?? 1, edit: ed({ kind: "number" as const, min: 0, max: 100, commit: (n: NodeDef, v: string | number | boolean) => commit(ops.updateNode(network$.getValue(), n.id, { exitWeight: Number(v) === 1 ? null : Number(v) })) }) },
           { key: "flows", label: "Transit flows", width: 100, align: "right", value: n => (net.flows ?? []).filter(f => f.from === n.id).length },
           { key: "entered", label: live("Entered"), width: 100, align: "right", value: n => (sim ? sim.entered.get(n.id) ?? 0 : null) },
+          { key: "exited", label: live("Left"), width: 90, align: "right", value: n => (sim ? sim.exited.get(n.id) ?? 0 : null) },
+          { key: "inH", label: live("In/h"), width: 80, align: "right", value: n => (sim ? Math.round(sim.gateRates.get(n.id)?.[0] ?? 0) : null) },
+          { key: "outH", label: live("Out/h"), width: 80, align: "right", value: n => (sim ? Math.round(sim.gateRates.get(n.id)?.[1] ?? 0) : null) },
         ];
         return { rows, cols, key: n => (n as NodeDef).id, sel: n => ({ kind: "node", id: (n as NodeDef).id }), at: n => n as NodeDef } as Def<unknown>;
       }
