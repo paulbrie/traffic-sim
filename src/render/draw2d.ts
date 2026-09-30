@@ -210,10 +210,48 @@ export function underlayHandles(cam: Camera, u: Underlay) {
   return { corners, top, rotate, center: c };
 }
 
-export function drawScene(
-  ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, geo: RoadGeo, paths: PathCache,
-  net: Network, compiled: Compiled, sim: Sim | null, ov: Overlay,
-) {
+/** the static part of the picture: ground, imagery, grid, reference image, buildings, roads by level */
+interface Background { key: string; stale: boolean; base: HTMLCanvasElement; layers: HTMLCanvasElement[] }
+const backgrounds = new WeakMap<CanvasRenderingContext2D, Background>();
+const objIds = new WeakMap<object, number>();
+let nextObjId = 1;
+const idOf = (o: object | null | undefined) => { if (!o) return 0; let k = objIds.get(o); if (!k) objIds.set(o, (k = nextObjId++)); return k; };
+function makeCanvas(w: number, h: number): HTMLCanvasElement {
+  const c = document.createElement("canvas"); c.width = w; c.height = h; return c;
+}
+/** draw an image of the whole view (in device pixels) over the world-transformed context */
+function blit(ctx: CanvasRenderingContext2D, img: HTMLCanvasElement | undefined, dpr: number, scale: number, w: number, h: number, cam: Camera) {
+  if (!img) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(img, 0, 0);
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * (w / 2 - cam.cx * scale), dpr * (h / 2 - cam.cy * scale));
+}
+function background(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, paths: PathCache, net: Network, ov: Overlay): Background {
+  const { w, h, dpr } = cam, W = Math.max(1, Math.round(w * dpr)), H = Math.max(1, Math.round(h * dpr));
+  const ul = ov.underlay?.u.visible && ov.underlay.img ? ov.underlay : null;
+  const key = [cam.cx, cam.cy, cam.scale, W, H, dpr, idOf(paths), idOf(pal), ov.buildings ? idOf(net.buildings) : 0, ov.satellite ? idOf(net.geo) : 0,
+    ov.satBrightness ?? 1, ov.gridOn ? ov.snapStep : 0, ov.maskRoads ? 1 : 0,
+    ul ? [idOf(ul.img), ul.u.x, ul.u.y, ul.u.rot, ul.u.mpp, ul.u.opacity, ul.u.w, ul.u.h].join(":") : 0].join(",");
+  let bg = backgrounds.get(ctx);
+  if (bg && bg.key === key && !bg.stale) return bg;
+  if (!bg || bg.base.width !== W || bg.base.height !== H) { bg = { key: "", stale: false, base: makeCanvas(W, H), layers: [] }; backgrounds.set(ctx, bg); }
+  const b = bg;
+  b.key = key; b.stale = false;
+  const onTile = () => { b.stale = true; ov.onTile?.(); };
+  const g = b.base.getContext("2d")!;
+  paintBase(g, cam, pal, paths, net, ov, onTile);
+  // roads above the lowest level: each on its own transparent image, so vehicles go in between
+  const levels = ov.maskRoads ? [] : paths.layers;
+  for (let i = 1; i < levels.length; i++) {
+    const c = (b.layers[i] = b.layers[i]?.width === W && b.layers[i]?.height === H ? b.layers[i] : makeCanvas(W, H)), lg = c.getContext("2d")!;
+    lg.setTransform(1, 0, 0, 1, 0, 0); lg.clearRect(0, 0, W, H);
+    lg.setTransform(dpr * cam.scale, 0, 0, dpr * cam.scale, dpr * (w / 2 - cam.cx * cam.scale), dpr * (h / 2 - cam.cy * cam.scale));
+    paintLevel(lg, levels[i], pal, 1 / cam.scale, cam.scale);
+  }
+  b.layers.length = Math.max(1, levels.length);
+  return b;
+}
+function paintBase(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, paths: PathCache, net: Network, ov: Overlay, onTile: () => void) {
   const { w, h, dpr, scale } = cam;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = pal.ground;
@@ -221,17 +259,15 @@ export function drawScene(
   if (ov.satellite && net.geo) {
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * (w / 2 - cam.cx * scale), dpr * (h / 2 - cam.cy * scale));
     const a = toWorld(cam, 0, 0), b = toWorld(cam, w, h);
-    drawSatellite(ctx, net.geo, { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y }, scale * dpr, ov.onTile ?? (() => {}));
+    drawSatellite(ctx, net.geo, { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y }, scale * dpr, onTile);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const dim = 1 - (ov.satBrightness ?? 1);
     if (dim > 0.005) { ctx.fillStyle = `rgba(0,0,0,${dim.toFixed(3)})`; ctx.fillRect(0, 0, w, h); }
   }
   drawGrid(ctx, cam, pal, ov);
 
-  // world transform
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * (w / 2 - cam.cx * scale), dpr * (h / 2 - cam.cy * scale));
-  const px = 1 / scale; // one screen pixel in metres
-
+  const px = 1 / scale;
   // reference image underlay
   const ul = ov.underlay;
   if (ul && ul.u.visible && ul.img) {
@@ -243,52 +279,79 @@ export function drawScene(
     ctx.drawImage(ul.img, -u.w / 2, -u.h / 2, u.w, u.h);
     ctx.restore();
   }
-
   if (ov.buildings && net.buildings?.length) {
     // over satellite imagery, footprints are see-through so the photo still shows
     if (ov.satellite && net.geo) ctx.globalAlpha = 0.4;
     drawBuildings(ctx, pal, net.buildings, px);
     ctx.globalAlpha = 1;
   }
-
   if (ov.maskRoads) {
     // just the outline of each road, so what is underneath (imagery, reference image) shows
     ctx.strokeStyle = "#22d3ee"; ctx.globalAlpha = 0.85; ctx.lineWidth = px * 1.2; ctx.lineJoin = "round";
     for (const p of paths.linkPaths.values()) ctx.stroke(p);
     ctx.globalAlpha = 1;
-  } else {
-    // level by level, lowest first: a bridge (with its shadow) covers the roads and traffic beneath
-    let prev = -Infinity;
-    for (const c of paths.layers) {
-      ctx.fillStyle = "rgba(0,0,0,0.28)"; ctx.fill(c.shadow, "nonzero");
-      // below ground (tunnels, underpasses): faded
-      const a0 = c.level < 0 ? 0.55 : 1;
-      ctx.globalAlpha = a0;
-      ctx.fillStyle = pal.curb; ctx.fill(c.curb, "nonzero");
-      ctx.fillStyle = pal.asphalt; ctx.fill(c.asphalt, "nonzero");
-      ctx.fillStyle = pal.bus; ctx.fill(c.bus);
-      ctx.fillStyle = pal.island; ctx.fill(c.island);
-      ctx.strokeStyle = pal.curb; ctx.lineWidth = 0.6; ctx.stroke(c.islandEdge);
+  } else if (paths.layers.length) {
+    paintLevel(ctx, paths.layers[0], pal, px, scale);
+  }
+}
+/** one level's roads, junctions and markings */
+function paintLevel(ctx: CanvasRenderingContext2D, c: LayerPaths, pal: Palette, px: number, scale: number) {
+  ctx.fillStyle = "rgba(0,0,0,0.28)"; ctx.fill(c.shadow, "nonzero");
+  // below ground (tunnels, underpasses): faded
+  const a0 = c.level < 0 ? 0.55 : 1;
+  ctx.globalAlpha = a0;
+  ctx.fillStyle = pal.curb; ctx.fill(c.curb, "nonzero");
+  ctx.fillStyle = pal.asphalt; ctx.fill(c.asphalt, "nonzero");
+  ctx.fillStyle = pal.bus; ctx.fill(c.bus);
+  ctx.fillStyle = pal.island; ctx.fill(c.island);
+  ctx.strokeStyle = pal.curb; ctx.lineWidth = 0.6; ctx.stroke(c.islandEdge);
+  ctx.lineCap = "butt";
+  ctx.strokeStyle = pal.mark; ctx.lineWidth = Math.max(0.15, px * 1); ctx.setLineDash([3, 4]); ctx.stroke(c.laneDash);
+  ctx.setLineDash([]); ctx.lineWidth = Math.max(0.2, px * 1.2); ctx.stroke(c.laneSolid);
+  ctx.strokeStyle = pal.divider; ctx.lineWidth = Math.max(0.15, px * 1); ctx.setLineDash([3, 4]); ctx.stroke(c.centerDash);
+  ctx.setLineDash([]); ctx.stroke(c.centerSolid);
+  ctx.strokeStyle = pal.mark; ctx.globalAlpha = 0.75 * a0; ctx.lineWidth = Math.max(0.12, px * 0.8); ctx.stroke(c.hatch); ctx.globalAlpha = a0;
+  if (scale > 1.2) {
+    ctx.fillStyle = pal.mark; ctx.globalAlpha = 0.85 * a0; ctx.fill(c.zebra);
+    ctx.globalAlpha = 0.55 * a0; ctx.lineWidth = Math.max(0.12, px * 0.8); ctx.setLineDash([1, 1.6]); ctx.stroke(c.guide); ctx.setLineDash([]); ctx.globalAlpha = a0;
+  }
+  ctx.strokeStyle = pal.mark; ctx.lineWidth = 0.5; ctx.stroke(c.stopLine);
+  ctx.setLineDash([0.9, 0.7]); ctx.stroke(c.yieldLine); ctx.setLineDash([]);
+  if (scale > 2.2) { ctx.lineWidth = 0.22; ctx.lineJoin = "round"; ctx.stroke(c.arrows); }
+  ctx.globalAlpha = 1;
+}
 
-      ctx.lineCap = "butt";
-      ctx.strokeStyle = pal.mark; ctx.lineWidth = Math.max(0.15, px * 1); ctx.setLineDash([3, 4]); ctx.stroke(c.laneDash);
-      ctx.setLineDash([]); ctx.lineWidth = Math.max(0.2, px * 1.2); ctx.stroke(c.laneSolid);
-      ctx.strokeStyle = pal.divider; ctx.lineWidth = Math.max(0.15, px * 1); ctx.setLineDash([3, 4]); ctx.stroke(c.centerDash);
-      ctx.setLineDash([]); ctx.stroke(c.centerSolid);
-      ctx.strokeStyle = pal.mark; ctx.globalAlpha = 0.75 * a0; ctx.lineWidth = Math.max(0.12, px * 0.8); ctx.stroke(c.hatch); ctx.globalAlpha = a0;
-      if (scale > 1.2) {
-        ctx.fillStyle = pal.mark; ctx.globalAlpha = 0.85 * a0; ctx.fill(c.zebra);
-        ctx.globalAlpha = 0.55 * a0; ctx.lineWidth = Math.max(0.12, px * 0.8); ctx.setLineDash([1, 1.6]); ctx.stroke(c.guide); ctx.setLineDash([]); ctx.globalAlpha = a0;
-      }
-      ctx.strokeStyle = pal.mark; ctx.lineWidth = 0.5; ctx.stroke(c.stopLine);
-      ctx.setLineDash([0.9, 0.7]); ctx.stroke(c.yieldLine); ctx.setLineDash([]);
-      if (scale > 2.2) { ctx.lineWidth = 0.22; ctx.lineJoin = "round"; ctx.stroke(c.arrows); }
-      ctx.globalAlpha = 1;
-      // the traffic on this level
-      if (sim) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo && v.level <= c.level, a0); }
+export function drawScene(
+  ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, geo: RoadGeo, paths: PathCache,
+  net: Network, compiled: Compiled, sim: Sim | null, ov: Overlay,
+) {
+  const { w, h, dpr, scale } = cam;
+  // everything that doesn't move comes from cached images, redrawn only when the view or the plan changes
+  const bg = background(ctx, cam, pal, paths, net, ov);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(bg.base, 0, 0);
+
+  // world transform
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * (w / 2 - cam.cx * scale), dpr * (h / 2 - cam.cy * scale));
+  const px = 1 / scale; // one screen pixel in metres
+  // what is on screen (with a margin for vehicles straddling the edge)
+  const tl = toWorld(cam, 0, 0), br = toWorld(cam, w, h), m = 20;
+  const view = { minX: tl.x - m, minY: tl.y - m, maxX: br.x + m, maxY: br.y + m };
+  const ul = ov.underlay;
+
+  if (ov.maskRoads) {
+    // (the road outlines are in the background image)
+  } else {
+    // level by level, lowest first: a bridge (with its shadow) covers the roads and traffic beneath.
+    // The roads come from the background images (bg.layers[0] is in the base image already).
+    let prev = -Infinity;
+    paths.layers.forEach((c, i) => {
+      if (i > 0) blit(ctx, bg.layers[i], dpr, scale, w, h, cam);
+      const a0 = c.level < 0 ? 0.55 : 1;
+      if (sim) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo && v.level <= c.level, a0, view); }
       prev = c.level;
-    }
-    if (sim) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo); }
+    });
+    if (sim) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo, 1, view); }
   }
 
   if (ov.connectors || ov.layer === "connectors") {
@@ -789,40 +852,52 @@ function drawLinkHandles(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palett
   if (!(l.c1 && l.c2)) { m.x += (b.y - a.y) === 0 && (b.x - a.x) === 0 ? 0 : 0; }
 }
 
-function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, bySpeed: boolean, px: number, only?: (v: Vehicle) => boolean, alpha = 1) {
+function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, bySpeed: boolean, px: number, only?: (v: Vehicle) => boolean, alpha = 1, view?: { minX: number; minY: number; maxX: number; maxY: number }) {
   // blink on wall-clock time so it looks right at any simulation speed
   const blinkOn = Math.floor(performance.now() / 380) % 2 === 0;
-  ctx.globalAlpha = alpha;
+  // one path per colour (speed colours in 16 steps), one for windows, one for turn signals: a few
+  // fills for the whole fleet instead of several per vehicle
+  let bodies = new Map<string, Path2D>(), windows = new Path2D(), signals = new Path2D(), inBatch = 0;
+  // (small batches: one huge path is far slower to fill than a few dozen small ones)
+  const flush = () => {
+    ctx.globalAlpha = alpha;
+    for (const [color, p] of bodies) { ctx.fillStyle = color; ctx.fill(p); }
+    ctx.fillStyle = "#ffab1a"; ctx.fill(signals);
+    ctx.fillStyle = "rgba(20,28,34,0.55)"; ctx.fill(windows);
+    ctx.globalAlpha = 1;
+    bodies = new Map(); windows = new Path2D(); signals = new Path2D(); inBatch = 0;
+  };
+  const quad = (p: Path2D, cx: number, cy: number, ux: number, uy: number, x0: number, x1: number, y0: number, y1: number) => {
+    // local x along the vehicle, y to its right (the normal (-uy, ux))
+    p.moveTo(cx + ux * x0 - uy * y0, cy + uy * x0 + ux * y0); p.lineTo(cx + ux * x1 - uy * y0, cy + uy * x1 + ux * y0);
+    p.lineTo(cx + ux * x1 - uy * y1, cy + uy * x1 + ux * y1); p.lineTo(cx + ux * x0 - uy * y1, cy + uy * x0 + ux * y1); p.closePath();
+  };
   for (const v of sim.vehicles) {
     if (v.dead || (only && !only(v))) continue;
     const q = sim.pose(v);
-    const dx = q.fx - q.rx, dy = q.fy - q.ry, len = Math.hypot(dx, dy) || v.len;
-    const ang = Math.atan2(dy, dx);
-    ctx.save();
-    ctx.translate((q.fx + q.rx) / 2, (q.fy + q.ry) / 2);
-    ctx.rotate(ang);
-    const w = Math.max(v.width, px * 3), L = Math.max(len, px * 5);
-    ctx.fillStyle = bySpeed ? speedColor(pal, v.v / Math.max(1, v.v0)) : v.kind === "bus" ? pal.busVeh : v.kind === "truck" ? pal.truck : pal.car;
-    ctx.beginPath();
-    const r = v.kind === "car" ? Math.min(0.7, w / 2) : 0.3;
-    ctx.moveTo(-L / 2 + r, -w / 2); ctx.lineTo(L / 2 - r, -w / 2); ctx.quadraticCurveTo(L / 2, -w / 2, L / 2, -w / 2 + r);
-    ctx.lineTo(L / 2, w / 2 - r); ctx.quadraticCurveTo(L / 2, w / 2, L / 2 - r, w / 2); ctx.lineTo(-L / 2 + r, w / 2);
-    ctx.quadraticCurveTo(-L / 2, w / 2, -L / 2, w / 2 - r); ctx.lineTo(-L / 2, -w / 2 + r); ctx.quadraticCurveTo(-L / 2, -w / 2, -L / 2 + r, -w / 2);
-    ctx.fill();
+    const cx = (q.fx + q.rx) / 2, cy = (q.fy + q.ry) / 2;
+    if (view && (cx < view.minX || cx > view.maxX || cy < view.minY || cy > view.maxY)) continue;
+    const dx = q.fx - q.rx, dy = q.fy - q.ry, len = Math.hypot(dx, dy) || v.len, ux = len ? dx / len : 1, uy = len ? dy / len : 0;
+    const w = Math.max(v.width, px * 3), L = Math.max(len, px * 5), hw = w / 2, hl = L / 2;
+    const color = bySpeed ? speedColor(pal, Math.round((v.v / Math.max(1, v.v0)) * 15) / 15) : v.kind === "bus" ? pal.busVeh : v.kind === "truck" ? pal.truck : pal.car;
+    let body = bodies.get(color); if (!body) bodies.set(color, (body = new Path2D()));
+    // cut corners: rounded-looking at any zoom, 8 points
+    const r = v.kind === "car" ? Math.min(0.7, hw) : 0.3;
+    const pts: [number, number][] = [[hl - r, -hw], [hl, -hw + r], [hl, hw - r], [hl - r, hw], [-hl + r, hw], [-hl, hw - r], [-hl, -hw + r], [-hl + r, -hw]];
+    pts.forEach(([x, y], i) => { const X = cx + ux * x - uy * y, Y = cy + uy * x + ux * y; if (i) body!.lineTo(X, Y); else body!.moveTo(X, Y); });
+    body.closePath();
     // turn signals: amber corners on the side the vehicle is heading (local +y = right)
     const bl = blinkOn ? sim.blinker(v) : 0;
     if (bl) {
-      ctx.fillStyle = "#ffab1a";
-      const bw = Math.max(0.65, px * 4), bh = Math.max(0.5, px * 3.2), y = bl > 0 ? w / 2 - bh * 0.6 : -w / 2 - bh * 0.4;
-      ctx.fillRect(L / 2 - bw, y, bw, bh); ctx.fillRect(-L / 2, y, bw, bh);
+      const bw = Math.max(0.65, px * 4), bh = Math.max(0.5, px * 3.2), y = bl > 0 ? hw - bh * 0.6 : -hw - bh * 0.4;
+      quad(signals, cx, cy, ux, uy, hl - bw, hl, y, y + bh); quad(signals, cx, cy, ux, uy, -hl, -hl + bw, y, y + bh);
     }
-    ctx.fillStyle = "rgba(20,28,34,0.55)";
-    if (v.kind === "car") ctx.fillRect(L * 0.08, -w * 0.38, L * 0.2, w * 0.76);
-    else if (v.kind === "truck") ctx.fillRect(L * 0.28, -w / 2, L * 0.04, w);
-    else ctx.fillRect(L * 0.4, -w * 0.4, L * 0.06, w * 0.8);
-    ctx.restore();
+    if (v.kind === "car") quad(windows, cx, cy, ux, uy, L * 0.08, L * 0.28, -w * 0.38, w * 0.38);
+    else if (v.kind === "truck") quad(windows, cx, cy, ux, uy, L * 0.28, L * 0.32, -hw, hw);
+    else quad(windows, cx, cy, ux, uy, L * 0.4, L * 0.46, -w * 0.4, w * 0.4);
+    if (++inBatch >= 64) flush();
   }
-  ctx.globalAlpha = 1;
+  flush();
 }
 
 /** true if the piece is part of the given link (for hit testing vehicles on a road) */
