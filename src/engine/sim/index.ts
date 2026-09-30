@@ -33,13 +33,26 @@ export class Sim extends SimDemand {
     this.spawnLoop();
     this.buildIndex();
     for (const v of this.vehicles) if (!v.dead) this.think(v);
+    if (this.logLinks.size) this.logStates();
     for (const v of this.vehicles) if (!v.dead && (v.id + this.tick) % 5 === 0) this.considerLaneChange(v);
+    this.updatePeds();
     for (const st of this.ns) if (st.node.controlled && !st.node.ring) this.arbitrate(st);
     for (const v of this.vehicles) if (!v.dead) this.move(v);
     if (this.tick % 10 === 0) this.sample();
     if (this.tick % 50 === 0) this.housekeeping();
   }
   run(n: number) { for (let k = 0; k < n; k++) this.step(); }
+  /** road event logs: what each vehicle on a logged road is doing, when that changes */
+  protected logStates() {
+    for (const v of this.vehicles) {
+      if (v.dead || v.piece.kind !== "lane" || !this.roadLogged(v.piece.edge)) continue;
+      if (v.logState !== undefined && v.logState !== v.state) {
+        const lead = v.leader && v.gap < 60 ? `, ${v.gap.toFixed(1)} m behind #${v.leader.id}` : "";
+        this.evRoad(v.piece.edge, v, "state", `${v.logState} → ${v.state} at ${(v.v * 3.6).toFixed(0)} km/h, ${(v.piece.len - v.s).toFixed(0)} m before the end${lead}`);
+      }
+      v.logState = v.state;
+    }
+  }
   protected housekeeping() {
     for (let k = 0; k < this.ema.length; k++) if (this.ema[k] > 0) {
       const e = this.net.edges[k], ff = e.length / e.speed;
@@ -69,6 +82,13 @@ export class Sim extends SimDemand {
   /** what happened to transit flow `i`'s vehicles so far (average travel time in s, 0 before any arrived) */
   flowStats(i: number): FlowStats | null {
     const f = this.flowState[i];
+    if (!f) return null;
+    return { sent: f.sent, arrived: f.arrived, diverted: f.diverted, towed: f.towed, backlog: f.backlog, noRoute: f.noRoute, avgTravel: f.arrived ? f.travelSum / f.arrived : 0, inPlan: f.sent - f.arrived - f.diverted - f.towed };
+  }
+
+  /** results of zone-to-zone demand `i` (same meaning as a transit flow's) */
+  zoneFlowStats(i: number): FlowStats | null {
+    const f = this.zoneFlowState[i];
     if (!f) return null;
     return { sent: f.sent, arrived: f.arrived, diverted: f.diverted, towed: f.towed, backlog: f.backlog, noRoute: f.noRoute, avgTravel: f.arrived ? f.travelSum / f.arrived : 0, inPlan: f.sent - f.arrived - f.diverted - f.towed };
   }

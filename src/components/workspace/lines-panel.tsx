@@ -10,7 +10,7 @@ import { Slider } from "@/components/ui/slider";
 import { commit, network$, select, ui } from "@/state/store";
 import * as ops from "@/state/ops";
 import { cn } from "@/lib/utils";
-import { Section } from "./fields";
+import { IdChip, Section } from "./fields";
 
 export function LinesPanel() {
   const [net] = useSubject(network$);
@@ -39,6 +39,7 @@ export function LinesPanel() {
       </Section>
       {active && (
         <Section title="Edit line">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">ID <IdChip id={active.id} /></div>
           <div className="grid grid-cols-[1fr_auto] items-end gap-2">
             <div className="grid gap-1.5">
               <Label htmlFor="ln" className="text-xs text-muted-foreground">Name</Label>

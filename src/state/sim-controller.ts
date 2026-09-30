@@ -11,6 +11,8 @@ import type { Network } from "@/engine/types";
 import { network$, settings$, stats$, ui } from "./store";
 import type { ToWorker } from "./sim.worker";
 
+export type TestResult = { id: number } | { error: string };
+
 class SimController {
   compiled: Compiled = compile({ version: 1, nodes: [], links: [], stops: [], lines: [] });
   sim: SimMirror | null = null;
@@ -24,12 +26,22 @@ class SimController {
   private started = false;
 
   private post(m: ToWorker) { this.worker?.postMessage(m); }
+  private pending = new Map<number, (r: TestResult) => void>();
+  private req = 0;
+
+  /** send one test vehicle from an entry point to an exit (starts the simulation if needed) */
+  sendTest(from: string, to: string, lane: number | null): Promise<TestResult> {
+    this.ensureSim();
+    const req = ++this.req;
+    return new Promise(res => { this.pending.set(req, res); this.post({ type: "test", from, to, lane, req }); });
+  }
 
   start() {
     if (this.started) return;
     this.started = true;
     this.worker = new Worker(new URL("./sim.worker.ts", import.meta.url), { type: "module" });
-    this.worker.onmessage = (e: MessageEvent<{ type: "snapshot"; gen: number; snap: Snapshot }>) => {
+    this.worker.onmessage = (e: MessageEvent<{ type: "snapshot"; gen: number; snap: Snapshot } | { type: "test"; req: number; result: TestResult }>) => {
+      if (e.data.type === "test") { const cb = this.pending.get(e.data.req); this.pending.delete(e.data.req); cb?.(e.data.result); return; }
       if (e.data.gen !== this.gen || !this.sim) return;
       this.sim.apply(e.data.snap);
       this.fresh = true;
@@ -60,7 +72,7 @@ class SimController {
   /** push the event-log choice from the UI into the running simulation */
   applyLog() {
     const cfg = ui.getValue().eventLog;
-    this.post({ type: "log", all: cfg.all, nodes: [...cfg.nodes] });
+    this.post({ type: "log", all: cfg.all, nodes: [...cfg.nodes], links: [...(cfg.links ?? [])] });
   }
 
   /** tell the worker what the page shows in detail: the selected vehicle, the selected junction */

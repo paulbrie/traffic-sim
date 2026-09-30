@@ -1,23 +1,26 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { MapPin } from "lucide-react";
 import { batch } from "subjecto";
 import { buildRoadGeo, type RoadGeo } from "@/render/geometry";
-import { buildPaths, drawScene, toScreen, toWorld, underlayHandles, type Camera, type Overlay, type PathCache, type UnderlayHandle } from "@/render/draw2d";
+import { buildPaths, connectorsOf, drawScene, toScreen, toWorld, underlayHandles, type Camera, type Overlay, type PathCache, type UnderlayHandle } from "@/render/draw2d";
 import { readPalette, type Palette } from "@/render/palette";
-import { linkExtent } from "@/engine/compile";
+import { connectorId, linkExtent, LW, type CNode } from "@/engine/compile";
 import { pointInPoly } from "@/engine/buildings";
 import type { Network, Vec } from "@/engine/types";
-import { commit, endGesture, network$, select, setUnderlay, ui, underlay$, type UiState } from "@/state/store";
+import { commit, endGesture, network$, select, toggleRoad, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { viewCmd$, viewport } from "@/state/commands";
 import { underlayImg$ } from "@/state/underlay-image";
 import { worldToImage, type Underlay } from "@/lib/underlay";
+import { unproject } from "@/lib/osm/area";
+import { routeBetween, routeShape } from "@/engine/route";
 import * as ops from "@/state/ops";
 
 type Snap = { p: Vec; nodeId?: string; link?: { id: string; t: number } };
 type Drag =
-  | { mode: "pan"; sx: number; sy: number; cx: number; cy: number; moved: boolean; clickSel: boolean }
+  | { mode: "pan"; sx: number; sy: number; cx: number; cy: number; moved: boolean; clickSel: boolean; right?: boolean }
   | { mode: "node"; id: string; moved: boolean; sx: number; sy: number }
   | { mode: "handle"; linkId: string; handle: "c1" | "c2" | "bend"; moved: boolean }
   | { mode: "ul-move"; start: Vec; x0: number; y0: number }
@@ -30,6 +33,8 @@ const HIT_NODE = 10, HIT_HANDLE = 9;
 export function PlanCanvas() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  /** right-click menu on plans that know where they are on Earth */
+  const [menu, setMenu] = useState<{ x: number; y: number; lat: number; lon: number } | null>(null);
 
   useEffect(() => {
     const wrap = wrapRef.current!, canvas = canvasRef.current!, ctx = canvas.getContext("2d")!;
@@ -50,6 +55,17 @@ export function PlanCanvas() {
     let ulHover: UnderlayHandle | null = null;
 
     const markDirty = () => { dirty = true; };
+    // the route tracer's route, worked out again only when its ends or the network change
+    let traceKey = "", tracePts: number[] | null = null;
+    const traceFor = (t: UiState["trace"]) => {
+      const key = `${t.from}|${t.to}|${simController.version}`;
+      if (key !== traceKey) {
+        traceKey = key;
+        const r = t.from && t.to ? routeBetween(simController.compiled, t.from, t.to) : null;
+        tracePts = r ? routeShape(r).pts : null;
+      }
+      return tracePts;
+    };
     const subs = [
       ui.subscribe("**", () => { u = ui.getValue(); markDirty(); }),
       network$.subscribe(n => { net = n; markDirty(); }),
@@ -100,23 +116,24 @@ export function PlanCanvas() {
 
     // ------------------------------------------------------------ hit testing
     const pxToM = (px: number) => px / cam.scale;
-    function hitNode(sx: number, sy: number, exclude?: string): string | null {
+    function hitNode(sx: number, sy: number, exclude?: string, only?: (id: string) => boolean): string | null {
       let best: string | null = null, bd = HIT_NODE;
       for (const n of net.nodes) {
-        if (n.id === exclude) continue;
+        if (n.id === exclude || (only && !only(n.id))) continue;
         const q = toScreen(cam, n.x, n.y), d = Math.hypot(q.x - sx, q.y - sy);
         if (d < bd) { bd = d; best = n.id; }
       }
       return best;
     }
     function hitLink(p: Vec): { id: string; t: number; pt: Vec; d: number } | null {
-      let best: { id: string; t: number; pt: Vec; d: number } | null = null;
+      let best: { id: string; t: number; pt: Vec; d: number; lv: number } | null = null;
       for (const l of net.links) {
         const A = ops.nodeById(net, l.from), B = ops.nodeById(net, l.to);
         if (!A || !B) continue;
         const [lo, hi] = linkExtent(l), half = Math.max(-lo, hi);
         const r = ops.nearestT(l, A, B, p);
-        if (r.d <= half + pxToM(4) && (!best || r.d < best.d)) best = { id: l.id, t: r.t, pt: r.pt, d: r.d };
+        // where roads overlap (a bridge over a road), the one on top wins
+        if (r.d <= half + pxToM(4) && (!best || (l.level ?? 0) > best.lv || ((l.level ?? 0) === best.lv && r.d < best.d))) best = { id: l.id, t: r.t, pt: r.pt, d: r.d, lv: l.level ?? 0 };
       }
       return best;
     }
@@ -138,6 +155,47 @@ export function PlanCanvas() {
         if (pointInPoly(b.pts, p.x, p.y)) return b.id;
       }
       return null;
+    }
+    /** the nearest lane (within its width) under a point */
+    function hitLane(p: Vec): string | null {
+      let best: string | null = null, bd = LW * 0.6;
+      for (const e of simController.compiled.edges) for (const lp of e.lanes) {
+        const r = lp.poly.project(p.x, p.y);
+        if (r.d < bd) { bd = r.d; best = `${e.link.id}|${e.dir}|${lp.lane}`; }
+      }
+      return best;
+    }
+    /** the nearest lane connector through a junction */
+    function hitConnector(p: Vec): string | null {
+      let best: string | null = null, bd = Math.max(1.2, pxToM(8));
+      for (const c of connectorsOf(simController.compiled)) {
+        const q = c.pts;
+        for (let k = 2; k < q.length; k += 2) {
+          const ax = q[k - 2], ay = q[k - 1], dx = q[k] - ax, dy = q[k + 1] - ay, L2 = dx * dx + dy * dy || 1;
+          const t = Math.max(0, Math.min(1, ((p.x - ax) * dx + (p.y - ay) * dy) / L2));
+          const d = Math.hypot(p.x - ax - dx * t, p.y - ay - dy * t);
+          if (d < bd) { bd = d; best = connectorId(c); }
+        }
+      }
+      return best;
+    }
+    function pickInLayer(layer: LayerId, sx: number, sy: number, w: Vec): Selection | null {
+      const c = simController.compiled;
+      const node = (only: (n: CNode) => boolean) => { const id = hitNode(sx, sy, undefined, id => { const n = c.nodeById.get(id); return !!n && only(n); }); return id ? { kind: "node" as const, id } : null; };
+      switch (layer) {
+        case "roads": { const l = hitLink(w); return l ? { kind: "link", id: l.id } : null; }
+        case "counters": { const l = hitLink(w); return l && ops.linkById(net, l.id)?.counter ? { kind: "link", id: l.id } : null; }
+        case "lanes": { const id = hitLane(w); return id ? { kind: "lane", id } : null; }
+        case "connectors": { const id = hitConnector(w); return id ? { kind: "connector", id } : null; }
+        case "junctions": return node(n => n.controlled && n.degree >= 2);
+        case "signals": return node(n => n.controlled && n.def.control === "lights");
+        case "entries": return node(n => n.gateway);
+        case "stops": { const id = hitStop(w); return id ? { kind: "stop", id } : null; }
+        case "buildings": { const id = hitBuilding(w); return id ? { kind: "building", id } : null; }
+        case "zones": { const n = node(x => x.gateway); if (n) return n; const id = hitBuilding(w); return id ? { kind: "building", id } : null; }
+        case "vehicles": { const v = simController.sim?.vehicleNear(w.x, w.y, Math.max(3, pxToM(10))); return v ? { kind: "vehicle", id: String(v.id) } : null; }
+        default: return null;
+      }
     }
     function hitStop(p: Vec): string | null {
       if (!geo) return null;
@@ -196,12 +254,13 @@ export function PlanCanvas() {
     const local = (e: PointerEvent | WheelEvent | MouseEvent) => { const r = canvas.getBoundingClientRect(); return { sx: e.clientX - r.left, sy: e.clientY - r.top }; };
 
     function onPointerDown(e: PointerEvent) {
+      setMenu(null);
       canvas.setPointerCapture(e.pointerId);
       const { sx, sy } = local(e);
       const w = toWorld(cam, sx, sy);
       const tool = u.tool;
       if (e.button === 1 || e.button === 2 && tool !== "road" || spaceHeld || tool === "pan") {
-        drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: false };
+        drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: false, right: e.button === 2 };
         return;
       }
       if (e.button === 2 && tool === "road") { pending = null; markDirty(); return; }
@@ -289,7 +348,17 @@ export function PlanCanvas() {
         return;
       }
 
-      // select tool
+      // select tool, limited to one kind of object when a layer is chosen
+      if (u.layer !== "all") {
+        const pick = pickInLayer(u.layer, sx, sy, w);
+        if (pick) {
+          if (pick.kind === "link" && e.shiftKey && u.selection?.kind === "link") toggleRoad(pick.id); else select(pick);
+          drag = pick.kind === "node" ? { mode: "node", id: pick.id, moved: false, sx, sy } : { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: false };
+          return;
+        }
+        drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: true };
+        return;
+      }
       const h = hitHandle(sx, sy);
       if (h && u.selection?.kind === "link") { drag = { mode: "handle", linkId: u.selection.id, handle: h, moved: false }; return; }
       const nodeId = hitNode(sx, sy);
@@ -302,7 +371,8 @@ export function PlanCanvas() {
         if (v) { select({ kind: "vehicle", id: String(v.id) }); return; }
       }
       const l = hitLink(w);
-      if (l) { select({ kind: "link", id: l.id }); return; }
+      // Shift+click: add the road to the selected roads (or take it out)
+      if (l) { if (e.shiftKey && u.selection?.kind === "link") toggleRoad(l.id); else select({ kind: "link", id: l.id }); return; }
       const b = hitBuilding(w);
       if (b) { select({ kind: "building", id: b }); drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: false }; return; }
       drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: true };
@@ -382,6 +452,11 @@ export function PlanCanvas() {
     function onPointerUp(e: PointerEvent) {
       try { canvas.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
       if (drag?.mode === "pan" && drag.clickSel && !drag.moved) select(null);
+      // right-click without dragging: offer the spot in Google Maps
+      if (drag?.mode === "pan" && drag.right && !drag.moved && net.geo) {
+        const { sx, sy } = local(e), g = unproject(net.geo, toWorld(cam, sx, sy));
+        setMenu({ x: Math.max(0, Math.min(sx, cam.w - 216)), y: Math.max(0, Math.min(sy, cam.h - 72)), lat: g.lat, lon: g.lon });
+      }
       if (drag?.mode === "node" && drag.moved) {
         // dropped onto another node: merge them
         const { sx, sy } = local(e);
@@ -395,6 +470,7 @@ export function PlanCanvas() {
 
     function onWheel(e: WheelEvent) {
       e.preventDefault();
+      setMenu(null);
       const { sx, sy } = local(e);
       if (e.ctrlKey || e.metaKey || e.deltaMode === 1) zoomAt(sx, sy, Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.08 : 0.01)));
       else { cam.cx += e.deltaX / cam.scale; cam.cy += e.deltaY / cam.scale; markDirty(); }
@@ -405,6 +481,7 @@ export function PlanCanvas() {
       shift = e.shiftKey;
       if (e.type === "keydown" && e.code === "Space" && !typing) { spaceHeld = true; canvas.style.cursor = "grab"; e.preventDefault(); }
       if (e.type === "keyup" && e.code === "Space") { spaceHeld = false; canvas.style.cursor = "default"; }
+      if (e.type === "keydown" && e.key === "Escape") setMenu(null);
       if (e.type === "keydown" && !typing && (e.key === "Escape" || e.key === "Enter") && pending) { pending = null; markDirty(); e.stopPropagation(); }
       if (e.type === "keydown" && !typing && e.key === "Escape" && u.calib.active) {
         const c = ui.getValue().calib; batch(() => { c.active = false; c.a = null; c.b = null; }); e.stopPropagation();
@@ -471,7 +548,8 @@ export function PlanCanvas() {
           underlay: ul ? { u: ul, img: ulImg, editing: u.tool === "image" && !u.calib.active, hover: ulHover } : null,
           calib: u.calib.active ? { a: u.calib.a, b: u.calib.b, cursor: cursorWorld } : null,
           buildings: u.display.buildings,
-          alsoSelected: u.tool === "segment" && u.segScope === "road" && u.selection?.kind === "link" ? ops.chainLinks(net, u.selection.id).map(c => c.id).slice(1) : [],
+          satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, layer: u.layer, maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
+          alsoSelected: u.selection?.kind !== "link" ? [] : u.multi.length ? u.multi : u.tool === "segment" && u.segScope === "road" ? ops.chainLinks(net, u.selection.id).map(c => c.id).slice(1) : [],
         });
         viewport.cx = cam.cx; viewport.cy = cam.cy; viewport.wm = cam.w / cam.scale; viewport.hm = cam.h / cam.scale;
         scaleBar(cam);
@@ -512,6 +590,18 @@ export function PlanCanvas() {
   return (
     <div ref={wrapRef} className="absolute inset-0 overflow-hidden">
       <canvas ref={canvasRef} className="block touch-none select-none" aria-label="Street plan editor" />
+      {menu && (
+        <div role="menu" className="absolute z-20 min-w-48 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md" style={{ left: menu.x, top: menu.y }}>
+          <a
+            role="menuitem" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-accent"
+            href={`https://www.google.com/maps/search/?api=1&query=${menu.lat.toFixed(6)},${menu.lon.toFixed(6)}`}
+            onClick={() => setMenu(null)}
+          >
+            <MapPin className="size-4" /> Open in Google Maps
+          </a>
+          <div className="px-2 pb-1 font-mono text-[11px] text-muted-foreground tabular">{menu.lat.toFixed(6)}, {menu.lon.toFixed(6)}</div>
+        </div>
+      )}
       <div className="pointer-events-none absolute bottom-3 left-3 flex flex-col gap-1">
         <div data-scalebar className="h-1.5 border-x-2 border-b-2 border-foreground/70" style={{ width: 100 }}>
           <span className="relative -top-4 text-[11px] font-medium text-foreground/80 tabular">100 m</span>

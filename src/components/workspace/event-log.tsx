@@ -18,7 +18,7 @@ const csvCell = (v: unknown) => {
 export function downloadEvents(events: JunctionEvent[], format: "csv" | "jsonl", name: string) {
   const refs = junctionRefs(simController.compiled);
   const rows = events.map(e => ({
-    time_s: e.t, junction: refs.get(e.node) ?? e.node, vehicle: e.veh ?? "", type: e.vkind ?? "", event: e.kind,
+    time_s: e.t, junction: refs.get(e.node) ?? e.node, road: e.link ?? "", vehicle: e.veh ?? "", type: e.vkind ?? "", event: e.kind,
     turn: e.data?.turn ?? "", lane: e.data?.lane ?? "", allowed_lanes: e.data?.lo ? `${e.data.lo}-${e.data.hi}` : "", out_lane: e.data?.outLane ?? "",
     light: e.data?.sig ?? "", reason: e.data?.code ?? "", detail: e.detail,
   }));
@@ -36,28 +36,48 @@ export function downloadEvents(events: JunctionEvent[], format: "csv" | "jsonl",
 const KIND_STYLE: Partial<Record<JunctionEvent["kind"], string>> = {
   deny: "text-amber-600 dark:text-amber-400", revoke: "text-amber-600 dark:text-amber-400",
   "wrong-lane": "text-destructive", "turn-changed": "text-destructive", towed: "text-destructive", reroute: "text-destructive",
-  grant: "text-[var(--sig-go)]", signal: "text-primary",
+  grant: "text-[var(--sig-go)]", signal: "text-primary", "enter-road": "text-[var(--sig-go)]", appear: "text-[var(--sig-go)]", state: "text-primary",
 };
 
 /** Per-junction recorder: switch, latest events, downloads. */
 export function JunctionEventLog({ nodeId, refName }: { nodeId: string; refName: string }) {
   useSubject(stats$);
   const [log] = useDeepSubject(ui, "eventLog");
-  const on = log.all || log.nodes.includes(nodeId);
   const sim = simController.sim;
-  const events = sim ? sim.events.filter(e => e.node === nodeId) : [];
+  return (
+    <LogBox
+      on={log.all || log.nodes.includes(nodeId)} disabled={log.all} label={refName}
+      events={sim ? sim.events.filter(e => e.node === nodeId) : []}
+      toggle={v => { const cur = ui.getValue().eventLog; cur.nodes = v ? [...new Set([...cur.nodes, nodeId])] : cur.nodes.filter(id => id !== nodeId); }}
+      hint="Turn on to record every request, grant, refusal (with the reason), lane change, turn change and light change here."
+    />
+  );
+}
+
+/** Per-road recorder: what vehicles do on this road (both directions). */
+export function RoadEventLog({ linkId }: { linkId: string }) {
+  useSubject(stats$);
+  const [log] = useDeepSubject(ui, "eventLog");
+  const sim = simController.sim;
+  return (
+    <LogBox
+      on={(log.links ?? []).includes(linkId)} label={linkId}
+      events={sim ? sim.events.filter(e => e.link === linkId) : []}
+      toggle={v => { const cur = ui.getValue().eventLog; const l = cur.links ?? []; cur.links = v ? [...new Set([...l, linkId])] : l.filter(id => id !== linkId); }}
+      hint="Turn on to record what vehicles do on this road: appearing or entering (and their next turn), lane changes (and why), changes of state (free, following, queued, at a red light, yielding…), leaving, arriving and being removed."
+    />
+  );
+}
+
+function LogBox({ on, disabled, label, events, toggle, hint }: { on: boolean; disabled?: boolean; label: string; events: JunctionEvent[]; toggle: (v: boolean) => void; hint: string }) {
   const latest = events.slice(-60).reverse();
-  const toggle = (v: boolean) => {
-    const cur = ui.getValue().eventLog;
-    cur.nodes = v ? [...new Set([...cur.nodes, nodeId])] : cur.nodes.filter(id => id !== nodeId);
-  };
   return (
     <div className="grid gap-2">
       <div className="flex items-center justify-between gap-2">
         <h4 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Event log</h4>
         <label className="flex items-center gap-2 text-xs">
-          Record {refName}
-          <Switch checked={on} disabled={log.all} onCheckedChange={toggle} aria-label={`Record events at ${refName}`} />
+          Record {label}
+          <Switch checked={on} disabled={disabled} onCheckedChange={toggle} aria-label={`Record events at ${label}`} />
         </label>
       </div>
       {on ? (
@@ -72,13 +92,13 @@ export function JunctionEventLog({ nodeId, refName }: { nodeId: string; refName:
             ))}
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!events.length} onClick={() => downloadEvents(events, "csv", `${refName}-events`)}><Download /> CSV</Button>
-            <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!events.length} onClick={() => downloadEvents(events, "jsonl", `${refName}-events`)}><Download /> JSON</Button>
+            <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!events.length} onClick={() => downloadEvents(events, "csv", `${label}-events`)}><Download /> CSV</Button>
+            <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!events.length} onClick={() => downloadEvents(events, "jsonl", `${label}-events`)}><Download /> JSON</Button>
             <span className="self-center text-[10px] text-muted-foreground">{events.length} events · newest first · vehicle numbers match the one shown when you click a car</span>
           </div>
         </>
       ) : (
-        <p className="text-xs text-muted-foreground">Turn on to record every request, grant, refusal (with the reason), lane change, turn change and light change here.</p>
+        <p className="text-xs text-muted-foreground">{hint}</p>
       )}
     </div>
   );
@@ -98,6 +118,7 @@ export function EventLogPanel() {
       </label>
       <p className="text-xs text-muted-foreground">
         {log.all ? "Recording all junctions." : log.nodes.length ? `Recording ${log.nodes.length} junction${log.nodes.length > 1 ? "s" : ""} (switch on in each junction's panel).` : "Or switch recording on for single junctions in their panel."}
+        {log.links?.length ? ` Recording ${log.links.length} road${log.links.length > 1 ? "s" : ""} too (switch on in each road's panel).` : ""}
         {" "}Keeps the latest 50,000 events; restarting traffic starts a new log.
       </p>
       <div className="flex flex-wrap items-center gap-2">

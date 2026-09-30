@@ -14,6 +14,8 @@ import { sendView } from "@/state/commands";
 import { junctionRefs } from "@/engine/refs";
 import { EventLogPanel } from "./event-log";
 import { FlowsTable } from "./flows";
+import { RouteTracer } from "./route-tracer";
+import { ZonesSection } from "./zones";
 import { NumberField, Section, compass } from "./fields";
 
 /** share of trips crossing the plan boundary (automatic, or set by hand) */
@@ -84,7 +86,9 @@ export function TrafficPanel() {
           </>
         ) : <p className="text-sm text-muted-foreground">Press play to run traffic on this plan.</p>}
       </Section>
+      <RouteTracer />
       <FlowsTable />
+      <ZonesSection />
       <CountersTable />
       <JunctionTable />
       <Section title="Event log"><EventLogPanel /></Section>
@@ -94,13 +98,22 @@ export function TrafficPanel() {
           ["reservations", "Show junction reservations"],
           ["labels", "Show stop names"],
           ["junctions", "Show junction numbers and stats"],
+          ["connectors", "Show lane connectors"],
+          ["maskRoads", "Roads as outlines only (O)"],
           ...(net.buildings?.length ? [["buildings", "Show buildings"] as const] : []),
+          ...(net.geo ? [["satellite", "Satellite background"] as const] : []),
         ] as const).map(([k, label]) => (
           <label key={k} className="flex items-center justify-between gap-2 text-sm">
             <span>{label}</span>
             <Switch checked={display[k]} onCheckedChange={v => setDisplay({ ...display, [k]: v })} />
           </label>
         ))}
+        {net.geo && display.satellite && (
+          <div className="grid gap-2">
+            <Label htmlFor="satb" className="flex justify-between text-sm font-normal"><span>Imagery brightness</span><span className="font-mono text-xs tabular text-muted-foreground">{Math.round(display.satBrightness * 100)}%</span></Label>
+            <Slider id="satb" min={30} max={100} step={5} value={[Math.round(display.satBrightness * 100)]} onValueChange={([v]) => setDisplay({ ...display, satBrightness: v / 100 })} />
+          </div>
+        )}
       </Section>
     </div>
   );

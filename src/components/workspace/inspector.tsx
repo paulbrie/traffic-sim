@@ -1,28 +1,33 @@
 "use client";
 
 import { Fragment } from "react";
+import { toast } from "sonner";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { ArrowLeftRight, Minus, Spline, TrafficCone, Trash2, TriangleAlert, Minus as StraightIcon } from "lucide-react";
+import { ArrowLeftRight, Footprints, Merge, Minus, Plus, Spline, TrafficCone, Trash2, TriangleAlert, Minus as StraightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Kbd } from "@/components/ui/kbd";
 import { commit, network$, select, stats$, ui } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import * as ops from "@/state/ops";
-import { BUILDING_USES, type BuildingDef, type BuildingUse, type Control, type LinkDef, type Network, type NodeDef } from "@/engine/types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, lanesAtLine, type Bays, type BuildingDef, type BuildingUse, type Control, type LinkDef, type Network, type NodeDef } from "@/engine/types";
 import { FLOOR_HEIGHT, USE_LABEL, polyArea, tripWeight } from "@/engine/buildings";
-import { NumberField, Section, Stepper, compass } from "./fields";
+import { IdChip, NumberField, Section, Stepper, compass } from "./fields";
 import { SignalGroupSection } from "./signal-groups";
 import { PhaseEditor } from "./phase-editor";
 import { FlowsSection } from "./flows";
-import { LaneArrowsEditor } from "./lane-arrows";
+import { ConnectorInspector, LaneInspector } from "./object-inspectors";
+import { ZonePicker, ZonesSection } from "./zones";
+import { LaneArrowsEditor, SignPicker } from "./lane-arrows";
+import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
 import { junctionRefs } from "@/engine/refs";
-import { JunctionEventLog } from "./event-log";
+import { JunctionEventLog, RoadEventLog } from "./event-log";
 
 const CONTROL_LABEL: Record<Control, string> = { priority: "Priority (first come)", free: "Free (go when clear)", stop: "All-way stop", lights: "Traffic lights", roundabout: "Roundabout" };
 const SPEEDS = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 130];
@@ -36,14 +41,20 @@ export function Inspector() {
   if (sel.kind === "stop") { const s = net.stops.find(x => x.id === sel.id); return s ? <StopInspector net={net} id={s.id} /> : <PlanSummary net={net} />; }
   if (sel.kind === "building") { const b = net.buildings?.find(x => x.id === sel.id); return b ? <BuildingInspector net={net} b={b} /> : <PlanSummary net={net} />; }
   if (sel.kind === "vehicle") return <VehicleInspector id={sel.id} />;
+  if (sel.kind === "lane") return <LaneInspector id={sel.id} />;
+  if (sel.kind === "zone") return <ZonesSection />;
+  if (sel.kind === "connector") return <ConnectorInspector id={sel.id} />;
   return <PlanSummary net={net} />;
 }
 
-function Header({ title, kind, onDelete }: { title: string; kind: string; onDelete?: () => void }) {
+function Header({ title, kind, onDelete, id }: { title: string; kind: string; onDelete?: () => void; id?: string }) {
   return (
     <div className="flex items-center gap-2 border-b px-4 py-3">
       <div className="min-w-0 flex-1">
-        <div className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{kind}</div>
+        <div className="flex items-center gap-2 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+          {kind}
+          {id && <IdChip id={id} />}
+        </div>
         <div className="truncate font-medium">{title}</div>
       </div>
       {onDelete && <Button variant="ghost" size="icon-sm" onClick={onDelete} aria-label={`Delete ${kind.toLowerCase()}`}><Trash2 /></Button>}
@@ -107,7 +118,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
   const customLights = node.control === "lights" && (node.phases?.length ?? 0) >= 2;
   return (
     <div>
-      <Header kind={kind} title={`${node.x.toFixed(1)}, ${node.y.toFixed(1)}`} onDelete={() => { commit(ops.deleteNode(net, node.id)); select(null); }} />
+      <Header kind={kind} id={node.id} title={`${node.x.toFixed(1)}, ${node.y.toFixed(1)}`} onDelete={() => { commit(ops.deleteNode(net, node.id)); select(null); }} />
       <Section title="Position">
         <div className="grid grid-cols-2 gap-2">
           <NumberField id="nx" label="X (east)" unit="m" value={node.x} onCommit={x => commit(ops.moveNode(net, node.id, { x, y: node.y }), `nx:${node.id}`)} />
@@ -153,7 +164,18 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
               <Switch checked={!!node.smooth} onCheckedChange={v => set({ smooth: v })} aria-label="Rounded kerbs" />
             </label>
           )}
-          {node.control === "roundabout" && <p className="text-xs text-muted-foreground">Ring radius {cn?.ringR.toFixed(1)} m. Entering traffic yields to the ring.</p>}
+          {node.control === "roundabout" && (
+            <>
+              <label className="flex items-center justify-between gap-2 text-sm">
+                <span>Two circulating lanes</span>
+                <Switch checked={node.ringLanes === 2} onCheckedChange={v => set({ ringLanes: v ? 2 : undefined })} aria-label="Two circulating lanes" />
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Ring radius {cn?.ringR.toFixed(1)} m. Entering traffic yields to the ring.
+                {node.ringLanes === 2 ? " The outer lane is for the first exit, the inner lane for going further round; on roads with two or more lanes, the kerb lane is for the first exit." : ""}
+              </p>
+            </>
+          )}
           {node.control === "stop" && <p className="text-xs text-muted-foreground">Every approach stops at the line, then vehicles go in arrival order.</p>}
           {node.control === "free" && <p className="text-xs text-muted-foreground">No signs, no queue order: any vehicle enters as soon as its path through the junction and its exit are clear, closest first.</p>}
           {node.control === "priority" && <p className="text-xs text-muted-foreground">Vehicles reserve their path through the junction first come, first served.</p>}
@@ -163,12 +185,18 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
         </Section>
       )}
       {(degree >= 3 || crossing) && node.control === "lights" && cn && cn.controlled && <PhaseEditor net={net} node={node} cn={cn} />}
+      {degree >= 3 && node.control === "priority" && cn && <ApproachSignsSection net={net} node={node} />}
+      {(degree >= 3 || crossing) && node.control !== "roundabout" && cn && <PedestriansSection node={node} nodeIdx={cn.idx} set={set} />}
+      {degree >= 3 && node.control !== "roundabout" && cn && <SlipLanesSection net={net} node={node} />}
       {(degree >= 3 || crossing) && <SignalGroupSection net={net} node={node} />}
       {ref && cn && <JunctionLive net={net} nodeIdx={cn.idx} />}
       {degree === 2 && !crossing && (
         <Section title="Road joint">
           <p className="text-xs text-muted-foreground">A bend point on a road. Drag it to reshape the road, or double-click a road to add more.</p>
-          <Button size="sm" onClick={() => set({ junction: true, control: "lights" })}><TrafficCone /> Make junction here</Button>
+          <div className="flex gap-2">
+            <Button size="sm" className="flex-1" onClick={() => set({ junction: true, control: "lights" })}><TrafficCone /> Make junction here</Button>
+            <Button size="sm" variant="outline" className="flex-1" onClick={() => set({ junction: true, control: "priority", peds: 300 })}><Footprints /> Zebra crossing</Button>
+          </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" className="flex-1" onClick={() => commit(ops.smoothAt(net, node.id))}><Spline /> Smooth here</Button>
             <Button variant="outline" size="sm" className="flex-1" onClick={() => {
@@ -189,6 +217,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
       )}
       {degree === 1 && node.gateway && <InflowSection node={node} set={set} />}
       {degree === 1 && node.gateway && <FlowsSection net={net} node={node} />}
+      {degree === 1 && node.gateway && <Section title="Zone"><ZonePicker net={net} kind="entry" id={node.id} /></Section>}
     </div>
   );
 }
@@ -318,6 +347,7 @@ function LightCycles({ nodeIdx, name }: { net: Network; nodeIdx: number; name: (
 
 // ---------------------------------------------------------------- link
 function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
+  const [multi, setMulti] = useDeepSubject(ui, "multi");
   const A = ops.nodeById(net, link.from)!, B = ops.nodeById(net, link.to)!;
   const len = ops.linkLength(link, A, B);
   const chord = Math.hypot(B.x - A.x, B.y - A.y);
@@ -334,18 +364,55 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
     const r = (deg * Math.PI) / 180;
     commit(ops.moveNode(net, B.id, { x: A.x + Math.sin(r) * chord, y: A.y - Math.cos(r) * chord }), `brg:${link.id}`);
   };
-  const lanesRow = (label: string, lanes: number, bus: boolean, onLanes: (n: number) => void, onBus: (b: boolean) => void, other: number) => (
-    <div className="grid gap-2 rounded-md border p-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm">{label}</span>
-        <Stepper label="lanes" value={lanes} min={other === 0 ? 1 : 0} max={4} onChange={onLanes} />
+  const lanesRow = (d: 1 | -1, label: string, lanes: number, bus: boolean, onLanes: (n: number) => void, onBus: (b: boolean) => void, other: number) => {
+    const bays: Bays = (d === 1 ? link.baysF : link.baysB) ?? { left: 0, leftLen: 60, right: 0, rightLen: 40 };
+    const setB = (patch: Partial<Bays>) => commit(ops.setBays(net, link.id, d, { ...bays, ...patch }));
+    const room = MAX_LANES_AT_LINE - lanes;
+    return (
+      <div className="grid gap-2 rounded-md border p-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm">{label}</span>
+          <Stepper label="lanes" value={lanes} min={other === 0 ? 1 : 0} max={MAX_LANES} onChange={onLanes} />
+        </div>
+        <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>{lanes === 1 ? "Buses only (no cars this way)" : "Kerb lane for buses only"}</span>
+          <Switch checked={bus && lanes >= 1} disabled={lanes < 1} onCheckedChange={onBus} />
+        </label>
+        {lanes >= 2 && (
+          <div className="grid gap-1.5 border-t pt-2">
+            <span className="text-xs text-muted-foreground">A lane ends (merges into the lane beside it)</span>
+            <div className="grid grid-cols-[1fr_5.5rem] items-center gap-2">
+              <Select value={(d === 1 ? link.dropF : link.dropB)?.side ?? "none"} onValueChange={v => set(d === 1 ? { dropF: v === "none" ? null : { side: v as "left" | "right", len: link.dropF?.len ?? 80 }, turnsF: null } : { dropB: v === "none" ? null : { side: v as "left" | "right", len: link.dropB?.len ?? 80 }, turnsB: null })}>
+                <SelectTrigger size="sm" className="w-full" aria-label="Lane that ends"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No lane ends</SelectItem>
+                  <SelectItem value="right">Right lane merges left</SelectItem>
+                  <SelectItem value="left">Left lane merges right</SelectItem>
+                </SelectContent>
+              </Select>
+              {(d === 1 ? link.dropF : link.dropB) ? (
+                <NumberField id={`drop${d}`} label="Merge length" hideLabel unit="m" value={(d === 1 ? link.dropF : link.dropB)!.len} min={10} max={300} step={10} digits={0}
+                  onCommit={v => set(d === 1 ? { dropF: { ...link.dropF!, len: Math.round(v) } } : { dropB: { ...link.dropB!, len: Math.round(v) } })} />
+              ) : <span />}
+            </div>
+          </div>
+        )}
+        {lanes > 0 && (
+          <div className="grid gap-1.5 border-t pt-2">
+            <span className="text-xs text-muted-foreground">Turn bays before the junction ahead</span>
+            <div className="grid grid-cols-[1fr_auto_5.5rem] items-center gap-x-2 gap-y-1.5 text-xs">
+              <span>Left</span>
+              <Stepper label="left turn bays" value={bays.left} min={0} max={Math.min(MAX_BAYS, room - bays.right)} onChange={v => setB({ left: v })} />
+              <NumberField id={`bl${d}`} label="Left bay length" hideLabel unit="m" value={bays.leftLen} min={10} max={400} step={5} digits={0} className={bays.left ? "" : "invisible"} onCommit={v => setB({ leftLen: Math.round(v) })} />
+              <span>Right{bus ? " (not with a bus lane)" : ""}</span>
+              <Stepper label="right turn bays" value={bays.right} min={0} max={bus ? 0 : Math.min(MAX_BAYS, room - bays.left)} onChange={v => setB({ right: v })} />
+              <NumberField id={`br${d}`} label="Right bay length" hideLabel unit="m" value={bays.rightLen} min={10} max={400} step={5} digits={0} className={bays.right ? "" : "invisible"} onCommit={v => setB({ rightLen: Math.round(v) })} />
+            </div>
+          </div>
+        )}
       </div>
-      <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span>{lanes === 1 ? "Buses only (no cars this way)" : "Kerb lane for buses only"}</span>
-        <Switch checked={bus && lanes >= 1} disabled={lanes < 1} onCheckedChange={onBus} />
-      </label>
-    </div>
-  );
+    );
+  };
   const compiled = simController.compiled;
   const roadName = (id: string) => {
     const l = ops.linkById(net, id);
@@ -384,7 +451,20 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
   });
   return (
     <div>
-      <Header kind="Road" title={link.name || "Unnamed road"} onDelete={() => { commit(ops.deleteLink(net, link.id)); select(null); }} />
+      <Header kind="Road" id={link.id} title={link.name || "Unnamed road"} onDelete={() => { commit(ops.deleteLink(net, link.id)); select(null); }} />
+      {multi.length > 0 && (
+        <Section>
+          <p className="text-sm">{multi.length + 1} roads selected <span className="text-muted-foreground">(Shift+click to add or remove)</span></p>
+          <div className="flex flex-wrap gap-1">{[link.id, ...multi].map(id => <IdChip key={id} id={id} />)}</div>
+          <div className="flex gap-2">
+            <Button size="sm" className="flex-1" onClick={mergeSelectedRoads}><Merge /> Merge into one road <Kbd className="ml-1">M</Kbd></Button>
+            <Button size="sm" variant="ghost" onClick={() => setMulti([])}>Clear</Button>
+          </div>
+          {multi.length === 1 && (
+            <Button size="sm" variant="outline" className="justify-start" onClick={smoothSelectedJoin} title="Make the two roads flow into each other where they meet, keeping them separate"><Spline /> Smooth the join between them <Kbd className="ml-1">S</Kbd></Button>
+          )}
+        </Section>
+      )}
       <Section>
         <div className="grid gap-1.5">
           <Label htmlFor="lname" className="text-xs text-muted-foreground">Name</Label>
@@ -392,8 +472,27 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
         </div>
       </Section>
       <Section title="Lanes">
-        {lanesRow(`Towards ${dir.name} (${dir.deg.toFixed(0)}°)`, link.lanesF, link.busF, n => set({ lanesF: n, busF: n >= 1 && link.busF, turnsF: null, greenF: ops.resizeGreens(link.greenF, n) }), b => set({ busF: b }), link.lanesB)}
-        {lanesRow(`Towards ${back.name} (${back.deg.toFixed(0)}°)`, link.lanesB, link.busB, n => set({ lanesB: n, busB: n >= 1 && link.busB, turnsB: null, greenB: ops.resizeGreens(link.greenB, n) }), b => set({ busB: b }), link.lanesF)}
+        {lanesRow(1, `Towards ${dir.name} (${dir.deg.toFixed(0)}°)`, link.lanesF, link.busF, n => set({ lanesF: n, busF: n >= 1 && link.busF, turnsF: null, greenF: ops.resizeGreens(link.greenF, lanesAtLine({ ...link, lanesF: n }, 1)) }), b => set({ busF: b, ...(b && link.baysF?.right ? { baysF: link.baysF.left ? { ...link.baysF, right: 0 } : null, turnsF: null } : {}) }), link.lanesB)}
+        {lanesRow(-1, `Towards ${back.name} (${back.deg.toFixed(0)}°)`, link.lanesB, link.busB, n => set({ lanesB: n, busB: n >= 1 && link.busB, turnsB: null, greenB: ops.resizeGreens(link.greenB, lanesAtLine({ ...link, lanesB: n }, -1)) }), b => set({ busB: b, ...(b && link.baysB?.right ? { baysB: link.baysB.left ? { ...link.baysB, right: 0 } : null, turnsB: null } : {}) }), link.lanesF)}
+        {link.lanesF > 0 && link.lanesB > 0 && (
+          <div className="grid gap-2 rounded-md border p-2.5">
+            <div className="grid grid-cols-[1fr_5.5rem] items-center gap-2">
+              <span className="text-sm">Median</span>
+              <NumberField id="lmed" label="Median width" hideLabel unit="m" value={link.median ?? 0} min={0} max={MAX_MEDIAN} step={0.5} digits={1} onCommit={v => set({ median: v > 0 ? Math.round(v * 10) / 10 : undefined, ...(v > 0 ? { medianKind: link.medianKind ?? "painted" } : { medianKind: undefined }) })} />
+            </div>
+            {(link.median ?? 0) > 0 && (
+              <ToggleGroup type="single" className="w-full" value={link.medianKind ?? "painted"} onValueChange={v => v && set({ medianKind: v as "painted" | "raised" })} aria-label="Median type">
+                <ToggleGroupItem value="painted" className="h-7 flex-1 text-xs">Painted</ToggleGroupItem>
+                <ToggleGroupItem value="raised" className="h-7 flex-1 text-xs">Raised (kerbed)</ToggleGroupItem>
+              </ToggleGroup>
+            )}
+            <p className="text-[11px] text-muted-foreground">Left turn bays open into the median; before they open their space is hatched{(link.medianKind === "raised" && (link.median ?? 0) > 0) ? " or kerbed" : ""}.</p>
+          </div>
+        )}
+        <div className="grid grid-cols-[1fr_5.5rem] items-center gap-2">
+          <span className="text-sm">Lane width</span>
+          <NumberField id="llw" label="Lane width" hideLabel unit="m" value={link.laneWidth ?? LANE_WIDTH.default} min={LANE_WIDTH.min} max={LANE_WIDTH.max} step={0.1} digits={1} onCommit={v => set({ laneWidth: Math.abs(v - LANE_WIDTH.default) < 0.01 ? undefined : Math.round(v * 10) / 10 })} />
+        </div>
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-muted-foreground">{link.lanesF === 0 || link.lanesB === 0 ? "One-way street" : `${link.lanesF}:${link.lanesB} lanes`}</span>
           <Button variant="outline" size="sm" onClick={() => commit(ops.reverseLink(net, link.id))}><ArrowLeftRight /> Swap sides</Button>
@@ -406,6 +505,18 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
         </Section>
       )}
       <CounterSection link={link} towards={[dir.name, back.name]} onChange={on => set({ counter: on || undefined })} />
+      <Section><RoadEventLog linkId={link.id} /></Section>
+      <Section title="Elevation">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm">Level</span>
+          <Stepper label="levels" value={link.level ?? 0} min={LEVELS.min} max={LEVELS.max} onChange={v => set({ level: v || undefined })} />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {(link.level ?? 0) > 0 ? `A bridge, ${link.level} level${link.level === 1 ? "" : "s"} up: drawn over the roads it crosses; roads joining it ramp up to it in 3D.`
+            : (link.level ?? 0) < 0 ? "Below ground (an underpass or tunnel): drawn faded, under the roads it crosses."
+              : "Ground level. Raise it to make a bridge over the roads it crosses, or lower it for an underpass. Roads only meet at junctions, never where they cross at different levels."}
+        </p>
+      </Section>
       <Section title="Speed limit">
         <Select value={String(link.speed)} onValueChange={v => set({ speed: Number(v) })}>
           <SelectTrigger className="w-full" aria-label="Speed limit"><SelectValue /></SelectTrigger>
@@ -428,7 +539,10 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
             }}><Spline /> Make curve</Button>
           )}
           {ops.chainJoints(net, link.id).length > 0 && (
-            <Button variant="outline" size="sm" className="flex-1" onClick={() => commit(ops.smoothChain(net, link.id))}><Spline /> Smooth whole road</Button>
+            <>
+              <Button variant="outline" size="sm" className="flex-1" onClick={() => commit(ops.smoothChain(net, link.id))}><Spline /> Smooth whole road</Button>
+              {!multi.length && <Button variant="outline" size="sm" className="flex-1" onClick={mergeSelectedRoads} title="Merge the road's pieces into one (M)"><Merge /> Merge its pieces</Button>}
+            </>
           )}
         </div>
         {link.c1 && link.c2 && (
@@ -444,6 +558,86 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
   );
 }
 
+// ---------------------------------------------------------------- pedestrians
+/** people crossing the roads at a junction (or a zebra on a plain road), and how they fare */
+function PedestriansSection({ node, nodeIdx, set }: { node: NodeDef; nodeIdx: number; set: (patch: Partial<NodeDef>) => void }) {
+  useSubject(stats$);
+  const s = node.peds ? simController.sim?.pedStats(nodeIdx) : null;
+  return (
+    <Section title="Pedestrians">
+      <div className="grid grid-cols-[1fr_7rem] items-center gap-2">
+        <span className="text-sm">People crossing each road</span>
+        <NumberField id="peds" label="Pedestrians per hour" hideLabel unit="/h" value={node.peds ?? 0} min={0} max={3000} step={50} digits={0} onCommit={v => set({ peds: v > 0 ? Math.round(v) : null })} />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {node.control === "lights" ? "They cross a road while its traffic has red; vehicles turning into that road wait for them." : "They have priority on the zebra: vehicles stop for anyone waiting or crossing."}
+      </p>
+      {s && (
+        <p className="text-xs tabular text-muted-foreground">{s.crossed} crossed so far, waiting {s.avgWait.toFixed(0)} s on average{s.waiting ? ` · ${s.waiting} waiting now` : ""}</p>
+      )}
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------- signs
+/** give-way / stop signs on each road arriving at a priority junction */
+function ApproachSignsSection({ net, node }: { net: Network; node: NodeDef }) {
+  const cn = simController.compiled.nodeById.get(node.id);
+  const arriving = cn?.arms.filter(a => a.inEdge) ?? [];
+  if (!arriving.length) return null;
+  return (
+    <Section title="Signs">
+      <p className="text-xs text-muted-foreground">Traffic on a road with a give-way or stop sign waits for traffic on the roads without one.</p>
+      {arriving.map(a => {
+        const e = a.inEdge!, l = e.link, sign = (e.dir === 1 ? l.signF : l.signB) ?? null;
+        return (
+          <SignPicker
+            key={e.key} control={node.control} sign={sign} label={l.name ? `${l.name}, from the ${compass(a.u.x, a.u.y).name}` : `Road from the ${compass(a.u.x, a.u.y).name}`}
+            onSign={x => commit(ops.updateLink(net, l.id, e.dir === 1 ? { signF: x } : { signB: x }))}
+          />
+        );
+      })}
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------- slip lanes
+/** free right turns that bypass the junction on a lane of their own, round a kerbed island */
+function SlipLanesSection({ net, node }: { net: Network; node: NodeDef }) {
+  const c = simController.compiled, cn = c.nodeById.get(node.id);
+  if (!cn) return null;
+  const name = (l: LinkDef) => l.name || compassOf(net, l, node.id);
+  const existing = net.links.filter(l => l.slip === node.id);
+  // right turns this junction still makes
+  const rights = [...cn.moves.values()].flat().filter(m => m.turn === "R");
+  const add = (inId: string, outId: string) => {
+    const [n2, err] = ops.addSlipLane(net, node.id, inId, outId);
+    if (err) toast.error(err); else commit(n2);
+  };
+  if (!existing.length && !rights.length) return null;
+  return (
+    <Section title="Slip lanes">
+      <p className="text-xs text-muted-foreground">A slip lane lets right-turning traffic bypass the junction round a kerbed island and give way where it joins. Drag its end points to shape it.</p>
+      {existing.map(l => (
+        <div key={l.id} className="flex items-center justify-between gap-2 text-sm">
+          <button type="button" className="truncate text-left underline-offset-2 hover:underline" onClick={() => select({ kind: "link", id: l.id })}>{l.name || "Slip lane"}</button>
+          <Button variant="ghost" size="icon-sm" className="size-7 shrink-0" aria-label="Remove slip lane" onClick={() => commit(ops.deleteLink(net, l.id))}><Trash2 /></Button>
+        </div>
+      ))}
+      {rights.map(m => (
+        <Button key={`${m.in.key}>${m.out.key}`} variant="outline" size="sm" className="justify-start" onClick={() => add(m.in.link.id, m.out.link.id)}>
+          <Plus /> From {name(m.in.link)} into {name(m.out.link)}
+        </Button>
+      ))}
+    </Section>
+  );
+}
+/** "road to the NE" for an unnamed road at a node */
+function compassOf(net: Network, l: LinkDef, nodeId: string) {
+  const here = ops.nodeById(net, nodeId), other = ops.nodeById(net, l.from === nodeId ? l.to : l.from);
+  return here && other ? `the road to the ${compass(other.x - here.x, other.y - here.y).name}` : "road";
+}
+
 // ---------------------------------------------------------------- stop
 function StopInspector({ net, id }: { net: Network; id: string }) {
   const stop = net.stops.find(s => s.id === id)!;
@@ -454,7 +648,7 @@ function StopInspector({ net, id }: { net: Network; id: string }) {
   const lines = net.lines;
   return (
     <div>
-      <Header kind="Bus stop" title={stop.name} onDelete={() => { commit(ops.deleteStop(net, stop.id)); select(null); }} />
+      <Header kind="Bus stop" id={stop.id} title={stop.name} onDelete={() => { commit(ops.deleteStop(net, stop.id)); select(null); }} />
       <Section>
         <div className="grid gap-1.5">
           <Label htmlFor="sname" className="text-xs text-muted-foreground">Name</Label>
@@ -533,7 +727,7 @@ function BuildingInspector({ net, b }: { net: Network; b: BuildingDef }) {
   const osm = /^([wr])(\d+)/.exec(b.id);
   return (
     <div>
-      <Header kind="Building" title={b.name || USE_LABEL[b.use]} onDelete={() => { commit(ops.deleteBuilding(net, b.id)); select(null); }} />
+      <Header kind="Building" id={b.id} title={b.name || USE_LABEL[b.use]} onDelete={() => { commit(ops.deleteBuilding(net, b.id)); select(null); }} />
       <Section>
         <div className="grid gap-1.5">
           <Label htmlFor="buse" className="text-xs text-muted-foreground">Use</Label>
@@ -551,6 +745,7 @@ function BuildingInspector({ net, b }: { net: Network; b: BuildingDef }) {
         </div>
       </Section>
       <Section title="Traffic">
+        <ZonePicker net={net} kind="building" id={b.id} />
         <label className="flex items-center justify-between gap-2 text-sm">
           <span>Set trips by hand</span>
           <Switch checked={typeof b.trips === "number"} onCheckedChange={v => set({ trips: v ? auto : null })} />
@@ -579,7 +774,7 @@ function VehicleInspector({ id }: { id: string }) {
   const v = sim?.vehicle && String(sim.vehicle.id) === id && sim.vehicles.some(x => x.id === sim.vehicle!.id) ? sim.vehicle : null;
   if (!v) return (
     <div>
-      <Header kind="Vehicle" title={`#${id}`} />
+      <Header kind="Vehicle" id={`#${id}`} title={`#${id}`} />
       <Section><p className="text-sm text-muted-foreground">{sim?.vehicles.some(x => String(x.id) === id) ? "Loading…" : "This vehicle has left the plan."}</p></Section>
     </div>
   );
@@ -606,7 +801,7 @@ function VehicleInspector({ id }: { id: string }) {
   const myEvents = sim!.events.filter(x => x.veh === v.id).slice(-12).reverse();
   return (
     <div>
-      <Header kind={v.kind === "car" ? "Car" : v.kind === "truck" ? "Truck" : "Bus"} title={`#${v.id}`} />
+      <Header kind={v.kind === "car" ? "Car" : v.kind === "truck" ? "Truck" : "Bus"} id={`#${v.id}`} title={v.road} />
       <Section>
         <Badge variant="secondary" className="w-fit">{v.state}</Badge>
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">

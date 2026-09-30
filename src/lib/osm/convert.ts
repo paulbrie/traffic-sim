@@ -6,13 +6,17 @@
  * crossing, offset T-junctions) become one junction, pairs of one-way carriageways between the same
  * junctions become one two-way road, small roundabouts become roundabout junctions, and each
  * road's shape is fitted with the editor's straight / cubic Bézier links.
- * Tags used: oneway, lanes(:forward/:backward), maxspeed, name/ref, busway, junction=roundabout;
- * on nodes highway=traffic_signals / stop / give_way / mini_roundabout.
+ * Tags used: oneway, lanes(:forward/:backward), turn:lanes(:forward/:backward), maxspeed, name/ref,
+ * busway, junction=roundabout; on nodes highway=traffic_signals / stop / give_way / mini_roundabout.
+ * A short stretch before a junction with extra turn-only lanes becomes turn bays on the road before
+ * it, the gap between two merged carriageways becomes a median, and a one-way road cutting the
+ * corner of a right turn becomes a slip lane (with its island). Bridges and tunnels (bridge, tunnel,
+ * layer) keep their elevation level, so they are drawn over / under what they cross.
  *
  * Buildings: footprints (outer rings of multipolygons too) whose centre lies in the area, with a
  * height from height / building:levels and a use from building / shop / amenity / office tags.
  */
-import { DEFAULT_SIGNAL, type ApproachSign, type BuildingDef, type BuildingUse, type Control, type GeoRef, type LinkDef, type Network, type NodeDef, type PlanSettings, type Vec } from "../../engine/types";
+import { DEFAULT_SIGNAL, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, type ApproachSign, type Bays, type LaneTurn, type BuildingDef, type BuildingUse, type Control, type GeoRef, type LinkDef, type Network, type NodeDef, type PlanSettings, type Vec } from "../../engine/types";
 import { FLOOR_HEIGHT, polyArea, polyCentroid } from "../../engine/buildings";
 import { newId } from "../../engine/sample";
 import { highwaysFor, project, type BBox, type RoadClass } from "./area";
@@ -43,7 +47,6 @@ const SIGN_REACH = 30;
 const MAX_RING = 40;
 /** tolerance when fitting road shapes with straight lines and curves (m) */
 const FIT_TOL = 1.5;
-const MAX_LANES = 4;
 /** entry roads are at least this long (m), extended past the area's edge when needed */
 const MIN_ENTRY = 30;
 /** bend points added by the shape fitting stay this far from the road's ends (m) … */
@@ -61,6 +64,14 @@ interface Seg {
   lanesF: number; lanesB: number; busF: boolean; busB: boolean; speed: number; name: string;
   /** sign for traffic arriving at b (F) / at a (B) */
   signF: ApproachSign | null; signB: ApproachSign | null;
+  /** lane arrows (turn:lanes) where each direction arrives, left to right */
+  turnsF: LaneTurn[] | null; turnsB: LaneTurn[] | null;
+  baysF?: Bays | null; baysB?: Bays | null;
+  median?: number;
+  /** a slip lane: the vertex of the junction it bypasses */
+  slip?: string;
+  /** elevation order (bridge / tunnel / layer tags; 0 = ground) */
+  level: number;
 }
 
 export function convertOsm(data: OsmData, opts: ConvertOptions): { network: Network; stats: ImportStats } {
@@ -123,10 +134,42 @@ function wayAttrs(t: Tags) {
   lanesF = Math.min(MAX_LANES, lanesF); lanesB = Math.min(MAX_LANES, lanesB);
   const bus = (side: string) => ["lane", "opposite_lane"].includes(t[`busway:${side}`] ?? "") || t.busway === "lane";
   const busF = bus("right") || bus("both"), busB = oneway === 0 && (bus("left") || bus("both"));
+  // lane arrows, left to right as the driver sees them (only when they match the lane count)
+  const turnsOf = (v: string | undefined, n: number) => {
+    const t = v ? parseTurns(v) : null;
+    return t && t.length === n && n > 0 ? t : null;
+  };
+  // bridges and tunnels: their layer (default one up / one down); other roads with a layer keep it
+  const layer = parseInt(t.layer ?? "", 10), yes = (v?: string) => !!v && v !== "no";
+  let level = Number.isFinite(layer) ? layer : 0;
+  if (yes(t.bridge) && !Number.isFinite(layer)) level = 1;
+  if (yes(t.tunnel) && !Number.isFinite(layer)) level = -1;
+  level = Math.min(LEVELS.max, Math.max(LEVELS.min, level));
   return {
+    level,
     oneway, ring, lanesF, lanesB, speed: parseSpeed(t.maxspeed, hw), name: (t.name || t.ref || "").slice(0, 120),
     busF: busF && lanesF >= 2, busB: busB && lanesB >= 2,
+    turnsF: oneway === -1 ? null : turnsOf(oneway ? t["turn:lanes"] : t["turn:lanes:forward"], lanesF),
+    turnsB: oneway !== 0 ? null : turnsOf(t["turn:lanes:backward"], lanesB),
   };
+}
+
+/** "left|through|through;right" → ["L", "S", "SR"] ("none" and merges count as ahead) */
+function parseTurns(v: string): LaneTurn[] | null {
+  const out: LaneTurn[] = [];
+  for (const lane of v.split("|")) {
+    const parts = lane.split(";").map(x => x.trim());
+    let L = false, S = false, R = false;
+    for (const p of parts) {
+      if (/left|reverse/.test(p)) L = true;
+      else if (/right/.test(p)) R = true;
+      else S = true;
+    }
+    const code = `${L ? "L" : ""}${S ? "S" : ""}${R ? "R" : ""}`;
+    if (!code) return null;
+    out.push(code as LaneTurn);
+  }
+  return out;
 }
 
 function parseSpeed(v: string | undefined, hw: string): number {
@@ -250,7 +293,9 @@ function buildRoads(
       const run = pc.slice(start, i + 1);
       const seg: Seg = {
         a: run[0].key, b: run[run.length - 1].key, pts: run.map(p => ({ x: p.x, y: p.y })),
-        lanesF: at.lanesF, lanesB: at.lanesB, busF: at.busF, busB: at.busB, speed: at.speed, name: at.name, signF: null, signB: null,
+        lanesF: at.lanesF, lanesB: at.lanesB, busF: at.busF, busB: at.busB, speed: at.speed, name: at.name, signF: null, signB: null, level: at.level,
+        // arrows apply where the way ends (forward) / starts (backward)
+        turnsF: i === pc.length - 1 ? at.turnsF : null, turnsB: start === 0 ? at.turnsB : null,
       };
       // stop / give-way signs on the approach to either end
       let along = 0;
@@ -325,6 +370,8 @@ function buildRoads(
   segs = mergeChains(segs, vx);
   segs = mergeParallel(segs, vx);
   segs = mergeChains(segs, vx);
+  segs = mergeBays(segs, vx);
+  markSlips(segs);
   return { segs, vx };
 }
 
@@ -361,7 +408,10 @@ function clip(pts: Pt[], r: { x0: number; x1: number; y0: number; y1: number }, 
 }
 
 function reverseSeg(s: Seg): Seg {
-  return { ...s, a: s.b, b: s.a, pts: s.pts.slice().reverse(), lanesF: s.lanesB, lanesB: s.lanesF, busF: s.busB, busB: s.busF, signF: s.signB, signB: s.signF };
+  return {
+    ...s, a: s.b, b: s.a, pts: s.pts.slice().reverse(), lanesF: s.lanesB, lanesB: s.lanesF, busF: s.busB, busB: s.busF, signF: s.signB, signB: s.signF,
+    turnsF: s.turnsB, turnsB: s.turnsF, baysF: s.baysB ?? null, baysB: s.baysF ?? null,
+  };
 }
 
 /** join the two roads meeting at a plain 2-way point when they have the same lanes, speed and name */
@@ -380,10 +430,10 @@ function mergeChains(segs: Seg[], vx: Map<string, Vx>): Seg[] {
     if (s1.a === k) s1 = reverseSeg(s1);
     if (s2.b === k) s2 = reverseSeg(s2);
     if (s1.b !== k || s2.a !== k || s1.a === s2.b) continue;
-    if (s1.lanesF !== s2.lanesF || s1.lanesB !== s2.lanesB || s1.speed !== s2.speed || s1.name !== s2.name || s1.busF !== s2.busF || s1.busB !== s2.busB) continue;
+    if (s1.lanesF !== s2.lanesF || s1.lanesB !== s2.lanesB || s1.speed !== s2.speed || s1.name !== s2.name || s1.busF !== s2.busF || s1.busB !== s2.busB || s1.level !== s2.level) continue;
     const orig = [...set];
     orig.forEach(s => { del(s); live.delete(s); });
-    const m: Seg = { ...s1, b: s2.b, pts: [...s1.pts, ...s2.pts.slice(1)], signF: s2.signF, signB: s1.signB };
+    const m: Seg = { ...s1, b: s2.b, pts: [...s1.pts, ...s2.pts.slice(1)], signF: s2.signF, signB: s1.signB, turnsF: s2.turnsF, turnsB: s1.turnsB };
     add(m); live.add(m);
   }
   return [...live];
@@ -411,12 +461,15 @@ function mergeParallel(segs: Seg[], vx: Map<string, Vx>): Seg[] {
       const mid = polyAt(s.pts, 0.5);
       const partner = rest.findIndex(o => {
         const d = Math.hypot(polyAt(o.pts, 0.5).x - mid.x, polyAt(o.pts, 0.5).y - mid.y);
-        return d < 40 && ((s.lanesB === 0 && o.lanesF === 0) || (s.lanesF === 0 && o.lanesB === 0));
+        return d < 40 && s.level === o.level && ((s.lanesB === 0 && o.lanesF === 0) || (s.lanesF === 0 && o.lanesB === 0));
       });
       if (partner >= 0) {
         const o = rest.splice(partner, 1)[0];
         const [f, b] = s.lanesB === 0 ? [s, o] : [o, s];
-        kept.push({ ...f, lanesB: b.lanesB, busB: b.busB, signB: b.signB, name: f.name || b.name, speed: Math.max(f.speed, b.speed), pts: averagePolys(f.pts, b.pts) });
+        // the gap between the carriageways (centre to centre, less half of each one's lanes) is the median
+        const gap = [0.25, 0.5, 0.75].map(t => Math.hypot(polyAt(f.pts, t).x - polyAt(b.pts, t).x, polyAt(f.pts, t).y - polyAt(b.pts, t).y)).sort((x, y) => x - y)[1];
+        const median = Math.min(MAX_MEDIAN, Math.round((gap - ((f.lanesF + b.lanesB) * 3.2) / 2) * 2) / 2);
+        kept.push({ ...f, lanesB: b.lanesB, busB: b.busB, signB: b.signB, turnsB: b.turnsB, name: f.name || b.name, speed: Math.max(f.speed, b.speed), pts: averagePolys(f.pts, b.pts), ...(median >= 1 ? { median } : {}) });
         continue;
       }
       const dup = kept.findIndex(o => Math.hypot(polyAt(o.pts, 0.5).x - mid.x, polyAt(o.pts, 0.5).y - mid.y) < 8);
@@ -426,6 +479,70 @@ function mergeParallel(segs: Seg[], vx: Map<string, Vx>): Seg[] {
     out.push(kept[0], ...kept.slice(1).flatMap(s => splitMid(s, vx)));
   }
   return out;
+}
+
+/**
+ * Turn bays: where a road gains lanes for its last stretch before a junction and the extra lanes
+ * are marked turn-only (turn:lanes), the stretch folds into the road before it as bays.
+ */
+function mergeBays(segs: Seg[], vx: Map<string, Vx>): Seg[] {
+  const at = new Map<string, Seg[]>();
+  for (const s of segs) for (const k of [s.a, s.b]) (at.get(k) ?? at.set(k, []).get(k)!).push(s);
+  const deg = (k: string) => at.get(k)?.length ?? 0;
+  const gone = new Set<Seg>(), out: Seg[] = [];
+  for (const s0 of segs) {
+    if (gone.has(s0)) continue;
+    // look at both directions: orient so the short stretch arrives at its junction going forward
+    for (const s of [s0, reverseSeg(s0)]) {
+      if (gone.has(s0) || !s.turnsF || s.lanesF < 2 || deg(s.b) < 3 || polyLen(s.pts) > 160) continue;
+      const k = s.a, v = vx.get(k);
+      if (!v || v.boundary || v.lights || v.ring || deg(k) !== 2) continue;
+      const up0 = at.get(k)!.find(x => x !== s0);
+      if (!up0 || gone.has(up0)) continue;
+      const up = up0.b === k ? up0 : reverseSeg(up0);
+      const extra = s.lanesF - up.lanesF;
+      if (extra < 1 || up.lanesB !== s.lanesB || up.name !== s.name || up.lanesF < 1 || up.level !== s.level) continue;
+      const t = s.turnsF;
+      let left = 0, right = 0;
+      while (left < t.length && t[left] === "L") left++;
+      while (right < t.length - left && t[t.length - 1 - right] === "R") right++;
+      left = Math.min(left, extra, MAX_BAYS); right = Math.min(right, extra - left, MAX_BAYS);
+      if (left + right !== extra || up.lanesF + extra > MAX_LANES_AT_LINE) continue;
+      const len = Math.round(Math.min(400, Math.max(10, polyLen(s.pts))));
+      const merged: Seg = { ...up, b: s.b, pts: [...up.pts, ...s.pts.slice(1)], signF: s.signF, turnsF: t, baysF: { left, leftLen: len, right, rightLen: len } };
+      gone.add(s0); gone.add(up0);
+      out.push(merged);
+    }
+  }
+  return [...segs.filter(s => !gone.has(s)), ...out];
+}
+
+/**
+ * Slip lanes: a one-way road from a point on one road to a point on another, both next to the same
+ * junction, where going that way through the junction would be a right turn.
+ */
+function markSlips(segs: Seg[]) {
+  const at = new Map<string, Seg[]>();
+  for (const s of segs) for (const k of [s.a, s.b]) (at.get(k) ?? at.set(k, []).get(k)!).push(s);
+  const deg = (k: string) => at.get(k)?.length ?? 0;
+  const dirAt = (s: Seg, from: string): Vec => {
+    const p = s.a === from ? s.pts : s.pts.slice().reverse(), a = p[0], b = p[Math.min(p.length - 1, 1)];
+    const d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    return { x: (b.x - a.x) / d, y: (b.y - a.y) / d };
+  };
+  for (const s of segs) {
+    if (s.lanesB !== 0 || s.lanesF > 2 || deg(s.a) !== 3 || deg(s.b) !== 3 || polyLen(s.pts) > 150) continue;
+    // the other roads at each end, and the junction both lead to
+    const fromD = at.get(s.a)!.filter(x => x !== s), toM = at.get(s.b)!.filter(x => x !== s);
+    for (const r1 of fromD) for (const r2 of toM) {
+      const J = r1.a === s.a ? r1.b : r1.a;
+      if (J !== (r2.a === s.b ? r2.b : r2.a) || deg(J) < 3) continue;
+      // arriving at J along r1, leaving along r2: a right turn (screen y points down)
+      const din = dirAt(r1, J), dout = dirAt(r2, J), inT = { x: -din.x, y: -din.y };
+      const cross = inT.x * dout.y - inT.y * dout.x;
+      if (cross > 0.5) s.slip = J;
+    }
+  }
 }
 
 /** split a road at its middle with a plain bend point */
@@ -467,7 +584,8 @@ function toNetwork(segs: Seg[], vx: Map<string, Vx>): { network: Network; stats:
   for (const s of segs) {
     const pts = simplify(s.pts, 0.8);
     lengthM += polyLen(pts);
-    const parts = fit(pts);
+    // a slip lane stays one curve, so it stays one road
+    const parts = s.slip ? oneCurve(pts) : fit(pts);
     let from = node(s.a);
     parts.forEach((p, i) => {
       const last = i === parts.length - 1;
@@ -476,6 +594,11 @@ function toNetwork(segs: Seg[], vx: Map<string, Vx>): { network: Network; stats:
         id: newId("l"), name: s.name, from: from.id, to: to.id, c1: p.c1 && rv(p.c1), c2: p.c2 && rv(p.c2),
         lanesF: s.lanesF, lanesB: s.lanesB, busF: s.busF, busB: s.busB, speed: s.speed,
         ...(last && s.signF ? { signF: s.signF } : {}), ...(i === 0 && s.signB ? { signB: s.signB } : {}),
+        ...(last && s.turnsF ? { turnsF: s.turnsF } : {}), ...(i === 0 && s.turnsB ? { turnsB: s.turnsB } : {}),
+        ...(last && s.baysF ? { baysF: s.baysF } : {}), ...(i === 0 && s.baysB ? { baysB: s.baysB } : {}),
+        ...(s.median ? { median: s.median, medianKind: s.median >= 2.5 ? "raised" as const : "painted" as const } : {}),
+        ...(s.slip ? { slip: node(s.slip).id } : {}),
+        ...(s.level ? { level: s.level } : {}),
       });
       from = to;
     });
@@ -506,6 +629,15 @@ function toNetwork(segs: Seg[], vx: Map<string, Vx>): { network: Network; stats:
       entries: nodes.filter(n => n.gateway && degOf(n.id) === 1).length,
     },
   };
+}
+
+/** one cubic for the whole polyline: tangent to its ends, handles a third of the chord */
+function oneCurve(pts: Vec[]): { end: number; c1: Vec | null; c2: Vec | null }[] {
+  const n = pts.length, A = pts[0], B = pts[n - 1];
+  if (n <= 2) return [{ end: n - 1, c1: null, c2: null }];
+  const unit = (p: Vec, q: Vec) => { const d = Math.hypot(q.x - p.x, q.y - p.y) || 1; return { x: (q.x - p.x) / d, y: (q.y - p.y) / d }; };
+  const t0 = unit(A, pts[1]), t1 = unit(pts[n - 2], B), k = Math.hypot(B.x - A.x, B.y - A.y) / 3;
+  return [{ end: n - 1, c1: { x: A.x + t0.x * k, y: A.y + t0.y * k }, c2: { x: B.x - t1.x * k, y: B.y - t1.y * k } }];
 }
 
 /**

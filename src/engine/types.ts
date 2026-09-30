@@ -46,6 +46,18 @@ export interface NodeDef {
    * Which lanes get green in each phase is stored on the roads arriving here (`greenF` / `greenB`).
    */
   phases?: SignalPhase[] | null;
+  /**
+   * Pedestrians per hour crossing each road at this junction (on its zebra crossing, just past the
+   * stop line); missing / 0 = none. At traffic lights they cross a road while its traffic has red;
+   * elsewhere (priority, stop, a zebra on a plain road) they have priority over vehicles.
+   */
+  peds?: number | null;
+  /**
+   * Roundabouts: circulating lanes (1, or 2). With two, the outer lane is for the first exit (right
+   * turns) and the inner lane for everything further round; on approaches with two or more lanes the
+   * kerb lane is for the first exit and the others for the rest.
+   */
+  ringLanes?: 1 | 2;
 }
 
 /** One green phase of a junction with custom lights. */
@@ -103,6 +115,63 @@ export interface LinkDef {
   greenB?: number[][] | null;
   /** count the vehicles passing the middle of this road (a traffic counter; off by default) */
   counter?: boolean;
+  /**
+   * Turn bays where each direction reaches the junction ahead: extra lanes on the left (next to
+   * the centre / median) and on the right (kerb side) over the last metres before the stop line.
+   * Lane numbering at the junction then counts them: left bays first, then the through lanes,
+   * then right bays (so `turnsF` / `greenF` have lanesF + left + right entries).
+   */
+  baysF?: Bays | null;
+  baysB?: Bays | null;
+  /** width of the median between the two directions (m; 0 = none) and how it is built */
+  median?: number;
+  medianKind?: MedianKind;
+  /**
+   * A slip lane: this (one-way) road lets right-turning traffic bypass the junction with this node
+   * id. The approach it leaves then has no right turn at that junction, and a kerbed island is
+   * drawn between the slip lane and the junction corner.
+   */
+  slip?: string | null;
+  /** width of each lane (m); missing = 3.2 */
+  laneWidth?: number;
+  /**
+   * A lane that ends: in that direction the leftmost ("left") or kerb-side ("right") lane merges
+   * into the lane beside it over the last `len` metres before the road's end (it narrows away).
+   */
+  dropF?: LaneDrop | null;
+  dropB?: LaneDrop | null;
+  /**
+   * Elevation order: 0 = ground (missing), 1, 2, … = bridges / flyovers above it, -1, … = underpasses
+   * and tunnels. Roads only meet where they share a junction, so a bridge simply passes over what
+   * is below; the level decides what is drawn on top, and the height in 3D (the roads leading onto
+   * a bridge ramp up to it).
+   */
+  level?: number;
+}
+
+export const LEVELS = { min: -3, max: 5 };
+
+export type MedianKind = "painted" | "raised";
+
+export interface LaneDrop { side: "left" | "right"; len: number }
+
+export interface Bays {
+  /** extra lanes (0–2) and how far back from the stop line they reach (m) */
+  left: number; leftLen: number;
+  right: number; rightLen: number;
+}
+
+/** most through lanes per direction, most bay lanes per side, and most lanes at a stop line */
+export const MAX_LANES = 6, MAX_BAYS = 2, MAX_LANES_AT_LINE = 8;
+export const MAX_MEDIAN = 30;
+export const LANE_WIDTH = { min: 2.5, max: 4.2, default: 3.2 };
+
+/** lanes of one direction where it reaches the junction ahead (through lanes plus turn bays) */
+export function lanesAtLine(link: LinkDef, dir: 1 | -1): number {
+  const n = dir === 1 ? link.lanesF : link.lanesB;
+  if (n <= 0) return 0;
+  const b = dir === 1 ? link.baysF : link.baysB;
+  return n + (b ? b.left + b.right : 0);
 }
 
 export type ApproachSign = "yield" | "stop";
@@ -190,6 +259,23 @@ export interface FlowDef {
   trucks?: number;
 }
 
+/** A zone: a named group of entry points and buildings where trips start and end (TransModeler's centroids). */
+export interface ZoneDef {
+  id: string;
+  name: string;
+  color: string;
+  members: { kind: "entry" | "building"; id: string }[];
+}
+
+/** Demand between two zones: vehicles per hour from one to the other. */
+export interface ZoneFlowDef {
+  id: string;
+  from: string; to: string;
+  rate: number;
+  /** share of trucks (0..1) */
+  trucks?: number;
+}
+
 /** Where the plan sits on Earth: the latitude/longitude of world point (0, 0). */
 export interface GeoRef { lat: number; lon: number }
 
@@ -206,6 +292,9 @@ export interface Network {
   buildings?: BuildingDef[];
   /** transit flows between entry points */
   flows?: FlowDef[];
+  /** zones and the demand between them */
+  zones?: ZoneDef[];
+  zoneFlows?: ZoneFlowDef[];
   /** set for plans imported from a map, so later imports line up; `areas` are the frames imported so far */
   geo?: (GeoRef & { areas?: GeoArea[] }) | null;
 }

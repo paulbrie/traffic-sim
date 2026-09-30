@@ -6,15 +6,20 @@
  *
  * Framework-free, so both sides can be tested in Node.
  */
-import type { CNode, Compiled } from "../compile";
+import { pieceLevel, pieceZ, type CNode, type Compiled } from "../compile";
 import { isJunction } from "../refs";
 import { signalAspect, type Aspect } from "../signals";
-import type { JunctionEvent, Kind, Stats, Vehicle } from "./base";
+import type { JunctionEvent, Kind, Stats, TestTrip, Vehicle } from "./base";
+
+/** a pedestrian crossing right now: its arm, people waiting, people crossing and how far across (0..1) */
+export interface PedView { arm: number; waiting: number; crossing: number; progress: number }
+/** pedestrians at a junction so far: crossed, average wait (s), waiting now */
+export interface PedStats { crossed: number; avgWait: number; waiting: number }
 import type { CounterStats, FlowStats, Sim } from "./index";
 
 const KINDS: Kind[] = ["car", "truck", "bus"];
-/** floats per vehicle in `Snapshot.geo`: front x, y, rear x, y, speed, desired speed, length, width, blinker */
-const G = 9;
+/** floats per vehicle in `Snapshot.geo`: front x, y, rear x, y, speed, desired speed, length, width, blinker, level drawn at, elevation */
+const G = 11;
 
 export type JunctionStats = ReturnType<Sim["junctionStats"]>;
 export type LightCycles = ReturnType<Sim["lightCycles"]>;
@@ -64,6 +69,16 @@ export interface Snapshot {
   counters?: [string, CounterStats][];
   /** transit flows by flow id */
   flows?: [string, FlowStats][];
+  /** zone-to-zone demand by its id */
+  zoneFlows?: [string, FlowStats][];
+  /** test vehicles sent by hand */
+  tests?: TestTrip[];
+  /** pedestrian crossings, by node index (only junctions with pedestrians) */
+  peds: [number, PedView[]][];
+  /** pedestrians who crossed and their average wait, by node index (sent every half second or so) */
+  pedStats?: [number, PedStats][];
+  /** per lane piece id: vehicles on it, and their mean speed (m/s), as pairs */
+  lanes?: Float32Array;
   /** reserved paths as x, y pairs (when watched) */
   reservations?: Float32Array[];
   vehicle?: VehicleDetail | null;
@@ -88,6 +103,7 @@ export class SnapshotWriter {
       const p = sim.pose(v), o = i * G;
       geo[o] = p.fx; geo[o + 1] = p.fy; geo[o + 2] = p.rx; geo[o + 3] = p.ry;
       geo[o + 4] = v.v; geo[o + 5] = v.v0; geo[o + 6] = v.len; geo[o + 7] = v.width; geo[o + 8] = sim.blinker(v);
+      geo[o + 9] = pieceLevel(v.piece); geo[o + 10] = pieceZ(sim.net, v.piece, v.s);
     });
     const N = sim.net.nodes.length;
     const phase = new Int16Array(N), stage = new Int8Array(N), stageT = new Float32Array(N), occupied = new Int16Array(N), cycleAt = new Float32Array(N);
@@ -109,6 +125,7 @@ export class SnapshotWriter {
     const snap: Snapshot = {
       tick: sim.tick, stats: { ...sim.stats, history: sim.stats.history.slice() },
       ids, kinds, tints, states, stateNames, geo, phase, stage, stageT, occupied, cycleAt, waiting, events, resetEvents,
+      peds: sim.net.nodes.filter(n => n.peds > 0).map(n => [n.idx, sim.pedView(n.idx)] as [number, PedView[]]),
     };
     const transfer = [ids.buffer, kinds.buffer, tints.buffer, states.buffer, geo.buffer, phase.buffer, stage.buffer, stageT.buffer, occupied.buffer, cycleAt.buffer, waiting.buffer] as ArrayBuffer[];
 
@@ -118,6 +135,17 @@ export class SnapshotWriter {
       snap.turnCounts = [...sim.turnCounts];
       snap.entered = [...sim.entered];
       snap.flows = sim.net.flows.map(f => [f.def.id, sim.flowStats(f.idx)!]);
+      snap.zoneFlows = sim.net.zoneFlows.map(f => [f.def.id, sim.zoneFlowStats(f.idx)!]);
+      snap.tests = sim.tests.map(t => ({ ...t }));
+      snap.pedStats = sim.net.nodes.filter(n => n.peds > 0).map(n => [n.idx, sim.pedStats(n.idx)!] as [number, PedStats]);
+      // lanes are the first pieces, numbered the same on both sides
+      let nl = 0;
+      for (const p of sim.net.pieces) if (p.kind === "lane") nl = Math.max(nl, p.id + 1);
+      const lanes = new Float32Array(nl * 2);
+      for (const v of live) if (v.piece.kind === "lane" && v.piece.id < nl) { lanes[v.piece.id * 2]++; lanes[v.piece.id * 2 + 1] += v.v; }
+      for (let i = 0; i < nl; i++) if (lanes[i * 2]) lanes[i * 2 + 1] /= lanes[i * 2];
+      snap.lanes = lanes;
+      transfer.push(lanes.buffer as ArrayBuffer);
       snap.counters = sim.net.edges.flatMap(e => { const c = sim.counterStats(e.idx); return c ? [[e.key, c] as [string, CounterStats]] : []; });
     }
     snap.cycles = watch.nodes.filter(k => k >= 0 && k < N).map(k => [k, sim.lightCycles(k)]);
@@ -157,6 +185,8 @@ export interface VehicleView {
   id: number; kind: Kind; tint: number; state: string; dead: false;
   v: number; v0: number; len: number; width: number;
   fx: number; fy: number; rx: number; ry: number; blink: -1 | 0 | 1;
+  /** the elevation level it is drawn at, and its height in levels (see LinkDef.level) */
+  level: number; z: number;
 }
 
 /** Answers the page's questions about the running simulation from the latest snapshot. */
@@ -169,6 +199,11 @@ export class SimMirror {
   entered = new Map<string, number>();
   counters = new Map<string, CounterStats>();
   flows = new Map<string, FlowStats>();
+  zoneFlows = new Map<string, FlowStats>();
+  tests: TestTrip[] = [];
+  private pedsNow = new Map<number, PedView[]>();
+  private pedTotals = new Map<number, PedStats>();
+  private laneLive: Float32Array = new Float32Array(0);
   vehicle: VehicleDetail | null = null;
   private snap: Snapshot | null = null;
   private junctions: (JunctionStats | null)[] = [];
@@ -188,6 +223,7 @@ export class SimMirror {
       v.id = s.ids[i]; v.kind = KINDS[s.kinds[i]]; v.tint = s.tints[i]; v.state = s.stateNames[s.states[i]]; v.dead = false;
       v.fx = s.geo[o]; v.fy = s.geo[o + 1]; v.rx = s.geo[o + 2]; v.ry = s.geo[o + 3];
       v.v = s.geo[o + 4]; v.v0 = s.geo[o + 5]; v.len = s.geo[o + 6]; v.width = s.geo[o + 7]; v.blink = s.geo[o + 8] as -1 | 0 | 1;
+      v.level = s.geo[o + 9]; v.z = s.geo[o + 10];
     }
     this.net.stops.forEach((st, i) => { st.waiting = s.waiting[i] ?? st.waiting; });
     if (s.resetEvents) this.events = [];
@@ -197,6 +233,11 @@ export class SimMirror {
     if (s.entered) this.entered = new Map(s.entered);
     if (s.counters) this.counters = new Map(s.counters);
     if (s.flows) this.flows = new Map(s.flows);
+    if (s.zoneFlows) this.zoneFlows = new Map(s.zoneFlows);
+    if (s.tests) this.tests = s.tests;
+    this.pedsNow = new Map(s.peds);
+    if (s.pedStats) this.pedTotals = new Map(s.pedStats);
+    if (s.lanes) this.laneLive = s.lanes;
     if (s.cycles) this.cycles = new Map(s.cycles);
     this.reserved = s.reservations ?? [];
     if (s.vehicle !== undefined) this.vehicle = s.vehicle;
@@ -239,6 +280,18 @@ export class SimMirror {
 
   /** readings of the traffic counter on one direction of a road (null = none, or no reading yet) */
   counter(linkId: string, dir: 1 | -1): CounterStats | null { return this.counters.get(`${linkId}:${dir}`) ?? null; }
+
+  /** vehicles on a lane piece right now, and their mean speed (m/s) */
+  /** pedestrians at node `idx` right now (one entry per crossing) */
+  pedView(idx: number): PedView[] { return this.pedsNow.get(idx) ?? []; }
+  /** pedestrians who crossed at node `idx` so far */
+  pedStats(idx: number): PedStats | null { return this.pedTotals.get(idx) ?? null; }
+  laneStats(pieceId: number): { vehicles: number; speed: number } {
+    return { vehicles: this.laneLive[pieceId * 2] ?? 0, speed: this.laneLive[pieceId * 2 + 1] ?? 0 };
+  }
+
+  /** results of zone-to-zone demand (by its id) */
+  zoneFlow(id: string): FlowStats | null { return this.zoneFlows.get(id) ?? null; }
 
   /** results of a transit flow (by its id; null before the first reading) */
   flow(id: string): FlowStats | null { return this.flows.get(id) ?? null; }

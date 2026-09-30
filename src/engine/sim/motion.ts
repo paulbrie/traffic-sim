@@ -30,14 +30,28 @@ export abstract class SimMotion extends SimJunctions {
           if (gg < gap) { gap = gg; lv = u.v; leader = u; }
         }
         const vp = v.piece;
-        const mergingHere = vp.kind === "conn" && vp.role === "entry" && p.kind === "ring" && vp.node === p.node && p.node.ring![vp.arm].between === p;
+        const mergingHere = vp.kind === "conn" && vp.role === "entry" && p.kind === "ring" && vp.node === p.node && ringOf(p.node, vp.ringLane)[vp.arm].between === p;
         if (p.kind === "ring" && p.part === "between" && !first && !mergingHere) {
-          const ring = p.node.ring!;
+          const ring = ringOf(p.node, p.lane);
           for (const u of this.ringClaims.get(p.node) ?? []) {
-            if (u === v || u.piece.kind !== "conn" || u.piece.role !== "entry" || u.piece.node !== p.node || ring[u.piece.arm].between !== p) continue;
+            if (u === v || u.piece.kind !== "conn" || u.piece.role !== "entry" || u.piece.node !== p.node || (u.piece.ringLane ?? 0) !== p.lane || ring[u.piece.arm].between !== p) continue;
             if (u.s < u.piece.len - 4) continue;
             const gg = acc + (u.s - u.piece.len) - u.len;
             if (gg < gap) { gap = gg; lv = u.v; leader = u; }
+          }
+        }
+        // two-lane roundabout, both lanes leaving into the same exit lane (or crossings of a free
+        // junction joining the same exit lane): zip in by who is nearer the end
+        if (p.kind === "conn" && (p.role === "exit" ? !!p.node.ring2 : p.role === "turn" && p.node.def.control === "free")) {
+          const mine = acc + p.len; // acc starts at -v.s: this is the distance left to the end
+          for (const o of p.node.conns.values()) {
+            if (o === p || o.role !== p.role || o.outEdge !== p.outEdge || o.outLane !== p.outLane || (p.role === "exit" && o.ringLane === p.ringLane) || o.entryKey === p.entryKey) continue;
+            for (const u of this.index.get(o.id) ?? []) {
+              const theirs = o.len - u.s;
+              if (theirs > mine || (theirs === mine && u.id > v.id)) continue;
+              const gg = mine - theirs - u.len;
+              if (gg < gap) { gap = gg; lv = u.v; leader = u; }
+            }
           }
         }
       }
@@ -85,6 +99,36 @@ export abstract class SimMotion extends SimJunctions {
       if (a2 < a) a = a2;
     }
     if (brake < a) a = brake;
+    // a lane that ends: wait at its end (behind the taper) until there is room in the lane beside
+    if (v.piece.kind === "lane" && v.lane === v.piece.edge.dropLane) {
+      const e = v.piece.edge, d = e.dropStop * (v.piece.len / Math.max(1e-6, e.length)) - v.s - 0.5;
+      a = Math.min(a, this.idm(v, Math.max(0.2, d), 0, curLim));
+    }
+    // on a road with turn bays (or a lane that ends), a vehicle that must move across toward its bay…
+    if (v.piece.kind === "lane" && !v.granted && v.lcT <= 0 && (v.piece.edge.left || v.piece.edge.right || v.piece.edge.dropLane >= 0)) {
+      const e = v.piece.edge, lp = v.piece;
+      const need = this.neededLanes(v), step = v.lane < need.lo ? 1 : v.lane > need.hi ? -1 : 0, c = v.lane + step;
+      if (step !== 0 && need.urgent < 80 && c >= 0 && c < e.n) {
+        const sc = v.s * (e.lanes[c].len / lp.len);
+        // …eases off to slip in behind a vehicle alongside in that lane
+        if (v.v > 2 && sc >= e.open[c]) {
+          const L = this.laneLeader(v, c), F = this.laneFollower(v, c);
+          if (L.u && L.gap < 1.5 + 0.25 * v.v) a = Math.min(a, Math.max(-3, this.idm(v, Math.max(0.3, L.gap), L.v, curLim)));
+          else if (F.u && F.gap < 1.5) a = Math.min(a, -1.5);
+        }
+      }
+      // …and when its bay is queued back toward the mouth, rolls up to wait behind the last vehicle in it
+      const next = v.route[v.ri + 1], m = next ? this.moveOf(e, next) : undefined;
+      if (m && (v.lane < m.lo || v.lane > m.hi)) {
+        const k = m.hi < e.left ? m.hi : m.lo >= e.left + e.thru ? m.lo : -1;
+        if (k >= 0) {
+          let rear = Infinity;
+          for (const u of this.index.get(e.lanes[k].id) ?? []) rear = Math.min(rear, u.s - u.len);
+          const gapTo = rear * (lp.len / e.lanes[k].len) - v.s - 1;
+          if (isFinite(rear) && gapTo > -1) a = Math.min(a, Math.max(-4, this.idm(v, Math.max(0.2, gapTo), 0, curLim)));
+        }
+      }
+    }
     v.acc = Math.max(-v.bmax, a);
     v.gap = gap; v.leader = leader;
 
@@ -213,11 +257,25 @@ export abstract class SimMotion extends SimJunctions {
     if (m) {
       const many = (e.to.moves.get(e.idx)?.length || 0) > 1 || e.to.controlled;
       if (many && (m.lo > lo || m.hi < hi)) { lo = Math.max(lo, m.lo); hi = Math.min(hi, m.hi); urgent = toEnd; }
-      if (!e.to.controlled && m.out.n - 1 < hi) { hi = m.out.n - 1; urgent = toEnd; }
+      const cap = e.left + m.out.thru - 1;
+      if (!e.to.controlled && cap < hi) { hi = cap; urgent = toEnd; }
+    }
+    // a lane that ends: leave it (the nearer its end, the more urgently)
+    if (e.dropLane >= 0) {
+      if (e.dropLane === e.left) lo = Math.max(lo, e.dropLane + 1); else hi = Math.min(hi, e.dropLane - 1);
+      if (v.lane === e.dropLane) urgent = Math.min(urgent, Math.max(0, e.dropStop * (p.len / Math.max(1e-6, e.length)) - v.s));
+    }
+    // turn bays: until the bay the turn needs has opened, line up in the through lane beside it
+    if ((e.left || e.right) && (hi < e.left || lo >= e.left + e.thru)) {
+      const k = hi < e.left ? hi : lo, sk = v.s * (e.lanes[k].len / p.len);
+      if (sk < e.open[k]) {
+        const beside = hi < e.left ? e.left : e.left + e.thru - 1;
+        lo = hi = beside; urgent = Math.min(urgent, e.open[k] - sk);
+      }
     }
     if (v.kind === "bus") {
       const stopHere = v.dest.kind === "stop" && v.dest.stop.edge === e;
-      if ((stopHere || e.bus) && hi >= e.n - 1) { lo = e.n - 1; urgent = Math.min(urgent, toEnd); }
+      if ((stopHere || e.bus) && hi >= e.kerb) { lo = e.kerb; urgent = Math.min(urgent, toEnd); }
     }
     if (lo > hi) lo = hi;
     return { lo, hi, urgent };
@@ -245,9 +303,12 @@ export abstract class SimMotion extends SimJunctions {
     const need = this.neededLanes(v), a = v.lane;
     const dir = a < need.lo ? 1 : a > need.hi ? -1 : 0;
     const aCur = this.idm(v, v.gap, v.leader ? v.leader.v : 0, v.v0);
-    let best = -1, bestGain = 0;
+    let best = -1, bestGain = 0, bestMandatory = false;
+    const bayRoad = e.left > 0 || e.right > 0 || e.dropLane >= 0;
     for (const c of [a - 1, a + 1]) {
       if (c < 0 || c >= e.n) continue;
+      // a turn bay only from where it opens
+      if (e.open[c] > 0 && v.s * (e.lanes[c].len / p.len) < e.open[c]) continue;
       const mandatory = dir !== 0 && Math.sign(c - a) === dir;
       if (dir !== 0 && !mandatory) continue;
       if (!mandatory && (c < need.lo || c > need.hi)) continue;
@@ -259,20 +320,24 @@ export abstract class SimMotion extends SimJunctions {
       if (F.u) {
         if (F.gap < (courtesy ? 0.8 : 1.5)) continue;
         const fNew = this.idm(F.u, F.gap, v.v, F.u.v0);
-        if (fNew < (courtesy ? -6 : -3)) continue;
+        if (fNew < (courtesy ? -6 : mandatory && bayRoad ? -4.5 : -3)) continue;
         fLoss = Math.max(0, F.u.acc - fNew);
       }
       const aNew = this.idm(v, L.gap, L.v, v.v0);
       let gain = aNew - aCur - v.politeness * fLoss + (c > a ? 0.08 : -0.08);
       if (v.kind === "truck") gain += c > a ? 0.25 : -0.25;
       if (mandatory) gain += need.urgent < 60 ? 5 : 1;
-      if (gain > (mandatory ? 0 : 0.3) && gain > bestGain) { best = c; bestGain = gain; }
+      // getting to a turn bay (across to it, then into its queue): any safe gap will do
+      if (mandatory && bayRoad) gain = Math.max(gain, 0.01);
+      if (gain > (mandatory ? 0 : 0.3) && gain > bestGain) { best = c; bestGain = gain; bestMandatory = mandatory; }
     }
     if (best < 0) return;
     const np = e.lanes[best];
     v.s = Math.min(np.len - 0.01, v.s * (np.len / p.len));
     v.lcOff = (v.lcT > 0 ? v.lcOff * v.lcT : 0) + (p.offset - np.offset);
-    v.lcT = 1; v.lcCool = 3.5; v.laneChanges++; this.stats.laneChanges++;
+    // on a road with turn bays, the steps across to a bay come quickly one after the other
+    v.lcT = 1; v.lcCool = bestMandatory && (e.left || e.right || e.dropLane >= 0) ? 1.5 : 3.5; v.laneChanges++; this.stats.laneChanges++;
+    this.evRoad(e, v, "lane", `→ lane ${best + 1} ${(p.len - v.s).toFixed(0)} m before the end${bestMandatory ? ` (must: needs lanes ${this.neededLanes(v).lo + 1}-${this.neededLanes(v).hi + 1})` : " (faster)"} at ${(v.v * 3.6).toFixed(0)} km/h`);
     if (e.to.controlled && p.len - v.s < 150) this.ev(e.to, v, "lane", `lane ${v.lane + 1} → ${best + 1} ${(p.len - v.s).toFixed(0)} m before the junction${this.neededLanes(v).lo !== 0 || this.neededLanes(v).hi !== e.n - 1 ? ` (needs lanes ${this.neededLanes(v).lo + 1}-${this.neededLanes(v).hi + 1})` : ""}`);
     v.piece = np; v.lane = best;
     if (v.reqFor && v.reqFor.inEdge === e) { v.reqFor = null; }
@@ -301,6 +366,7 @@ export abstract class SimMotion extends SimJunctions {
         if (!cross) { this.kill(v, "removed"); return; }
         if (e.to.controlled && (!v.granted || v.conn !== cross[0])) { v.s = p.len - 0.01; v.v = 0; return; }
         this.recordEma(v, e);
+        this.evRoad(e, v, "leave-road", `into ${e.to.def.id}: ${cross[0].kind === "conn" ? this.mv(cross[0]) : "the junction"} at ${(v.v * 3.6).toFixed(0)} km/h, ${((this.tick - v.enterT) * DT).toFixed(0)} s on this road`);
         v.s -= p.len; v.trail = [p, ...v.trail].slice(0, 2);
         v.piece = cross[0]; v.queue = cross.slice(1);
         if (cross[0].kind === "conn") {
@@ -323,6 +389,10 @@ export abstract class SimMotion extends SimJunctions {
         v.ri++; v.lane = p.outLane; v.conn = null; v.granted = false; v.enterT = this.tick;
         v.stoppedAt = null; v.fixedAt = null;
         this.replan(v);
+        if (this.roadLogged(np.edge)) {
+          const nt = this.nextTurn(v);
+          this.evRoad(np.edge, v, "enter-road", `from ${p.node.def.id} at ${(v.v * 3.6).toFixed(0)} km/h${nt ? `; next: ${this.mv(nt.move)} at ${nt.node.def.id} (lanes ${nt.move.lo + 1}-${nt.move.hi + 1})` : "; ends on this road"}`);
+        }
       } else { this.kill(v, "removed"); return; }
     }
     // destinations along an edge
@@ -379,3 +449,6 @@ export abstract class SimMotion extends SimJunctions {
     return k % n;
   }
 }
+
+/** a roundabout's circulating lane: the inner one of a two-lane ring for lane 1 */
+const ringOf = (n: CNode, lane?: number) => (lane && n.ring2) || n.ring!;

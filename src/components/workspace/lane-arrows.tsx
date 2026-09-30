@@ -3,7 +3,7 @@
 import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
-import { LANE_TURNS, type ApproachSign, type LaneTurn, type LaneTurns, type LinkDef } from "@/engine/types";
+import { LANE_TURNS, lanesAtLine, type ApproachSign, type LaneTurn, type LaneTurns, type LinkDef } from "@/engine/types";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { Compiled, Movement } from "@/engine/compile";
 import { Input } from "@/components/ui/input";
@@ -48,7 +48,7 @@ export function LaneArrowsEditor({ compiled, link, dir, heading, onChange, onSig
   compiled: Compiled; link: LinkDef; dir: 1 | -1; heading: string; onChange: (turns: LaneTurns | null) => void; onSign: (sign: ApproachSign | null) => void;
   onSplit: (split: Record<string, number> | null) => void; roadName: (linkId: string) => string;
 }) {
-  const n = dir === 1 ? link.lanesF : link.lanesB;
+  const n = lanesAtLine(link, dir);
   const custom = dir === 1 ? link.turnsF : link.turnsB;
   const e = compiled.edges.find(x => x.link.id === link.id && x.dir === dir);
   if (!n || !e || !e.to.controlled || e.to.degree < 3) return null;
@@ -174,13 +174,13 @@ export function SignGlyph({ kind, className }: { kind: ApproachSign; className?:
   );
 }
 
-function SignPicker({ control, sign, onSign }: { control: string; sign: ApproachSign | null; onSign: (s: ApproachSign | null) => void }) {
+export function SignPicker({ control, sign, onSign, label = "Sign" }: { control: string; sign: ApproachSign | null; onSign: (s: ApproachSign | null) => void; label?: string }) {
   if (control !== "priority") {
     return <p className="text-[11px] text-muted-foreground">Signs apply at priority junctions; this one uses {control === "lights" ? "traffic lights" : control === "stop" ? "an all-way stop" : control === "free" ? "free flow (no rules)" : "a roundabout"}.</p>;
   }
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="text-xs text-muted-foreground">Sign</span>
+      <span className="min-w-0 truncate text-xs text-muted-foreground">{label}</span>
       <ToggleGroup type="single" value={sign ?? "none"} onValueChange={v => v && onSign(v === "none" ? null : (v as ApproachSign))} aria-label="Sign at the junction">
         <ToggleGroupItem value="none" className="h-7 px-2 text-xs" aria-label="No sign (right of way)">None</ToggleGroupItem>
         <ToggleGroupItem value="yield" className="h-7 gap-1 px-2 text-xs" aria-label="Give way (cédez le passage)"><SignGlyph kind="yield" className="size-4" /> Give way</ToggleGroupItem>

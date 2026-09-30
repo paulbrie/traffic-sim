@@ -28,6 +28,8 @@ async function main() {
   let t0 = Date.now();
   const { network, stats } = convertOsm(data, { ...opts, origin: bboxCenter(bbox) });
   console.log("convert", Date.now() - t0, "ms", JSON.stringify(stats), "json", (JSON.stringify(network).length / 1024).toFixed(0), "kB");
+  const L = network.links;
+  console.log(`roads with turn bays ${L.filter(l => l.baysF || l.baysB).length}, lane arrows ${L.filter(l => l.turnsF || l.turnsB).length}, medians ${L.filter(l => l.median).length}, slip lanes ${L.filter(l => l.slip).length}, 5+ lanes ${L.filter(l => l.lanesF > 4 || l.lanesB > 4).length}`);
   const clean = sanitizeNetwork(network);
   if (clean.links.length !== network.links.length || clean.nodes.length !== network.nodes.length || (clean.buildings?.length ?? 0) !== (network.buildings?.length ?? 0)) console.log("WARNING: validation dropped parts of the import");
   t0 = Date.now();

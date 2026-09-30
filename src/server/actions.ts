@@ -339,13 +339,14 @@ export async function savePlan(id: string, input: { network: unknown; keepBuildi
   const me = await assertUser();
   assertId(id);
   try { await assertPlan(me, id, "write"); } catch { return { ok: false, reason: "forbidden" }; }
-  const network = sanitizeNetwork(input.network);
-  if (input.keepBuildings) {
+  let raw = input.network;
+  if (input.keepBuildings && raw && typeof raw === "object") {
     const [cur] = await db.select({ buildings: sql`${schema.plans.network}->'buildings'`.mapWith(schema.plans.network) }).from(schema.plans).where(eq(schema.plans.id, id));
-    // stored plans were sanitised when they were saved
     const kept = cur?.buildings as unknown as Network["buildings"] | null;
-    if (Array.isArray(kept) && kept.length) network.buildings = kept;
+    // put them back before sanitising, so zone members that are buildings survive
+    if (Array.isArray(kept) && kept.length) raw = { ...raw, buildings: kept };
   }
+  const network = sanitizeNetwork(raw);
   const settings = sanitizeSettings(input.settings);
   const underlay = sanitizeUnderlay(input.underlay);
   const now = new Date();

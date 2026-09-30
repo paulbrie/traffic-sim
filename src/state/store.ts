@@ -13,12 +13,25 @@ import type { Vec } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 
 export type Tool = "select" | "road" | "segment" | "stop" | "pan" | "image";
+/** which kind of object the map selects and highlights (TransModeler-style layers) */
+export type LayerId = "all" | "roads" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones";
+export const LAYERS: { id: LayerId; label: string }[] = [
+  { id: "all", label: "All objects" }, { id: "roads", label: "Roads" }, { id: "lanes", label: "Lanes" }, { id: "junctions", label: "Junctions" },
+  { id: "connectors", label: "Lane connectors" }, { id: "entries", label: "Entry / exit points" }, { id: "signals", label: "Signals" },
+  { id: "stops", label: "Bus stops" }, { id: "counters", label: "Traffic counters" }, { id: "buildings", label: "Buildings" },
+  { id: "vehicles", label: "Vehicles" }, { id: "zones", label: "Zones" },
+];
 export type Selection =
   | { kind: "node"; id: string }
   | { kind: "link"; id: string }
   | { kind: "stop"; id: string }
   | { kind: "line"; id: string }
   | { kind: "building"; id: string }
+  /** id "linkId|dir|lane" */
+  | { kind: "lane"; id: string }
+  /** id "nodeId|inEdgeKey|inLane|outEdgeKey|outLane" */
+  | { kind: "connector"; id: string }
+  | { kind: "zone"; id: string }
   | { kind: "vehicle"; id: string };
 export type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
 
@@ -29,18 +42,26 @@ export interface UiState {
   view: "2d" | "3d";
   snap: { grid: boolean; step: number; angle: boolean };
   draft: { lanesF: number; lanesB: number; busF: boolean; busB: boolean; speed: number; curved: boolean };
-  display: { bySpeed: boolean; reservations: boolean; labels: boolean; buildings: boolean; junctions: boolean };
+  /** more roads selected with the one in `selection` (Shift+click), e.g. to merge them */
+  multi: string[];
+  /** route tracer: from an entry point to an exit, starting in an entry lane (null = the kerb-side one) */
+  trace: { from: string | null; to: string | null; lane: number | null };
+  display: { bySpeed: boolean; reservations: boolean; labels: boolean; buildings: boolean; junctions: boolean; satellite: boolean; connectors: boolean; maskRoads: boolean; /** satellite imagery brightness (0.3–1) */ satBrightness: number };
   sim: { running: boolean; speed: number; epoch: number };
   save: { status: SaveStatus; revision: number; savedAt: string | null; message: string };
   cursor: { x: number; y: number; inside: boolean };
   panel: "inspect" | "traffic" | "lines" | "image";
   /** junction event log: record every junction, or just these node ids */
-  eventLog: { all: boolean; nodes: string[] };
+  /** event logs: every junction, chosen junctions, chosen roads (by link id) */
+  eventLog: { all: boolean; nodes: string[]; links: string[] };
   /** segment tool: edit just the clicked segment or the whole road through its joints */
   segScope: "segment" | "road";
   /** scale calibration: pick two points on the reference image, then type their real distance */
   calib: { active: boolean; a: Vec | null; b: Vec | null };
   history: { canUndo: boolean; canRedo: boolean };
+  layer: LayerId;
+  /** the data table under the map */
+  dataview: boolean;
   /** opened with view-only access: edits are blocked and nothing is saved */
   readOnly: boolean;
 }
@@ -53,15 +74,19 @@ export const ui = new DeepSubject<UiState>(
     view: "2d",
     snap: { grid: true, step: 5, angle: true },
     draft: { lanesF: 1, lanesB: 1, busF: false, busB: false, speed: 50, curved: false },
-    display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false },
+    trace: { from: null, to: null, lane: null },
+    multi: [],
+    display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85 },
     sim: { running: false, speed: 3, epoch: 0 },
     save: { status: "saved", revision: 1, savedAt: null, message: "" },
     cursor: { x: 0, y: 0, inside: false },
     panel: "inspect",
     segScope: "segment",
-    eventLog: { all: false, nodes: [] },
+    eventLog: { all: false, nodes: [], links: [] },
     calib: { active: false, a: null, b: null },
     history: { canUndo: false, canRedo: false },
+    layer: "all",
+    dataview: false,
     readOnly: false,
   },
   { name: "ui" },
@@ -178,7 +203,20 @@ export function select(sel: Selection | null) {
   const u = ui.getValue();
   const cur = u.selection;
   if (cur === sel || (cur && sel && cur.kind === sel.kind && cur.id === sel.id)) return;
-  u.selection = sel ? { ...sel } : null;
+  batch(() => { u.selection = sel ? { ...sel } : null; if (u.multi.length) u.multi = []; });
+}
+
+/** Shift+click on a road: add it to the selected roads, or take it out again */
+export function toggleRoad(id: string) {
+  const u = ui.getValue(), cur = u.selection;
+  if (cur?.kind !== "link") { select({ kind: "link", id }); return; }
+  batch(() => {
+    if (cur.id === id) {
+      // taking out the first one: the next becomes the main selection
+      if (u.multi.length) { u.selection = { kind: "link", id: u.multi[0] }; u.multi = u.multi.slice(1); }
+      else u.selection = null;
+    } else u.multi = u.multi.includes(id) ? u.multi.filter(x => x !== id) : [...u.multi, id];
+  });
 }
 
 function pruneSelection(net: Network) {

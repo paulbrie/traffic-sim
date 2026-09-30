@@ -310,88 +310,88 @@
  "osm-cluj": [
   {
    "tick": 500,
-   "hash": "eac3a80a",
-   "vehicles": 185,
-   "trips": 11,
+   "hash": "d73b2992",
+   "vehicles": 181,
+   "trips": 14,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "5806d204",
-   "vehicles": 246,
+   "hash": "57507c4a",
+   "vehicles": 249,
    "trips": 35,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "a97857ad",
-   "vehicles": 313,
-   "trips": 66,
+   "hash": "d2b59455",
+   "vehicles": 299,
+   "trips": 67,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "7aa6d015",
-   "vehicles": 313,
-   "trips": 111,
+   "hash": "dc364e65",
+   "vehicles": 316,
+   "trips": 110,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "d513524e",
-   "vehicles": 318,
-   "trips": 145,
+   "hash": "779393aa",
+   "vehicles": 316,
+   "trips": 153,
    "towed": 1
   },
   {
    "tick": 3000,
-   "hash": "99e76ba5",
+   "hash": "f9700f70",
    "vehicles": 315,
-   "trips": 180,
-   "towed": 2
+   "trips": 193,
+   "towed": 3
   }
  ],
  "osm-milton-keynes": [
   {
    "tick": 500,
-   "hash": "e8c706f4",
+   "hash": "690c7c79",
    "vehicles": 209,
    "trips": 2,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "77ffe815",
-   "vehicles": 287,
-   "trips": 26,
+   "hash": "dd5fbc4b",
+   "vehicles": 299,
+   "trips": 21,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "548717eb",
-   "vehicles": 333,
-   "trips": 62,
+   "hash": "d21b82da",
+   "vehicles": 353,
+   "trips": 50,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "f7914134",
-   "vehicles": 358,
-   "trips": 111,
+   "hash": "f638c70b",
+   "vehicles": 388,
+   "trips": 94,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "cccc4ac9",
-   "vehicles": 390,
-   "trips": 159,
+   "hash": "6d73792d",
+   "vehicles": 411,
+   "trips": 140,
    "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "8229f694",
-   "vehicles": 412,
-   "trips": 201,
+   "hash": "6988fd73",
+   "vehicles": 423,
+   "trips": 193,
    "towed": 0
   }
  ]

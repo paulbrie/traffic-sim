@@ -31,8 +31,15 @@ export interface Vehicle {
   dead: boolean;
   /** spawned by an entry point with a set flow (not counted against the car/truck totals) */
   metered: boolean;
+  /** a test vehicle sent by hand (index into `tests`), or -1 */
+  test?: number;
+  /** the last state written to a road's event log */
+  logState?: string;
   /** index of the transit flow the vehicle belongs to (-1 = none) */
   flow: number;
+  /** index of the zone-to-zone demand it belongs to (-1 = none), and the trip end it was given */
+  zflow: number;
+  goal: Dest | null;
   /** turning-proportion decisions already drawn, by edge index */
   splits?: Map<number, Edge>;
 }
@@ -42,10 +49,14 @@ export interface Req { v: Vehicle; conn: Conn; d: number; at: number }
 export interface JunctionEvent {
   /** simulation time, seconds */
   t: number;
+  /** the junction it happened at ("" for events on a road) */
   node: string;
+  /** events on a road: the road (and `data.lane`) */
+  link?: string;
   veh: number | null;
   vkind: string | null;
-  kind: "approach" | "request" | "grant" | "deny" | "revoke" | "enter" | "leave" | "lane" | "wrong-lane" | "turn-changed" | "reroute" | "signal" | "towed";
+  kind: "approach" | "request" | "grant" | "deny" | "revoke" | "enter" | "leave" | "lane" | "wrong-lane" | "turn-changed" | "reroute" | "signal" | "towed"
+    | "appear" | "enter-road" | "state" | "leave-road" | "exit" | "arrive";
   detail: string;
   /** machine-readable bits for analysis (lanes are 1-based) */
   data?: { turn?: string; from?: string; to?: string; lane?: number; outLane?: number; lo?: number; hi?: number; sig?: string | null; code?: string };
@@ -59,6 +70,21 @@ export interface NodeState {
   demand: number[];
   /** per arm: vehicles through during the current green, when it started, and past cycles */
   cyc: { count: number; greenAt: number; hist: { n: number; green: number; at: number }[] }[];
+}
+
+/**
+ * Pedestrians at one zebra crossing (one per road at a junction; a crossing on a plain road has
+ * one): people waiting at the kerb and since when, the group on the crossing and when it will be
+ * across, and totals.
+ */
+export interface PedCross {
+  waiting: number; since: number;
+  crossing: number; from: number; until: number;
+  /** when the road's traffic last turned red (lights); pedestrians may step out only early in that red */
+  redSince: number;
+  /** pedestrians have claimed the crossing: no new vehicle may drive over it */
+  claim: boolean;
+  crossed: number; waitSum: number;
 }
 
 /** what happened to a transit flow's vehicles */
@@ -81,6 +107,9 @@ export interface Counter {
   /** ticks of recent passes (last 5 minutes) */
   recent: number[];
 }
+
+/** one test vehicle: where it was sent, and how it went (time in s once it has left the plan) */
+export interface TestTrip { id: number; from: string; to: string; lane: number; sentAt: number; done: null | "arrived" | "elsewhere" | "stuck"; time: number }
 
 export interface Stats {
   count: number; cars: number; trucks: number; buses: number;
@@ -121,8 +150,14 @@ export abstract class SimBase {
   vehicles: Vehicle[] = [];
   stats: Stats = { count: 0, cars: 0, trucks: 0, buses: 0, avgSpeed: 0, stopped: 0, tripsPerMin: 0, trips: 0, towed: 0, boarded: 0, laneChanges: 0, history: [] };
   protected rng: () => number;
+  /** test vehicles sent by hand, in order */
+  tests: TestTrip[] = [];
   protected nextId = 1;
   protected ns: NodeState[];
+  /** pedestrian crossings by node index and arm (empty where there are no pedestrians) */
+  protected peds: PedCross[][];
+  /** pedestrians use their own random numbers, so adding them leaves the rest of a run as it was */
+  protected pedRng: () => number;
   protected index = new PieceIndex();
   protected groupIndex = new Map<number, Vehicle[]>();
   protected ema: Float64Array;
@@ -150,6 +185,8 @@ export abstract class SimBase {
   protected ringClaims = new Map<CNode, Vehicle[]>();
   /** transit flows, parallel to net.flows */
   protected flowState: FlowState[] = [];
+  /** zone-to-zone demand, parallel to net.zoneFlows */
+  protected zoneFlowState: FlowState[] = [];
   /** traffic counters by edge index (roads with `counter` on; null elsewhere) */
   protected counters: (Counter | null)[] = [];
   /** vehicles that crossed each node so far, and the ticks of recent crossings (last minute) */
@@ -176,6 +213,8 @@ export abstract class SimBase {
     this.ns = this.net.nodes.map(node => {
       return { node, occ: [], req: new Map(), phase: 0, stage: 0, t: 0, demand: node.phases.map(() => -1e9), cyc: node.arms.map(() => ({ count: 0, greenAt: 0, hist: [] })) };
     });
+    this.peds = this.net.nodes.map(n => (n.peds > 0 ? (n.degree === 2 ? [n.arms[0]] : n.arms).map(() => ({ waiting: 0, since: 0, crossing: 0, from: 0, until: 0, redSince: -1, claim: false, crossed: 0, waitSum: 0 })) : []));
+    this.pedRng = mulberry32(((settings.seed || 7) * 7919) ^ 0x9ed5);
     this.gateways = this.net.nodes.filter(n => n.gateway);
     this.edgeWeights = this.net.edges.map(e => Math.max(0, e.length - 6));
     this.totalLen = this.edgeWeights.reduce((a, b) => a + b, 0);
@@ -189,6 +228,7 @@ export abstract class SimBase {
     this.net.places.forEach((p, i) => (this.placeCum[i] = acc += p.w));
     this.maxSpeed = Math.max(13.9, ...this.net.edges.map(e => e.speed));
     this.flowState = this.net.flows.map(() => ({ sent: 0, arrived: 0, diverted: 0, towed: 0, travelSum: 0, backlog: 0, noRoute: 0 }));
+    this.zoneFlowState = this.net.zoneFlows.map(() => ({ sent: 0, arrived: 0, diverted: 0, towed: 0, travelSum: 0, backlog: 0, noRoute: 0 }));
     this.counters = this.net.edges.map(e => (e.link.counter ? { total: 0, cars: 0, trucks: 0, buses: 0, speedSum: 0, recent: [] } : null));
   }
   get time() { return this.tick * DT; }
@@ -238,6 +278,16 @@ export abstract class SimBase {
     for (const v of this.vehicles) if (!v.dead) this.addToIndex(v);
   }
   protected logging(n: CNode) { return this.logAll ? n.controlled : this.logNodes.has(n.idx); }
+  /** roads whose vehicle events are recorded (by link id) */
+  logLinks = new Set<string>();
+  protected roadLogged(e: Edge) { return this.logLinks.size > 0 && this.logLinks.has(e.link.id); }
+  /** an event on a road (recorded only for roads being logged) */
+  protected evRoad(e: Edge, v: Vehicle, kind: JunctionEvent["kind"], detail: string) {
+    if (!this.roadLogged(e)) return;
+    const dir = e.dir === 1 ? "→" : "←";
+    this.events.push({ t: Math.round(this.tick) / 10, node: "", link: e.link.id, veh: v.id, vkind: v.kind, kind, detail: `${dir} lane ${v.lane + 1} · ${detail}`, data: { lane: v.lane + 1, from: e.link.id } });
+    if (this.events.length > 60000) this.events.splice(0, 10000);
+  }
   protected ev(n: CNode, v: Vehicle | null, kind: JunctionEvent["kind"], detail = "", data?: JunctionEvent["data"]) {
     if (!this.logging(n)) return;
     this.events.push({ t: Math.round(this.tick) / 10, node: n.def.id, veh: v ? v.id : null, vkind: v ? v.kind : null, kind, detail, ...(data ? { data } : {}) });
@@ -265,13 +315,26 @@ export abstract class SimBase {
   }
   protected kill(v: Vehicle, why: "exit" | "arrived" | "towed" | "removed") {
     if (v.dead) return;
+    if (v.piece.kind === "lane") this.evRoad(v.piece.edge, v, why === "exit" ? "exit" : why === "arrived" ? "arrive" : why === "towed" ? "towed" : "leave-road",
+      why === "exit" ? "leaves the plan" : why === "arrived" ? "reached its destination" : why === "towed" ? `removed after ${v.wait.toFixed(0)} s stuck (${v.state})` : "removed (no way on)");
     v.dead = true;
+    if (v.test !== undefined && v.test >= 0) {
+      const t = this.tests[v.test];
+      t.done = why === "exit" && v.dest.kind === "gateway" && v.dest.node.def.id === t.to ? "arrived" : why === "towed" ? "stuck" : "elsewhere";
+      t.time = (this.tick - v.bornT) * DT;
+    }
     if (why === "exit" || why === "arrived") { this.stats.trips++; this.tripLog.push(this.tick); }
     else if (why === "towed") this.stats.towed++;
     if (v.flow >= 0) {
       const f = this.flowState[v.flow], to = this.net.flows[v.flow].to;
       if (why === "exit" && v.dest.kind === "gateway" && v.dest.node === to) { f.arrived++; f.travelSum += (this.tick - v.bornT) * DT; }
       else if (why === "exit") f.diverted++;
+      else if (why === "towed") f.towed++;
+    }
+    if (v.zflow >= 0) {
+      const f = this.zoneFlowState[v.zflow];
+      if ((why === "exit" || why === "arrived") && v.dest === v.goal) { f.arrived++; f.travelSum += (this.tick - v.bornT) * DT; }
+      else if (why === "exit" || why === "arrived") f.diverted++;
       else if (why === "towed") f.towed++;
     }
   }

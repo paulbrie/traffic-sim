@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, Eye, Bus, Hand, Minus, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, Eye, Bus, Hand, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -17,15 +17,17 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Kbd } from "@/components/ui/kbd";
 import { savePlan } from "@/server/actions";
-import type { Network, PlanSettings } from "@/engine/types";
+import { MAX_LANES, type Network, type PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
-import { commit, loadPlan, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type Tool } from "@/state/store";
+import { commit, LAYERS, loadPlan, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { sendView, viewport } from "@/state/commands";
 import { OsmImportDialog, describeStats, type OsmImportMode } from "@/components/osm/osm-import-dialog";
 import { bboxCenter, unproject, type BBox } from "@/lib/osm/area";
 import { suggestSettings } from "@/lib/osm/convert";
 import { startUnderlayImage } from "@/state/underlay-image";
+import { SAT_ATTRIBUTION } from "@/render/satellite";
+import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
 import * as ops from "@/state/ops";
 import { cn } from "@/lib/utils";
 import { PlanCanvas } from "./plan-canvas";
@@ -38,6 +40,7 @@ import { Stepper } from "./fields";
 import { Compass } from "./compass";
 import { HistoryButton } from "./history-dialog";
 import { OptimizeButton } from "./optimize-dialog";
+import { Dataview } from "./dataview";
 
 const View3D = dynamic(() => import("./view-3d").then(m => m.View3D), { ssr: false, loading: () => <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading 3D…</div> });
 
@@ -55,6 +58,7 @@ export function Workspace({ plan, user }: { plan: WorkspacePlan; user: MenuUser 
   useShortcuts();
   const [view] = useDeepSubject(ui, "view");
   const [panel, setPanel] = useDeepSubject(ui, "panel");
+  const [dataview] = useDeepSubject(ui, "dataview");
 
   return (
     <TooltipProvider>
@@ -62,12 +66,17 @@ export function Workspace({ plan, user }: { plan: WorkspacePlan; user: MenuUser 
         <TopBar plan={plan} user={user} />
         <div className="flex min-h-0 flex-1">
           <ToolRail />
-          <div className="relative min-w-0 flex-1 bg-[var(--map-ground)]">
-            {view === "2d" ? <PlanCanvas /> : <View3D />}
-            <DraftBar />
-            <LiveBadge />
-            <Compass />
-            <StatusBar />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="relative min-h-0 flex-1 bg-[var(--map-ground)]">
+              {view === "2d" ? <PlanCanvas /> : <View3D />}
+              <DraftBar />
+              <LiveBadge />
+              <Compass />
+              <SatelliteCredit />
+              <SpeedLegend />
+              <StatusBar />
+            </div>
+            {dataview && <Dataview />}
           </div>
           <aside className="flex w-80 shrink-0 flex-col border-l bg-background" aria-label="Plan details">
             <Tabs value={panel} onValueChange={v => setPanel(v as typeof panel)} className="min-h-0 flex-1 gap-0">
@@ -109,6 +118,8 @@ function TopBar({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
         : <SaveIndicator planId={plan.id} />}
       <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} />
       <OptimizeButton planId={plan.id} planName={plan.name} />
+      <Separator orientation="vertical" className="!h-5" />
+      <LayerPicker />
       <div className="ml-auto flex items-center gap-2">
         <ToggleGroup type="single" value={view} onValueChange={v => v && setView(v as "2d" | "3d")} aria-label="View">
           <ToggleGroupItem value="2d" aria-label="Plan view"><MapIcon /> Plan</ToggleGroupItem>
@@ -153,6 +164,23 @@ function SaveIndicator({ planId }: { planId: string }) {
         </>
       )}
       {save.status === "error" && <Button size="sm" variant="outline" className="h-7" onClick={() => doSave(planId)}>Retry</Button>}
+    </div>
+  );
+}
+
+/** which kind of object the map selects and highlights, and the data table of that layer */
+function LayerPicker() {
+  const [layer, setLayer] = useDeepSubject(ui, "layer");
+  const [dataview, setDataview] = useDeepSubject(ui, "dataview");
+  return (
+    <div className="flex items-center gap-1.5">
+      <Select value={layer} onValueChange={v => setLayer(v as LayerId)}>
+        <SelectTrigger size="sm" className="h-8 w-44" aria-label="Layer: what the map selects"><Layers className="size-3.5 text-muted-foreground" /><SelectValue /></SelectTrigger>
+        <SelectContent>{LAYERS.map(l => <SelectItem key={l.id} value={l.id}>{l.label}</SelectItem>)}</SelectContent>
+      </Select>
+      <Tip label={dataview ? "Hide the data table" : "Data table of this layer"}>
+        <Button size="icon-sm" variant={dataview ? "secondary" : "ghost"} aria-pressed={dataview} aria-label="Data table" onClick={() => setDataview(!dataview)}><Table2 /></Button>
+      </Tip>
     </div>
   );
 }
@@ -253,6 +281,7 @@ function DraftBar() {
   const [view] = useDeepSubject(ui, "view");
   const [draft, setDraft] = useDeepSubject(ui, "draft");
   const [snap, setSnap] = useDeepSubject(ui, "snap");
+  const [display, setDisplay] = useDeepSubject(ui, "display");
   if (view !== "2d" || (tool !== "road" && tool !== "select")) return null;
   return (
     <div className="absolute top-3 left-1/2 z-10 flex w-max max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 overflow-x-auto rounded-lg border bg-background/95 px-3 py-1.5 text-sm whitespace-nowrap shadow-sm backdrop-blur">
@@ -263,8 +292,8 @@ function DraftBar() {
             <ToggleGroupItem value="straight" className="h-7 px-2 text-xs" aria-label="Straight segments"><Minus /> Straight</ToggleGroupItem>
             <ToggleGroupItem value="curved" className="h-7 px-2 text-xs" aria-label="Smooth curves"><Spline /> Curved</ToggleGroupItem>
           </ToggleGroup>
-          <span className="flex items-center gap-1.5 text-xs">Forward <Stepper label="forward lanes" value={draft.lanesF} min={draft.lanesB === 0 ? 1 : 0} max={4} onChange={v => setDraft({ ...draft, lanesF: v })} /></span>
-          <span className="flex items-center gap-1.5 text-xs">Back <Stepper label="backward lanes" value={draft.lanesB} min={draft.lanesF === 0 ? 1 : 0} max={4} onChange={v => setDraft({ ...draft, lanesB: v })} /></span>
+          <span className="flex items-center gap-1.5 text-xs">Forward <Stepper label="forward lanes" value={draft.lanesF} min={draft.lanesB === 0 ? 1 : 0} max={MAX_LANES} onChange={v => setDraft({ ...draft, lanesF: v })} /></span>
+          <span className="flex items-center gap-1.5 text-xs">Back <Stepper label="backward lanes" value={draft.lanesB} min={draft.lanesF === 0 ? 1 : 0} max={MAX_LANES} onChange={v => setDraft({ ...draft, lanesB: v })} /></span>
           <Select value={String(draft.speed)} onValueChange={v => setDraft({ ...draft, speed: Number(v) })}>
             <SelectTrigger size="sm" className="h-7 w-28" aria-label="Speed limit for new roads"><SelectValue /></SelectTrigger>
             <SelectContent>{[30, 40, 50, 60, 70, 80, 90].map(s => <SelectItem key={s} value={String(s)}>{s} km/h</SelectItem>)}</SelectContent>
@@ -275,6 +304,11 @@ function DraftBar() {
       <label className="flex items-center gap-1.5 text-xs">
         <Switch checked={snap.grid} onCheckedChange={v => setSnap({ ...snap, grid: v })} aria-label="Snap to grid" /> Grid
       </label>
+      <Tip label="Off: roads as outlines only, to see the map under them" keys="O">
+        <label className="flex items-center gap-1.5 text-xs">
+          <Switch checked={!display.maskRoads} onCheckedChange={v => setDisplay({ ...display, maskRoads: !v })} aria-label="Show road surfaces" /> Roads
+        </label>
+      </Tip>
       <Select value={String(snap.step)} onValueChange={v => setSnap({ ...snap, step: Number(v) })}>
         <SelectTrigger size="sm" className="h-7 w-20" aria-label="Grid step"><SelectValue /></SelectTrigger>
         <SelectContent>{[0.5, 1, 2, 5, 10, 20].map(s => <SelectItem key={s} value={String(s)}>{s} m</SelectItem>)}</SelectContent>
@@ -302,6 +336,29 @@ function LiveBadge() {
       {!running && <div className="col-span-4 text-muted-foreground">Paused</div>}
     </div>
   );
+}
+
+/** what the vehicle colours mean when they show speed */
+function SpeedLegend() {
+  const [display] = useDeepSubject(ui, "display");
+  const [view] = useDeepSubject(ui, "view");
+  if (!display.bySpeed) return null;
+  return (
+    <div className={cn("pointer-events-none absolute left-16 z-10 flex items-center gap-2.5 rounded-md bg-background/90 px-2 py-1 text-[11px] shadow-sm", view === "3d" ? "bottom-3" : "bottom-9")}>
+      <span className="text-muted-foreground">Speed</span>
+      {([["var(--sig-stop)", "stopped"], ["var(--sig-slow)", "slow"], ["var(--sig-go)", "free flow"]] as const).map(([c, l]) => (
+        <span key={l} className="flex items-center gap-1"><span className="size-2.5 rounded-sm" style={{ background: c }} />{l}</span>
+      ))}
+    </div>
+  );
+}
+
+/** Esri's attribution, while its imagery is on screen */
+function SatelliteCredit() {
+  const [display] = useDeepSubject(ui, "display");
+  const [net] = useSubject(network$);
+  if (!display.satellite || !net.geo) return null;
+  return <div className="pointer-events-none absolute bottom-3 left-16 z-10 rounded bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground">{SAT_ATTRIBUTION}</div>;
 }
 
 function StatusBar() {
@@ -416,6 +473,9 @@ function useShortcuts() {
       else if (k === "i" && u.view === "2d" && !u.readOnly) { setTool("image"); u.panel = "image"; }
       else if (k === "c" && u.tool === "road") u.draft.curved = !u.draft.curved;
       else if (k === "h") setTool("pan");
+      else if (k === "o" && u.view === "2d") u.display.maskRoads = !u.display.maskRoads;
+      else if (k === "m" && !u.readOnly) mergeSelectedRoads();
+      else if (k === "s" && !u.readOnly && u.multi.length) smoothSelectedJoin();
       else if (k === "p") u.sim.running = !u.sim.running;
       else if (k === "f") sendView("fit");
       else if (k === "+" || k === "=") sendView("zoomIn");

@@ -5,11 +5,25 @@ import { Minus, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
+/** an object's ID, click to copy (to refer to it precisely, e.g. when reporting a problem) */
+export function IdChip({ id, className }: { id: string; className?: string }) {
+  return (
+    <button
+      type="button" title="Copy the ID"
+      className={cn("rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] font-normal tracking-normal normal-case text-muted-foreground hover:bg-accent hover:text-foreground", className)}
+      onClick={e => { e.stopPropagation(); navigator.clipboard?.writeText(id).then(() => toast.success(`Copied ${id}`), () => {}); }}
+    >{id}</button>
+  );
+}
+
 /** Numeric input that commits on Enter / blur, with optional unit suffix. */
-export function NumberField({ label, value, onCommit, unit, step = 1, min, max, digits = 2, id, className }: {
+export function NumberField({ label, value, onCommit, unit, step = 1, min, max, digits = 2, id, className, hideLabel }: {
   label: string; value: number; onCommit: (v: number) => void; unit?: string; step?: number; min?: number; max?: number; digits?: number; id: string; className?: string;
+  /** the label is for screen readers only (the field sits in a row that says what it is) */
+  hideLabel?: boolean;
 }) {
   const fmt = (v: number) => (Number.isFinite(v) ? String(Number(v.toFixed(digits))) : "");
   // while editing we keep the raw text; otherwise we show the live value
@@ -24,7 +38,7 @@ export function NumberField({ label, value, onCommit, unit, step = 1, min, max, 
   };
   return (
     <div className={cn("grid gap-1.5", className)}>
-      <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
+      <Label htmlFor={id} className={cn("text-xs text-muted-foreground", hideLabel && "sr-only")}>{label}</Label>
       <div className="relative">
         <Input
           id={id} inputMode="decimal" value={text} step={step}

@@ -1,7 +1,7 @@
 /** Pure network edit operations. Each returns a new Network (never mutates). */
 import { newId, makeNode } from "@/engine/sample";
-import { MAX_PHASES, type BuildingDef, type FlowDef, type LineDef, type LinkDef, type Network, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec } from "@/engine/types";
-import type { Compiled } from "@/engine/compile";
+import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec } from "@/engine/types";
+import { linkExtent, type Compiled } from "@/engine/compile";
 import { greenWaveOffsets, withCustomPhases } from "@/engine/signals";
 
 export const nodeById = (net: Network, id: string) => net.nodes.find(n => n.id === id);
@@ -57,7 +57,7 @@ export function deleteLink(net: Network, id: string): Network {
 
 /** Swap the drawing direction of a link (keeps traffic as it is on the ground). */
 export function reverseLink(net: Network, id: string): Network {
-  return updateLinkWith(net, id, l => ({ ...l, from: l.to, to: l.from, c1: l.c2, c2: l.c1, lanesF: l.lanesB, lanesB: l.lanesF, busF: l.busB, busB: l.busF, turnsF: l.turnsB ?? null, turnsB: l.turnsF ?? null, signF: l.signB ?? null, signB: l.signF ?? null, splitF: l.splitB ?? null, splitB: l.splitF ?? null, greenF: l.greenB ?? null, greenB: l.greenF ?? null }), true);
+  return updateLinkWith(net, id, l => ({ ...l, from: l.to, to: l.from, c1: l.c2, c2: l.c1, lanesF: l.lanesB, lanesB: l.lanesF, busF: l.busB, busB: l.busF, turnsF: l.turnsB ?? null, turnsB: l.turnsF ?? null, signF: l.signB ?? null, signB: l.signF ?? null, splitF: l.splitB ?? null, splitB: l.splitF ?? null, greenF: l.greenB ?? null, greenB: l.greenF ?? null, baysF: l.baysB ?? null, baysB: l.baysF ?? null, dropF: l.dropB ?? null, dropB: l.dropF ?? null }), true);
 }
 
 function updateLinkWith(net: Network, id: string, f: (l: LinkDef) => LinkDef, flipStops = false): Network {
@@ -79,13 +79,13 @@ export function splitLink(net: Network, id: string, t: number, at: Vec): [Networ
     const lerp = (p: Vec, q: Vec, u: number) => ({ x: p.x + (q.x - p.x) * u, y: p.y + (q.y - p.y) * u });
     const p01 = lerp(A, l.c1, t), p12 = lerp(l.c1, l.c2, t), p23 = lerp(l.c2, B, t);
     const p012 = lerp(p01, p12, t), p123 = lerp(p12, p23, t);
-    first = { ...l, id: newId("l"), to: node.id, c1: p01, c2: p012, turnsF: null, signF: null, splitF: null, greenF: null };
-    second = { ...l, id: newId("l"), from: node.id, c1: p123, c2: p23, turnsB: null, signB: null, splitB: null, greenB: null };
+    first = { ...l, id: newId("l"), to: node.id, c1: p01, c2: p012, turnsF: null, signF: null, splitF: null, greenF: null, baysF: null, dropF: null };
+    second = { ...l, id: newId("l"), from: node.id, c1: p123, c2: p23, turnsB: null, signB: null, splitB: null, greenB: null, baysB: null, dropB: null };
     const mid = lerp(p012, p123, t);
     node.x = round(mid.x); node.y = round(mid.y);
   } else {
-    first = { ...l, id: newId("l"), to: node.id, turnsF: null, signF: null, splitF: null, greenF: null };
-    second = { ...l, id: newId("l"), from: node.id, turnsB: null, signB: null, splitB: null, greenB: null };
+    first = { ...l, id: newId("l"), to: node.id, turnsF: null, signF: null, splitF: null, greenF: null, baysF: null, dropF: null };
+    second = { ...l, id: newId("l"), from: node.id, turnsB: null, signB: null, splitB: null, greenB: null, baysB: null, dropB: null };
   }
   const stops = net.stops.map(s => {
     if (s.link !== id) return s;
@@ -205,9 +205,27 @@ export function smoothTangent(prev: Vec, at: Vec, next: Vec): Vec {
 
 /** Makes the road flow smoothly through a two-road joint. No-op for other nodes. */
 export function smoothAt(net: Network, nodeId: string, tension = 1 / 3): Network {
-  const N = nodeById(net, nodeId);
   const ls = linksAt(net, nodeId);
-  if (!N || ls.length !== 2) return net;
+  return ls.length === 2 ? smoothPair(net, nodeId, ls[0], ls[1], tension) : net;
+}
+
+/**
+ * Smooth the join between two roads that meet at a point (a bend point or a junction with other
+ * roads too): their curves leave the shared point along one line, so one flows into the other.
+ * Returns why not when the roads don't share an end.
+ */
+export function smoothBetween(net: Network, idA: string, idB: string): Network | { error: string } {
+  const a = linkById(net, idA), b = linkById(net, idB);
+  if (!a || !b || a.id === b.id) return { error: "Select the two roads to smooth between (Shift+click the second)." };
+  const shared = [a.from, a.to].find(n => n === b.from || n === b.to);
+  if (!shared) return { error: "The two roads don't meet: pick two roads that share an end." };
+  return smoothPair(net, shared, a, b);
+}
+
+function smoothPair(net: Network, nodeId: string, la: LinkDef, lb: LinkDef, tension = 1 / 3): Network {
+  const N = nodeById(net, nodeId);
+  const ls = [la, lb];
+  if (!N) return net;
   const P = nodeById(net, otherEnd(ls[0], nodeId)), Q = nodeById(net, otherEnd(ls[1], nodeId));
   if (!P || !Q) return net;
   const t = smoothTangent(P, N, Q); // points from P's side towards Q's side
@@ -297,7 +315,7 @@ function fixStops(net: Network, linkId: string, flip: boolean): Network {
 export function flipTraffic(net: Network, id: string): Network {
   const l = linkById(net, id);
   if (!l) return net;
-  const n2 = updateLink(net, id, { lanesF: l.lanesB, lanesB: l.lanesF, busF: l.busB, busB: l.busF, turnsF: null, turnsB: null, signF: l.signB ?? null, signB: l.signF ?? null, splitF: l.splitB ?? null, splitB: l.splitF ?? null, greenF: null, greenB: null });
+  const n2 = updateLink(net, id, { lanesF: l.lanesB, lanesB: l.lanesF, busF: l.busB, busB: l.busF, turnsF: null, turnsB: null, signF: l.signB ?? null, signB: l.signF ?? null, splitF: l.splitB ?? null, splitB: l.splitF ?? null, greenF: null, greenB: null, baysF: l.baysB ?? null, baysB: l.baysF ?? null, dropF: l.dropB ?? null, dropB: l.dropF ?? null });
   return fixStops(n2, id, true);
 }
 
@@ -306,11 +324,36 @@ export function setLanes(net: Network, id: string, along: number, against: numbe
   const l = linkById(net, id);
   if (!l || along + against === 0) return net;
   const lanesF = aligned ? along : against, lanesB = aligned ? against : along;
+  const next = { ...l, lanesF, lanesB };
   const n2 = updateLink(net, id, {
     lanesF, lanesB, busF: l.busF && lanesF > 0, busB: l.busB && lanesB > 0, turnsF: lanesF === l.lanesF ? l.turnsF : null, turnsB: lanesB === l.lanesB ? l.turnsB : null,
-    greenF: resizeGreens(l.greenF, lanesF), greenB: resizeGreens(l.greenB, lanesB),
+    greenF: resizeGreens(l.greenF, lanesAtLine(next, 1)), greenB: resizeGreens(l.greenB, lanesAtLine(next, -1)),
+    ...(lanesF === 0 || lanesB === 0 ? { median: undefined, medianKind: undefined } : {}),
   });
   return fixStops(n2, id, false);
+}
+
+/**
+ * Set the turn bays of one direction (null = none). Lane numbering at the junction changes, so
+ * that direction's lane arrows go back to automatic and its per-lane greens are rebuilt from the
+ * nearest lane (a new left bay takes the phases of the old leftmost lane, and so on).
+ */
+export function setBays(net: Network, id: string, dir: 1 | -1, bays: Bays | null): Network {
+  return updateLinkWith(net, id, l => {
+    const cur = dir === 1 ? l.baysF : l.baysB;
+    const b = bays && bays.left + bays.right > 0 ? bays : null;
+    const old = (dir === 1 ? l.greenF : l.greenB) ?? null;
+    let greens: number[][] | null = null;
+    if (old?.length) {
+      const oL = cur?.left ?? 0, thru = dir === 1 ? l.lanesF : l.lanesB, nL = b?.left ?? 0, nR = b?.right ?? 0;
+      // map each new lane to the old one in the same place (through lanes keep theirs)
+      greens = Array.from({ length: nL + thru + nR }, (_, i) => {
+        const j = i < nL ? (oL > 0 ? Math.min(i, oL - 1) : 0) : i < nL + thru ? oL + (i - nL) : oL + thru - 1 + Math.min(i - nL - thru + 1, cur?.right ?? 0);
+        return [...(old[Math.min(old.length - 1, Math.max(0, j))] ?? [])];
+      });
+    }
+    return dir === 1 ? { ...l, baysF: b, turnsF: null, greenF: greens } : { ...l, baysB: b, turnsB: null, greenB: greens };
+  });
 }
 
 // ---------------------------------------------------------------- coordinated signal groups
@@ -545,8 +588,8 @@ export function mergeNetwork(net: Network, add: Network): [Network, MergeReport]
 export function approachesTo(net: Network, nodeId: string): { link: LinkDef; dir: 1 | -1; lanes: number }[] {
   const out: { link: LinkDef; dir: 1 | -1; lanes: number }[] = [];
   for (const l of net.links) {
-    if (l.to === nodeId && l.lanesF > 0) out.push({ link: l, dir: 1, lanes: l.lanesF });
-    if (l.from === nodeId && l.lanesB > 0) out.push({ link: l, dir: -1, lanes: l.lanesB });
+    if (l.to === nodeId && l.lanesF > 0) out.push({ link: l, dir: 1, lanes: lanesAtLine(l, 1) });
+    if (l.from === nodeId && l.lanesB > 0) out.push({ link: l, dir: -1, lanes: lanesAtLine(l, -1) });
   }
   return out;
 }
@@ -629,7 +672,7 @@ export function movePhase(net: Network, nodeId: string, p: number, d: -1 | 1): N
 /** Give (or take away) green for one lane of an arriving road in one phase. */
 export function setLaneGreen(net: Network, linkId: string, dir: 1 | -1, lane: number, phase: number, on: boolean): Network {
   return updateLinkWith(net, linkId, l => {
-    const lanes = dir === 1 ? l.lanesF : l.lanesB;
+    const lanes = lanesAtLine(l, dir);
     const cur = (dir === 1 ? l.greenF : l.greenB) ?? [];
     const g = Array.from({ length: lanes }, (_, i) => [...(cur[i] ?? [])]);
     if (lane < 0 || lane >= lanes) return l;
@@ -660,4 +703,224 @@ export function updateFlow(net: Network, id: string, patch: Partial<FlowDef>): N
 }
 export function deleteFlow(net: Network, id: string): Network {
   return { ...net, flows: (net.flows ?? []).filter(f => f.id !== id) };
+}
+
+// ---------------------------------------------------------------- zones and zone-to-zone demand
+const ZONE_COLORS = ["#2f6fb5", "#b5462f", "#3f8f4e", "#7a4fb0", "#d99800", "#1f8a8a", "#c2417a", "#6b7a1f"];
+
+export function addZone(net: Network, name?: string): [Network, ZoneDef] {
+  const zones = net.zones ?? [];
+  const zone: ZoneDef = { id: newId("z"), name: name?.trim() || `Zone ${zones.length + 1}`, color: ZONE_COLORS[zones.length % ZONE_COLORS.length], members: [] };
+  return [{ ...net, zones: [...zones, zone] }, zone];
+}
+export function updateZone(net: Network, id: string, patch: Partial<Omit<ZoneDef, "id">>): Network {
+  return { ...net, zones: (net.zones ?? []).map(z => (z.id === id ? { ...z, ...patch } : z)) };
+}
+/** delete a zone and the demand to and from it */
+export function deleteZone(net: Network, id: string): Network {
+  return { ...net, zones: (net.zones ?? []).filter(z => z.id !== id), zoneFlows: (net.zoneFlows ?? []).filter(f => f.from !== id && f.to !== id) };
+}
+/** put entry points or buildings in a zone (null = in no zone); each belongs to one zone at most */
+export function setZone(net: Network, members: { kind: "entry" | "building"; id: string }[], zoneId: string | null): Network {
+  const keys = new Set(members.map(m => `${m.kind}:${m.id}`));
+  return {
+    ...net,
+    zones: (net.zones ?? []).map(z => {
+      const rest = z.members.filter(m => !keys.has(`${m.kind}:${m.id}`));
+      return z.id === zoneId ? { ...z, members: [...rest, ...members] } : rest.length === z.members.length ? z : { ...z, members: rest };
+    }),
+  };
+}
+/** vehicles per hour from one zone to another (0 removes the pair) */
+export function setZoneFlow(net: Network, from: string, to: string, rate: number, patch: Partial<ZoneFlowDef> = {}): Network {
+  const flows = net.zoneFlows ?? [];
+  const cur = flows.find(f => f.from === from && f.to === to);
+  if (rate <= 0) return { ...net, zoneFlows: flows.filter(f => f !== cur) };
+  if (cur) return { ...net, zoneFlows: flows.map(f => (f === cur ? { ...f, rate, ...patch } : f)) };
+  return { ...net, zoneFlows: [...flows, { id: newId("d"), from, to, rate, ...patch }] };
+}
+
+// ---------------------------------------------------------------- slip lanes
+/** unit direction of travel along the road between nodes a and b, leaving a */
+function leaving(net: Network, a: string, b: string): Vec | null {
+  const l = net.links.find(x => (x.from === a && x.to === b) || (x.from === b && x.to === a));
+  if (!l) return null;
+  const A = nodeById(net, l.from)!, B = nodeById(net, l.to)!, fromA = l.from === a;
+  const p = linkPoint(l, A, B, fromA ? 0 : 1), q = linkPoint(l, A, B, fromA ? 0.05 : 0.95);
+  const d = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+  return { x: (q.x - p.x) / d, y: (q.y - p.y) / d };
+}
+
+/** parameter along a link at arc length d from its start */
+function tAt(l: LinkDef, A: Vec, B: Vec, d: number): number {
+  if (!l.c1 || !l.c2) return Math.max(0, Math.min(1, d / Math.max(1e-6, Math.hypot(B.x - A.x, B.y - A.y))));
+  let len = 0, prev = A;
+  for (let k = 1; k <= 128; k++) {
+    const q = linkPoint(l, A, B, k / 128), step = Math.hypot(q.x - prev.x, q.y - prev.y);
+    if (len + step >= d) return (k - 1 + (d - len) / Math.max(1e-6, step)) / 128;
+    len += step; prev = q;
+  }
+  return 1;
+}
+
+/**
+ * Add a slip lane at a junction: right-turning traffic from road `inLinkId` to road `outLinkId`
+ * leaves the approach some way before the junction, curves round the corner on a one-way road of
+ * its own and gives way where it joins the exit. Both roads get a new node there (with rounded
+ * kerbs); the junction loses that right turn from this approach. Returns the new network, or an
+ * explanation when the roads are too short.
+ */
+export function addSlipLane(net: Network, nodeId: string, inLinkId: string, outLinkId: string): [Network, string | null] {
+  const inL = linkById(net, inLinkId), outL = linkById(net, outLinkId), J = nodeById(net, nodeId);
+  if (!inL || !outL || !J || inL.id === outL.id) return [net, "Pick two different roads at this junction."];
+  const ends = (l: LinkDef) => [nodeById(net, l.from)!, nodeById(net, l.to)!] as const;
+  const [iA, iB] = ends(inL), [oA, oB] = ends(outL);
+  const lenIn = linkLength(inL, iA, iB), lenOut = linkLength(outL, oA, oB);
+  // far enough back for the gore where the slip leaves a wide road
+  const half = (l: LinkDef) => Math.max(...linkExtent(l).map(Math.abs));
+  const want = Math.min(70, Math.max(32, 24 + 2.2 * Math.max(half(inL), half(outL))));
+  const dIn = Math.min(want, lenIn * 0.6), dOut = Math.min(want, lenOut * 0.6);
+  if (dIn < 18 || dOut < 18) return [net, "The roads are too short here for a slip lane (it needs about 30 m of each)."];
+  const tIn = tAt(inL, iA, iB, inL.to === nodeId ? lenIn - dIn : dIn);
+  const [n1, D] = splitLink(net, inL.id, tIn, linkPoint(inL, iA, iB, tIn));
+  const tOut = tAt(outL, oA, oB, outL.from === nodeId ? dOut : lenOut - dOut);
+  const [n2, M] = splitLink(n1, outL.id, tOut, linkPoint(outL, oA, oB, tOut));
+  let n3: Network = { ...n2, nodes: n2.nodes.map(n => (n.id === D.id || n.id === M.id ? { ...n, gateway: false, control: "priority" as const, smooth: true } : n)) };
+  // leave and join at 50° to the roads, curving round the corner on their right
+  const tIn0 = leaving(n3, D.id, nodeId), tOut1 = leaving(n3, M.id, nodeId);
+  if (!tIn0 || !tOut1) return [net, "Could not find the roads after splitting them."];
+  const out = { x: -tOut1.x, y: -tOut1.y }; // travel direction on the exit at M
+  const a = (50 * Math.PI) / 180, k = 0.42 * Math.hypot(M.x - D.x, M.y - D.y);
+  const rIn = { x: -tIn0.y, y: tIn0.x }, rOut = { x: -out.y, y: out.x };
+  const c1 = { x: round(D.x + (tIn0.x * Math.cos(a) + rIn.x * Math.sin(a)) * k), y: round(D.y + (tIn0.y * Math.cos(a) + rIn.y * Math.sin(a)) * k) };
+  const c2 = { x: round(M.x - (out.x * Math.cos(a) - rOut.x * Math.sin(a)) * k), y: round(M.y - (out.y * Math.cos(a) - rOut.y * Math.sin(a)) * k) };
+  const slip: LinkDef = {
+    id: newId("l"), name: inL.name ? `${inL.name} slip` : "", from: D.id, to: M.id, c1, c2,
+    lanesF: 1, lanesB: 0, busF: false, busB: false, speed: Math.min(40, inL.speed), signF: "yield", slip: nodeId, ...(inL.level ? { level: inL.level } : {}),
+  };
+  n3 = { ...n3, links: [...n3.links, slip] };
+  // right bays on the approach are no use any more
+  const toJ = n3.links.find(l => (l.from === D.id && l.to === nodeId) || (l.to === D.id && l.from === nodeId));
+  if (toJ) {
+    const dir = toJ.to === nodeId ? 1 : -1, b = dir === 1 ? toJ.baysF : toJ.baysB;
+    if (b?.right) n3 = setBays(n3, toJ.id, dir, { ...b, right: 0 });
+  }
+  return [n3, null];
+}
+
+// ---------------------------------------------------------------- merging roads
+/** a link seen the other way round: from ↔ to, and every per-direction setting swapped */
+function reversedView(l: LinkDef): LinkDef {
+  return {
+    ...l, from: l.to, to: l.from, c1: l.c2, c2: l.c1, lanesF: l.lanesB, lanesB: l.lanesF, busF: l.busB, busB: l.busF,
+    turnsF: l.turnsB ?? null, turnsB: l.turnsF ?? null, signF: l.signB ?? null, signB: l.signF ?? null, splitF: l.splitB ?? null, splitB: l.splitF ?? null,
+    greenF: l.greenB ?? null, greenB: l.greenF ?? null, baysF: l.baysB ?? null, baysB: l.baysF ?? null, dropF: l.dropB ?? null, dropB: l.dropF ?? null,
+  };
+}
+
+/** one cubic Bézier through a polyline (chord-length least squares), and how far the polyline strays from it (m) */
+function fitOneCurve(pts: Vec[]): { c1: Vec | null; c2: Vec | null; err: number } {
+  const n = pts.length, A = pts[0], B = pts[n - 1];
+  const dist = (p: Vec, q: Vec) => Math.hypot(p.x - q.x, p.y - q.y);
+  const chord = dist(A, B);
+  // straight enough: a straight road
+  let wd = 0;
+  for (const p of pts) {
+    const dx = B.x - A.x, dy = B.y - A.y, L2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((p.x - A.x) * dx + (p.y - A.y) * dy) / L2));
+    wd = Math.max(wd, Math.hypot(p.x - A.x - dx * t, p.y - A.y - dy * t));
+  }
+  if (wd < 0.5) return { c1: null, c2: null, err: wd };
+  const unit = (p: Vec, q: Vec) => { const d = dist(p, q) || 1; return { x: (q.x - p.x) / d, y: (q.y - p.y) / d }; };
+  const t0 = unit(A, pts[1]), t1 = unit(pts[n - 2], B);
+  const u = [0];
+  for (let k = 1; k < n; k++) u.push(u[k - 1] + dist(pts[k], pts[k - 1]));
+  const L = u[n - 1] || 1;
+  let c00 = 0, c01 = 0, c11 = 0, x0 = 0, x1 = 0;
+  for (let k = 0; k < n; k++) {
+    const t = u[k] / L, s = 1 - t, b0 = s * s * s, b1 = 3 * s * s * t, b2 = 3 * s * t * t, b3 = t * t * t;
+    const a1 = { x: t0.x * b1, y: t0.y * b1 }, a2 = { x: -t1.x * b2, y: -t1.y * b2 };
+    const tx = pts[k].x - (A.x * (b0 + b1) + B.x * (b2 + b3)), ty = pts[k].y - (A.y * (b0 + b1) + B.y * (b2 + b3));
+    c00 += a1.x * a1.x + a1.y * a1.y; c01 += a1.x * a2.x + a1.y * a2.y; c11 += a2.x * a2.x + a2.y * a2.y;
+    x0 += a1.x * tx + a1.y * ty; x1 += a2.x * tx + a2.y * ty;
+  }
+  const det = c00 * c11 - c01 * c01;
+  let al1 = det > 1e-9 ? (x0 * c11 - x1 * c01) / det : chord / 3, al2 = det > 1e-9 ? (c00 * x1 - c01 * x0) / det : chord / 3;
+  if (!(al1 > chord * 0.02 && al1 < chord * 2 && al2 > chord * 0.02 && al2 < chord * 2)) al1 = al2 = chord / 3;
+  const c1 = { x: round(A.x + t0.x * al1), y: round(A.y + t0.y * al1) }, c2 = { x: round(B.x - t1.x * al2), y: round(B.y - t1.y * al2) };
+  const curve: Vec[] = [];
+  for (let k = 0; k <= 48; k++) {
+    const t = k / 48, s = 1 - t;
+    curve.push({ x: s * s * s * A.x + 3 * s * s * t * c1.x + 3 * s * t * t * c2.x + t * t * t * B.x, y: s * s * s * A.y + 3 * s * s * t * c1.y + 3 * s * t * t * c2.y + t * t * t * B.y });
+  }
+  let err = 0;
+  for (const p of pts) err = Math.max(err, Math.min(...curve.map(q => dist(p, q))));
+  return { c1, c2, err };
+}
+
+/**
+ * Merge roads that follow on from each other through plain road points (bend points) into one
+ * road: the points between them go, the shape is fitted with one curve, and the settings are the
+ * first road's, with the lane arrows, signs, bays and lights of each end kept from the road at that
+ * end. Bus stops move onto the merged road. Returns the new network and the merged road's id, or
+ * why the roads can't be merged; `err` is how far (m) the new curve strays from the old shape.
+ */
+export function mergeLinks(net: Network, ids: string[]): { net: Network; id: string; err: number } | { error: string } {
+  const set = new Set(ids), links = ids.map(id => linkById(net, id)).filter((l): l is LinkDef => !!l);
+  if (links.length < 2) return { error: "Select at least two roads (Shift+click) to merge." };
+  // how many selected roads meet at each node
+  const deg = new Map<string, number>();
+  for (const l of links) for (const n of [l.from, l.to]) deg.set(n, (deg.get(n) ?? 0) + 1);
+  const ends = [...deg].filter(([, d]) => d === 1).map(([n]) => n);
+  if (ends.length !== 2 || [...deg.values()].some(d => d > 2)) return { error: "The selected roads must follow on from each other in a single line." };
+  for (const [n, d] of deg) {
+    if (d !== 2) continue;
+    const node = nodeById(net, n);
+    if (linksAt(net, n).length !== 2 || node?.junction) return { error: "Another road joins in between (a junction there): only plain bend points can be merged away." };
+  }
+  // walk from one end, turning each road to face the way of travel along the chain
+  let at = ends[0];
+  const first = links.find(l => l.from === at || l.to === at)!;
+  if (first.to === at) at = ends[1];
+  const chain: { l: LinkDef; rev: boolean }[] = [];
+  const used = new Set<string>();
+  for (let guard = 0; guard < links.length; guard++) {
+    const l = links.find(x => !used.has(x.id) && (x.from === at || x.to === at));
+    if (!l) break;
+    used.add(l.id);
+    const rev = l.to === at;
+    chain.push({ l, rev });
+    at = rev ? l.from : l.to;
+  }
+  if (chain.length !== links.length) return { error: "The selected roads must follow on from each other in a single line." };
+  const views = chain.map(x => (x.rev ? reversedView(x.l) : x.l));
+  const bad = views.find(v => v.lanesF !== views[0].lanesF || v.lanesB !== views[0].lanesB);
+  if (bad) return { error: `The roads have different lanes (${views[0].lanesF}+${views[0].lanesB} and ${bad.lanesF}+${bad.lanesB} on ${bad.id}); make them the same first.` };
+  // the shape: points along every road in order, fitted with one curve
+  const pts: Vec[] = [], lens: number[] = [];
+  for (const v of views) {
+    const A = nodeById(net, v.from)!, B = nodeById(net, v.to)!, n = v.c1 ? 24 : 4;
+    lens.push(linkLength(v, A, B));
+    for (let k = pts.length ? 1 : 0; k <= n; k++) pts.push(linkPoint(v, A, B, k / n));
+  }
+  const fit = fitOneCurve(pts);
+  const head = views[0], tail = views[views.length - 1];
+  const merged: LinkDef = {
+    ...head, id: newId("l"), name: views.find(v => v.name)?.name ?? "", from: head.from, to: tail.to, c1: fit.c1, c2: fit.c2,
+    // each end keeps what was set where it meets its junction
+    turnsF: tail.turnsF ?? null, signF: tail.signF ?? null, splitF: tail.splitF ?? null, greenF: tail.greenF ?? null, baysF: tail.baysF ?? null,
+    turnsB: head.turnsB ?? null, signB: head.signB ?? null, splitB: head.splitB ?? null, greenB: head.greenB ?? null, baysB: head.baysB ?? null,
+    ...(views.some(v => v.counter) ? { counter: true } : {}),
+  };
+  // bus stops: to the same place along the merged road
+  const total = lens.reduce((a, b) => a + b, 0) || 1;
+  let offset = 0;
+  const where = new Map<string, { off: number; len: number; rev: boolean }>();
+  chain.forEach((x, i) => { where.set(x.l.id, { off: offset, len: lens[i], rev: x.rev }); offset += lens[i]; });
+  const stops = net.stops.map(s => {
+    const w = where.get(s.link);
+    if (!w) return s;
+    const pos = (w.off + (w.rev ? 1 - s.pos : s.pos) * w.len) / total;
+    return { ...s, link: merged.id, pos: round(pos * 1000) / 1000, dir: (w.rev ? -s.dir : s.dir) as 1 | -1 };
+  });
+  return { net: pruneRefs({ ...net, links: [...net.links.filter(l => !set.has(l.id)), merged], stops }), id: merged.id, err: fit.err };
 }

@@ -45,7 +45,9 @@ export class Poly {
     a = Math.max(0, Math.min(this.len, a)); b = Math.max(a, Math.min(this.len, b));
     const out: number[] = [];
     const pa = this.at(a); out.push(pa.x, pa.y);
-    for (let k = 0; k < this.cum.length; k++) if (this.cum[k] > a + 1e-6 && this.cum[k] < b - 1e-6) out.push(this.pts[2 * k], this.pts[2 * k + 1]);
+    // (no vertex within a centimetre of either end: a near-zero segment there would turn an offset of the
+    // line — a lane beside the centreline — around on a curve)
+    for (let k = 0; k < this.cum.length; k++) if (this.cum[k] > a + 0.01 && this.cum[k] < b - 0.01) out.push(this.pts[2 * k], this.pts[2 * k + 1]);
     const pb = this.at(b); out.push(pb.x, pb.y);
     if (out.length === 2) out.push(pb.x + 1e-3, pb.y);
     return new Poly(out);
@@ -66,6 +68,22 @@ export class Poly {
       // right-hand normal in screen coords (y down): rotate tangent clockwise → (-ty, tx)
       out[2 * k] = p[2 * k] - (ty / m) * d;
       out[2 * k + 1] = p[2 * k + 1] + (tx / m) * d;
+    }
+    return new Poly(out);
+  }
+  /**
+   * Offset to the right by a distance that changes along the line (`d(s)`), with extra vertices
+   * every `step` m between `from` and `to` so the change is smooth.
+   */
+  offsetBy(d: (s: number) => number, from = 0, to = this.len, step = 4): Poly {
+    const at = [...Array.from(this.cum)];
+    for (let s = from; s < to; s += step) at.push(s);
+    at.push(to);
+    const ss = [...new Set(at.filter(s => s >= 0 && s <= this.len).map(s => Math.round(s * 1000) / 1000))].sort((a, b) => a - b);
+    const out: number[] = [];
+    for (const s of ss) {
+      const p = this.at(s), t = this.tangent(Math.min(this.len - 1e-6, s + 1e-6)), off = d(s);
+      out.push(p.x - t.y * off, p.y + t.x * off);
     }
     return new Poly(out);
   }

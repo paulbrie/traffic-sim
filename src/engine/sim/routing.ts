@@ -103,10 +103,11 @@ export abstract class SimRouting extends SimBase {
     const b0 = exitLane(m, a, isBus);
     if (m.turn === "U" || (isBus && m.out.bus)) return b0;
     const out = m.out;
-    const usable = out.bus && !isBus ? out.n - 1 : out.n;
+    // only the exit's through lanes (its bays open further on)
+    const usable = out.bus && !isBus ? out.thru - 1 : out.thru;
     const k = m.hi - m.lo + 1, j = Math.min(k - 1, Math.max(0, a - m.lo));
     if (usable <= k) return b0;
-    const bLo = Math.floor((j * usable) / k), bHi = Math.max(bLo, Math.floor(((j + 1) * usable) / k) - 1);
+    const bLo = out.left + Math.floor((j * usable) / k), bHi = Math.max(bLo, out.left + Math.floor(((j + 1) * usable) / k) - 1);
     const want = this.laneTarget(v, outIdx);
     let target = b0;
     if (want) target = Math.min(Math.max(b0, want.lo), want.hi);
@@ -162,7 +163,7 @@ export abstract class SimRouting extends SimBase {
    */
   protected applySplit(v: Vehicle) {
     // buses follow their line, transit vehicles their own exit
-    if (v.kind === "bus" || v.flow >= 0) return;
+    if (v.kind === "bus" || v.flow >= 0 || v.zflow >= 0) return;
     // decide this junction and the next one, so there is a whole road to get into the right lane
     this.applySplitAt(v, v.ri);
     this.applySplitAt(v, v.ri + 1);

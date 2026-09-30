@@ -48,7 +48,11 @@ intended behaviour change), `npx tsx scripts/engine-bench.ts` (ms per simulation
 | Make junction here | On a road point (double-click a road to add one), turns it into a junction: traffic lights (with an all-red crossing phase), stop or priority |
 | `I` | Reference image: drag it to move, corners to scale, round handle to rotate (`Shift` for 15°) |
 | `H` / `Space`+drag | Pan · scroll or two-finger drag pans, `⌘`/`Ctrl`+scroll zooms |
+| right-click | On imported plans: **Open in Google Maps** at that point (new tab), with its coordinates (right-drag pans) |
 | `P` | Run / pause traffic · `F` fit · `+`/`-` zoom |
+| `O` | Roads as outlines only (the **Roads** switch next to Grid): see the satellite imagery or reference image under them |
+| `S` | With two roads selected (click one, `Shift`+click the other): smooth the join where they meet, so one flows into the other (also at a junction; both stay separate roads) |
+| `Shift`+click, `M` | Select several roads, then merge them into one (roads that follow on through plain bend points; with one road selected, `M` merges all its pieces) |
 | `⌘Z` / `⇧⌘Z` | Undo / redo · `Delete` removes the selection |
 
 Reference image: in the **Image** tab, drop a map screenshot, aerial photo or site drawing (PNG/JPEG/WebP, up to 25 MB).
@@ -59,7 +63,25 @@ the 3D ground, and is copied when you duplicate a plan.
 Precision: the inspector takes exact coordinates for junctions, length and bearing for straight roads,
 and exact curve handle positions. Grid snapping is adjustable from 0.5 m to 20 m.
 
-Roads: 0–4 lanes per direction (0 = one-way), optional bus-only kerb lane per direction, speed limit.
+Roads: 0–6 lanes per direction (0 = one-way), lane width (2.5–4.2 m), optional bus-only kerb lane per direction, speed limit.
+**Turn bays** (road inspector → Lanes): up to two extra lanes on the left and/or right for the last metres before the
+junction ahead, with the length you set. Left bays take the left turns, right bays the right turns; vehicles move into a
+bay only once it opens (after a taper), line up beside it before, and wait at its mouth when it is full.
+**Lane ends** (road inspector → Lanes, per direction, 2+ lanes): the left or the right lane merges into the lane
+beside it over the last metres you set before the road's end; the road narrows in a taper, drivers in that lane move
+over (neighbours let them in) and wait at the end of the taper if they must. Use it where a road goes on with fewer
+lanes (without it the extra lane just stops at the road point). **Median**
+(two-way roads): a painted (hatched) or raised (kerbed) strip between the directions; left bays open into it.
+**Free junctions** (no signs, no lights): vehicles waiting at the line go in the order they arrived, so every
+entering lane gets its turn and one still on its way can't jump them; crossings that end in the same lane zip in,
+each following the one ahead. **Slip lanes** (junction inspector → Slip lanes): a free right turn that leaves the approach before the junction, curves
+round a kerbed island and gives way where it joins the exit; the junction then has no right turn from that approach.
+**Elevation** (road inspector → Elevation, or the Level column in the Dataview): 0 = ground, 1, 2, … = bridges and
+flyovers, −1, … = underpasses and tunnels. Roads only meet at junctions, so a bridge simply passes over the roads it
+crosses; the plan view draws levels in order (bridges with a shadow, over the traffic beneath; below ground faded), clicks
+pick the road on top, and in 3D bridges stand on pillars while the roads joining them ramp up (6 m per level).
+Junctions with lights get zebra crossings and dashed guide lines for left turns, and lane lines are solid for the last
+metres before a stop line.
 Junctions (3+ roads): priority (first come, first served), all-way stop, actuated traffic lights
 (green / yellow / all-red / minimum green per junction), or roundabout. Dead ends are entry/exit points
 where traffic comes from and leaves to the rest of the city (toggle to make them turn-arounds).
@@ -71,15 +93,52 @@ own). Turns across oncoming traffic still give way when the oncoming lanes are g
 phases in a row stays green through the change. Each lane then gets its own signal head. **Back to automatic**
 returns to the worked-out phases.
 
+Route tracer (Traffic → Route tracer): pick an entry point, an exit and the lane to start in; the fastest route with
+no traffic is drawn on the map (length, junctions, free-flow time), and **Send a test vehicle** puts one car on it that
+the inspector follows. Test vehicles don't count towards the car total and use their own random numbers, so the rest
+of the run is unchanged; their results (arrival time, or ended elsewhere / stuck) are listed there.
+
+Pedestrians (junction inspector → Pedestrians, or **Zebra crossing** on a road point): people per hour crossing each
+road. At traffic lights they cross a road early in its red (the walk time; turning vehicles into that road wait for
+them); at priority / stop junctions and zebras they have priority, and held-up traffic gets a few seconds before the
+next group steps out. They are drawn on the zebras, with the number who crossed and their average wait.
+
+Two-lane roundabouts (junction inspector → Two circulating lanes): the outer lane serves the first exit, the inner
+lane everything further round (on approaches with 2+ lanes, the kerb lane is for the first exit); where both lanes
+leave into a one-lane exit they zip in turn.
+
+Satellite imagery brightness is adjustable in Traffic → Display (dimmer imagery makes roads and traffic stand out).
+
 Transit flows: select an entry / exit point and **Add a flow from here** to send vehicles from it to a chosen exit
 (vehicles per hour, share of trucks), e.g. through traffic crossing the area. They come on top of the car and truck
 totals and keep their exit (turning shares don't apply to them). While traffic runs you see how many were sent,
 arrived (with the average travel time), are still driving or are waiting to enter; **Traffic → Transit flows** lists
 them all, and the selected entry point's flows are drawn on the map.
 
+Road event log (road inspector → Event log → Record): what vehicles do on that road, in both directions: appearing
+or entering (with their next turn and the lanes it needs), lane changes (and whether they had to), changes of state
+(free, following, queued, at a red light, yielding…) with the gap to the vehicle ahead, leaving into a junction,
+arriving, leaving the plan or being removed; downloadable as CSV / JSON like the junction logs. Recording doesn't
+change the run.
+
 Traffic counters: select a road and switch on **Count traffic on this road** (off by default). While traffic runs,
 the inspector shows each direction's vehicles counted at the middle of the road, the rate per hour (last 5 minutes) and
 their average speed; counted roads get a badge on the map and are listed under **Traffic → Traffic counters**.
+
+Zones (origin–destination demand): group entry points and buildings into zones, then set how many vehicles per hour
+travel from each zone to each other. Create zones under **Traffic → Zones and demand** (or with **New zone…** in the
+Zone picker of an entry point or building), add members from their inspector or with **Add buildings in view**, and fill
+in the matrix. Trips start and end at the zone's entry points (evenly) and buildings (by trip weight); they come on top
+of the car and truck totals and keep their destination. The results table shows arrivals, average travel time and
+vehicles waiting to enter per pair; the **Zones** layer colours each zone's members on the map.
+
+Map view (plans imported from OpenStreetMap): **Satellite background** (Esri World Imagery, also on the 3D ground)
+and **Show lane connectors** are display toggles in the Traffic tab; vehicles are coloured by speed (legend on the map).
+The **Layer** picker in the top bar (Roads, Lanes, Junctions, Lane connectors, Entry / exit points, Signals, Stops,
+Counters, Buildings, Vehicles, Zones) highlights one kind of object and makes clicks pick only that kind, so single
+lanes and lane connectors can be selected and inspected. The table button next to it opens the **Dataview**: a
+sortable, filterable table of the chosen layer under the map, with live columns while traffic runs; click a row to
+select and focus the object, double-click an underlined cell (or use its list / checkbox) to edit it (undoable).
 
 Optimise (top bar): improves the junctions you choose by simulation. It may change their control (priority, all-way
 stop, lights, roundabout), lane arrows (dedicated left / right lanes), protected left-turn phases and green times,
@@ -103,6 +162,10 @@ include buildings. Data comes from the public Overpass API (with fallback mirror
   traffic signals, stop / give-way signs and small roundabouts are taken from the tags. Junction points a few metres
   apart (dual carriageways) become one junction, opposite one-way carriageways become one two-way road, and road
   shapes are fitted with the editor's straight and curved links, so everything stays editable.
+- Bridges and tunnels keep their level (`layer`, `bridge`, `tunnel`), so flyovers are drawn over what they cross.
+- Up to 6 lanes per direction are kept. Lane arrows come from `turn:lanes`; a short stretch before a junction that gains
+  turn-only lanes becomes turn bays on the road before it; two merged carriageways keep the gap between them as a median
+  (raised from 2.5 m); a one-way road cutting the corner of a right turn next to a junction becomes a slip lane.
 - Buildings are drawn in the plan view and extruded in 3D (height from `height` / `building:levels`). Trips inside the
   plan start and end at buildings, weighted by use (homes, shops, offices, …) × floor area; select a building to change
   its use, height or trip weight. **Traffic → Through traffic** sets how many trips use the entry points instead.

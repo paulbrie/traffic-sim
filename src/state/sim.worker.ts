@@ -14,13 +14,14 @@ export type ToWorker =
   | { type: "start" }
   | { type: "reset" }
   | { type: "run"; running: boolean; speed: number }
-  | { type: "log"; all: boolean; nodes: string[] }
+  | { type: "log"; all: boolean; nodes: string[]; links: string[] }
   | { type: "watch"; watch: Watch }
-  | { type: "clearEvents" };
+  | { type: "clearEvents" }
+  | { type: "test"; from: string; to: string; lane: number | null; req: number };
 
 let compiled: Compiled | null = null, settings: PlanSettings | null = null, sim: Sim | null = null, gen = 0;
 let running = false, speed = 3, acc = 0, last = performance.now(), lastPost = 0, dirty = false;
-let log = { all: false, nodes: [] as string[] };
+let log = { all: false, nodes: [] as string[], links: [] as string[] };
 let watch: Watch = { vehicle: null, nodes: [], reservations: false };
 const writer = new SnapshotWriter();
 
@@ -28,6 +29,7 @@ function applyLog() {
   if (!sim || !compiled) return;
   sim.logAll = log.all;
   sim.logNodes = new Set(log.nodes.map(id => compiled!.nodeById.get(id)?.idx).filter((i): i is number => i !== undefined));
+  sim.logLinks = new Set(log.links);
 }
 function startSim() {
   if (!compiled || !settings) return;
@@ -47,9 +49,16 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     case "start": if (!sim) startSim(); break;
     case "reset": sim = null; acc = 0; break;
     case "run": running = m.running; speed = m.speed; break;
-    case "log": log = { all: m.all, nodes: m.nodes }; applyLog(); break;
+    case "log": log = { all: m.all, nodes: m.nodes, links: m.links }; applyLog(); break;
     case "watch": watch = m.watch; dirty = true; break;
     case "clearEvents": if (sim) { sim.events.length = 0; writer.reset(); dirty = true; } break;
+    case "test": {
+      if (!sim) startSim();
+      const result = sim ? sim.sendTest(m.from, m.to, m.lane ?? undefined) : { error: "The simulation isn't ready." };
+      self.postMessage({ type: "test", req: m.req, result });
+      dirty = true;
+      break;
+    }
   }
 };
 

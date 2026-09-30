@@ -1,4 +1,4 @@
-import { BUILDING_USES, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type LaneTurns, type Network, type PlanSettings } from "./types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type PlanSettings } from "./types";
 
 const num = (v: unknown, lo: number, hi: number, def: number) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
 const str = (v: unknown, def = "", max = 200) => (typeof v === "string" ? v.slice(0, max) : def);
@@ -35,6 +35,20 @@ function greens(v: unknown, lanes: number) {
   return v.map(x => (Array.isArray(x) ? [...new Set(x.filter((i: unknown) => Number.isInteger(i) && (i as number) >= 0 && (i as number) < MAX_PHASES) as number[])].sort((a, b) => a - b) : []));
 }
 
+/**
+ * Turn bays of one direction: 0–2 per side, 10–400 m long; none on the kerb side of a direction
+ * with a bus lane, and never more than MAX_LANES_AT_LINE lanes at the stop line.
+ */
+function bays(v: unknown, lanes: number, bus: boolean): Bays | null {
+  if (!v || typeof v !== "object" || lanes <= 0) return null;
+  const b = v as Record<string, unknown>;
+  const left = Math.round(num(b.left, 0, MAX_BAYS, 0));
+  let right = bus ? 0 : Math.round(num(b.right, 0, MAX_BAYS, 0));
+  right = Math.min(right, MAX_LANES_AT_LINE - lanes - left);
+  if (left + right <= 0) return null;
+  return { left, leftLen: Math.round(num(b.leftLen, 10, 400, 60)), right, rightLen: Math.round(num(b.rightLen, 10, 400, 40)) };
+}
+
 /** Normalises untrusted JSON into a well-formed Network (drops dangling references). */
 export function sanitizeNetwork(input: unknown): Network {
   const src = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
@@ -50,6 +64,8 @@ export function sanitizeNetwork(input: unknown): Network {
       inflow: typeof n.inflow === "number" && isFinite(n.inflow) ? Math.min(120, Math.max(0, n.inflow)) : null,
       exitWeight: typeof n.exitWeight === "number" && isFinite(n.exitWeight) ? Math.min(100, Math.max(0, n.exitWeight)) : null,
       phases: phases(n.phases),
+      ...(n.ringLanes === 2 ? { ringLanes: 2 as const } : {}),
+      ...(typeof n.peds === "number" && isFinite(n.peds) && n.peds > 0 ? { peds: Math.round(Math.min(3000, n.peds)) } : {}),
       signal: {
         green: num(s.green, 3, 180, DEFAULT_SIGNAL.green), yellow: num(s.yellow, 1, 10, DEFAULT_SIGNAL.yellow),
         allRed: num(s.allRed, 0, 10, DEFAULT_SIGNAL.allRed), minGreen: num(s.minGreen, 1, 120, DEFAULT_SIGNAL.minGreen),
@@ -59,16 +75,36 @@ export function sanitizeNetwork(input: unknown): Network {
     };
   });
   const ids = new Set(nodes.map(n => n.id));
-  const links = arr("links").filter(l => typeof l.id === "string" && ids.has(l.from as string) && ids.has(l.to as string) && l.from !== l.to).map(l => ({
-    id: str(l.id), name: str(l.name, "", 120), from: str(l.from), to: str(l.to),
-    c1: vec(l.c1), c2: vec(l.c2),
-    lanesF: Math.round(num(l.lanesF, 0, 4, 1)), lanesB: Math.round(num(l.lanesB, 0, 4, 1)),
-    busF: l.busF === true, busB: l.busB === true, speed: Math.round(num(l.speed, 10, 130, 50)),
-    turnsF: turns(l.turnsF, num(l.lanesF, 0, 4, 1)), turnsB: turns(l.turnsB, num(l.lanesB, 0, 4, 1)),
-    signF: sign(l.signF), signB: sign(l.signB), splitF: split(l.splitF), splitB: split(l.splitB),
-    greenF: greens(l.greenF, num(l.lanesF, 0, 4, 1)), greenB: greens(l.greenB, num(l.lanesB, 0, 4, 1)),
-    ...(l.counter === true ? { counter: true } : {}),
-  })).filter(l => l.lanesF + l.lanesB > 0);
+  const links = arr("links").filter(l => typeof l.id === "string" && ids.has(l.from as string) && ids.has(l.to as string) && l.from !== l.to).map(l => {
+    const lanesF = Math.round(num(l.lanesF, 0, MAX_LANES, 1)), lanesB = Math.round(num(l.lanesB, 0, MAX_LANES, 1));
+    const busF = l.busF === true, busB = l.busB === true;
+    const baysF = bays(l.baysF, lanesF, busF), baysB = bays(l.baysB, lanesB, busB);
+    // a lane that ends: needs 2+ lanes, not on a side with turn bays or (right) a bus lane
+    const drop = (v: unknown, lanes: number, bus: boolean, b: Bays | null): LaneDrop | null => {
+      if (!v || typeof v !== "object" || lanes < 2) return null;
+      const d = v as Record<string, unknown>, side = d.side === "left" ? "left" : d.side === "right" ? "right" : null;
+      if (!side || (side === "right" && (bus || b?.right)) || (side === "left" && b?.left)) return null;
+      return { side, len: Math.round(num(d.len, 10, 300, 60)) };
+    };
+    const dropF = drop(l.dropF, lanesF, busF, baysF), dropB = drop(l.dropB, lanesB, busB, baysB);
+    const atF = lanesF + (baysF ? baysF.left + baysF.right : 0), atB = lanesB + (baysB ? baysB.left + baysB.right : 0);
+    const median = lanesF > 0 && lanesB > 0 ? Math.round(num(l.median, 0, MAX_MEDIAN, 0) * 10) / 10 : 0;
+    return {
+      id: str(l.id), name: str(l.name, "", 120), from: str(l.from), to: str(l.to),
+      c1: vec(l.c1), c2: vec(l.c2),
+      lanesF, lanesB, busF, busB, speed: Math.round(num(l.speed, 10, 130, 50)),
+      turnsF: turns(l.turnsF, atF), turnsB: turns(l.turnsB, atB),
+      signF: sign(l.signF), signB: sign(l.signB), splitF: split(l.splitF), splitB: split(l.splitB),
+      greenF: greens(l.greenF, atF), greenB: greens(l.greenB, atB),
+      ...(l.counter === true ? { counter: true } : {}),
+      ...(baysF ? { baysF } : {}), ...(baysB ? { baysB } : {}),
+      ...(dropF ? { dropF } : {}), ...(dropB ? { dropB } : {}),
+      ...(median > 0 ? { median, medianKind: l.medianKind === "raised" ? "raised" as const : "painted" as const } : {}),
+      ...(typeof l.laneWidth === "number" && isFinite(l.laneWidth) && Math.abs(l.laneWidth - LANE_WIDTH.default) > 0.01 ? { laneWidth: Math.round(num(l.laneWidth, LANE_WIDTH.min, LANE_WIDTH.max, LANE_WIDTH.default) * 10) / 10 } : {}),
+      ...(Number.isInteger(l.level) && (l.level as number) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, l.level as number)) } : {}),
+      ...(typeof l.slip === "string" && ids.has(l.slip) && l.slip !== l.from && l.slip !== l.to ? { slip: l.slip } : {}),
+    };
+  }).filter(l => l.lanesF + l.lanesB > 0);
   const linkIds = new Set(links.map(l => l.id));
   const stops = arr("stops").filter(s => linkIds.has(s.link as string)).map(s => ({
     id: str(s.id), name: str(s.name, "Stop", 80), link: str(s.link), dir: (s.dir === -1 ? -1 : 1) as 1 | -1, pos: num(s.pos, 0, 1, 0.5),
@@ -94,8 +130,20 @@ export function sanitizeNetwork(input: unknown): Network {
     ...(typeof f.trucks === "number" && isFinite(f.trucks) && f.trucks > 0 ? { trucks: Math.min(1, f.trucks) } : {}),
   }));
   const buildings = sanitizeBuildings(src.buildings);
+  // zones: members must exist (entry points by node id, buildings by id), each in one zone at most
+  const buildingIds = new Set(buildings.map(b => b.id)), inZone = new Set<string>();
+  const zones = arr("zones").filter(z => typeof z.id === "string").slice(0, 100).map(z => ({
+    id: str(z.id, "", 64), name: str(z.name, "Zone", 60), color: /^#[0-9a-fA-F]{6}$/.test(str(z.color)) ? str(z.color) : "#2f6fb5",
+    members: (Array.isArray(z.members) ? z.members : []).filter((m: Record<string, unknown>) => m && ((m.kind === "entry" && nodeIds.has(m.id as string)) || (m.kind === "building" && buildingIds.has(m.id as string))) && !inZone.has(`${m.kind}:${m.id}`) && (inZone.add(`${m.kind}:${m.id}`), true))
+      .map((m: Record<string, unknown>) => ({ kind: m.kind as "entry" | "building", id: m.id as string })),
+  }));
+  const zoneIds = new Set(zones.map(z => z.id));
+  const zoneFlows = arr("zoneFlows").filter(f => typeof f.id === "string" && zoneIds.has(f.from as string) && zoneIds.has(f.to as string)).slice(0, 2000).map(f => ({
+    id: str(f.id, "", 64), from: str(f.from), to: str(f.to), rate: Math.round(num(f.rate, 0, 20000, 0)),
+    ...(typeof f.trucks === "number" && isFinite(f.trucks) && f.trucks > 0 ? { trucks: Math.min(1, f.trucks) } : {}),
+  }));
   const geo = sanitizeGeo(src.geo);
-  return { version: 1, nodes, links, stops, lines, ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
+  return { version: 1, nodes, links, stops, lines, ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(zones.length ? { zones } : {}), ...(zoneFlows.length ? { zoneFlows } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
 }
 
 /** most buildings a plan keeps (an imported district of a few km²) */

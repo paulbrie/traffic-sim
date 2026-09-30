@@ -1,6 +1,10 @@
-import { conflicts, conflictEnd, type CNode, type Conn, type Edge } from "../compile";
-import type { Vehicle, Occ, NodeState } from "./base";
+import { conflicts, conflictEnd, zipFrom, type CNode, type Conn, type Edge } from "../compile";
+import { DT, type Vehicle, type Occ, type NodeState, type PedCross, type Req } from "./base";
 import { SimSignals } from "./signals";
+
+const PED_WALK = 8, PED_YIELD = 5;
+/** at a free junction, requests this close to the line are "waiting" and keep their turn */
+const FREE_LINE = 12;
 
 /** Junctions: who may enter (reservations of conflicting paths, stop and give-way signs, lights), roundabout entry, per-junction statistics. */
 export abstract class SimJunctions extends SimSignals {
@@ -9,6 +13,70 @@ export abstract class SimJunctions extends SimSignals {
     if (!node.controlled || node.degree < 2) return false;
     return node.def.control === "stop" || (node.def.control === "priority" && e.sign === "stop");
   }
+  // ------------------------------------------------------------ pedestrians
+  // (PED_WALK: seconds at the start of a red in which pedestrians may step out; PED_YIELD: seconds
+  // held-up traffic gets at a zebra before the next group)
+  /** the crossing of arm `k` at node `n` (a zebra on a plain road has one crossing for both sides) */
+  protected pedCross(n: CNode, k: number): PedCross | undefined {
+    const list = this.peds[n.idx];
+    return list.length ? list[n.degree === 2 ? 0 : k] : undefined;
+  }
+  /** time (s) a group takes to cross the road of arm `k`, walking at 1.2 m/s */
+  protected pedTime(n: CNode, k: number) { const a = n.arms[k]; return (a.hi - a.lo) / 1.2 + 1.5; }
+  /**
+   * Pedestrians arrive at each crossing at random (the junction's rate per hour), wait at the kerb,
+   * and cross as a group: at traffic lights early in their road's red (the "walk" time: after that
+   * it's "don't walk", so turning traffic gets through); elsewhere they have priority, so no new
+   * vehicle may drive over the crossing once they are waiting, except that the vehicles held up by
+   * a group get a few seconds to go before the next group steps out. Either way they step out only
+   * once the vehicles already in the junction on that road have cleared.
+   */
+  protected updatePeds() {
+    for (const st of this.ns) {
+      const n = st.node, list = this.peds[n.idx];
+      if (!list.length) continue;
+      const lights = n.def.control === "lights", p1 = (n.peds / 3600) * DT;
+      list.forEach((p, k) => {
+        if (this.pedRng() < p1) { if (!p.waiting) p.since = this.tick; p.waiting++; }
+        if (p.crossing && this.tick >= p.until) p.crossing = 0;
+        const arms = n.degree === 2 ? [0, 1] : [k];
+        const red = lights && arms.every(a => !n.arms[a].inEdge || this.signalFor(n.idx, a) === "red");
+        if (lights) { if (!red) p.redSince = -1; else if (p.redSince < 0) p.redSince = this.tick; }
+        if (!p.waiting || p.crossing) { p.claim = false; return; }
+        // at lights: only in the walk time at the start of this road's red (both sides of a crossing
+        // on a plain road); elsewhere: not until the traffic held up by the last group has had a go
+        const allowed = lights ? red && (this.tick - p.redSince) * DT < PED_WALK : this.tick >= p.until + PED_YIELD / DT;
+        p.claim = allowed;
+        if (!allowed) return;
+        const busy = st.occ.some(o => arms.includes(o.conn.inEdge.inArm) || arms.includes(o.conn.outEdge.outArm));
+        if (busy) return;
+        p.crossing = p.waiting; p.from = this.tick; p.until = this.tick + Math.ceil(this.pedTime(n, arms[0]) / DT);
+        p.crossed += p.waiting; p.waitSum += p.waiting * (this.tick - p.since) * DT;
+        p.waiting = 0; p.claim = false;
+      });
+    }
+  }
+  /** pedestrians are on, or have claimed, a crossing this connector drives over */
+  protected pedBlocks(n: CNode, c: Conn): boolean {
+    if (!this.peds[n.idx].length) return false;
+    for (const k of [c.inEdge.inArm, c.outEdge.outArm]) {
+      const p = this.pedCross(n, k);
+      if (p && (p.crossing > 0 || p.claim)) return true;
+    }
+    return false;
+  }
+  /** pedestrians who crossed at node `idx` and their average wait (s), or null where there are none */
+  pedStats(idx: number): { crossed: number; avgWait: number; waiting: number } | null {
+    const list = this.peds[idx];
+    if (!list?.length) return null;
+    const crossed = list.reduce((a, p) => a + p.crossed, 0), sum = list.reduce((a, p) => a + p.waitSum, 0);
+    return { crossed, avgWait: crossed ? sum / crossed : 0, waiting: list.reduce((a, p) => a + p.waiting, 0) };
+  }
+  /** each crossing at node `idx`: arm, people waiting, people crossing and how far across (0..1) */
+  pedView(idx: number): { arm: number; waiting: number; crossing: number; progress: number }[] {
+    return (this.peds[idx] ?? []).map((p, k) => ({ arm: k, waiting: p.waiting, crossing: p.crossing, progress: p.crossing ? Math.min(1, (this.tick - p.from) / Math.max(1, p.until - p.from)) : 0 }));
+  }
+
   /** at a priority junction, approaches with a yield or stop sign give way to the others */
   protected minor(node: CNode, e: Edge) { return node.def.control === "priority" && !!e.sign; }
   /**
@@ -37,14 +105,15 @@ export abstract class SimJunctions extends SimSignals {
   }
   /** gap acceptance for joining a roundabout ring at entry `c` */
   protected canEnterRing(v: Vehicle, c: Conn): boolean {
-    const n = c.node, ring = n.ring!, m = ring.length, k = c.arm;
+    // (a two-lane roundabout: the lane this entry joins)
+    const n = c.node, lane = c.ringLane ?? 0, ring = lane ? n.ring2! : n.ring!, m = ring.length, k = c.arm;
     // only the front vehicle of its lane may commit
     for (const u of this.index.get(v.piece.id) || []) if (u !== v && u.s > v.s) return false;
-    // one vehicle at a time per arm: nobody else entering or committed to enter here
+    // one vehicle at a time per arm (and ring lane): nobody else entering or committed to enter here
     for (const u of this.ringClaims.get(n) ?? []) {
       if (u === v || u.dead) continue;
-      if (u.piece.kind === "conn" && u.piece.role === "entry" && u.piece.node === n && u.piece.arm === k) return false;
-      if (u.granted && u.conn && u.conn.role === "entry" && u.conn.node === n && u.conn.arm === k && u.piece.kind === "lane") return false;
+      if (u.piece.kind === "conn" && u.piece.role === "entry" && u.piece.node === n && u.piece.arm === k && (u.piece.ringLane ?? 0) === lane) return false;
+      if (u.granted && u.conn && u.conn.role === "entry" && u.conn.node === n && u.conn.arm === k && (u.conn.ringLane ?? 0) === lane && u.piece.kind === "lane") return false;
     }
     // keep the ring from filling up (it would lock itself)
     let onRing = 0, circ = 0;
@@ -106,7 +175,7 @@ export abstract class SimJunctions extends SimSignals {
         if (o.entered || !this.minor(n0, o.conn.inEdge)) return true;
         const v = o.v;
         if (v.piece.kind !== "lane" || v.piece.edge !== o.conn.inEdge) return true;
-        if (!majorNow.some(b => conflicts(o.conn, b) || b.outEdge === o.conn.outEdge)) return true;
+        if (!majorNow.some(b => conflicts(o.conn, b) || (b.outEdge === o.conn.outEdge && b.outLane === o.conn.outLane))) return true;
         if (this.mustGoOnSignal(v, v.piece.len - v.s, "yellow")) return true;
         this.ev(n0, v, "revoke", "priority traffic arrived; waits again"); v.granted = false; v.conn = null; return false;
       });
@@ -115,10 +184,12 @@ export abstract class SimJunctions extends SimSignals {
     const reqs = [...st.req.values()];
     st.req.clear();
     const n = st.node, lights = n.def.control === "lights" && n.phases.length >= 2;
-    // free: no queue order, whoever is closest to the junction goes first if its path is clear
+    // free: vehicles waiting at the line take turns in arrival order (every entering lane gets its
+    // go, like a zip), then the rest by distance; one still on its way can't jump the waiting ones
     const free = n.def.control === "free";
+    const atLine = (r: Req) => r.d < FREE_LINE;
     if (lights) reqs.sort((a, b) => (a.conn.move.turn === "L" ? 1 : 0) - (b.conn.move.turn === "L" ? 1 : 0) || a.at - b.at || a.v.id - b.v.id);
-    else if (free) reqs.sort((a, b) => a.d - b.d || a.v.id - b.v.id);
+    else if (free) reqs.sort((a, b) => +!atLine(a) - +!atLine(b) || (atLine(a) ? a.at - b.at : a.d - b.d) || a.v.id - b.v.id);
     else reqs.sort((a, b) => a.at - b.at || a.v.id - b.v.id);
     // priority junction with signed approaches: majors go first, minors wait for a gap
     const signed = signedNode;
@@ -145,12 +216,15 @@ export abstract class SimJunctions extends SimSignals {
           && r.d < 4 && r.v.v < 1 && this.tick - r.at > 30;
         if (sig !== "green" && !sneak && !this.mustGoOnSignal(r.v, r.d, sig)) { deny(r.v, `${sig} light`); continue; }
       }
+      // pedestrians on (or about to step onto) the crossing it would drive over
+      if (this.pedBlocks(n, c)) { deny(r.v, "waits for pedestrians on the crossing"); continue; }
       let ok = true, why = "", yielded = false;
-      for (const o of st.occ) if (conflicts(c, o.conn) && !this.pastConflict(o, c)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : ""; break; }
+      for (const o of st.occ) if (conflicts(c, o.conn) && !this.pastConflict(o, c, r)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : ""; break; }
       if (ok) for (const b of blockers) if (conflicts(c, b)) { ok = false; why = log ? `crosses the path of a vehicle ahead in the queue (${this.mv(b)})` : ""; break; }
       if (ok && signed && this.minor(n, c.inEdge)) {
-        // giving way means not crossing *or* joining the road in front of priority traffic
-        const clash = (b: Conn) => conflicts(c, b) || b.outEdge === c.outEdge;
+        // giving way means not crossing *or* joining the lane in front of priority traffic
+        // (traffic in another lane of the road it joins doesn't matter)
+        const clash = (b: Conn) => conflicts(c, b) || (b.outEdge === c.outEdge && b.outLane === c.outLane);
         for (const b of major) if (clash(b)) { ok = false; yielded = true; why = log ? `gives way to priority traffic (${this.mv(b)})` : ""; break; }
         if (ok) for (const o of st.occ) if (!o.conn.inEdge.sign && clash(o.conn)) { ok = false; yielded = true; why = log ? `gives way to #${o.v.id} (${this.mv(o.conn)})` : ""; break; }
       }
@@ -161,7 +235,7 @@ export abstract class SimJunctions extends SimSignals {
       if (ok) {
         r.v.conn = c; r.v.granted = true; st.occ.push({ v: r.v, conn: c, entered: false, sneak });
         if (log) { this.lastDeny.delete(r.v.id); this.ev(n, r.v, "grant", `${this.mv(c)} · ${r.d.toFixed(0)} m from the line, waited ${((this.tick - r.at) / 10).toFixed(1)} s${sneak ? " · clears on the change (oncoming stopped)" : ""}`, this.md(c.move, c.inLane, c.outLane)); }
-      } else { if (!free && holdsQueue) blockers.push(c); deny(r.v, why); }
+      } else { if ((!free || atLine(r)) && holdsQueue) blockers.push(c); deny(r.v, why); }
     }
   }
   /**
@@ -169,9 +243,20 @@ export abstract class SimJunctions extends SimSignals {
    * is beyond it), so `c` is free as far as it is concerned: traffic on a green may go behind it
    * instead of waiting for it to leave the junction.
    */
-  protected pastConflict(o: Occ, c: Conn): boolean {
+  protected pastConflict(o: Occ, c: Conn, r?: Req): boolean {
     if (!o.entered) return false;
-    const v = o.v, end = conflictEnd(o.conn, c);
+    const v = o.v;
+    // free junction, both joining the same exit lane: follow it in (zip) once it is into the shared
+    // part and far enough ahead, counted in distance to the exit lane as the car-following does
+    if (r && c.node.def.control === "free") {
+      const zip = zipFrom(o.conn, c);
+      if (isFinite(zip)) {
+        const front = v.piece === o.conn ? v.s : v.trail[0] === o.conn ? o.conn.len + v.s : -Infinity;
+        const gap = c.len + r.d - (o.conn.len - front) - v.len;
+        return front - v.len > zip + 2 && gap > 2 + 1.5 * r.v.v;
+      }
+    }
+    const end = conflictEnd(o.conn, c);
     if (!isFinite(end)) return false;
     const front = v.piece === o.conn ? v.s : v.trail[0] === o.conn ? o.conn.len + v.s : -Infinity;
     return front - v.len > end + 1;

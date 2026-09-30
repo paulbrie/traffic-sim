@@ -3,11 +3,12 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { buildRoadGeo } from "@/render/geometry";
+import { buildRoadGeo, heightFn } from "@/render/geometry";
 import { buildBuildings, buildFurniture, buildRoads, buildingShell, type Furniture } from "@/render/scene3d";
+import { satelliteMosaic } from "@/render/satellite";
 import type { BuildingDef } from "@/engine/types";
 import { readPalette, speedColor, type Palette } from "@/render/palette";
-import { linkExtent } from "@/engine/compile";
+import { LEVEL_H, linkExtent } from "@/engine/compile";
 import { network$, select, ui, underlay$, type UiState } from "@/state/store";
 import { underlayImg$ } from "@/state/underlay-image";
 import { simController } from "@/state/sim-controller";
@@ -110,6 +111,34 @@ export function View3D() {
       ulMesh.visible = true;
     }
 
+    // satellite imagery on the ground, for plans that know where they are
+    const satMat = new THREE.MeshLambertMaterial({ depthWrite: false });
+    const satMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), satMat);
+    satMesh.rotation.x = -Math.PI / 2; satMesh.receiveShadow = true; satMesh.visible = false; satMesh.renderOrder = -1;
+    scene.add(satMesh);
+    let satKey = "", satGen = 0;
+    function syncSatellite() {
+      const net = network$.getValue(), geo = net.geo, want = !!geo && u.display.satellite;
+      satMesh.visible = want && !!satMat.map;
+      satMat.color.setScalar(u.display.satBrightness ?? 1);
+      if (!want || !geo) return;
+      const b = simController.compiled.bounds, pad = Math.max(150, 0.2 * Math.max(b.maxX - b.minX, b.maxY - b.minY));
+      const key = `${geo.lat},${geo.lon}:${Math.round(b.minX / 100)},${Math.round(b.minY / 100)},${Math.round(b.maxX / 100)},${Math.round(b.maxY / 100)}`;
+      if (key === satKey) return;
+      satKey = key;
+      const gen = ++satGen;
+      satelliteMosaic(geo, { minX: b.minX - pad, minY: b.minY - pad, maxX: b.maxX + pad, maxY: b.maxY + pad }).then(m => {
+        if (!m || gen !== satGen) return;
+        satMat.map?.dispose();
+        const tex = new THREE.CanvasTexture(m.canvas);
+        tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        satMat.map = tex; satMat.needsUpdate = true;
+        satMesh.scale.set(m.rect.maxX - m.rect.minX, m.rect.maxY - m.rect.minY, 1);
+        satMesh.position.set((m.rect.minX + m.rect.maxX) / 2, 0.002, (m.rect.minY + m.rect.maxY) / 2);
+        satMesh.visible = !!network$.getValue().geo && u.display.satellite;
+      });
+    }
+
     function applyTheme() {
       pal = readPalette();
       scene.background = new THREE.Color(pal.sky);
@@ -128,10 +157,11 @@ export function View3D() {
     function rebuild() {
       if (roads) { scene.remove(roads); roads.traverse(o => { if (o instanceof THREE.Mesh) o.geometry.dispose(); }); }
       if (furniture) { scene.remove(furniture.group); }
-      const geo = buildRoadGeo(simController.compiled, network$.getValue());
-      roads = buildRoads(geo, pal); scene.add(roads);
-      furniture = buildFurniture(geo, pal, sigMats); scene.add(furniture.group);
+      const geo = buildRoadGeo(simController.compiled, network$.getValue()), hf = heightFn(simController.compiled, network$.getValue());
+      roads = buildRoads(geo, pal, hf); scene.add(roads);
+      furniture = buildFurniture(geo, pal, sigMats, hf); scene.add(furniture.group);
       syncBuildings();
+      syncSatellite();
       builtVersion = simController.version;
       const b = simController.compiled.bounds;
       const cx = (b.minX + b.maxX) / 2, cz = (b.minY + b.maxY) / 2, span = Math.max(200, b.maxX - b.minX, b.maxY - b.minY);
@@ -155,7 +185,7 @@ export function View3D() {
     const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
 
     const subs = [
-      ui.subscribe("**", () => { u = ui.getValue(); if (houses) houses.mesh.visible = u.display.buildings; }),
+      ui.subscribe("**", () => { u = ui.getValue(); if (houses) houses.mesh.visible = u.display.buildings; syncSatellite(); }),
       underlay$.subscribe(syncUnderlay),
       underlayImg$.subscribe(syncUnderlay),
       viewCmd$.subscribe(c => {
@@ -225,24 +255,24 @@ export function View3D() {
         let n = 0, ng = 0;
         if (sim) for (const v of sim.vehicles) {
           if (v.dead || n + 2 >= MAXV) continue;
-          const q = sim.pose(v), mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
+          const q = sim.pose(v), mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2, y0 = v.z * LEVEL_H;
           const dx = q.fx - q.rx, dz = q.fy - q.ry, m = Math.hypot(dx, dz) || 1, a = Math.atan2(-dz, dx), ux = dx / m, uz = dz / m;
           const sc = u.display.bySpeed ? speedColor(pal, v.v / Math.max(1, v.v0)) : null;
           dummy.rotation.set(0, a, 0);
           if (v.kind === "truck") {
-            dummy.position.set(mx - ux * v.len * 0.12, 0.55, mz - uz * v.len * 0.12); dummy.scale.set(v.len * 0.74, 3, v.width); dummy.updateMatrix();
+            dummy.position.set(mx - ux * v.len * 0.12, 0.55 + y0, mz - uz * v.len * 0.12); dummy.scale.set(v.len * 0.74, 3, v.width); dummy.updateMatrix();
             body.setMatrixAt(n, dummy.matrix); col.set(sc ?? pal.truck); body.setColorAt(n++, col);
-            dummy.position.set(mx + ux * v.len * 0.385, 0.45, mz + uz * v.len * 0.385); dummy.scale.set(v.len * 0.21, 2.45, v.width * 0.98); dummy.updateMatrix();
+            dummy.position.set(mx + ux * v.len * 0.385, 0.45 + y0, mz + uz * v.len * 0.385); dummy.scale.set(v.len * 0.21, 2.45, v.width * 0.98); dummy.updateMatrix();
             body.setMatrixAt(n, dummy.matrix); col.set(sc ?? CAR3D[1]); body.setColorAt(n++, col);
-            dummy.position.set(mx + ux * v.len * 0.47, 1.75, mz + uz * v.len * 0.47); dummy.scale.set(0.35, 0.8, v.width * 0.9); dummy.updateMatrix();
+            dummy.position.set(mx + ux * v.len * 0.47, 1.75 + y0, mz + uz * v.len * 0.47); dummy.scale.set(0.35, 0.8, v.width * 0.9); dummy.updateMatrix();
             glass.setMatrixAt(ng++, dummy.matrix);
             continue;
           }
           const bus = v.kind === "bus";
-          dummy.position.set(mx, bus ? 0.3 : 0.28, mz); dummy.scale.set(v.len, bus ? 2.9 : 1.0, v.width); dummy.updateMatrix();
+          dummy.position.set(mx, (bus ? 0.3 : 0.28) + y0, mz); dummy.scale.set(v.len, bus ? 2.9 : 1.0, v.width); dummy.updateMatrix();
           body.setMatrixAt(n, dummy.matrix); col.set(sc ?? (bus ? pal.busVeh : CAR3D[v.tint % 4])); body.setColorAt(n++, col);
-          if (bus) { dummy.position.set(mx, 1.75, mz); dummy.scale.set(v.len * 0.9, 0.85, v.width * 1.03); }
-          else { const b = v.len * 0.07; dummy.position.set(mx - ux * b, 1.27, mz - uz * b); dummy.scale.set(v.len * 0.5, 0.55, v.width * 0.86); }
+          if (bus) { dummy.position.set(mx, 1.75 + y0, mz); dummy.scale.set(v.len * 0.9, 0.85, v.width * 1.03); }
+          else { const b = v.len * 0.07; dummy.position.set(mx - ux * b, 1.27 + y0, mz - uz * b); dummy.scale.set(v.len * 0.5, 0.55, v.width * 0.86); }
           dummy.updateMatrix(); glass.setMatrixAt(ng++, dummy.matrix);
         }
         // blinkers
@@ -252,7 +282,7 @@ export function View3D() {
           if (!b || nl + 2 > 16000) continue;
           const q = sim.pose(v), mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
           const dx = q.fx - q.rx, dz = q.fy - q.ry, m = Math.hypot(dx, dz) || 1, ux = dx / m, uz = dz / m;
-          const nx = -uz * b, nz = ux * b, half = v.len / 2 - 0.15, side = v.width / 2 + 0.02, h = v.kind === "car" ? 0.6 : 0.9;
+          const nx = -uz * b, nz = ux * b, half = v.len / 2 - 0.15, side = v.width / 2 + 0.02, h = (v.kind === "car" ? 0.6 : 0.9) + v.z * LEVEL_H;
           dummy.rotation.set(0, Math.atan2(-dz, dx), 0); dummy.scale.set(1, 1, 1);
           for (const f of [half, -half]) {
             dummy.position.set(mx + ux * f + nx * side, h, mz + uz * f + nz * side); dummy.updateMatrix();
@@ -282,7 +312,7 @@ export function View3D() {
         ring.visible = false;
         if (sel?.kind === "vehicle" && sim) {
           const v = sim.vehicles.find(x => String(x.id) === sel.id && !x.dead);
-          if (v) { const q = sim.pose(v); ring.position.set((q.fx + q.rx) / 2, 0.12, (q.fy + q.ry) / 2); const s = Math.max(3.5, v.len * 0.8); ring.scale.set(s, s, s); ring.visible = true; }
+          if (v) { const q = sim.pose(v); ring.position.set((q.fx + q.rx) / 2, 0.12 + v.z * LEVEL_H, (q.fy + q.ry) / 2); const s = Math.max(3.5, v.len * 0.8); ring.scale.set(s, s, s); ring.visible = true; }
         } else if (sel?.kind === "node") {
           const nd = net.nodes.find(x => x.id === sel.id);
           if (nd) { ring.position.set(nd.x, 0.12, nd.y); ring.scale.set(12, 12, 12); ring.visible = true; }
@@ -297,10 +327,12 @@ export function View3D() {
           else if (sel?.kind === "link") {
             const s = buildRoadGeo(simController.compiled, net).surfaces.find(x => x.linkId === sel.id);
             if (s) {
-              const L = s.curb.left.pts, R = s.curb.right.pts, pos: number[] = [];
+              const L = s.curb.left.pts, R = s.curb.right.pts, pos: number[] = [], hf = heightFn(simController.compiled, net);
+              // on top of the road, bridges included
+              const z = (x: number, y: number) => 0.25 + hf.at(s.on, x, y);
               for (let k = 0; k < Math.min(L.length, R.length) / 2 - 1; k++) {
-                pos.push(L[2 * k], 0.25, L[2 * k + 1], L[2 * k + 2], 0.25, L[2 * k + 3], R[2 * k + 2], 0.25, R[2 * k + 3]);
-                pos.push(L[2 * k], 0.25, L[2 * k + 1], R[2 * k + 2], 0.25, R[2 * k + 3], R[2 * k], 0.25, R[2 * k + 1]);
+                pos.push(L[2 * k], z(L[2 * k], L[2 * k + 1]), L[2 * k + 1], L[2 * k + 2], z(L[2 * k + 2], L[2 * k + 3]), L[2 * k + 3], R[2 * k + 2], z(R[2 * k + 2], R[2 * k + 3]), R[2 * k + 3]);
+                pos.push(L[2 * k], z(L[2 * k], L[2 * k + 1]), L[2 * k + 1], R[2 * k + 2], z(R[2 * k + 2], R[2 * k + 3]), R[2 * k + 3], R[2 * k], z(R[2 * k], R[2 * k + 1]), R[2 * k + 1]);
               }
               geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
             }
@@ -327,6 +359,7 @@ export function View3D() {
       controls.dispose();
       if (houses) { houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); }
       ulMat.map?.dispose(); ulMat.dispose(); ulMesh.geometry.dispose();
+      satMat.map?.dispose(); satMat.dispose(); satMesh.geometry.dispose();
       renderer.dispose();
       wrap.removeChild(renderer.domElement);
       compassEl()?.style.setProperty("--heading", "0deg");
