@@ -158,6 +158,8 @@ export interface Compiled {
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
   /** each road's centre line as laid out (with any "line up lanes" shift), by link id */
   linkCenters: Map<string, Poly>;
+  /** junctions still drawn with a simple outline (compiled with `outlines: "cached"`): node index, shape key */
+  pendingShapes: { node: number; key: string }[];
   getConn(move: Movement, a: number, b: number): Conn;
   /** pieces a vehicle drives through to cross a junction (1 connector, or entry + ring + exit); shared, don't modify */
   crossing(move: Movement, a: number, b: number): readonly Piece[];
@@ -303,9 +305,11 @@ export function linkExtent(link: LinkDef): [number, number] {
 
 /**
  * `outlines: false` skips working out junction outlines from the lanes (the slow part; only drawing
- * needs them — the simulation doesn't), e.g. in the simulation worker.
+ * needs them — the simulation doesn't), e.g. in the simulation worker. `"cached"` uses those already
+ * worked out and lists the missing ones in `pendingShapes` (for a worker to do; see putShapes).
  */
-export function compile(net: Network, opts: { outlines?: boolean } = {}): Compiled {
+export function compile(net: Network, opts: { outlines?: boolean | "cached" } = {}): Compiled {
+  const pendingShapes: { node: number; key: string }[] = [];
   clearConflictCache();
   const warnings: string[] = [];
   const nodes: CNode[] = [];
@@ -650,8 +654,17 @@ export function compile(net: Network, opts: { outlines?: boolean } = {}): Compil
     // a junction's shape comes from the lanes through it: the road ends plus every lane path at its
     // full width, so the road always covers its lanes (and the kerbs follow the turns)
     if (opts.outlines !== false && !n.ringR && (n.degree >= 3 || n.controlled || n.rounded)) {
-      const outer = laneOutline(n, 0);
-      if (outer) { n.polygon = outer; n.surface = kerbInset(n, outer) ?? outer; }
+      const inp = outlineInputs(n, 0), got = shapeCache.get(inp.key);
+      if (got) { n.polygon = got.polygon; n.surface = got.surface; }
+      else if (got === null) { /* merging failed before: keep the simple outline */ }
+      else if (opts.outlines === "cached") pendingShapes.push({ node: n.idx, key: inp.key });
+      else {
+        const outer = mergeOutline(inp);
+        const shape = outer ? { polygon: outer, surface: kerbInset(n, outer) ?? outer } : null;
+        if (shapeCache.size > 20000) shapeCache.clear();
+        shapeCache.set(inp.key, shape);
+        if (shape) { n.polygon = shape.polygon; n.surface = shape.surface; }
+      }
     }
     // an outline drawn by hand wins (its kerb band is worked out the same way)
     if (opts.outlines !== false && !n.ringR && n.degree >= 2 && n.def.outline && n.def.outline.length >= 3) {
@@ -814,7 +827,7 @@ export function compile(net: Network, opts: { outlines?: boolean } = {}): Compil
 
   const compiled: Compiled = {
     nodes, edges, pieces, nodeById, edgeByKey, stops, stopById, lines, places, flows, zones, zoneFlows, warnings,
-    bounds: { minX, minY, maxX, maxY }, linkCenters,
+    bounds: { minX, minY, maxX, maxY }, linkCenters, pendingShapes,
     getConn(move, a, b) {
       const cache = (move.conns ??= []), k = a * 8 + b;
       let c = cache[k];
@@ -1132,8 +1145,9 @@ export const clearConflictCache = () => { confCache.clear(); confEndCache.clear(
  * Junction outline from its lanes: a strip across each road end plus every lane path through the
  * junction, each as wide as its lane (and `CURB - inset` more), merged. Null if that fails.
  */
-const outlineCache = new Map<string, Vec[] | null>();
-function laneOutline(n: CNode, inset: number): Vec[] | null {
+/** what a junction's outline is made of (and a key for it: the same shapes give the same outline) */
+interface OutlineInputs { n: CNode; polys: Ring[][]; pieces: Ring[][]; key: string }
+function outlineInputs(n: CNode, inset: number): OutlineInputs {
   const polys: Ring[][] = [], pieces: Ring[][] = [], extra = CURB - inset;
   for (const a of n.arms) {
     const r = { x: -a.mu.y, y: a.mu.x }, m = a.mouth, lo = a.lo + inset, hi = a.hi - inset;
@@ -1160,11 +1174,11 @@ function laneOutline(n: CNode, inset: number): Vec[] | null {
       if (h.length >= 3) pieces.push([[...h.map(v => [v.x, v.y] as Pair), [h[0].x, h[0].y]]]);
     }
   }
-  // the same shapes give the same outline: most of a plan is unchanged between edits
   const key = `${inset}|` + polys.map(p => p[0].map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")).join("|");
-  const hit = outlineCache.get(key);
-  if (hit !== undefined) return hit;
-  if (outlineCache.size > 20000) outlineCache.clear();
+  return { n, polys, pieces, key };
+}
+/** the outline itself: those shapes merged (null if that fails) */
+function mergeOutline({ n, polys, pieces }: OutlineInputs): Vec[] | null {
   let merged: Ring[][];
   // (on a 1 cm grid, without repeated points: the merge is robust then)
   const snap = (ps: Ring[][]) => ps.map(poly => poly.map(ring => ring.map(([x, y]) => [Math.round(x * 100) / 100, Math.round(y * 100) / 100] as Pair).filter((q, i, r) => i === 0 || q[0] !== r[i - 1][0] || q[1] !== r[i - 1][1])).filter(ring => ring.length >= 4));
@@ -1189,9 +1203,18 @@ function laneOutline(n: CNode, inset: number): Vec[] | null {
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) A += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
     if (Math.abs(A) > bestA) { bestA = Math.abs(A); best = ring; }
   }
-  const out = best && best.length >= 4 ? orient(best.slice(0, -1).map(([x, y]) => ({ x, y }))) : null;
-  outlineCache.set(key, out);
-  return out;
+  return best && best.length >= 4 ? orient(best.slice(0, -1).map(([x, y]) => ({ x, y }))) : null;
+}
+/**
+ * Junction shapes worked out so far, by their inputs' key: outline and asphalt (kerb inset). Filled by
+ * full compiles; a compile with `outlines: "cached"` only reads it (see `putShapes`, the outline worker).
+ */
+export type JunctionShape = { polygon: Vec[]; surface: Vec[] } | null;
+const shapeCache = new Map<string, JunctionShape>();
+export const getShape = (key: string) => shapeCache.get(key);
+export function putShapes(entries: [string, JunctionShape][]) {
+  if (shapeCache.size > 20000) shapeCache.clear();
+  for (const [k, v] of entries) shapeCache.set(k, v);
 }
 type Pair = [number, number];
 type Ring = Pair[];

@@ -237,7 +237,7 @@ export abstract class SimBase {
   /** arrivals waiting to get onto the road at metered entry points */
   protected backlog = new Map<CNode, number>();
   constructor(network: Network | Compiled, settings: PlanSettings) {
-    this.net = "nodeById" in network ? network : compile(network);
+    this.net = "nodeById" in network ? network : compile(network, { outlines: false });
     this.settings = { ...settings };
     this.rng = mulberry32(settings.seed || 7);
     this.ema = new Float64Array(this.net.edges.length);

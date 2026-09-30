@@ -613,7 +613,7 @@ export function PlanCanvas() {
     const frame = () => {
       if (u.tool !== lastTool) { if (u.tool !== "road") pending = null; lastTool = u.tool; }
       const moved = u.view === "2d" ? simController.advance() : false;
-      if (u.view === "2d" && (dirty || moved || u.sim.running)) {
+      if (u.view === "2d" && (dirty || moved || u.sim.running || geoVersion !== simController.version)) {
         ensureGeo();
         let draftOv: Overlay["draft"] = null;
         if (u.tool === "road" && pending && cursorWorld) {

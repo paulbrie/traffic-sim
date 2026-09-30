@@ -581,3 +581,18 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   console.log(`line up lanes: straight-on paths end up to ${before.toFixed(2)} m to the side → ${after.toFixed(2)} m | ok ${ok}`);
   if (!ok) process.exit(1);
 }
+
+// junction outlines worked out elsewhere: a compile with outlines "cached" lists the missing ones, and
+// once a full compile has worked them out it uses the very same shapes; simulation runs don't need them
+{
+  const net = sanitizeNetwork(sampleTown());
+  // (moved a little, so none of these junctions are in the shape cache from earlier checks)
+  const moved = { ...net, nodes: net.nodes.map(n => ({ ...n, x: n.x + 0.37, y: n.y - 0.21 })) };
+  const cold = compile(moved, { outlines: "cached" }), full = compile(moved), warm = compile(moved, { outlines: "cached" });
+  const same = full.nodes.every((n, i) => JSON.stringify(n.polygon) === JSON.stringify(warm.nodes[i].polygon) && JSON.stringify(n.surface) === JSON.stringify(warm.nodes[i].surface));
+  const a = new Sim(compile(moved, { outlines: false }), { cars: 120, trucks: 5, seed: 9 }), b = new Sim(full, { cars: 120, trucks: 5, seed: 9 });
+  a.run(1500); b.run(1500);
+  const ok = cold.pendingShapes.length > 0 && warm.pendingShapes.length === 0 && same && a.stats.trips === b.stats.trips && a.stats.laneChanges === b.stats.laneChanges;
+  console.log(`outlines cached: ${cold.pendingShapes.length} missing at first, ${warm.pendingShapes.length} once worked out, same shapes ${same}; simulation without outlines identical ${a.stats.trips === b.stats.trips} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}

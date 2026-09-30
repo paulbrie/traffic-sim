@@ -42,7 +42,7 @@ function OptimizeContent({ planId, planName, close }: { planId: string; planName
   const [settings] = useState(() => settings$.getValue());
   const readOnly = ui.getValue().readOnly;
   const info = useMemo(() => {
-    const c = compile(net), refs = junctionRefs(c);
+    const c = compile(net, { outlines: false }), refs = junctionRefs(c);
     const junctions = [...refs].map(([id, ref]) => ({ id, ref, n: c.nodeById.get(id)! }))
       .map(x => ({ id: x.id, ref: x.ref, roads: [...new Set(x.n.arms.map(a => a.link.name || "unnamed road"))].join(" × "), control: x.n.def.control, phases: x.n.phases.length, custom: x.n.customPhases }));
     return { refs, junctions };
@@ -202,7 +202,7 @@ function Result({ r, took, refs, perMin, readOnly, saving, planName, onApply, on
   onApply: () => void; onSave: (name: string) => void; onAgain: () => void; onClose: () => void;
 }) {
   const [name, setName] = useState(`${planName} — optimised junctions`);
-  const compiled = useMemo(() => compile(r.network), [r.network]);
+  const compiled = useMemo(() => compile(r.network, { outlines: false }), [r.network]);
   const { baseline: b, best: a, better, of } = r.check;
   const gain = ((a.score - b.score) / Math.max(1, Math.abs(b.score))) * 100;
   const holds = r.changes.length > 0 && a.score > b.score && better > of / 2;

@@ -5,7 +5,7 @@
  * Recompiles whenever the network changes; any edit resets the simulation (vehicles are cleared)
  * because lanes and junctions may have moved.
  */
-import { compile, type Compiled } from "@/engine/compile";
+import { compile, getShape, putShapes, type Compiled, type JunctionShape } from "@/engine/compile";
 import { SimMirror, type Snapshot, type Watch } from "@/engine/sim/mirror";
 import type { Network } from "@/engine/types";
 import { network$, settings$, stats$, ui } from "./store";
@@ -62,8 +62,33 @@ class SimController {
     this.applyLog(); this.applyWatch();
   }
 
+  private outlineWorker: Worker | null = null;
+  private shapeReq = 0;
+  /** junction outlines the page doesn't have yet: worked out by a worker, then patched in */
+  private requestShapes(net: Network) {
+    const pending = this.compiled.pendingShapes;
+    if (!pending.length || typeof Worker === "undefined") return;
+    if (!this.outlineWorker) {
+      this.outlineWorker = new Worker(new URL("./outline.worker.ts", import.meta.url), { type: "module" });
+      this.outlineWorker.onmessage = (e: MessageEvent<{ req: number; shapes: [string, JunctionShape][] }>) => {
+        putShapes(e.data.shapes);
+        if (e.data.req !== this.shapeReq) return; // the plan has changed since: the next answer patches it
+        let changed = false;
+        for (const p of this.compiled.pendingShapes) {
+          const shape = getShape(p.key), n = this.compiled.nodes[p.node];
+          if (shape && n) { n.polygon = shape.polygon; n.surface = shape.surface; changed = true; }
+        }
+        this.compiled.pendingShapes = [];
+        if (changed) this.version++; // (the canvases redraw when the version changes)
+      };
+    }
+    this.outlineWorker.postMessage({ req: ++this.shapeReq, network: net, keys: pending.map(p => p.key) });
+  }
+
   private rebuild(net: Network) {
-    this.compiled = compile(net);
+    // junction outlines already worked out are used; the others are drawn simply until a worker has them
+    this.compiled = compile(net, { outlines: "cached" });
+    this.requestShapes(net);
     this.version++;
     this.gen++;
     this.post({ type: "load", network: net, settings: settings$.getValue(), gen: this.gen });

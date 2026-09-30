@@ -15,6 +15,8 @@
  * Web Workers and scripts can run them however they like.
  */
 import { compile, type CNode, type Compiled } from "./compile";
+/** simulations and analysis don't need junction outlines (the slow part of compiling) */
+const SIM_ONLY = { outlines: false } as const;
 import { Sim } from "./sim";
 import { withCustomPhases } from "./signals";
 import { DEFAULT_SIGNAL, LANE_TURNS, type Control, type LaneTurn, type LaneTurns, type LinkDef, type Network, type PlanSettings } from "./types";
@@ -41,7 +43,7 @@ export const scoreOf = (m: RunMetrics) => m.trips - 5 * m.towed;
 
 /** Simulates a plan with one seed and measures the window after the warm-up. */
 export function measureRun(net: Network, settings: PlanSettings, spec: RunSpec): RunMetrics {
-  const sim = new Sim(compile(net), settings);
+  const sim = new Sim(compile(net, SIM_ONLY), settings);
   sim.run(Math.round(spec.warmup * 10));
   const trips0 = sim.stats.trips, towed0 = sim.stats.towed;
   let speed = 0, stopped = 0, n = 0;
@@ -205,7 +207,7 @@ function leftDecision(id: string): Decision {
     key: `lefts:${id}`, structural: true,
     options: (net0, c0) => {
       if (!isLit(c0.nodeById.get(id))) return [];
-      const net1 = asCustom(net0, c0, id), c = net1 === net0 ? c0 : compile(net1), n = c.nodeById.get(id)!;
+      const net1 = asCustom(net0, c0, id), c = net1 === net0 ? c0 : compile(net1, SIM_ONLY), n = c.nodeById.get(id)!;
       const out: Option[] = [];
       n.phases.forEach((arms, p) => {
         // approaches green in this phase whose leftmost lane turns left (and has a lane beside it)
@@ -276,7 +278,7 @@ function decisions(c: Compiled, nodes: string[], targets: Set<OptimizeTarget>): 
 
 /** what differs between the original plan and the result at the chosen junctions */
 export function describeChanges(original: Network, result: Network, nodes: string[]): Change[] {
-  const c0 = compile(original), c1 = compile(result);
+  const c0 = compile(original, SIM_ONLY), c1 = compile(result, SIM_ONLY);
   const out: Change[] = [];
   for (const id of nodes) {
     const a = c0.nodeById.get(id), b = c1.nodeById.get(id);
@@ -339,7 +341,7 @@ export async function optimizeSignals(
   let bestConfirm: Summary | null = confirm.length ? (await run([net], confirm))[0] : null;
 
   for (let round = 1; round <= rounds; round++) {
-    let compiled = compile(net);
+    let compiled = compile(net, SIM_ONLY);
     const list = decisions(compiled, cfg.nodes, targets);
     // rough size of what is left, for the progress bar
     const perPass = list.reduce((a, d) => a + d.options(net, compiled, round).length, 0);
@@ -363,7 +365,7 @@ export async function optimizeSignals(
         if (conf.score <= bestConfirm.score + margin(bestConfirm) / 2) { report(round, `not confirmed: ${opts[bi].label}`); continue; }
       }
       net = opts[bi].net; best = results[bi]; bestConfirm = conf ?? bestConfirm; improved = true;
-      compiled = compile(net);
+      compiled = compile(net, SIM_ONLY);
       report(round, `kept ${opts[bi].label}`);
     }
     if (!improved) break;

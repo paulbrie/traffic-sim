@@ -203,7 +203,7 @@ include buildings. Data comes from the public Overpass API (with fallback mirror
   - `optimize.ts` junction optimiser (control, lane arrows, protected lefts, green times; judged by simulation)
   - `validate.ts` sanitises plan JSON on the server
 - `src/lib/osm/` — OpenStreetMap import: area, projection and Overpass query (`area.ts`), OSM → plan conversion (`convert.ts`)
-- `src/state/` — subjecto stores (`ui` DeepSubject, `network$`/`settings$`/`stats$` Subjects), undo history, edit operations, simulation controller (the live simulation runs in `sim.worker.ts`; the page reads a mirror of it)
+- `src/state/` — subjecto stores (`ui` DeepSubject, `network$`/`settings$`/`stats$` Subjects), undo history, edit operations, simulation controller (the live simulation runs in `sim.worker.ts`; the page reads a mirror of it; junction outlines are worked out in `outline.worker.ts` and patched in, simple outlines show meanwhile)
 - `src/render/` — shared road geometry, Canvas 2D renderer, three.js scene builders
 - `src/components/workspace/` — editor UI: canvas, 3D view, inspector, traffic and bus-line panels
 - `src/components/osm/` — the import dialog and its Leaflet map
