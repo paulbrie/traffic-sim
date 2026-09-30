@@ -9,14 +9,17 @@ export abstract class SimDemand extends SimMotion {
   protected makeVehicle(kind: Kind): Vehicle {
     const r = this.rng;
     const P = KIND_PARAMS(kind, r, this.P);
+    // every field set here, in one order, so all vehicles share one object shape (fast property access)
     return {
-      id: this.nextId++, kind, ...P, tint: (r() * 6) | 0,
+      id: this.nextId++, kind, len: P.len, width: P.width, pref: P.pref, a: P.a, b: P.b, bmax: P.bmax, T: P.T, s0: P.s0, politeness: P.politeness,
+      tint: (r() * 6) | 0,
       route: [], ri: 0, piece: this.net.pieces[0], s: 0, v: 0, acc: 0, lane: 0, queue: [], trail: [],
       conn: null, granted: false, dest: { kind: "gateway", node: this.net.nodes[0] }, state: "free", wait: 0,
       enterT: this.tick, bornT: this.tick, gap: Infinity, leader: null, v0: 10,
       reroutes: 0, laneChanges: 0, lcCool: 0, lcOff: 0, lcT: 0,
       reqAt: 0, reqFor: null, stoppedAt: null, fixedAt: null, rerouteAt: null,
       line: null, stopIdx: 0, pax: 0, cap: 50, dwell: 0, dead: false, metered: false, flow: -1, zflow: -1, goal: null,
+      test: undefined, logState: undefined, splits: undefined,
     };
   }
   protected randomEdge(): Edge | null {

@@ -23,12 +23,32 @@ export abstract class SimMotion extends SimJunctions {
       // leaders on this piece (plus vehicles on sibling connectors from the same entry lane,
       // and vehicles about to merge onto a roundabout ring stretch)
       if (!leader) {
-        const list = p.kind === "conn" && p.role !== "exit" ? this.groupIndex.get(p.entryKey) : this.index.get(p.id);
-        if (list) for (const u of list) {
-          if (u === v) continue;
-          if (first && !(u.s > v.s || (u.s === v.s && u.id > v.id))) continue;
-          const gg = acc + u.s - u.len;
-          if (gg < gap) { gap = gg; lv = u.v; leader = u; }
+        if (p.kind === "conn" && p.role !== "exit") {
+          const list = this.groupIndex.get(p.entryKey);
+          if (list) for (const u of list) {
+            if (u === v) continue;
+            if (first && !(u.s > v.s || (u.s === v.s && u.id > v.id))) continue;
+            const gg = acc + u.s - u.len;
+            if (gg < gap) { gap = gg; lv = u.v; leader = u; }
+          }
+        } else {
+          // (the same choice as scanning the whole list: the smallest gap ahead, ties to the earlier
+          // in the list; walking by position we can stop once nobody further on can be closer)
+          const sv = this.index.sorted(p.id);
+          if (sv) {
+            const vs = sv.vs, ord = sv.ord;
+            let k = 0;
+            if (first) { let lo = 0, hi = vs.length; while (lo < hi) { const m = (lo + hi) >> 1; if (vs[m].s < v.s) lo = m + 1; else hi = m; } k = lo; }
+            let bestOrd = Infinity, pick: Vehicle | null = null;
+            for (; k < vs.length; k++) {
+              const u = vs[k];
+              if (acc + u.s - sv.maxLen > gap + 1e-6) break;
+              if (u === v || (first && !(u.s > v.s || (u.s === v.s && u.id > v.id)))) continue;
+              const gg = acc + u.s - u.len;
+              if (gg < gap || (gg === gap && pick && ord[k] < bestOrd)) { gap = gg; bestOrd = ord[k]; pick = u; }
+            }
+            if (pick) { lv = pick.v; leader = pick; }
+          }
         }
         const vp = v.piece;
         const mergingHere = vp.kind === "conn" && vp.role === "entry" && p.kind === "ring" && vp.node === p.node && ringOf(p.node, vp.ringLane)[vp.arm].between === p;

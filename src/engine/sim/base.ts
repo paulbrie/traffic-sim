@@ -134,15 +134,36 @@ export const KIND_PARAMS = (kind: Kind, r: () => number, P: SimParams = resolveP
 export class PieceIndex {
   private lists: (Vehicle[] | undefined)[] = [];
   private used: number[] = [];
+  /** the same lists sorted by position (built on first use, until the list changes) */
+  private views: (SortedView | undefined)[] = [];
   get(id: number): Vehicle[] | undefined { return this.lists[id]; }
   add(id: number, v: Vehicle) {
     let l = this.lists[id];
     if (!l) this.lists[id] = l = [];
     if (!l.length) this.used.push(id);
     l.push(v);
+    const sv = this.views[id]; if (sv) sv.fresh = false;
   }
-  clear() { for (const id of this.used) this.lists[id]!.length = 0; this.used.length = 0; }
+  clear() { for (const id of this.used) { this.lists[id]!.length = 0; const sv = this.views[id]; if (sv) sv.fresh = false; } this.used.length = 0; }
+  /**
+   * Vehicles on a piece by position (s ascending; equal positions keep list order), each with its
+   * place in the list (`ord`, for breaking ties exactly as a scan of the list would) and the longest
+   * vehicle's length. Only valid while positions don't change (sort again after a list changes).
+   */
+  sorted(id: number): SortedView | undefined {
+    const l = this.lists[id];
+    if (!l || !l.length) return undefined;
+    let sv = this.views[id];
+    if (sv && sv.fresh) return sv;
+    if (!sv) this.views[id] = sv = { vs: [], ord: [], maxLen: 0, fresh: false };
+    const idx = l.map((_, i) => i).sort((a, b) => l[a].s - l[b].s || a - b);
+    sv.vs.length = 0; sv.ord.length = 0; sv.maxLen = 0;
+    for (const i of idx) { sv.vs.push(l[i]); sv.ord.push(i); if (l[i].len > sv.maxLen) sv.maxLen = l[i].len; }
+    sv.fresh = true;
+    return sv;
+  }
 }
+export interface SortedView { vs: Vehicle[]; ord: number[]; maxLen: number; fresh: boolean }
 
 /** State, the vehicle index, logging and helpers shared by every layer. */
 export abstract class SimBase {
