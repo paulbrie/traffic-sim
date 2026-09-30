@@ -1,4 +1,5 @@
 import type { CLine, CNode, Conn, Edge, LanePiece, Piece } from "../compile";
+import { laneAllowed } from "../compile";
 import { DT, LOOK, NO_PIECES, type Dest, type Vehicle } from "./base";
 import { SimJunctions } from "./junctions";
 
@@ -140,7 +141,7 @@ export abstract class SimMotion extends SimJunctions {
       // the vehicle's own movement (a roundabout entry piece is shared by all turns from that arm)
       const m = (v.route[v.ri] === e && v.route[v.ri + 1] ? this.moveOf(e, v.route[v.ri + 1]) : undefined) ?? pendConn.move;
       // wrong lane for the planned turn and too late to change: take a turn this lane allows
-      const wrongLane = v.lane < m.lo || v.lane > m.hi;
+      const wrongLane = !laneAllowed(m, v.lane);
       // a turning share was drawn for this junction: keep trying to reach the right lane for a while
       // …but never for long while standing at the line, where it blocks everyone behind it
       const committed = !!v.splits?.has(e.idx) && !(pendD < 8 && v.wait > 6);
@@ -258,6 +259,12 @@ export abstract class SimMotion extends SimJunctions {
     if (m) {
       const many = (e.to.moves.get(e.idx)?.length || 0) > 1 || e.to.controlled;
       if (many && (m.lo > lo || m.hi < hi)) { lo = Math.max(lo, m.lo); hi = Math.min(hi, m.hi); urgent = toEnd; }
+      // lane connections set by hand can leave a lane out in the middle: go to the nearest one that has it
+      if (m.map && m.map[v.lane] < 0 && v.lane >= lo && v.lane <= hi) {
+        let q = -1;
+        for (let d = 1; d < e.n && q < 0; d++) for (const c of [v.lane - d, v.lane + d]) if (c >= lo && c <= hi && m.map[c] >= 0) { q = c; break; }
+        if (q >= 0) { lo = hi = q; urgent = toEnd; }
+      }
       // lanes dropping at a plain road point: be in one that carries on
       const first = e.left + (m.skip ?? 0), cap = first + m.out.thru - 1;
       if (!e.to.controlled && (cap < hi || first > lo)) { lo = Math.max(lo, first); hi = Math.min(hi, cap); urgent = toEnd; }

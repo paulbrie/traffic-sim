@@ -59,7 +59,33 @@ export interface NodeDef {
    * kerb lane is for the first exit and the others for the rest.
    */
   ringLanes?: 1 | 2;
+  /**
+   * Lane connections set by hand, per turn: key "inLink:dir>outLink:dir" (the directed roads in and
+   * out), value per incoming lane (0 = leftmost) the outgoing lane it feeds, or null for none. Turns
+   * without an entry use the automatic connections. Ignored at roundabouts.
+   */
+  laneMap?: Record<string, (number | null)[]>;
+  /**
+   * Lane connector shapes set by hand: key "inLink:dir|inLane>outLink:dir|outLane", value how far the
+   * curve's handles reach (m) along the lane it leaves and back along the lane it joins, or (moved
+   * freely) the two handle points relative to the node.
+   */
+  connShape?: Record<string, ConnShape>;
+  /** junction outline drawn by hand (outer kerb edge), points relative to the node; replaces the automatic one */
+  outline?: Vec[];
+  /** painted areas on the junction: hatched (no driving) or kerbed islands; points relative to the node */
+  paint?: { kind: "hatch" | "island"; pts: Vec[] }[];
+  /** draw lane lines through the junction, between neighbouring lane paths */
+  laneLines?: boolean;
+  /**
+   * Line up lanes: a one-way road carrying on one direction of a two-way road here has its lanes shifted
+   * sideways (fading out along it) so they continue exactly where that direction's lanes are.
+   */
+  align?: boolean;
 }
+
+/** a lane connector's hand-set curve: handle lengths along the lanes, or free handle points (relative to its node) */
+export type ConnShape = [number, number] | { c1: Vec; c2: Vec };
 
 /** One green phase of a junction with custom lights. */
 export interface SignalPhase {

@@ -130,9 +130,18 @@ export function cubicPoints(a: Vec, c1: Vec, c2: Vec, b: Vec, n: number): number
 }
 
 /** smooth connector between two lane ends (positions + unit tangents) */
-export function connectorPoints(p: Vec, tp: Vec, q: Vec, tq: Vec, n = 14): number[] {
+export function connectorPoints(p: Vec, tp: Vec, q: Vec, tq: Vec, n = 14, reach?: readonly [number, number]): number[] {
   const dist = Math.hypot(q.x - p.x, q.y - p.y);
   if (dist < 1e-3) return [p.x, p.y, q.x + 1e-3, q.y];
+  const [k1, k2] = reach ?? connectorReach(p, tp, q, tq);
+  return cubicPoints(p, { x: p.x + tp.x * k1, y: p.y + tp.y * k1 }, { x: q.x - tq.x * k2, y: q.y - tq.y * k2 }, q, n);
+}
+/**
+ * How far a lane connector's curve handles reach along the lane it leaves (k1) and back along the lane
+ * it joins (k2), in metres: the automatic shape. Handles along the lanes keep the path tangent to both.
+ */
+export function connectorReach(p: Vec, tp: Vec, q: Vec, tq: Vec): [number, number] {
+  const dist = Math.hypot(q.x - p.x, q.y - p.y);
   const cross = tp.x * tq.y - tp.y * tq.x;
   const dx = q.x - p.x, dy = q.y - p.y;
   // how far ahead the exit lies along each lane's own direction
@@ -151,7 +160,7 @@ export function connectorPoints(p: Vec, tp: Vec, q: Vec, tq: Vec, n = 14): numbe
   }
   // never let a handle overshoot the other end (that is what makes zig-zags)
   k1 = Math.min(k1, dist * 0.75); k2 = Math.min(k2, dist * 0.75);
-  return cubicPoints(p, { x: p.x + tp.x * k1, y: p.y + tp.y * k1 }, { x: q.x - tq.x * k2, y: q.y - tq.y * k2 }, q, n);
+  return [k1, k2];
 }
 
 export const angleOf = (v: Vec) => Math.atan2(v.y, v.x);

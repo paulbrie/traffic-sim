@@ -1,5 +1,5 @@
 /** Static road geometry derived from the compiled network, shared by 2D and 3D renderers. */
-import { CURB, LEVEL_H, armEnd, connectorPreview, linkCenter, linkZ, type Arm, type CNode, type Movement, type Compiled, type Edge } from "@/engine/compile";
+import { CURB, LEVEL_H, armEnd, connectorPreview, exitLane, laneAllowed, linkCenter, linkZ, type Arm, type CNode, type Movement, type Compiled, type Edge } from "@/engine/compile";
 import { Poly, normAngle } from "@/engine/geom";
 import type { LinkDef, MedianKind, Network, Vec } from "@/engine/types";
 
@@ -179,7 +179,7 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
     const es = byLink.get(link.id); if (!es) continue;
     const on = onL(link);
     const A = c.nodeById.get(link.from)!, B = c.nodeById.get(link.to)!;
-    const full = linkCenter(link, A.pos, B.pos);
+    const full = c.linkCenters.get(link.id) ?? linkCenter(link, A.pos, B.pos);
     const tA = es.f ? es.f.trimA : es.b ? es.b.trimB : 0;
     const tB = es.f ? es.f.trimB : es.b ? es.b.trimA : 0;
     const center0 = full.slice(tA, Math.max(tA + 0.1, full.len - tB)), Lc = center0.len;
@@ -294,7 +294,7 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
         if (moves.length > 1 && ec.len > 18) {
           for (let k = 0; k < e.n; k++) {
             if (k === e.dropLane) continue;
-            const turns = moves.filter(m => k >= m.lo && k <= m.hi).map(m => m.turn).join("");
+            const turns = moves.filter(m => laneAllowed(m, k)).map(m => m.turn).join("");
             const s = ec.len - 9, p = ec.at(s), tt = ec.tangent(s), off = e.base + (k + 0.5) * e.lw;
             geo.arrows.push({ p: { x: p.x - tt.y * off, y: p.y + tt.x * off }, dir: tt, turns, on });
           }
@@ -407,6 +407,17 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
       on: onN(n),
     });
   }
+  // painted areas and lane lines through junctions (set on the junction)
+  for (const n of c.nodes) {
+    const on = onN(n), abs = (q: Vec) => ({ x: n.pos.x + q.x, y: n.pos.y + q.y });
+    for (const a of n.def.paint ?? []) {
+      const pts = a.pts.map(abs);
+      if (a.kind === "island") { geo.islands.push({ pts, on }); continue; }
+      geo.lines.push({ poly: new Poly([...pts, pts[0]].flatMap(q => [q.x, q.y])), dashed: false, kind: "lane", on });
+      for (const seg of hatchInside(pts, 1.6)) geo.lines.push({ poly: new Poly(seg), dashed: false, kind: "hatch", on });
+    }
+    if (n.def.laneLines && !n.ringR) for (const pts of junctionLaneLines(c, n)) geo.lines.push({ poly: new Poly(pts), dashed: true, kind: "lane", on });
+  }
   const lineColor = new Map<string, string>();
   for (const l of net.lines) for (const s of l.stops) if (!lineColor.has(s)) lineColor.set(s, l.color);
   for (const s of c.stops) {
@@ -428,7 +439,7 @@ export function heightFn(c: Compiled, net: Network) {
   const links = new Map(net.links.map(l => [l.id, l])), centers = new Map<string, Poly>();
   const centerOf = (l: LinkDef) => {
     let p = centers.get(l.id);
-    if (!p) { const A = c.nodeById.get(l.from), B = c.nodeById.get(l.to); p = A && B ? linkCenter(l, A.pos, B.pos) : new Poly([0, 0, 0, 0]); centers.set(l.id, p); }
+    if (!p) { const A = c.nodeById.get(l.from), B = c.nodeById.get(l.to); p = c.linkCenters.get(l.id) ?? (A && B ? linkCenter(l, A.pos, B.pos) : new Poly([0, 0, 0, 0])); centers.set(l.id, p); }
     return p;
   };
   const at = (on: On, x: number, y: number): number => {
@@ -443,3 +454,51 @@ export function heightFn(c: Compiled, net: Network) {
   return { flat, at, node };
 }
 export type HeightFn = ReturnType<typeof heightFn>;
+
+/** diagonal hatch lines (45°, `gap` m apart) clipped to a polygon, each as [x0, y0, x1, y1] */
+function hatchInside(poly: Vec[], gap: number): number[][] {
+  const out: number[][] = [];
+  // lines x + y = k: intersect every edge, pair the crossings up
+  let lo = Infinity, hi = -Infinity;
+  for (const p of poly) { lo = Math.min(lo, p.x + p.y); hi = Math.max(hi, p.x + p.y); }
+  for (let k = Math.ceil(lo / gap) * gap; k < hi; k += gap) {
+    const xs: number[] = [];
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[j], b = poly[i], fa = a.x + a.y - k, fb = b.x + b.y - k;
+      if ((fa < 0) !== (fb < 0)) { const t = fa / (fa - fb); xs.push(a.x + (b.x - a.x) * t); }
+    }
+    xs.sort((p, q) => p - q);
+    for (let m = 0; m + 1 < xs.length; m += 2) out.push([xs[m], k - xs[m], xs[m + 1], k - xs[m + 1]]);
+  }
+  return out;
+}
+
+/**
+ * Lane lines through a junction: between each two neighbouring lanes of an approach, a line midway
+ * between their paths, for as long as the paths run side by side (until they part for different exits).
+ */
+function junctionLaneLines(c: Compiled, n: CNode): number[][] {
+  const out: number[][] = [];
+  for (const arm of n.arms) {
+    const e = arm.inEdge;
+    if (!e) continue;
+    const moves = n.moves.get(e.idx) ?? [];
+    // one path per lane: the straight-most movement it may take
+    const pathOf = (a: number) => {
+      const ms = moves.filter(m => laneAllowed(m, a)).sort((x, y) => Math.abs(x.delta) - Math.abs(y.delta));
+      return ms.length ? c.getConn(ms[0], a, exitLane(ms[0], a, false)).poly : null;
+    };
+    for (let a = 0; a + 1 < e.n; a++) {
+      const p = pathOf(a), q = pathOf(a + 1);
+      if (!p || !q) continue;
+      const pts: number[] = [], steps = 24;
+      for (let k = 0; k <= steps; k++) {
+        const u = p.at((p.len * k) / steps), v = q.at((q.len * k) / steps);
+        if (Math.hypot(u.x - v.x, u.y - v.y) > e.lw * 1.4) break;
+        pts.push((u.x + v.x) / 2, (u.y + v.y) / 2);
+      }
+      if (pts.length >= 6) out.push(pts);
+    }
+  }
+  return out;
+}

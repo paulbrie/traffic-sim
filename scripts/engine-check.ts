@@ -1,4 +1,4 @@
-import { Sim, sampleTown, compile, connectorPreview, exitLane, measureRun, optimizeSignals } from "../src/engine";
+import { Sim, sampleTown, compile, connectorPreview, exitLane, connectionIssues, alignableNodes, measureRun, optimizeSignals } from "../src/engine";
 import { makeLink, makeNode } from "../src/engine/sample";
 import * as mirrorModule from "../src/engine/sim/mirror";
 import { readFileSync } from "fs";
@@ -472,5 +472,112 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const rates = s.gateRates(), anyIn = rates.some(([, a]) => a > 0), anyOut = rates.some(([, , b]) => b > 0);
   const ok = ins > 20 && outs > 20 && outs <= s.stats.trips && anyIn && anyOut;
   console.log(`entry / exit counters: ${ins} entered, ${outs} left (${s.stats.trips} trips); busiest ${Math.round(Math.max(...rates.map(r => r[1])))}/h in | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// lane connections set by hand: they win over the automatic ones, a swap is reported as crossing
+// paths, a turn with every lane switched off is gone, the check finds roads that lead nowhere
+{
+  const J = makeNode(0, 0, "priority", false), W = makeNode(-200, 0), E = makeNode(200, 0), S = makeNode(0, 200);
+  const we = makeLink(W, J, 2, 2), je = makeLink(J, E, 2, 2), js = makeLink(J, S, 1, 1);
+  const base: Network = { version: 1, nodes: [J, W, E, S], stops: [], lines: [], links: [we, je, js] };
+  const kS = `${we.id}:1>${je.id}:1`, kR = `${we.id}:1>${js.id}:1`;
+  const auto = compile(sanitizeNetwork(base));
+  const withMap = sanitizeNetwork({ ...base, nodes: base.nodes.map(n => n.id === J.id ? { ...n, laneMap: { [kS]: [1, 0], [kR]: [null, null], "bad key": [0] } } : n) });
+  const c = compile(withMap), cn = c.nodeById.get(J.id)!, fromW = cn.moves.get(c.edgeByKey.get(`${we.id}:1`)!.idx)!;
+  const mS = fromW.find(m => m.turn === "S")!;
+  const issues = connectionIssues(c, cn);
+  const autoIssues = connectionIssues(auto, auto.nodeById.get(J.id)!);
+  const sim = new Sim(c, { cars: 120, trucks: 0, seed: 2 }); sim.run(3000);
+  // every turn from the side road switched off: that road leads nowhere
+  const offS = Object.fromEntries([we, je].map(l => [`${js.id}:-1>${l.id}:${l === we ? -1 : 1}`, [null]]));
+  const dead = compile(sanitizeNetwork({ ...base, nodes: base.nodes.map(n => n.id === J.id ? { ...n, laneMap: offS } : n) }));
+  const deadIssues = connectionIssues(dead, dead.nodeById.get(J.id)!);
+  const kept = Object.keys(withMap.nodes.find(n => n.id === J.id)!.laneMap ?? {});
+  const ok = exitLane(mS, 0, false) === 1 && exitLane(mS, 1, false) === 0 && !fromW.some(m => m.turn === "R")
+    && issues.some(i => i.message.includes("cross")) && autoIssues.length === 0 && sim.stats.trips > 20
+    && kept.length === 2 && deadIssues.some(i => i.level === "error" && /leads nowhere/.test(i.message));
+  console.log(`lane connections by hand: straight lanes swapped ${exitLane(mS, 0, false)}/${exitLane(mS, 1, false)}, right turn gone ${!fromW.some(m => m.turn === "R")}; issues ${issues.map(i => i.message).join(" | ")}; automatic: ${autoIssues.length}; ${sim.stats.trips} trips | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// a junction's shape comes from its lanes: every lane path through a junction stays on its asphalt
+{
+  const c = compile(sanitizeNetwork(JSON.parse(readFileSync("scripts/fixtures/osm-milton-keynes.json", "utf8"))));
+  const inside = (p: { x: number; y: number }, poly: { x: number; y: number }[]) => {
+    let r = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) if ((poly[i].y > p.y) !== (poly[j].y > p.y) && p.x < ((poly[j].x - poly[i].x) * (p.y - poly[i].y)) / (poly[j].y - poly[i].y) + poly[i].x) r = !r;
+    return r;
+  };
+  let paths = 0, off = 0;
+  for (const v of connectorPreview(c, n => n.degree >= 2)) {
+    paths++;
+    const pts = v.pts, poly = v.node.polygon;
+    // (the ends sit on the mouth line; look at the path in between)
+    for (let i = 4; i + 5 < pts.length; i += 2) if (!inside({ x: pts[i], y: pts[i + 1] }, poly)) { off++; break; }
+  }
+  const ok = paths > 300 && off === 0;
+  console.log(`junction shapes from lanes: ${paths} lane paths through junctions, ${off} leaving the road | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// connector shapes set by hand: the path takes the new handles, the junction outline still covers it,
+// and bad values are dropped on load
+{
+  const J = makeNode(0, 0, "priority", false), W = makeNode(-200, 0), N = makeNode(0, -200), E = makeNode(200, 0);
+  const wj = makeLink(W, J, 1, 1), jn = makeLink(J, N, 1, 1), je = makeLink(J, E, 1, 1);
+  const base: Network = { version: 1, nodes: [J, W, N, E], stops: [], lines: [], links: [wj, jn, je] };
+  const key = `${wj.id}:1|0>${jn.id}:1|0`;
+  const c0 = compile(sanitizeNetwork(base));
+  const shaped = sanitizeNetwork({ ...base, nodes: base.nodes.map(n => n.id === J.id ? { ...n, connShape: { [key]: [12, 12], "nope": [1, 2], [`${wj.id}:1|0>${je.id}:1|0`]: [NaN, 3] } } : n) });
+  const c1 = compile(shaped);
+  const path = (c: typeof c0) => connectorPreview(c).find(v => v.move.in.link.id === wj.id && v.move.out.link.id === jn.id)!;
+  const p0 = path(c0), p1 = path(c1), mid = (v: typeof p0) => { const k = (v.pts.length / 4) | 0; return { x: v.pts[k * 2], y: v.pts[k * 2 + 1] }; };
+  const moved = Math.hypot(mid(p0).x - mid(p1).x, mid(p0).y - mid(p1).y);
+  const inside = (p: { x: number; y: number }, poly: { x: number; y: number }[]) => { let r = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) if ((poly[i].y > p.y) !== (poly[j].y > p.y) && p.x < ((poly[j].x - poly[i].x) * (p.y - poly[i].y)) / (poly[j].y - poly[i].y) + poly[i].x) r = !r; return r; };
+  let off = 0; for (let i = 4; i + 5 < p1.pts.length; i += 2) if (!inside({ x: p1.pts[i], y: p1.pts[i + 1] }, p1.node.polygon)) off++;
+  const kept = Object.keys(shaped.nodes.find(n => n.id === J.id)!.connShape ?? {});
+  const sim = new Sim(c1, { cars: 60, trucks: 0, seed: 3 }); sim.run(2000);
+  const ok = moved > 1 && off === 0 && kept.length === 1 && kept[0] === key && sim.stats.trips > 10;
+  console.log(`connector shapes by hand: path moved ${moved.toFixed(1)} m, ${off} points off the road, kept ${kept.length} shape; ${sim.stats.trips} trips | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// junction editor: an outline drawn by hand replaces the automatic one (with a kerb band inside it),
+// painted areas and lane lines are kept, free connector handles bend the path, bad data is dropped
+{
+  const J = makeNode(0, 0, "priority", false), W = makeNode(-200, 0), N = makeNode(0, -200), E = makeNode(200, 0);
+  const wj = makeLink(W, J, 1, 1), jn = makeLink(J, N, 1, 1), je = makeLink(J, E, 1, 1);
+  const square = [{ x: -12, y: -12 }, { x: 12, y: -12 }, { x: 12, y: 12 }, { x: -12, y: 12 }];
+  const key = `${wj.id}:1|0>${jn.id}:1|0`;
+  const net = sanitizeNetwork({ version: 1, nodes: [{ ...J, outline: square, laneLines: true, paint: [{ kind: "hatch", pts: [{ x: 2, y: 2 }, { x: 5, y: 2 }, { x: 4, y: 5 }] }, { kind: "bogus", pts: [] }], connShape: { [key]: { c1: { x: -2, y: 8 }, c2: { x: 8, y: -2 } } } }, W, N, E], stops: [], lines: [], links: [wj, jn, je] } as Network);
+  const nd = net.nodes.find(n => n.id === J.id)!;
+  const c = compile(net), cn = c.nodeById.get(J.id)!;
+  const area = (p: { x: number; y: number }[]) => { let A = 0; for (let i = 0, j = p.length - 1; i < p.length; j = i++) A += (p[j].x + p[i].x) * (p[j].y - p[i].y); return Math.abs(A / 2); };
+  const v = connectorPreview(c).find(x => x.move.in.link.id === wj.id && x.move.out.link.id === jn.id)!;
+  const auto = connectorPreview(compile(sanitizeNetwork({ ...net, nodes: net.nodes.map(n => n.id === J.id ? { ...n, connShape: undefined } : n) }))).find(x => x.move.in.link.id === wj.id && x.move.out.link.id === jn.id)!;
+  const k = (v.pts.length / 4) | 0, moved = Math.hypot(v.pts[k * 2] - auto.pts[k * 2], v.pts[k * 2 + 1] - auto.pts[k * 2 + 1]);
+  const geo = buildRoadGeo(c, net);
+  const ok = Math.abs(area(cn.polygon) - 576) < 1 && area(cn.surface) < 576 && area(cn.surface) > 400 && nd.paint?.length === 1 && nd.laneLines === true
+    && moved > 0.5 && geo.lines.some(l => l.kind === "hatch");
+  console.log(`junction editor: outline ${area(cn.polygon).toFixed(0)} m² (asphalt ${area(cn.surface).toFixed(0)}), ${nd.paint?.length} painted area, free handles moved the path ${moved.toFixed(1)} m | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// line up lanes: a two-way road splitting into two one-way carriageways; with it on, the one-way roads'
+// lanes continue where each direction's lanes are, so the straight-on paths hardly shift sideways
+{
+  const J = makeNode(0, 0, "priority", false), E = makeNode(200, 0), NW = makeNode(-200, -12), SW = makeNode(-200, 12);
+  const main = makeLink(J, E, 2, 2), out = makeLink(J, NW, 2, 0), inn = makeLink(SW, J, 2, 0);
+  const base: Network = { version: 1, nodes: [J, E, NW, SW], stops: [], lines: [], links: [main, out, inn] };
+  const shift = (net: Network) => {
+    const c = compile(sanitizeNetwork(net)); let worst = 0;
+    // how far each straight-on path ends up to the side of where it started (the main road runs along x)
+    for (const v of connectorPreview(c)) if (v.move.turn === "S") { const P = v.pts; worst = Math.max(worst, Math.abs(P[P.length - 1] - P[1])); }
+    return worst;
+  };
+  const before = shift(base), after = shift({ ...base, nodes: base.nodes.map(n => (n.id === J.id ? { ...n, align: true } : n)) });
+  const ok = before > 0.5 && after < 0.1 && alignableNodes(base).includes(J.id);
+  console.log(`line up lanes: straight-on paths end up to ${before.toFixed(2)} m to the side → ${after.toFixed(2)} m | ok ${ok}`);
   if (!ok) process.exit(1);
 }

@@ -1,4 +1,4 @@
-import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type PlanSettings } from "./types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type PlanSettings, type Vec, type ConnShape } from "./types";
 import { sanitizeParams } from "./params";
 
 const num = (v: unknown, lo: number, hi: number, def: number) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
@@ -66,6 +66,12 @@ export function sanitizeNetwork(input: unknown): Network {
       exitWeight: typeof n.exitWeight === "number" && isFinite(n.exitWeight) ? Math.min(100, Math.max(0, n.exitWeight)) : null,
       phases: phases(n.phases),
       ...(n.ringLanes === 2 ? { ringLanes: 2 as const } : {}),
+      ...(laneMapOf(n.laneMap) ?? {}),
+      ...(connShapeOf(n.connShape) ?? {}),
+      ...(ptsOf(n.outline, 400) ? { outline: ptsOf(n.outline, 400)! } : {}),
+      ...(paintOf(n.paint) ?? {}),
+      ...(n.laneLines === true ? { laneLines: true } : {}),
+      ...(n.align === true ? { align: true } : {}),
       ...(typeof n.peds === "number" && isFinite(n.peds) && n.peds > 0 ? { peds: Math.round(Math.min(3000, n.peds)) } : {}),
       signal: {
         green: num(s.green, 3, 180, DEFAULT_SIGNAL.green), yellow: num(s.yellow, 1, 10, DEFAULT_SIGNAL.yellow),
@@ -177,6 +183,59 @@ function sanitizeGeo(v: unknown): Network["geo"] {
     a && [a.south, a.north].every(x => typeof x === "number" && Math.abs(x) <= 85) && [a.west, a.east].every(x => typeof x === "number" && Math.abs(x) <= 180) && (a.south as number) < (a.north as number) && (a.west as number) < (a.east as number),
   ).map((a: Record<string, number>): GeoArea => ({ south: a.south, west: a.west, north: a.north, east: a.east }));
   return { lat: g.lat, lon: g.lon, ...(areas.length ? { areas } : {}) };
+}
+
+/** hand-set lane connections: well-formed keys, lane numbers in range, at most 64 turns */
+function laneMapOf(v: unknown): { laneMap: Record<string, (number | null)[]> } | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const out: Record<string, (number | null)[]> = {};
+  for (const [k, arr] of Object.entries(v as Record<string, unknown>).slice(0, 64)) {
+    if (!/^[\w-]{1,64}:-?1>[\w-]{1,64}:-?1$/.test(k) || !Array.isArray(arr) || !arr.length || arr.length > MAX_LANES_AT_LINE) continue;
+    out[k] = arr.map(x => (typeof x === "number" && Number.isInteger(x) && x >= 0 && x < MAX_LANES_AT_LINE ? x : null));
+  }
+  return Object.keys(out).length ? { laneMap: out } : null;
+}
+
+/** a ring of points relative to a node (3..max, within 500 m), rounded to the centimetre */
+function ptsOf(v: unknown, max: number): Vec[] | null {
+  if (!Array.isArray(v) || v.length < 3 || v.length > max) return null;
+  const out: Vec[] = [];
+  for (const p of v) {
+    const x = Number((p as Vec)?.x), y = Number((p as Vec)?.y);
+    if (!isFinite(x) || !isFinite(y) || Math.abs(x) > 500 || Math.abs(y) > 500) return null;
+    out.push({ x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 });
+  }
+  return out;
+}
+function paintOf(v: unknown): { paint: { kind: "hatch" | "island"; pts: Vec[] }[] } | null {
+  if (!Array.isArray(v)) return null;
+  const out = v.slice(0, 50).flatMap(a => {
+    const kind = (a as { kind?: unknown })?.kind, pts = ptsOf((a as { pts?: unknown })?.pts, 200);
+    return (kind === "hatch" || kind === "island") && pts ? [{ kind, pts } as { kind: "hatch" | "island"; pts: Vec[] }] : [];
+  });
+  return out.length ? { paint: out } : null;
+}
+
+/** hand-set connector shapes: well-formed keys, two handle lengths (0.5–200 m), at most 256 */
+function connShapeOf(v: unknown): { connShape: Record<string, ConnShape> } | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const out: Record<string, ConnShape> = {};
+  for (const [k, r] of Object.entries(v as Record<string, unknown>).slice(0, 256)) {
+    if (!/^[\w-]{1,64}:-?1\|\d>[\w-]{1,64}:-?1\|\d$/.test(k)) continue;
+    // free handle points (relative to the node, within 300 m)
+    if (r && typeof r === "object" && !Array.isArray(r)) {
+      const f = (p: unknown) => { const x = Number((p as Vec)?.x), y = Number((p as Vec)?.y); return isFinite(x) && isFinite(y) && Math.abs(x) < 300 && Math.abs(y) < 300 ? { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 } : null; };
+      const c1 = f((r as { c1?: unknown }).c1), c2 = f((r as { c2?: unknown }).c2);
+      if (c1 && c2) out[k] = { c1, c2 };
+      continue;
+    }
+    if (!Array.isArray(r) || r.length !== 2) continue;
+    const [a, b] = r.map(Number);
+    if (!isFinite(a) || !isFinite(b)) continue;
+    const c = (x: number) => Math.round(Math.min(200, Math.max(0.5, x)) * 100) / 100;
+    out[k] = [c(a), c(b)];
+  }
+  return Object.keys(out).length ? { connShape: out } : null;
 }
 
 export function sanitizeSettings(input: unknown): PlanSettings {

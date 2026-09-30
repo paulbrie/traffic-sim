@@ -3,12 +3,13 @@
 import { Fragment } from "react";
 import { useSubject } from "subjecto/react";
 import { Button } from "@/components/ui/button";
-import { connectorId } from "@/engine/compile";
+import { connShapeKey, connectorHandles, connectorId, exitLane, laneAllowed } from "@/engine/compile";
 import { junctionRefs } from "@/engine/refs";
 import { connectorsOf } from "@/render/draw2d";
-import { select, stats$ } from "@/state/store";
+import { commit, network$, select, stats$ } from "@/state/store";
+import * as ops from "@/state/ops";
 import { simController } from "@/state/sim-controller";
-import { IdChip, Section, compass } from "./fields";
+import { IdChip, NumberField, Section, compass } from "./fields";
 
 const TURN_NAME = { L: "left", S: "ahead", R: "right", U: "U-turn" } as const;
 const GLYPH = { L: "←", S: "↑", R: "→", U: "↶" } as const;
@@ -60,6 +61,52 @@ export function LaneInspector({ id }: { id: string }) {
   );
 }
 
+/** change where this lane goes on this turn, or take it off the turn (sets the junction's lane connections) */
+function ConnectorEdit({ v }: { v: ReturnType<typeof connectorsOf>[number] }) {
+  const m = v.move, key = `${m.in.key}>${m.out.key}`, nodeId = v.node.def.id;
+  const lanes = Array.from({ length: m.in.n }, (_, a) => (laneAllowed(m, a) ? exitLane(m, a, false) : null));
+  const manual = !!v.node.def.laneMap?.[key];
+  const apply = (b: number | null) => {
+    const next = [...lanes]; next[v.inLane] = b;
+    commit(ops.setLaneMap(network$.getValue(), nodeId, key, next));
+    select(b === null ? { kind: "node", id: nodeId } : { kind: "connector", id: connectorId({ ...v, outLane: b }) });
+  };
+  return (
+    <Section title="Change this connection">
+      <label className="flex items-center justify-between gap-2 text-sm">
+        <span>Into lane of {m.out.link.name || m.out.link.id}</span>
+        <select className="h-7 rounded border bg-transparent px-1 font-mono text-sm" value={v.outLane} onChange={e => apply(Number(e.target.value))} aria-label="Into lane">
+          {Array.from({ length: m.out.n }, (_, q) => <option key={q} value={q}>{q + 1}</option>)}
+        </select>
+      </label>
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" onClick={() => apply(null)}>Remove this connection</Button>
+        {manual && <Button variant="ghost" size="sm" onClick={() => { commit(ops.setLaneMap(network$.getValue(), nodeId, key, null)); select({ kind: "node", id: nodeId }); }}>Back to automatic</Button>}
+      </div>
+      <p className="text-[11px] text-muted-foreground">Lane {v.inLane + 1} of {m.in.link.name || m.in.link.id}. All the lane connections of this junction are listed in its inspector.</p>
+    </Section>
+  );
+}
+
+/** the connector's curve: drag its two handles on the map, or type how far they reach */
+function ConnectorShape({ v }: { v: ReturnType<typeof connectorsOf>[number] }) {
+  const h = connectorHandles(v.node, v.move, v.inLane, v.outLane), key = connShapeKey(v.move, v.inLane, v.outLane), nodeId = v.node.def.id;
+  const set = (reach: [number, number] | null, k?: string) => commit(ops.setConnShape(network$.getValue(), nodeId, key, reach), k);
+  return (
+    <Section title="Curve">
+      <div className="grid grid-cols-2 gap-2">
+        <NumberField id="k1" label="Leaves along its lane" unit="m" value={h.k1} min={0.5} max={200} step={0.5} digits={1} onCommit={x => set([x, h.k2], `k1:${key}`)} />
+        <NumberField id="k2" label="Joins along its lane" unit="m" value={h.k2} min={0.5} max={200} step={0.5} digits={1} onCommit={x => set([h.k1, x], `k2:${key}`)} />
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        {h.custom ? "Shaped by hand." : "Automatic shape."} Drag the two round handles on the map (each slides along its lane; hold Shift to move one freely) to reshape it;
+        the junction&apos;s outline follows its lanes, and vehicles drive the new path.
+      </p>
+      {h.custom && <Button variant="outline" size="sm" className="justify-self-start" onClick={() => set(null)}>Automatic shape</Button>}
+    </Section>
+  );
+}
+
 /** a lane connector: the path from one lane through a junction into another */
 export function ConnectorInspector({ id }: { id: string }) {
   useSubject(stats$);
@@ -87,6 +134,8 @@ export function ConnectorInspector({ id }: { id: string }) {
         <p className="text-[11px] text-muted-foreground">Vehicles on this turn counts every lane making it. Lane arrows and signal phases are set on the road and the junction.</p>
         <Button variant="outline" size="sm" className="justify-self-start" onClick={() => select({ kind: "link", id: v.move.in.link.id })}>Open the road</Button>
       </Section>
+      {v.node.ringR === 0 && <ConnectorShape v={v} />}
+      {v.node.ringR === 0 && <ConnectorEdit v={v} />}
     </div>
   );
 }

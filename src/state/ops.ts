@@ -1,6 +1,6 @@
 /** Pure network edit operations. Each returns a new Network (never mutates). */
 import { newId, makeNode } from "@/engine/sample";
-import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec } from "@/engine/types";
+import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape } from "@/engine/types";
 import { linkExtent, type Compiled } from "@/engine/compile";
 import { greenWaveOffsets, withCustomPhases } from "@/engine/signals";
 
@@ -14,6 +14,45 @@ export function addNode(net: Network, p: Vec): [Network, NodeDef] {
 
 export function updateNode(net: Network, id: string, patch: Partial<NodeDef>): Network {
   return { ...net, nodes: net.nodes.map(n => (n.id === id ? { ...n, ...patch } : n)) };
+}
+
+/**
+ * Set the hand-made lane connections of one turn at a node ("inLink:dir>outLink:dir"): per incoming
+ * lane the outgoing lane it feeds, or null for none. `null` for the whole turn goes back to automatic.
+ */
+export function setLaneMap(net: Network, nodeId: string, key: string, lanes: (number | null)[] | null): Network {
+  const n = nodeById(net, nodeId);
+  if (!n) return net;
+  const next = { ...(n.laneMap ?? {}) };
+  if (lanes) next[key] = lanes; else delete next[key];
+  return updateNode(net, nodeId, { laneMap: Object.keys(next).length ? next : undefined });
+}
+
+/** Set (or with null, clear) the hand-made shape of one lane connector at a node: its two handle lengths. */
+export function setConnShape(net: Network, nodeId: string, key: string, reach: ConnShape | null): Network {
+  const n = nodeById(net, nodeId);
+  if (!n) return net;
+  const next = { ...(n.connShape ?? {}) };
+  if (!reach) delete next[key];
+  else next[key] = Array.isArray(reach) ? [round(reach[0]), round(reach[1])] : { c1: { x: round(reach.c1.x), y: round(reach.c1.y) }, c2: { x: round(reach.c2.x), y: round(reach.c2.y) } };
+  return updateNode(net, nodeId, { connShape: Object.keys(next).length ? next : undefined });
+}
+
+/** Set (or with null, clear) a junction's hand-drawn outline: points relative to the node. */
+export function setOutline(net: Network, nodeId: string, pts: Vec[] | null): Network {
+  return updateNode(net, nodeId, { outline: pts && pts.length >= 3 ? pts.map(p => ({ x: round(p.x), y: round(p.y) })) : undefined });
+}
+/** Add a painted area (hatched or a kerbed island) to a junction; points relative to the node. */
+export function addPaint(net: Network, nodeId: string, kind: "hatch" | "island", pts: Vec[]): Network {
+  const n = nodeById(net, nodeId);
+  if (!n || pts.length < 3) return net;
+  return updateNode(net, nodeId, { paint: [...(n.paint ?? []), { kind, pts: pts.map(p => ({ x: round(p.x), y: round(p.y) })) }] });
+}
+export function removePaint(net: Network, nodeId: string, index: number): Network {
+  const n = nodeById(net, nodeId);
+  if (!n?.paint) return net;
+  const next = n.paint.filter((_, i) => i !== index);
+  return updateNode(net, nodeId, { paint: next.length ? next : undefined });
 }
 
 /** Move a node; curve handles of attached links move along so curves keep their shape. */

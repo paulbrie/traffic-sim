@@ -6,7 +6,7 @@ import { batch } from "subjecto";
 import { buildRoadGeo, type RoadGeo } from "@/render/geometry";
 import { buildPaths, connectorsOf, drawScene, toScreen, toWorld, underlayHandles, type Camera, type Overlay, type PathCache, type UnderlayHandle } from "@/render/draw2d";
 import { readPalette, type Palette } from "@/render/palette";
-import { connectorId, linkExtent, LW, type CNode } from "@/engine/compile";
+import { connShapeKey, connectorHandles, connectorId, linkExtent, LW, type CNode } from "@/engine/compile";
 import { pointInPoly } from "@/engine/buildings";
 import type { Network, Vec } from "@/engine/types";
 import { commit, endGesture, network$, select, toggleRoad, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
@@ -23,6 +23,8 @@ type Drag =
   | { mode: "pan"; sx: number; sy: number; cx: number; cy: number; moved: boolean; clickSel: boolean; right?: boolean }
   | { mode: "node"; id: string; moved: boolean; sx: number; sy: number }
   | { mode: "handle"; linkId: string; handle: "c1" | "c2" | "bend"; moved: boolean }
+  | { mode: "conn"; id: string; which: "k1" | "k2" }
+  | { mode: "outline"; node: string; idx: number }
   | { mode: "ul-move"; start: Vec; x0: number; y0: number }
   | { mode: "ul-rotate"; a0: number; rot0: number }
   | { mode: "ul-scale"; d0: number; mpp0: number }
@@ -136,6 +138,22 @@ export function PlanCanvas() {
         if (r.d <= half + pxToM(4) && (!best || (l.level ?? 0) > best.lv || ((l.level ?? 0) === best.lv && r.d < best.d))) best = { id: l.id, t: r.t, pt: r.pt, d: r.d, lv: l.level ?? 0 };
       }
       return best;
+    }
+    /** index of the outline point (of the junction whose outline is being edited) under the pointer, or -1 */
+    function hitOutlinePoint(sx: number, sy: number): number {
+      const id = ui.getValue().shape.edit, nd = id ? ops.nodeById(net, id) : null;
+      if (!nd?.outline) return -1;
+      return nd.outline.findIndex(p => { const q = toScreen(cam, nd.x + p.x, nd.y + p.y); return Math.hypot(q.x - sx, q.y - sy) < HIT_HANDLE; });
+    }
+    /** the selected lane connector and one of its curve handles under the pointer */
+    function hitConnHandle(sx: number, sy: number): { id: string; which: "k1" | "k2" } | null {
+      const sel = u.selection;
+      if (sel?.kind !== "connector") return null;
+      const v = connectorsOf(simController.compiled).find(x => connectorId(x) === sel.id);
+      if (!v) return null;
+      const h = connectorHandles(v.node, v.move, v.inLane, v.outLane);
+      for (const [p, which] of [[h.h1, "k1"], [h.h2, "k2"]] as const) { const q = toScreen(cam, p.x, p.y); if (Math.hypot(q.x - sx, q.y - sy) < HIT_HANDLE) return { id: sel.id, which }; }
+      return null;
     }
     function hitHandle(sx: number, sy: number): "c1" | "c2" | "bend" | null {
       const sel = u.selection;
@@ -266,6 +284,19 @@ export function PlanCanvas() {
       if (e.button === 2 && tool === "road") { pending = null; markDirty(); return; }
       if (e.button !== 0) return;
 
+      // junction editor: clicks add points to the painted area being drawn, or pick outline points
+      const sh = ui.getValue().shape;
+      if (sh.paint) { const pp = sh.paint; sh.paint = { ...pp, pts: [...pp.pts, { x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
+      if (sh.edit) {
+        const k = hitOutlinePoint(sx, sy);
+        if (k >= 0) {
+          const nd = ops.nodeById(net, sh.edit)!;
+          if (e.altKey) { if (nd.outline!.length > 3) commit(ops.setOutline(net, nd.id, nd.outline!.filter((_, i) => i !== k))); return; }
+          drag = { mode: "outline", node: nd.id, idx: k };
+          return;
+        }
+      }
+
       const calib = u.calib;
       if (calib.active) {
         const p = { x: ops.round(w.x), y: ops.round(w.y) };
@@ -348,6 +379,9 @@ export function PlanCanvas() {
         return;
       }
 
+      // the selected lane connector's curve handles (any layer)
+      const ch = hitConnHandle(sx, sy);
+      if (ch) { drag = { mode: "conn", id: ch.id, which: ch.which }; return; }
       // select tool, limited to one kind of object when a layer is chosen
       if (u.layer !== "all") {
         const pick = pickInLayer(u.layer, sx, sy, w);
@@ -418,6 +452,31 @@ export function PlanCanvas() {
         commit(ops.moveNode(net, drag.id, p), `drag:${drag.id}`);
         return;
       }
+      if (drag?.mode === "outline") {
+        const d = drag, nd = ops.nodeById(net, d.node);
+        if (!nd?.outline) return;
+        const p = shift ? { x: w.x, y: w.y } : gridSnap(w);
+        commit(ops.setOutline(net, nd.id, nd.outline.map((q, i) => (i === d.idx ? { x: p.x - nd.x, y: p.y - nd.y } : q))), `outline:${nd.id}`);
+        return;
+      }
+      if (drag?.mode === "conn") {
+        const d = drag, v = connectorsOf(simController.compiled).find(x => connectorId(x) === d.id);
+        if (!v) return;
+        const h = connectorHandles(v.node, v.move, v.inLane, v.outLane);
+        const key = connShapeKey(v.move, v.inLane, v.outLane), np = v.node.pos;
+        if (e.shiftKey || h.free) {
+          // Shift (or already free): the handle goes wherever it is dragged
+          const rel = (p: Vec) => ({ x: p.x - np.x, y: p.y - np.y });
+          const c1 = d.which === "k1" ? rel(w) : rel(h.h1), c2 = d.which === "k2" ? rel(w) : rel(h.h2);
+          commit(ops.setConnShape(net, v.node.def.id, key, { c1, c2 }), `conn:${d.id}`);
+        } else {
+          // each handle slides along its lane's direction (the path stays tangent to both lanes)
+          const k = d.which === "k1" ? (w.x - h.P.x) * h.tp.x + (w.y - h.P.y) * h.tp.y : (h.Q.x - w.x) * h.tq.x + (h.Q.y - w.y) * h.tq.y;
+          const reach: [number, number] = d.which === "k1" ? [Math.max(0.5, k), h.k2] : [h.k1, Math.max(0.5, k)];
+          commit(ops.setConnShape(net, v.node.def.id, key, reach), `conn:${d.id}`);
+        }
+        return;
+      }
       if (drag?.mode === "handle") {
         drag.moved = true;
         const l = ops.linkById(net, drag.linkId);
@@ -437,8 +496,9 @@ export function PlanCanvas() {
       // hover feedback
       let hv: Overlay["hover"] = null;
       if (u.tool === "select") {
-        const h = hitHandle(sx, sy);
-        if (h) hv = { kind: "handle", id: h };
+        const h = hitHandle(sx, sy), ch = hitConnHandle(sx, sy);
+        if (ch) hv = { kind: "handle", id: ch.which };
+        else if (h) hv = { kind: "handle", id: h };
         else { const n = hitNode(sx, sy); if (n) hv = { kind: "node", id: n }; else { const l = hitLink(w); if (l) hv = { kind: "link", id: l.id }; } }
       } else if (u.tool === "stop" || u.tool === "segment") { const l = hitLink(w); if (l) hv = { kind: "link", id: l.id }; }
       else if (u.tool === "road") { const n = hitNode(sx, sy); if (n) hv = { kind: "node", id: n }; }
@@ -482,6 +542,11 @@ export function PlanCanvas() {
       if (e.type === "keydown" && e.code === "Space" && !typing) { spaceHeld = true; canvas.style.cursor = "grab"; e.preventDefault(); }
       if (e.type === "keyup" && e.code === "Space") { spaceHeld = false; canvas.style.cursor = "default"; }
       if (e.type === "keydown" && e.key === "Escape") setMenu(null);
+      const sh = ui.getValue().shape;
+      if (e.type === "keydown" && !typing && sh.paint && (e.key === "Enter" || e.key === "Escape")) {
+        if (e.key === "Enter") finishPaint(); else sh.paint = null;
+        e.stopPropagation(); e.preventDefault(); markDirty(); return;
+      }
       if (e.type === "keydown" && !typing && (e.key === "Escape" || e.key === "Enter") && pending) { pending = null; markDirty(); e.stopPropagation(); }
       if (e.type === "keydown" && !typing && e.key === "Escape" && u.calib.active) {
         const c = ui.getValue().calib; batch(() => { c.active = false; c.a = null; c.b = null; }); e.stopPropagation();
@@ -489,6 +554,24 @@ export function PlanCanvas() {
       markDirty();
     };
     const onDbl = (e: MouseEvent) => {
+      const sh = ui.getValue().shape;
+      // drawing a painted area: a double-click finishes it
+      if (sh.paint) { finishPaint(); return; }
+      // editing an outline: double-click an edge to add a point there
+      if (sh.edit) {
+        const nd = ops.nodeById(net, sh.edit);
+        if (nd?.outline) {
+          const { sx, sy } = local(e), w = toWorld(cam, sx, sy), pts = nd.outline.map(p => ({ x: nd.x + p.x, y: nd.y + p.y }));
+          let best = -1, bd = pxToM(12);
+          for (let i = 0; i < pts.length; i++) {
+            const a = pts[i], b = pts[(i + 1) % pts.length], dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1;
+            const t = Math.max(0, Math.min(1, ((w.x - a.x) * dx + (w.y - a.y) * dy) / L2)), d = Math.hypot(a.x + dx * t - w.x, a.y + dy * t - w.y);
+            if (d < bd) { bd = d; best = i; }
+          }
+          if (best >= 0) { const next = [...nd.outline]; next.splice(best + 1, 0, { x: w.x - nd.x, y: w.y - nd.y }); commit(ops.setOutline(net, nd.id, next)); }
+          return;
+        }
+      }
       if (u.tool === "road") { pending = null; markDirty(); return; }
       if (u.tool !== "select") return;
       // double-click a road to add a bend point you can drag
@@ -500,6 +583,17 @@ export function PlanCanvas() {
       commit(n2);
       select({ kind: "node", id: node.id });
     };
+    /** finish the painted area being drawn (3 points or more) and add it to its junction */
+    function finishPaint() {
+      const sh = ui.getValue().shape, p = sh.paint;
+      if (!p) return;
+      const nd = ops.nodeById(net, p.node);
+      // (a double-click also clicked twice: drop points on top of the one before)
+      const pts = p.pts.filter((q, i) => i === 0 || Math.hypot(q.x - p.pts[i - 1].x, q.y - p.pts[i - 1].y) > 0.3);
+      if (nd && pts.length >= 3) commit(ops.addPaint(net, nd.id, p.kind, pts.map(q => ({ x: q.x - nd.x, y: q.y - nd.y }))));
+      sh.paint = null;
+      markDirty();
+    }
     const onLeave = () => { cursorWorld = null; hover = null; ui.getValue().cursor.inside = false; markDirty(); };
     const noMenu = (e: MouseEvent) => e.preventDefault();
 
@@ -549,6 +643,10 @@ export function PlanCanvas() {
           calib: u.calib.active ? { a: u.calib.a, b: u.calib.b, cursor: cursorWorld } : null,
           buildings: u.display.buildings,
           satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, layer: u.layer, maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
+          shape: (() => {
+            const sh = u.shape, on = sh.edit ? ops.nodeById(net, sh.edit) : null;
+            return { outline: on?.outline ? on.outline.map(p => ({ x: on.x + p.x, y: on.y + p.y })) : null, paint: sh.paint?.pts ?? null, cursor: cursorWorld };
+          })(),
           alsoSelected: u.selection?.kind !== "link" ? [] : u.multi.length ? u.multi : u.tool === "segment" && u.segScope === "road" ? ops.chainLinks(net, u.selection.id).map(c => c.id).slice(1) : [],
         });
         viewport.cx = cam.cx; viewport.cy = cam.cy; viewport.wm = cam.w / cam.scale; viewport.hm = cam.h / cam.scale;

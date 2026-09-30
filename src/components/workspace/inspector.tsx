@@ -28,6 +28,8 @@ import { LaneArrowsEditor, SignPicker } from "./lane-arrows";
 import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
 import { junctionRefs } from "@/engine/refs";
 import { JunctionEventLog, RoadEventLog } from "./event-log";
+import { LaneConnectionsSection } from "./lane-connections";
+import { JunctionShapeSection } from "./junction-shape";
 
 const CONTROL_LABEL: Record<Control, string> = { priority: "Priority (first come)", free: "Free (go when clear)", stop: "All-way stop", lights: "Traffic lights", roundabout: "Roundabout" };
 const SPEEDS = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 130];
@@ -189,6 +191,8 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
       {(degree >= 3 || crossing) && node.control !== "roundabout" && cn && <PedestriansSection node={node} nodeIdx={cn.idx} set={set} />}
       {degree >= 3 && node.control !== "roundabout" && cn && <SlipLanesSection net={net} node={node} />}
       {(degree >= 3 || crossing) && <SignalGroupSection net={net} node={node} />}
+      {degree >= 2 && node.control !== "roundabout" && <JunctionShapeSection net={net} node={node} />}
+      {degree >= 2 && node.control !== "roundabout" && <LaneConnectionsSection net={net} node={node} />}
       {ref && cn && <JunctionLive net={net} nodeIdx={cn.idx} />}
       {degree === 2 && !crossing && (
         <Section title="Road joint">

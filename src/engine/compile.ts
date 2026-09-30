@@ -4,7 +4,8 @@
  * areas, turn movements with lane allowances, lane connectors, signal phases
  * and bus stops. The simulator and both renderers read this structure.
  */
-import { Poly, connectorPoints, signedAngle, normAngle, hull, dist } from "./geom";
+import polygonClipping from "polygon-clipping";
+import { Poly, connectorPoints, connectorReach, cubicPoints, signedAngle, normAngle, hull, dist } from "./geom";
 import { MAX_LANES, type FlowDef, type LinkDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
 import { attachBuildings, type Place } from "./buildings";
 
@@ -88,6 +89,8 @@ export interface Movement {
   /** lanes added at a plain road point: how many of the exit's left through lanes are new (the
    *  approach's lanes feed the ones they are lined up with) */
   shift?: number;
+  /** lane connections set by hand (NodeDef.laneMap): per incoming lane the outgoing lane, -1 = none */
+  map?: number[];
   /** connectors and crossings built for this movement, by inLane * 8 + outLane (filled lazily) */
   conns?: (Conn | undefined)[];
   crossings?: (readonly Piece[] | undefined)[];
@@ -153,6 +156,8 @@ export interface Compiled {
   zoneFlows: CZoneFlow[];
   warnings: string[];
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  /** each road's centre line as laid out (with any "line up lanes" shift), by link id */
+  linkCenters: Map<string, Poly>;
   getConn(move: Movement, a: number, b: number): Conn;
   /** pieces a vehicle drives through to cross a junction (1 connector, or entry + ring + exit); shared, don't modify */
   crossing(move: Movement, a: number, b: number): readonly Piece[];
@@ -233,6 +238,59 @@ export function dirLanes(link: LinkDef, dir: 1 | -1) {
   return { thru, left, right, n: thru > 0 ? thru + left + right : 0, leftLen: b?.leftLen ?? 0, rightLen: b?.rightLen ?? 0 };
 }
 
+/**
+ * "Line up lanes" (NodeDef.align): at such a node, each one-way road carrying straight on from one
+ * direction of a two-way road gets shifted sideways (in its from→to right-normal frame; `a` at its
+ * from end, `b` at its to end) so its lanes continue where that direction's lanes are.
+ */
+/** nodes where "line up lanes" would change something (a one-way road carrying on from a two-way one) */
+export function alignableNodes(net: Network): string[] {
+  const pos = new Map(net.nodes.map(n => [n.id, { pos: { x: n.x, y: n.y } } as unknown as CNode]));
+  const found = new Set<string>();
+  alignShifts(net, pos, () => true, id => found.add(id));
+  return [...found];
+}
+/** where a one-way road's lanes should be (a lane centre line: point `p`, direction `d` away from the node) */
+interface AlignTarget { p: Vec; d: Vec }
+function alignShifts(net: Network, nodeById: Map<string, CNode>, on = (nd: NodeDef) => !!nd.align, found?: (id: string) => void): Map<string, { a?: AlignTarget; b?: AlignTarget }> {
+  const out = new Map<string, { a?: AlignTarget; b?: AlignTarget }>();
+  for (const nd of net.nodes) {
+    if (!on(nd)) continue;
+    const at = net.links.flatMap(l => {
+      if (l.from !== nd.id && l.to !== nd.id) return [];
+      const A = nodeById.get(l.from), B = nodeById.get(l.to);
+      if (!A || !B || A === B) return [];
+      const c = linkCenter(l, A.pos, B.pos), atFrom = l.from === nd.id, t = c.tangent(atFrom ? 0 : c.len);
+      return [{ l, atFrom, u: atFrom ? t : { x: -t.x, y: -t.y }, R: { x: -t.y, y: t.x } }];
+    });
+    for (const o of at) {
+      if ((o.l.lanesF > 0) === (o.l.lanesB > 0)) continue; // one-way roads only
+      const arrives = o.atFrom ? o.l.lanesB > 0 : o.l.lanesF > 0;
+      // the two-way road it carries straight on from (the most nearly opposite direction)
+      let best: (typeof at)[number] | null = null, bd = -0.94; // (within about 20° of straight on)
+      for (const t of at) {
+        if (t === o || !(t.l.lanesF > 0 && t.l.lanesB > 0)) continue;
+        const d = o.u.x * t.u.x + o.u.y * t.u.y;
+        if (d < bd) { bd = d; best = t; }
+      }
+      if (!best) continue;
+      const T = best.l, lw = laneWidth(T), m = T.median ?? 0, nF = dirLanes(T, 1).n, nB = dirLanes(T, -1).n;
+      // the lanes it continues: those leaving here if it arrives, those arriving if it leaves
+      const useF = arrives ? best.atFrom : !best.atFrom;
+      // only a true continuation: as many lanes as that direction has (lanes added or dropped are mapped instead)
+      if (dirLanes(o.l, o.l.lanesF > 0 ? 1 : -1).thru !== (useF ? dirLanes(T, 1).thru : dirLanes(T, -1).thru)) continue;
+      const off = useF ? laneBase(nF, nB, m, lw) + (nF * lw) / 2 : -(laneBase(nB, nF, m, lw) + (nB * lw) / 2);
+      // those lanes' centre line, carried straight on past the node
+      const target: AlignTarget = { p: { x: nd.x + best.R.x * off, y: nd.y + best.R.y * off }, d: { x: -best.u.x, y: -best.u.y } };
+      const cur = out.get(o.l.id) ?? {};
+      if (o.atFrom) cur.a = target; else cur.b = target;
+      out.set(o.l.id, cur);
+      found?.(nd.id);
+    }
+  }
+  return out;
+}
+
 /** lateral extent of a link in the from→to right-normal frame */
 export function linkExtent(link: LinkDef): [number, number] {
   const nF = dirLanes(link, 1).n, nB = dirLanes(link, -1).n, m = link.median ?? 0, lw = laneWidth(link);
@@ -261,10 +319,13 @@ export function compile(net: Network): Compiled {
   const edges: Edge[] = [];
   const edgeByKey = new Map<string, Edge>();
   const linkInfo = new Map<string, { link: LinkDef; center: Poly; A: CNode; B: CNode; ef: Edge | null; eb: Edge | null }>();
+  const linkCenters = new Map<string, Poly>();
+  const shifts = alignShifts(net, nodeById);
   for (const link of net.links) {
     const A = nodeById.get(link.from), B = nodeById.get(link.to);
     if (!A || !B || A === B) { warnings.push(`Road "${link.name || link.id}" is not connected to two different junctions.`); continue; }
     const center = linkCenter(link, A.pos, B.pos);
+    linkCenters.set(link.id, center);
     if (center.len < 1) continue;
     const mk = (dir: 1 | -1): Edge | null => {
       const d = dirLanes(link, dir), nOther = dirLanes(link, dir === 1 ? -1 : 1).n, n = d.n;
@@ -341,6 +402,27 @@ export function compile(net: Network): Compiled {
     const info = linkInfo.get(link.id); if (!info) continue;
     const armA = info.A.arms.find(a => a.link === link)!, armB = info.B.arms.find(a => a.link === link)!;
     let sa = armA.setback, sb = armB.setback;
+    // "line up lanes": the road's line shifted sideways, fully up to where it meets the junction,
+    // then fading out along it
+    const sh = shifts.get(link.id);
+    if (sh && info.center.len > 2) {
+      const base = info.center, Lb = base.len, T = Math.min(40, Lb * 0.45), ease = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+      const pa = Math.min(sa + 2, Lb * 0.4), pb = Math.min(sb + 2, Lb * 0.4);
+      // sideways (right of from→to) so the road's centre at the mouth lies on the target line
+      const toLine = (t: AlignTarget | undefined, at: number) => {
+        if (!t) return 0;
+        const M = base.at(at), tg = base.tangent(at), R = { x: -tg.y, y: tg.x };
+        const den = t.d.x * R.y - t.d.y * R.x;
+        if (Math.abs(den) < 0.2) return 0;
+        const v = Math.max(-8, Math.min(8, -(t.d.x * (M.y - t.p.y) - t.d.y * (M.x - t.p.x)) / den));
+        return Math.abs(v) < 0.05 ? 0 : v;
+      };
+      const da = toLine(sh.a, Math.min(sa, Lb * 0.4)), db = toLine(sh.b, Math.max(Lb - sb, Lb * 0.6));
+      info.center = base.offsetBy(s => da * ease(1 - (s - pa) / T) + db * ease(1 - (Lb - s - pb) / T), 0, Lb, 2);
+      if (info.ef) info.ef.center = info.center;
+      if (info.eb) info.eb.center = info.center.reversed();
+      linkCenters.set(link.id, info.center);
+    }
     const L = info.center.len;
     if (sa + sb > L - 2) {
       const f = Math.max(0.05, (L - 2) / (sa + sb));
@@ -548,6 +630,30 @@ export function compile(net: Network): Compiled {
       }
       if (best) { if (ein.thru > eout.thru) m.skip = best; else m.shift = best; }
     }
+    // lane connections set by hand win over the automatic ones (a turn with no lane left is dropped)
+    if (n.def.laneMap && !n.ringR) for (const [k, list] of n.moves) {
+      const next = list.filter(m => {
+        const arr = n.def.laneMap![`${m.in.key}>${m.out.key}`];
+        if (!arr) return true;
+        m.map = Array.from({ length: m.in.n }, (_, a) => { const b = arr[a]; return b != null && b < m.out.n ? b : -1; });
+        const used = m.map.map((b, a) => (b >= 0 ? a : -1)).filter(a => a >= 0);
+        if (!used.length) return false;
+        m.lo = Math.min(...used); m.hi = Math.max(...used);
+        return true;
+      });
+      if (next.length !== list.length) n.moves.set(k, next);
+    }
+    // a junction's shape comes from the lanes through it: the road ends plus every lane path at its
+    // full width, so the road always covers its lanes (and the kerbs follow the turns)
+    if (!n.ringR && (n.degree >= 3 || n.controlled || n.rounded)) {
+      const outer = laneOutline(n, 0);
+      if (outer) { n.polygon = outer; n.surface = kerbInset(n, outer) ?? outer; }
+    }
+    // an outline drawn by hand wins (its kerb band is worked out the same way)
+    if (!n.ringR && n.degree >= 2 && n.def.outline && n.def.outline.length >= 3) {
+      const outer = orient(n.def.outline.map(p => ({ x: n.pos.x + p.x, y: n.pos.y + p.y })));
+      n.polygon = outer; n.surface = kerbInset(n, outer) ?? outer;
+    }
     // signal phases: group arms that face each other
     if (n.controlled && n.degree === 2) {
       // both directions share one green; the second phase is all-red (e.g. pedestrians crossing)
@@ -704,7 +810,7 @@ export function compile(net: Network): Compiled {
 
   const compiled: Compiled = {
     nodes, edges, pieces, nodeById, edgeByKey, stops, stopById, lines, places, flows, zones, zoneFlows, warnings,
-    bounds: { minX, minY, maxX, maxY },
+    bounds: { minX, minY, maxX, maxY }, linkCenters,
     getConn(move, a, b) {
       const cache = (move.conns ??= []), k = a * 8 + b;
       let c = cache[k];
@@ -791,7 +897,10 @@ function buildConn(n: CNode, move: Movement, a: number, b: number, id: number): 
       pts.push(u * u * u * P.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * Q.x, u * u * u * P.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * Q.y);
     }
   } else {
-    pts = connectorPoints(P, tp, Q, tq, 14);
+    const shape = n.def.connShape?.[connShapeKey(move, a, b)];
+    pts = shape && !Array.isArray(shape)
+      ? cubicPoints(P, { x: n.pos.x + shape.c1.x, y: n.pos.y + shape.c1.y }, { x: n.pos.x + shape.c2.x, y: n.pos.y + shape.c2.y }, Q, 14)
+      : connectorPoints(P, tp, Q, tq, 14, shape);
   }
   const poly = new Poly(pts);
   const r = poly.minRadius();
@@ -810,22 +919,121 @@ function buildConn(n: CNode, move: Movement, a: number, b: number, id: number): 
  * showing them doesn't change a run. Roundabouts are left out (their ring is drawn instead).
  */
 export interface ConnectorView { node: CNode; move: Movement; inLane: number; outLane: number; pts: Float32Array }
+/** may vehicles in lane `a` of its approach take movement `m` */
+export const laneAllowed = (m: Movement, a: number) => a >= m.lo && a <= m.hi && (!m.map || m.map[a] >= 0);
+
 export function connectorPreview(c: Compiled, only?: (n: CNode, m: Movement) => boolean): ConnectorView[] {
   const out: ConnectorView[] = [];
   for (const n of c.nodes) {
     if (!n.controlled || n.ringR > 0) continue;
     for (const list of n.moves.values()) for (const m of list) if (!only || only(n, m)) for (let a = m.lo; a <= m.hi; a++) {
+      if (!laneAllowed(m, a)) continue;
       const b = exitLane(m, a, false);
       out.push({ node: n, move: m, inLane: a, outLane: b, pts: Float32Array.from(buildConn(n, m, a, b, -1).poly.pts) });
     }
   }
   return out;
 }
+export interface ConnectionIssue {
+  node: CNode;
+  /** "error": traffic can't get through as drawn; "warn": probably not what was meant */
+  level: "error" | "warn";
+  message: string;
+  /** the road it is about (for selecting it) */
+  link?: string;
+}
+const TURN_WORD: Record<Turn, string> = { L: "left", R: "right", S: "straight", U: "U-turn" };
+/** do two polylines (flat x,y lists) cross each other (touching within 0.5 m of an end doesn't count) */
+function polylinesCross(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
+  const ends = [a[0], a[1], a[a.length - 2], a[a.length - 1], b[0], b[1], b[b.length - 2], b[b.length - 1]];
+  const nearEnd = (x: number, y: number) => { for (let k = 0; k < 8; k += 2) if (Math.hypot(x - ends[k], y - ends[k + 1]) < 0.5) return true; return false; };
+  for (let i = 0; i + 3 < a.length; i += 2) for (let j = 0; j + 3 < b.length; j += 2) {
+    const px = a[i], py = a[i + 1], rx = a[i + 2] - px, ry = a[i + 3] - py;
+    const qx = b[j], qy = b[j + 1], sx = b[j + 2] - qx, sy = b[j + 3] - qy;
+    const d = rx * sy - ry * sx; if (Math.abs(d) < 1e-9) continue;
+    const t = ((qx - px) * sy - (qy - py) * sx) / d, u = ((qx - px) * ry - (qy - py) * rx) / d;
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1 && !nearEnd(px + rx * t, py + ry * t)) return true;
+  }
+  return false;
+}
+/**
+ * Lane connection problems at junctions and road points: roads that lead nowhere, lanes with no
+ * way on, exit lanes nothing feeds, and lanes of one approach whose paths cross each other.
+ */
+export function connectionIssues(c: Compiled, only?: CNode): ConnectionIssue[] {
+  const out: ConnectionIssue[] = [];
+  const name = (e: Edge) => e.link.name || e.link.id;
+  for (const n of only ? [only] : c.nodes) {
+    if (n.degree < 2 || n.ringR > 0) continue;
+    const plainJoint = n.degree === 2 && !n.controlled;
+    const fed = new Map<Edge, Set<number>>();
+    for (const arm of n.arms) {
+      const e = arm.inEdge;
+      if (!e) continue;
+      const moves = n.moves.get(e.idx) ?? [];
+      if (!moves.length) { out.push({ node: n, level: "error", message: `${name(e)} leads nowhere here: traffic on it has no way on`, link: e.link.id }); continue; }
+      const views: { a: number; b: number; m: Movement; pts: ArrayLike<number> }[] = [];
+      for (let a = 0; a < e.n; a++) {
+        // (a lane that ends before the line, and bus lanes: only buses use them)
+        if (a === e.dropLane || (e.bus && a === e.kerb)) continue;
+        const ms = moves.filter(m => laneAllowed(m, a));
+        if (!ms.length) { out.push({ node: n, level: "warn", message: `Lane ${a + 1} of ${name(e)} has no connection here`, link: e.link.id }); continue; }
+        for (const m of ms) {
+          const b = exitLane(m, a, false);
+          (fed.get(m.out) ?? fed.set(m.out, new Set()).get(m.out)!).add(b);
+          if (!plainJoint) views.push({ a, b, m, pts: buildConn(n, m, a, b, -1).poly.pts });
+        }
+      }
+      // two lanes of the same approach whose paths cross (into different exit lanes)
+      for (let i = 0; i < views.length; i++) for (let j = i + 1; j < views.length; j++) {
+        const x = views[i], y = views[j];
+        if (x.a === y.a || (x.m.out === y.m.out && x.b === y.b)) continue;
+        if (polylinesCross(x.pts, y.pts)) out.push({ node: n, level: "warn", message: `From ${name(e)}, the paths of lane ${x.a + 1} (${TURN_WORD[x.m.turn]} to ${name(x.m.out)} lane ${x.b + 1}) and lane ${y.a + 1} (${TURN_WORD[y.m.turn]} to ${name(y.m.out)} lane ${y.b + 1}) cross`, link: e.link.id });
+      }
+    }
+    // exit lanes that nothing feeds here (a lane that opens at a road point is expected)
+    if (!plainJoint) for (const arm of n.arms) {
+      const e = arm.outEdge;
+      if (!e) continue;
+      const got = fed.get(e);
+      if (!got) { if (n.arms.some(o => o.inEdge && o.link !== e.link)) out.push({ node: n, level: "warn", message: `Nothing turns into ${name(e)} here`, link: e.link.id }); continue; }
+      for (let b = e.left; b < e.left + e.thru; b++) if (!got.has(b) && !(e.bus && b === e.kerb)) out.push({ node: n, level: "warn", message: `Lane ${b + 1} of ${name(e)} is not fed by any lane here`, link: e.link.id });
+    }
+  }
+  return out;
+}
+
+/** key of a connector's hand-set shape (NodeDef.connShape) */
+export const connShapeKey = (move: Movement, a: number, b: number) => `${move.in.key}|${a}>${move.out.key}|${b}`;
+/**
+ * A lane connector's curve: where it starts and ends, the lane directions there, and how far its two
+ * handles reach (the hand-set shape, or the automatic one). For drawing and dragging the handles.
+ */
+export function connectorHandles(n: CNode, move: Movement, a: number, b: number) {
+  const lin = move.in.lanes[Math.min(a, move.in.lanes.length - 1)], lout = move.out.lanes[Math.min(b, move.out.lanes.length - 1)];
+  const P = lin.poly.at(lin.len), tp = lin.poly.tangent(lin.len), Q = lout.poly.at(0), tq = lout.poly.tangent(0);
+  const custom = n.def.connShape?.[connShapeKey(move, a, b)];
+  if (custom && !Array.isArray(custom)) {
+    // free handles: report their reach along the lanes too (for the inspector)
+    const h1 = { x: n.pos.x + custom.c1.x, y: n.pos.y + custom.c1.y }, h2 = { x: n.pos.x + custom.c2.x, y: n.pos.y + custom.c2.y };
+    const k1 = (h1.x - P.x) * tp.x + (h1.y - P.y) * tp.y, k2 = (Q.x - h2.x) * tq.x + (Q.y - h2.y) * tq.y;
+    return { P, tp, Q, tq, k1, k2, custom: true, free: true, h1, h2 };
+  }
+  const [k1, k2] = custom ?? connectorReach(P, tp, Q, tq);
+  return { P, tp, Q, tq, k1, k2, custom: !!custom, free: false, h1: { x: P.x + tp.x * k1, y: P.y + tp.y * k1 }, h2: { x: Q.x - tq.x * k2, y: Q.y - tq.y * k2 } };
+}
+
 /** selection id of a lane connector */
 export const connectorId = (v: { node: CNode; move: Movement; inLane: number; outLane: number }) => `${v.node.def.id}|${v.move.in.key}|${v.inLane}|${v.move.out.key}|${v.outLane}`;
 
 /** which exit lane a vehicle in lane a ends up in for a movement (always a through lane of the exit: its bays open further on) */
 export function exitLane(move: Movement, a: number, isBus: boolean): number {
+  if (move.map) {
+    // set by hand; a lane without one (inside lo..hi) follows its nearest connected neighbour
+    let best = -1;
+    for (let d = 0; d < move.map.length && best < 0; d++) for (const q of [a - d, a + d]) if (q >= 0 && q < move.map.length && move.map[q] >= 0) { best = move.map[q]; break; }
+    return best >= 0 ? best : move.out.left;
+  }
   const out = move.out, lo = out.left, nOut = out.thru;
   let b: number;
   if (move.turn === "U") b = 0;
@@ -917,6 +1125,181 @@ export function zipFrom(A: Conn, B: Conn): number {
 export const clearConflictCache = () => { confCache.clear(); confEndCache.clear(); zipCache.clear(); };
 
 /**
+ * Junction outline from its lanes: a strip across each road end plus every lane path through the
+ * junction, each as wide as its lane (and `CURB - inset` more), merged. Null if that fails.
+ */
+const outlineCache = new Map<string, Vec[] | null>();
+function laneOutline(n: CNode, inset: number): Vec[] | null {
+  const polys: Ring[][] = [], pieces: Ring[][] = [], extra = CURB - inset;
+  for (const a of n.arms) {
+    const r = { x: -a.mu.y, y: a.mu.x }, m = a.mouth, lo = a.lo + inset, hi = a.hi - inset;
+    const d = Math.min(1.5, Math.max(0.3, a.setback * 0.5));
+    const pt = (side: number, back: number): Pair => [m.x + r.x * side - a.mu.x * back, m.y + r.y * side - a.mu.y * back];
+    polys.push([[pt(lo, 0), pt(hi, 0), pt(hi, d), pt(lo, d), pt(lo, 0)]]);
+  }
+  for (const list of n.moves.values()) for (const mv of list) for (let q = mv.lo; q <= mv.hi; q++) {
+    if (!laneAllowed(mv, q)) continue;
+    const P = buildConn(n, mv, q, exitLane(mv, q, false), -1).poly.pts, cnt = P.length / 2;
+    if (cnt < 2) continue;
+    const half = Math.max(mv.in.lw, mv.out.lw) / 2 + extra, left: Pair[] = [], right: Pair[] = [];
+    for (let i = 0; i < cnt; i++) {
+      const i0 = Math.max(0, i - 1), i1 = Math.min(cnt - 1, i + 1);
+      const dx = P[i1 * 2] - P[i0 * 2], dy = P[i1 * 2 + 1] - P[i0 * 2 + 1], len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;
+      left.push([P[i * 2] + nx * half, P[i * 2 + 1] + ny * half]);
+      right.push([P[i * 2] - nx * half, P[i * 2 + 1] - ny * half]);
+    }
+    polys.push([[...left, ...right.reverse(), left[0]]]);
+    // (the same path as small convex pieces, for when a tight turn folds its edges over each other)
+    for (let i = 0; i + 1 < cnt; i++) {
+      const h = hull([left[i], left[i + 1], right[cnt - 2 - i], right[cnt - 1 - i]].map(([x, y]) => ({ x, y })));
+      if (h.length >= 3) pieces.push([[...h.map(v => [v.x, v.y] as Pair), [h[0].x, h[0].y]]]);
+    }
+  }
+  // the same shapes give the same outline: most of a plan is unchanged between edits
+  const key = `${inset}|` + polys.map(p => p[0].map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")).join("|");
+  const hit = outlineCache.get(key);
+  if (hit !== undefined) return hit;
+  if (outlineCache.size > 20000) outlineCache.clear();
+  let merged: Ring[][];
+  // (on a 1 cm grid, without repeated points: the merge is robust then)
+  const snap = (ps: Ring[][]) => ps.map(poly => poly.map(ring => ring.map(([x, y]) => [Math.round(x * 100) / 100, Math.round(y * 100) / 100] as Pair).filter((q, i, r) => i === 0 || q[0] !== r[i - 1][0] || q[1] !== r[i - 1][1])).filter(ring => ring.length >= 4));
+  polys.splice(0, polys.length, ...snap(polys).filter(p => p.length)); pieces.splice(0, pieces.length, ...snap(pieces).filter(p => p.length));
+  const arms = polys.slice(0, n.arms.length);
+  try { merged = polygonClipping.union(polys[0], ...polys.slice(1)); }
+  catch {
+    // one shape at a time (a shape that trips the merge is retried nudged by a millimetre, then left out)
+    merged = [arms[0]];
+    for (const p of [...arms.slice(1), ...pieces]) {
+      try { merged = polygonClipping.union(merged, p); }
+      catch {
+        try { merged = polygonClipping.union(merged, p.map(ring => ring.map(([x, y]) => [x + 0.001, y + 0.0007] as Pair))); } catch { /* left out */ }
+      }
+    }
+  }
+  // the biggest piece, without holes (asphalt all the way across)
+  let best: Ring | null = null, bestA = 0;
+  for (const poly of merged) {
+    const ring = poly[0];
+    let A = 0;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) A += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
+    if (Math.abs(A) > bestA) { bestA = Math.abs(A); best = ring; }
+  }
+  const out = best && best.length >= 4 ? orient(best.slice(0, -1).map(([x, y]) => ({ x, y }))) : null;
+  outlineCache.set(key, out);
+  return out;
+}
+type Pair = [number, number];
+type Ring = Pair[];
+
+/**
+ * The asphalt inside a junction outline: the outline less a kerb band (CURB wide) along every edge
+ * except where a road meets it (the mouth lines), so the kerb is a thin border everywhere.
+ */
+const insetCache = new Map<string, Vec[] | null>();
+function kerbInset(n: CNode, outline: Vec[]): Vec[] | null {
+  const pts = simplify(outline, 0.03);
+  if (pts.length < 3) return null;
+  // which side of the edges is inside: test just off the middle of the longest edge
+  let li = 0, ll = 0;
+  for (let i = 0; i < pts.length; i++) { const b = pts[(i + 1) % pts.length], d = Math.hypot(b.x - pts[i].x, b.y - pts[i].y); if (d > ll) { ll = d; li = i; } }
+  const la = pts[li], lb = pts[(li + 1) % pts.length], probe = { x: (la.x + lb.x) / 2 - ((lb.y - la.y) / ll) * 0.05, y: (la.y + lb.y) / 2 + ((lb.x - la.x) / ll) * 0.05 };
+  const sgn = pointInPolygon(probe, pts) ? 1 : -1; // +1: the left of each edge (−dy, dx) is inside
+  // the arm whose mouth line a point lies on (and whether at its kerb corner, where the road's kerb ends)
+  const mouthOf = (p: Vec) => {
+    for (const a of n.arms) {
+      const dx = p.x - a.mouth.x, dy = p.y - a.mouth.y, along = dx * a.mu.x + dy * a.mu.y, side = dx * -a.mu.y + dy * a.mu.x;
+      if (Math.abs(along) < 0.3 && side > a.lo - 0.05 && side < a.hi + 0.05) return { a, corner: side < a.lo + 0.1 || side > a.hi - 0.1 };
+    }
+    return null;
+  };
+  const bands: Ring[][] = [];
+  const disc = (p: Vec, r: number): Ring[] => { const ring: Ring = []; for (let k = 0; k <= 8; k++) { const t = (k % 8) * Math.PI / 4; ring.push([p.x + Math.cos(t) * r, p.y + Math.sin(t) * r]); } return [ring]; };
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    // (an edge along a mouth line, not one leaving it into the junction)
+    const ma = mouthOf(a), mb = mouthOf(b);
+    const mouth = !!ma && !!mb && ma.a === mb.a && Math.abs(((b.x - a.x) * ma.a.mu.x + (b.y - a.y) * ma.a.mu.y) / (Math.hypot(b.x - a.x, b.y - a.y) || 1)) < 0.5;
+    if (!mouth) {
+      const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+      if (len < 1e-6) continue;
+      const nx = (-dy / len) * sgn, ny = (dx / len) * sgn; // inward normal
+      const o = 0.02; // (a hair outside, so no sliver of kerb is left along the edge)
+      bands.push([[[a.x - nx * o, a.y - ny * o], [b.x - nx * o, b.y - ny * o], [b.x + nx * CURB, b.y + ny * CURB], [a.x + nx * CURB, a.y + ny * CURB], [a.x - nx * o, a.y - ny * o]]]);
+    }
+    const m0 = mouthOf(a);
+    if (!m0 || m0.corner) bands.push(disc(a, CURB));
+  }
+  const ring: Ring = [...pts.map(p => [p.x, p.y] as Pair), [pts[0].x, pts[0].y]];
+  const key = ring.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ");
+  const hit = insetCache.get(key);
+  if (hit !== undefined) return hit;
+  if (insetCache.size > 20000) insetCache.clear();
+  let res: Ring[][];
+  const snapped = bands.map(poly => poly.map(r => r.map(([x, y]) => [Math.round(x * 100) / 100, Math.round(y * 100) / 100] as Pair)));
+  try { res = polygonClipping.difference([ring], ...snapped); }
+  catch {
+    // one band at a time (a band that trips the cut is retried nudged by a millimetre, then left out)
+    res = [[ring]];
+    for (const b of snapped) {
+      try { res = polygonClipping.difference(res, b); }
+      catch { try { res = polygonClipping.difference(res, b.map(r => r.map(([x, y]) => [x + 0.001, y + 0.0007] as Pair))); } catch { /* left out */ } }
+    }
+  }
+  let best: Ring | null = null, bestA = 0;
+  for (const poly of res) {
+    const r = poly[0];
+    let A = 0;
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++) A += (r[j][0] + r[i][0]) * (r[j][1] - r[i][1]);
+    if (Math.abs(A) > bestA) { bestA = Math.abs(A); best = r; }
+  }
+  const out = best && best.length >= 4 ? orient(best.slice(0, -1).map(([x, y]) => ({ x, y }))) : null;
+  insetCache.set(key, out);
+  return out;
+}
+/**
+ * The winding every road and junction outline uses (as `hull` gives): the renderer fills them all as one
+ * path with the nonzero rule, where overlapping outlines wound the other way would cancel out.
+ */
+export function orient(pts: Vec[]): Vec[] {
+  let A = 0;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) A += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
+  return A > 0 ? pts.slice().reverse() : pts;
+}
+function pointInPolygon(p: Vec, poly: Vec[]): boolean {
+  let r = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) if ((poly[i].y > p.y) !== (poly[j].y > p.y) && p.x < ((poly[j].x - poly[i].x) * (p.y - poly[i].y)) / (poly[j].y - poly[i].y) + poly[i].x) r = !r;
+  return r;
+}
+/** Douglas–Peucker on a closed ring (exported for seeding an outline to edit by hand) */
+export const simplifyRing = (pts: Vec[], tol: number) => simplify(pts, tol);
+/** Douglas–Peucker on a closed ring: drop points within `tol` m of the line through their neighbours */
+function simplify(pts: Vec[], tol: number): Vec[] {
+  if (pts.length < 4) return pts.slice();
+  const keep = new Array<boolean>(pts.length).fill(false);
+  const rec = (i: number, j: number) => {
+    let best = -1, bd = tol;
+    const a = pts[i], b = pts[j], dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+    for (let k = i + 1; k < j; k++) { const d = Math.abs((pts[k].x - a.x) * dy - (pts[k].y - a.y) * dx) / L; if (d > bd) { bd = d; best = k; } }
+    if (best >= 0) { keep[best] = true; rec(i, best); rec(best, j); }
+  };
+  // split at the point farthest from the first, so both halves are open chains
+  let far = 1, fd = 0;
+  for (let k = 1; k < pts.length; k++) { const d = Math.hypot(pts[k].x - pts[0].x, pts[k].y - pts[0].y); if (d > fd) { fd = d; far = k; } }
+  keep[0] = keep[far] = true;
+  rec(0, far);
+  const closed = [...pts, pts[0]];
+  const rec2 = (i: number, j: number) => {
+    let best = -1, bd = tol;
+    const a = closed[i], b = closed[j], dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+    for (let k = i + 1; k < j; k++) { const d = Math.abs((closed[k].x - a.x) * dy - (closed[k].y - a.y) * dx) / L; if (d > bd) { bd = d; best = k; } }
+    if (best >= 0) { keep[best % pts.length] = true; rec2(i, best); rec2(best, j); }
+  };
+  rec2(far, pts.length);
+  return pts.filter((_, k) => keep[k]);
+}
+
+/**
  * Junction outline with rounded kerbs: each road's mouth, joined to the next road (going round
  * the node) by a curve that leaves along one road's kerb and arrives along the other's. Between
  * two roads at a shallow angle (a slip road joining) this gives the pointed "gore" of a merge
@@ -945,3 +1328,4 @@ function smoothOutline(n: CNode, inset = 0): Vec[] {
   }
   return out;
 }
+

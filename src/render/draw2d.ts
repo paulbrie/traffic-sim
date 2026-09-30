@@ -1,5 +1,5 @@
 /** Canvas 2D renderer for the plan view (world units = metres). */
-import { connectorId, connectorPreview, type Compiled, type ConnectorView, type Piece } from "@/engine/compile";
+import { connectorHandles, connectorId, connectorPreview, type Compiled, type ConnectorView, type Piece } from "@/engine/compile";
 import type { Poly } from "@/engine/geom";
 import type { SimMirror as Sim, VehicleView as Vehicle } from "@/engine/sim/mirror";
 import type { BuildingDef, BuildingUse, LinkDef, Network, Vec } from "@/engine/types";
@@ -114,6 +114,8 @@ export function buildPaths(geo: RoadGeo): PathCache {
 }
 
 export interface Overlay {
+  /** junction editor: the outline being edited (its points), a painted area being drawn, the pointer */
+  shape?: { outline: Vec[] | null; paint: Vec[] | null; cursor: Vec | null };
   selection: { kind: string; id: string } | null;
   hover: { kind: "node" | "link" | "stop" | "handle"; id: string } | null;
   showNodes: boolean;
@@ -470,6 +472,37 @@ export function drawScene(
   if (sel?.kind === "link") {
     const l = net.links.find(x => x.id === sel.id);
     if (l) drawLinkHandles(ctx, cam, pal, net, l, ov.hover?.kind === "handle" ? ov.hover.id : null);
+  }
+  // junction editor: the outline's points (drag; double-click an edge to add, Alt+click to remove),
+  // and the painted area being drawn (click points, double-click or Enter to finish)
+  if (ov.shape?.outline) {
+    const pts = ov.shape.outline.map(p => toScreen(cam, p.x, p.y));
+    ctx.strokeStyle = pal.select; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]);
+    ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = pal.bg; ctx.lineWidth = 2;
+    for (const q of pts) { ctx.beginPath(); ctx.rect(q.x - 4.5, q.y - 4.5, 9, 9); ctx.fill(); ctx.stroke(); }
+  }
+  if (ov.shape?.paint) {
+    const pts = ov.shape.paint.map(p => toScreen(cam, p.x, p.y)), cur = ov.shape.cursor ? toScreen(cam, ov.shape.cursor.x, ov.shape.cursor.y) : null;
+    ctx.strokeStyle = pal.select; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+    ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); if (cur && pts.length) ctx.lineTo(cur.x, cur.y); if (pts.length >= 2) ctx.lineTo(pts[0].x, pts[0].y); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = pal.select;
+    for (const q of pts) { ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, Math.PI * 2); ctx.fill(); }
+  }
+  // a selected lane connector: its two curve handles, each sliding along its lane's direction
+  if (sel?.kind === "connector") {
+    const v = connectorsOf(compiled).find(x => connectorId(x) === sel.id);
+    if (v) {
+      const h = connectorHandles(v.node, v.move, v.inLane, v.outLane), hov = ov.hover?.kind === "handle" ? ov.hover.id : null;
+      const P = toScreen(cam, h.P.x, h.P.y), Q = toScreen(cam, h.Q.x, h.Q.y), a = toScreen(cam, h.h1.x, h.h1.y), b = toScreen(cam, h.h2.x, h.h2.y);
+      ctx.strokeStyle = pal.select; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(P.x, P.y); ctx.lineTo(a.x, a.y); ctx.moveTo(Q.x, Q.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]);
+      for (const [q, id] of [[a, "k1"], [b, "k2"]] as const) {
+        const r = hov === id ? 7 : 5.5;
+        ctx.fillStyle = hov === id ? pal.select : pal.bg; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+    }
   }
   if (ov.pendingPoint) {
     const q = toScreen(cam, ov.pendingPoint.x, ov.pendingPoint.y);

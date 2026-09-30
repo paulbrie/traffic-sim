@@ -64,6 +64,8 @@ export interface UiState {
   dataview: boolean;
   /** opened with view-only access: edits are blocked and nothing is saved */
   readOnly: boolean;
+  /** junction editor: the junction whose outline is being edited, and a painted area being drawn */
+  shape: { edit: string | null; paint: { node: string; kind: "hatch" | "island"; pts: Vec[] } | null };
 }
 
 export const ui = new DeepSubject<UiState>(
@@ -88,6 +90,7 @@ export const ui = new DeepSubject<UiState>(
     layer: "all",
     dataview: false,
     readOnly: false,
+    shape: { edit: null, paint: null },
   },
   { name: "ui" },
 );
@@ -203,7 +206,13 @@ export function select(sel: Selection | null) {
   const u = ui.getValue();
   const cur = u.selection;
   if (cur === sel || (cur && sel && cur.kind === sel.kind && cur.id === sel.id)) return;
-  batch(() => { u.selection = sel ? { ...sel } : null; if (u.multi.length) u.multi = []; });
+  batch(() => {
+    u.selection = sel ? { ...sel } : null; if (u.multi.length) u.multi = [];
+    // (the junction editor belongs to its junction: selecting something else ends it)
+    const keep = sel?.kind === "node" ? sel.id : null;
+    if (u.shape.edit && u.shape.edit !== keep) u.shape.edit = null;
+    if (u.shape.paint && u.shape.paint.node !== keep) u.shape.paint = null;
+  });
 }
 
 /** Shift+click on a road: add it to the selected roads, or take it out again */

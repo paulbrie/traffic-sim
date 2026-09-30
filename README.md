@@ -72,6 +72,20 @@ beside it over the last metres you set before the road's end; the road narrows i
 over (neighbours let them in) and wait at the end of the taper if they must. Use it where a road goes on with fewer
 lanes (without it the extra lane just stops at the road point). **Median**
 (two-way roads): a painted (hatched) or raised (kerbed) strip between the directions; left bays open into it.
+**Junction shapes** come from the lanes through them: each road end plus every lane path at its full width,
+merged, with a kerb band along the edge, so the asphalt always covers the lanes and kerbs follow the turns (a turn
+with no lane path leaves a notch; the gap between two roads splitting off becomes a nose). **Junction editor**
+(junction inspector → Shape): *Edit outline* to drag the kerb points onto the aerial (double-click an edge to add
+a point, Alt+click to remove one; *Automatic outline* goes back), *Lane lines through the junction*, and painted
+areas (*Add hatched area* / *Add island*: click the corners, double-click or Enter to finish). To change how a lane
+runs through, show the Connectors layer, click its path and drag its two handles (each slides along its lane; with
+Shift it moves freely), or type how far they reach; vehicles drive the new path. Stored per node (`outline`,
+`paint`, `laneLines`, `connShape`).
+**Lane connections** (junction or road point inspector → Lane connections): which lane of each approach feeds
+which lane of each exit, per turn. They are worked out automatically; change any of them by hand (or take a lane off
+a turn with –), and the arrow puts a turn back to automatic. Clicking a single lane connector on the map offers the
+same. The section also lists problems: a road that leads nowhere, a lane with no connection, an exit lane nothing
+feeds, and lanes of one approach whose paths cross. Stored per node (`laneMap`); lane arrows decide which turns exist.
 **Free junctions** (no signs, no lights): vehicles waiting at the line go in the order they arrived, so every
 entering lane gets its turn and one still on its way can't jump them; crossings that end in the same lane zip in,
 each following the one ahead. **Slip lanes** (junction inspector → Slip lanes): a free right turn that leaves the approach before the junction, curves
