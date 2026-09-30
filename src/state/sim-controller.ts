@@ -23,6 +23,8 @@ class SimController {
   private gen = 0;
   private fresh = false;
   private lastStatsAt = 0;
+  /** the simulation speed actually reached (× real time; 0 while paused) */
+  rate = 0;
   private started = false;
 
   private post(m: ToWorker) { this.worker?.postMessage(m); }
@@ -40,10 +42,11 @@ class SimController {
     if (this.started) return;
     this.started = true;
     this.worker = new Worker(new URL("./sim.worker.ts", import.meta.url), { type: "module" });
-    this.worker.onmessage = (e: MessageEvent<{ type: "snapshot"; gen: number; snap: Snapshot } | { type: "test"; req: number; result: TestResult }>) => {
+    this.worker.onmessage = (e: MessageEvent<{ type: "snapshot"; gen: number; snap: Snapshot; rate?: number } | { type: "test"; req: number; result: TestResult }>) => {
       if (e.data.type === "test") { const cb = this.pending.get(e.data.req); this.pending.delete(e.data.req); cb?.(e.data.result); return; }
       if (e.data.gen !== this.gen || !this.sim) return;
       this.sim.apply(e.data.snap);
+      this.rate = e.data.rate ?? 0;
       this.fresh = true;
       const now = performance.now();
       if (now - this.lastStatsAt > 250) { this.lastStatsAt = now; stats$.next(this.sim.stats); }

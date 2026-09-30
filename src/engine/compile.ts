@@ -301,7 +301,11 @@ export function linkExtent(link: LinkDef): [number, number] {
   return [lo - CURB, hi + CURB];
 }
 
-export function compile(net: Network): Compiled {
+/**
+ * `outlines: false` skips working out junction outlines from the lanes (the slow part; only drawing
+ * needs them — the simulation doesn't), e.g. in the simulation worker.
+ */
+export function compile(net: Network, opts: { outlines?: boolean } = {}): Compiled {
   clearConflictCache();
   const warnings: string[] = [];
   const nodes: CNode[] = [];
@@ -645,12 +649,12 @@ export function compile(net: Network): Compiled {
     }
     // a junction's shape comes from the lanes through it: the road ends plus every lane path at its
     // full width, so the road always covers its lanes (and the kerbs follow the turns)
-    if (!n.ringR && (n.degree >= 3 || n.controlled || n.rounded)) {
+    if (opts.outlines !== false && !n.ringR && (n.degree >= 3 || n.controlled || n.rounded)) {
       const outer = laneOutline(n, 0);
       if (outer) { n.polygon = outer; n.surface = kerbInset(n, outer) ?? outer; }
     }
     // an outline drawn by hand wins (its kerb band is worked out the same way)
-    if (!n.ringR && n.degree >= 2 && n.def.outline && n.def.outline.length >= 3) {
+    if (opts.outlines !== false && !n.ringR && n.degree >= 2 && n.def.outline && n.def.outline.length >= 3) {
       const outer = orient(n.def.outline.map(p => ({ x: n.pos.x + p.x, y: n.pos.y + p.y })));
       n.polygon = outer; n.surface = kerbInset(n, outer) ?? outer;
     }

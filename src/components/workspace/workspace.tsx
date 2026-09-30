@@ -135,6 +135,7 @@ function TopBar({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
           <SelectTrigger size="sm" className="w-20" aria-label="Simulation speed"><SelectValue /></SelectTrigger>
           <SelectContent>{[1, 2, 3, 5, 10, 30].map(s => <SelectItem key={s} value={String(s)}>{s}×</SelectItem>)}</SelectContent>
         </Select>
+        <ReachedSpeed asked={sim.speed} running={sim.running} />
         <Tip label="Restart traffic (clears vehicles)">
           <Button size="icon-sm" variant="ghost" onClick={() => { ui.getValue().sim.epoch++; }} aria-label="Restart traffic"><RotateCcw /></Button>
         </Tip>
@@ -314,6 +315,18 @@ function DraftBar() {
         <SelectContent>{[0.5, 1, 2, 5, 10, 20].map(s => <SelectItem key={s} value={String(s)}>{s} m</SelectItem>)}</SelectContent>
       </Select>
     </div>
+  );
+}
+
+/** the speed the simulation really runs at, when a big plan can't keep up with the one chosen */
+function ReachedSpeed({ asked, running }: { asked: number; running: boolean }) {
+  useSubject(stats$); // refreshed with the live numbers (~4×/s)
+  const r = simController.rate;
+  if (!running || !r || r >= asked * 0.85) return null;
+  return (
+    <Tip label={`This plan is too big to simulate at ${asked}× on this computer: it runs at about ${r.toFixed(1)}× real time.`}>
+      <span className="font-mono text-xs text-amber-600 tabular">≈{r < 10 ? r.toFixed(1) : Math.round(r)}×</span>
+    </Tip>
   );
 }
 

@@ -21,6 +21,8 @@ export type ToWorker =
 
 let compiled: Compiled | null = null, settings: PlanSettings | null = null, sim: Sim | null = null, gen = 0;
 let running = false, speed = 3, acc = 0, last = performance.now(), lastPost = 0, dirty = false;
+/** the speed actually reached (simulated seconds per real second, smoothed): less than asked when a step is slow */
+let rate = 0, rateTicks = 0, rateSince = performance.now();
 let log = { all: false, nodes: [] as string[], links: [] as string[] };
 let watch: Watch = { vehicle: null, nodes: [], reservations: false };
 const writer = new SnapshotWriter();
@@ -41,7 +43,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
   switch (m.type) {
     case "load": {
       const had = !!sim;
-      compiled = compile(m.network); settings = m.settings; gen = m.gen; sim = null;
+      // (the simulation doesn't need junction outlines: skip the slow part)
+      compiled = compile(m.network, { outlines: false }); settings = m.settings; gen = m.gen; sim = null;
       if (had) startSim();
       break;
     }
@@ -70,13 +73,16 @@ function loop() {
   if (sim && running) {
     acc += dt * speed;
     while (acc >= DT) {
-      sim.step(); acc -= DT; moved = true;
+      sim.step(); acc -= DT; moved = true; rateTicks++;
       if (performance.now() - now > 40) { acc = 0; break; } // can't keep up: run slower, don't pile up a backlog
     }
   }
   if (sim && (moved || dirty) && now - lastPost >= 30) {
+    const span = (now - rateSince) / 1000;
+    if (span >= 1) { const r = running ? (rateTicks * DT) / span : 0; rate = rate ? rate * 0.5 + r * 0.5 : r; rateTicks = 0; rateSince = now; }
+    if (!running) rate = 0;
     const { snap, transfer } = writer.write(sim, watch, now);
-    self.postMessage({ type: "snapshot", gen, snap }, transfer);
+    self.postMessage({ type: "snapshot", gen, snap, rate }, transfer);
     lastPost = now; dirty = false;
   }
   setTimeout(loop, 4);
