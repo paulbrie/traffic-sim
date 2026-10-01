@@ -1017,3 +1017,24 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   console.log(`connector between loose road ends: offered ${offered}, one junction ${joined}, ${f.arrived} of ${f.sent} arrived across it, ${sim.stats.towed} towed | ok ${ok}`);
   if (!ok) process.exit(1);
 }
+
+// aggressive drivers: a share of cars wants to go over the limit, by up to the set excess; the others never do
+{
+  const W = makeNode(-600, 0), E = makeNode(600, 0);
+  const net = sanitizeNetwork({ version: 1, nodes: [W, E], stops: [], lines: [], links: [makeLink(W, E, 2, 2, { speed: 50 })] });
+  const sim = new Sim(compile(net), { cars: 40, trucks: 0, seed: 3, params: { aggressiveShare: 30, aggressiveExcess: 25 } });
+  const top = new Map<number, { v: number; aggr: boolean }>();
+  for (let t = 0; t < 3000; t++) {
+    sim.step();
+    for (const v of sim.vehicles) if (!v.dead && v.kind === "car") { const x = top.get(v.id); if (!x || v.v > x.v) top.set(v.id, { v: v.v, aggr: v.aggressive }); }
+  }
+  const lim = 50 / 3.6, all = [...top.values()], aggr = all.filter(x => x.aggr), calm = all.filter(x => !x.aggr);
+  const share = aggr.length / Math.max(1, all.length), fastest = Math.max(...aggr.map(x => x.v)) * 3.6, calmTop = Math.max(...calm.map(x => x.v)) * 3.6;
+  const ok = share > 0.15 && share < 0.45 && aggr.some(x => x.v > lim * 1.05) && fastest <= 50 * 1.25 + 0.5 && calmTop <= 50.05;
+  // and none at all by default (the run as before)
+  const plain = new Sim(compile(net), { cars: 40, trucks: 0, seed: 3 });
+  for (let t = 0; t < 200; t++) plain.step();
+  const none = plain.vehicles.every(v => !v.aggressive);
+  console.log(`aggressive drivers: ${aggr.length} of ${all.length} cars (${(share * 100).toFixed(0)}% for 30%), fastest ${fastest.toFixed(1)} km/h on a 50 limit (up to ${(50 * 1.25).toFixed(1)}), others at most ${calmTop.toFixed(1)}; none by default ${none} | ok ${ok && none}`);
+  if (!(ok && none)) process.exit(1);
+}

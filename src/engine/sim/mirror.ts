@@ -32,6 +32,8 @@ export interface VehicleDetail {
   road: string; lane: number | null; lanes: number | null;
   heading: string; wait: number; laneChanges: number; reroutes: number;
   a: number; b: number; pax: number; cap: number;
+  /** an aggressive driver (wants to go over the limit), and how much faster than the limit it would like to go (×) */
+  aggressive: boolean; pref: number;
   nextTurn: { node: string; turn: "L" | "S" | "R" | "U"; lo: number; hi: number } | null;
   /** route ahead as x, y pairs */
   route: number[];
@@ -182,7 +184,7 @@ function vehicleDetail(sim: Sim, v: Vehicle): VehicleDetail {
     road: e ? e.link.name || "unnamed" : v.piece.kind === "ring" ? "roundabout" : "junction",
     lane: e ? v.lane : null, lanes: e ? e.n : null,
     heading: v.dest.kind === "gateway" ? "leaving the plan" : v.dest.kind === "stop" ? `stop ${v.dest.stop.def.name}` : `${v.dest.edge.link.name || "a road"}`,
-    wait: v.wait, laneChanges: v.laneChanges, reroutes: v.reroutes, a: v.a, b: v.b, pax: v.pax, cap: v.cap,
+    wait: v.wait, laneChanges: v.laneChanges, reroutes: v.reroutes, a: v.a, b: v.b, pax: v.pax, cap: v.cap, aggressive: v.aggressive, pref: v.pref,
     nextTurn: nt ? { node: nt.node.def.id, turn: nt.move.turn, lo: nt.move.lo, hi: nt.move.hi } : null,
     route: sim.routeAhead(v, 800),
   };

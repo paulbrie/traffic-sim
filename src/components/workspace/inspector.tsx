@@ -847,6 +847,7 @@ function VehicleInspector({ id }: { id: string }) {
   const rows: [string, string][] = [
     ["Speed", `${(v.v * 3.6).toFixed(1)} km/h`],
     ["Desired here", `${(v.v0 * 3.6).toFixed(0)} km/h`],
+    ...(v.aggressive ? [["Driver", `aggressive: up to ${Math.round((v.pref - 1) * 100)}% over the limit`] as [string, string]] : []),
     ["Acceleration", `${v.acc.toFixed(2)} m/s²`],
     ["Gap ahead", Number.isFinite(v.gap) && v.gap < 100 ? `${v.gap.toFixed(1)} m` : "clear"],
     ["Road", v.road],

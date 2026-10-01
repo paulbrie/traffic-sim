@@ -42,6 +42,8 @@ export interface Vehicle {
   early?: { conn: Conn; at: number; d: number; granted: boolean } | null;
   dest: Dest; state: string; wait: number; enterT: number; bornT: number;
   gap: number; leader: Vehicle | null; v0: number;
+  /** an aggressive driver: wants to go over the limit (see SimParams.aggressiveShare) */
+  aggressive: boolean;
   reroutes: number; laneChanges: number; lcCool: number; lcOff: number; lcT: number;
   reqAt: number; reqFor: Conn | null; stoppedAt: Conn | null; fixedAt: Edge | null; rerouteAt: Edge | null;
   line: CLine | null; stopIdx: number; pax: number; cap: number; dwell: number;
@@ -154,10 +156,13 @@ export interface Stats {
 
 export const KIND_PARAMS = (kind: Kind, r: () => number, P: SimParams = resolveParams()) =>
   kind === "car"
-    ? { len: 4.6, width: 1.9, pref: P.speedPref + r() * 0.22, a: P.carAccel + r() * 0.5, b: P.carBrake, bmax: 9, T: P.carHeadway + r() * 0.4, s0: P.carMinGap, politeness: P.politeness + r() * 0.4 }
+    // (an aggressive driver wants to go over the limit; the extra draw only when there are any, so runs without stay as they were)
+    ? P.aggressiveShare > 0 && r() < P.aggressiveShare / 100
+      ? { len: 4.6, width: 1.9, pref: 1 + (P.aggressiveExcess / 100) * (0.2 + 0.8 * r()), aggressive: true, a: P.carAccel + r() * 0.5, b: P.carBrake, bmax: 9, T: P.carHeadway + r() * 0.4, s0: P.carMinGap, politeness: P.politeness + r() * 0.4 }
+      : { len: 4.6, width: 1.9, pref: P.speedPref + r() * 0.22, aggressive: false, a: P.carAccel + r() * 0.5, b: P.carBrake, bmax: 9, T: P.carHeadway + r() * 0.4, s0: P.carMinGap, politeness: P.politeness + r() * 0.4 }
     : kind === "truck"
-      ? { len: 10 + r() * 2, width: 2.5, pref: 0.8 + r() * 0.08, a: P.truckAccel + r() * 0.2, b: 1.5, bmax: 6.5, T: P.truckHeadway + r() * 0.3, s0: 3, politeness: 0.5 }
-      : { len: 12, width: 2.55, pref: 0.85, a: 0.9, b: 1.6, bmax: 7, T: 1.5, s0: 2.5, politeness: 0.5 };
+      ? { len: 10 + r() * 2, width: 2.5, pref: 0.8 + r() * 0.08, aggressive: false, a: P.truckAccel + r() * 0.2, b: 1.5, bmax: 6.5, T: P.truckHeadway + r() * 0.3, s0: 3, politeness: 0.5 }
+      : { len: 12, width: 2.55, pref: 0.85, aggressive: false, a: 0.9, b: 1.6, bmax: 7, T: 1.5, s0: 2.5, politeness: 0.5 };
 
 /**
  * Vehicles on each piece (lane, connector, ring stretch), rebuilt every tick. Lists are kept and
@@ -323,7 +328,15 @@ export abstract class SimBase {
   protected armOf(node: CNode, e: Edge) { return e.to === node ? e.inArm : -1; }
   /** highest lane index a general-traffic vehicle may use on edge e */
   protected maxLane(v: Vehicle, e: Edge) { return v.kind !== "bus" && e.bus ? e.n - 2 : e.n - 1; }
-  protected lim(v: Vehicle, p: Piece) { return p.kind === "lane" ? Math.min(p.vmax, p.edge.speed * v.pref) : p.vmax * this.P.junctionSpeed; }
+  /**
+   * The speed a vehicle wants on a piece: the limit times its preference, no faster than the lane allows
+   * (the limit, or less on a tight bend); an aggressive driver goes over the limit, but still slows for bends.
+   */
+  protected lim(v: Vehicle, p: Piece) {
+    if (p.kind !== "lane") return p.vmax * this.P.junctionSpeed;
+    const cap = v.aggressive && p.vmax >= p.edge.speed ? Infinity : p.vmax;
+    return Math.min(cap, p.edge.speed * v.pref);
+  }
   protected pick<T>(arr: T[]) { return arr[(this.rng() * arr.length) | 0]; }
   /** a copy in random order (Fisher–Yates; every order equally likely) */
   protected shuffled<T>(arr: readonly T[]): T[] {

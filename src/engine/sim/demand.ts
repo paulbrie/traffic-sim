@@ -11,7 +11,7 @@ export abstract class SimDemand extends SimMotion {
     const P = KIND_PARAMS(kind, r, this.P);
     // every field set here, in one order, so all vehicles share one object shape (fast property access)
     return {
-      id: this.nextId++, kind, len: P.len, width: P.width, pref: P.pref, a: P.a, b: P.b, bmax: P.bmax, T: P.T, s0: P.s0, politeness: P.politeness,
+      id: this.nextId++, kind, len: P.len, width: P.width, pref: P.pref, aggressive: P.aggressive, a: P.a, b: P.b, bmax: P.bmax, T: P.T, s0: P.s0, politeness: P.politeness,
       tint: (r() * 6) | 0,
       route: [], ri: 0, piece: this.net.pieces[0], s: 0, v: 0, acc: 0, lane: 0, queue: [], trail: [],
       conn: null, granted: false, dest: { kind: "gateway", node: this.net.nodes[0] }, state: "free", wait: 0,

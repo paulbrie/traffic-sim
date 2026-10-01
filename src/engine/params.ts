@@ -10,6 +10,9 @@ export interface SimParams {
   carMinGap: number;
   speedPref: number;
   politeness: number;
+  /** share of cars driven by aggressive drivers (%) who go over the limit, and by up to how much (%) */
+  aggressiveShare: number;
+  aggressiveExcess: number;
   // trucks
   truckAccel: number;
   truckHeadway: number;
@@ -52,6 +55,8 @@ export const PARAMS: ParamInfo[] = [
   { key: "carMinGap", group: "Drivers", label: "Gap when stopped", unit: "m", min: 0.5, max: 5, step: 0.1, def: 1.6, help: "Distance kept to the vehicle ahead in a queue." },
   { key: "speedPref", group: "Drivers", label: "Speed vs the limit", unit: "×", min: 0.6, max: 1.3, step: 0.01, def: 0.88, help: "Lowest wished speed as a share of the limit (each driver adds up to 0.22 more)." },
   { key: "politeness", group: "Drivers", label: "Politeness", unit: "", min: 0, max: 1, step: 0.05, def: 0.1, help: "How much drivers care about slowing others when changing lanes (each adds up to 0.4 more)." },
+  { key: "aggressiveShare", group: "Drivers", label: "Aggressive drivers", unit: "%", min: 0, max: 100, step: 1, def: 0, help: "Share of cars whose drivers want to go faster than the limit (by up to the amount below). The others never go over it." },
+  { key: "aggressiveExcess", group: "Drivers", label: "Aggressive drivers: over the limit by up to", unit: "%", min: 0, max: 50, step: 1, def: 25, help: "How far over the limit an aggressive driver wants to go: each one between a fifth of this and all of it. They still slow for bends and junctions." },
   { key: "truckAccel", group: "Trucks", label: "Acceleration", unit: "m/s²", min: 0.3, max: 2, step: 0.05, def: 0.75, help: "How quickly trucks pick up speed (each adds up to 0.2 more)." },
   { key: "truckHeadway", group: "Trucks", label: "Time gap to the vehicle ahead", unit: "s", min: 0.8, max: 3.5, step: 0.05, def: 1.6, help: "Trucks' following distance in seconds (each adds up to 0.3 more)." },
   { key: "laneChangeGain", group: "Lane changes", label: "Advantage needed", unit: "m/s²", min: 0, max: 1.5, step: 0.05, def: 0.3, help: "How much better the next lane must be before a driver moves over by choice. Lower = more lane changes." },
