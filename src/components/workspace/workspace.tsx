@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, ChevronDown, Eye, Bus, Hand, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, ChevronDown, Eye, Bus, Hand, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -143,6 +143,7 @@ function TopBar({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
           <Button size="icon-sm" variant="ghost" onClick={() => { ui.getValue().sim.epoch++; }} aria-label="Restart traffic"><RotateCcw /></Button>
         </Tip>
         <Separator orientation="vertical" className="!h-5" />
+        <SettingsMenu />
         <UserMenu user={user} />
       </div>
     </header>
@@ -234,6 +235,27 @@ function LayerPicker() {
         <Button size="icon-sm" variant={dataview ? "secondary" : "ghost"} aria-pressed={dataview} aria-label="Data table" onClick={() => setDataview(!dataview)}><Table2 /></Button>
       </Tip>
     </div>
+  );
+}
+
+/** editor settings (in the top bar): the grid step for drawing and snapping */
+function SettingsMenu() {
+  const [snap, setSnap] = useDeepSubject(ui, "snap");
+  const keep = (e: Event) => e.preventDefault();
+  return (
+    <DropdownMenu>
+      <Tip label="Settings">
+        <DropdownMenuTrigger asChild>
+          <Button size="icon-sm" variant="ghost" aria-label="Settings"><Settings /></Button>
+        </DropdownMenuTrigger>
+      </Tip>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">Grid step (drawing and snapping)</DropdownMenuLabel>
+        {[0.5, 1, 2, 5, 10, 20].map(st => (
+          <DropdownMenuCheckboxItem key={st} checked={snap.step === st} onCheckedChange={() => setSnap({ ...snap, step: st })} onSelect={keep}>{st} m</DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -332,8 +354,7 @@ function DraftBar() {
   const [tool] = useDeepSubject(ui, "tool");
   const [view] = useDeepSubject(ui, "view");
   const [draft, setDraft] = useDeepSubject(ui, "draft");
-  const [snap, setSnap] = useDeepSubject(ui, "snap");
-  if (view !== "2d" || (tool !== "road" && tool !== "select")) return null;
+  if (view !== "2d" || tool !== "road") return null;
   return (
     <div className="absolute top-3 left-1/2 z-10 flex w-max max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 overflow-x-auto rounded-lg border bg-background/95 px-3 py-1.5 text-sm whitespace-nowrap shadow-sm backdrop-blur">
       {tool === "road" && (
@@ -349,13 +370,8 @@ function DraftBar() {
             <SelectTrigger size="sm" className="h-7 w-28" aria-label="Speed limit for new roads"><SelectValue /></SelectTrigger>
             <SelectContent>{[30, 40, 50, 60, 70, 80, 90].map(s => <SelectItem key={s} value={String(s)}>{s} km/h</SelectItem>)}</SelectContent>
           </Select>
-          <Separator orientation="vertical" className="!h-5" />
         </>
       )}
-      <Select value={String(snap.step)} onValueChange={v => setSnap({ ...snap, step: Number(v) })}>
-        <SelectTrigger size="sm" className="h-7 w-20" aria-label="Grid step"><SelectValue /></SelectTrigger>
-        <SelectContent>{[0.5, 1, 2, 5, 10, 20].map(s => <SelectItem key={s} value={String(s)}>{s} m</SelectItem>)}</SelectContent>
-      </Select>
     </div>
   );
 }
