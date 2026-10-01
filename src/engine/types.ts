@@ -336,6 +336,15 @@ export interface ZoneFlowDef {
   trucks?: number;
 }
 
+/** A marker placed on the map: a pin with a label (in 3D on the roof of a building it stands on). */
+export interface MarkerDef {
+  id: string;
+  x: number; y: number;
+  label: string;
+  /** pin colour (#rrggbb); missing = the default */
+  color?: string;
+}
+
 /** Where the plan sits on Earth: the latitude/longitude of world point (0, 0). */
 export interface GeoRef { lat: number; lon: number }
 
@@ -386,6 +395,8 @@ export interface Network {
   zoneFlows?: ZoneFlowDef[];
   /** reversible-lane corridors (their roads have `rev` set to the corridor's id) */
   reversibles?: ReversibleDef[];
+  /** markers placed on the map */
+  markers?: MarkerDef[];
   /** set for plans imported from a map, so later imports line up; `areas` are the frames imported so far */
   geo?: (GeoRef & { areas?: GeoArea[] }) | null;
 }

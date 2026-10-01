@@ -12,15 +12,15 @@ import type { Stats } from "@/engine/sim";
 import type { Vec } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 
-export type Tool = "select" | "road" | "segment" | "stop" | "pan" | "image";
+export type Tool = "select" | "road" | "segment" | "stop" | "pan" | "image" | "marker";
 /** the kinds of object the map shows and can select (TransModeler-style layers); any combination can be on */
-export type LayerId = "roads" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones";
+export type LayerId = "roads" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones" | "markers";
 /** `key`: Shift + this letter switches the layer on or off (Shift+A: all of them) */
 export const LAYERS: { id: LayerId; label: string; key: string }[] = [
   { id: "roads", label: "Roads", key: "R" }, { id: "lanes", label: "Lanes", key: "L" }, { id: "junctions", label: "Junctions", key: "J" },
   { id: "connectors", label: "Lane connectors", key: "C" }, { id: "entries", label: "Entry / exit points", key: "E" }, { id: "signals", label: "Signals", key: "S" },
   { id: "stops", label: "Bus stops", key: "B" }, { id: "counters", label: "Traffic counters", key: "T" }, { id: "buildings", label: "Buildings", key: "U" },
-  { id: "vehicles", label: "Vehicles", key: "V" }, { id: "zones", label: "Zones", key: "Z" },
+  { id: "vehicles", label: "Vehicles", key: "V" }, { id: "zones", label: "Zones", key: "Z" }, { id: "markers", label: "Markers", key: "M" },
 ];
 /** a layer's highlights (lane outlines, connectors, rings around junctions…) show when at most this many layers are on */
 export const LAYER_HIGHLIGHT_MAX = 3;
@@ -38,7 +38,8 @@ export type Selection =
   /** id "nodeId|inEdgeKey|inLane|outEdgeKey|outLane" */
   | { kind: "connector"; id: string }
   | { kind: "zone"; id: string }
-  | { kind: "vehicle"; id: string };
+  | { kind: "vehicle"; id: string }
+  | { kind: "marker"; id: string };
 export type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
 
 export interface UiState {
@@ -280,7 +281,8 @@ function pruneSelection(net: Network) {
         : sel.kind === "stop" ? net.stops.some(s => s.id === sel.id)
           : sel.kind === "line" ? net.lines.some(l => l.id === sel.id)
             : sel.kind === "building" ? (net.buildings ?? []).some(b => b.id === sel.id)
-              : true;
+              : sel.kind === "marker" ? (net.markers ?? []).some(m => m.id === sel.id)
+                : true;
   const all = selectedAll();
   if (all.every(alive)) return;
   const left = all.filter(alive);

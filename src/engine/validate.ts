@@ -1,4 +1,4 @@
-import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type ReversibleDef, type PlanSettings, type Vec, type ConnShape, type ConnectorDef, type LaneTargets } from "./types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type ReversibleDef, type PlanSettings, type Vec, type ConnShape, type ConnectorDef, type LaneTargets, type MarkerDef } from "./types";
 import { sanitizeParams } from "./params";
 
 const num = (v: unknown, lo: number, hi: number, def: number) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
@@ -170,7 +170,12 @@ export function sanitizeNetwork(input: unknown): Network {
     ...(typeof f.trucks === "number" && isFinite(f.trucks) && f.trucks > 0 ? { trucks: Math.min(1, f.trucks) } : {}),
   }));
   const geo = sanitizeGeo(src.geo);
-  return { version: 1, nodes, links, stops, lines, ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(zones.length ? { zones } : {}), ...(zoneFlows.length ? { zoneFlows } : {}), ...(reversibles.length ? { reversibles } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
+  // markers on the map: a point, a label, a colour
+  const markers = arr("markers").filter(m => typeof m.id === "string" && m.id && isFinite(Number(m.x)) && isFinite(Number(m.y))).slice(0, 1000).map((m): MarkerDef => ({
+    id: str(m.id, "m", 64), x: Math.round(Number(m.x) * 100) / 100, y: Math.round(Number(m.y) * 100) / 100, label: str(m.label, "", 120),
+    ...(typeof m.color === "string" && /^#[0-9a-fA-F]{6}$/.test(m.color) ? { color: m.color } : {}),
+  }));
+  return { version: 1, nodes, links, stops, lines, ...(markers.length ? { markers } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(zones.length ? { zones } : {}), ...(zoneFlows.length ? { zoneFlows } : {}), ...(reversibles.length ? { reversibles } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
 }
 
 /** most buildings a plan keeps (an imported district of a few km²) */

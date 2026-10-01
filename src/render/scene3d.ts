@@ -1,7 +1,8 @@
 /** Builds three.js meshes for roads, junctions and street furniture from the shared road geometry. */
 import * as THREE from "three";
 import { Poly } from "@/engine/geom";
-import type { BuildingDef, Vec } from "@/engine/types";
+import { DEFAULT_MARKER_COLOR, markerBase } from "@/engine/markers";
+import type { BuildingDef, Network, Vec } from "@/engine/types";
 import type { HeightFn, LaneSign, On, RoadGeo, Strip } from "./geometry";
 import { buildingColor, type Palette } from "./palette";
 
@@ -327,4 +328,34 @@ export function buildingShell(b: BuildingDef): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   return g;
+}
+
+/**
+ * Markers in 3D: a pin (a pole and a ball in its colour) with its label above, standing on the ground, or
+ * on the roof of the building whose footprint it is in.
+ */
+export function buildMarkers(net: Network, pal: Palette): THREE.Group {
+  const group = new THREE.Group();
+  const poleGeo = new THREE.CylinderGeometry(0.12, 0.12, 6, 8), headGeo = new THREE.SphereGeometry(1.1, 16, 12);
+  for (const m of net.markers ?? []) {
+    const base = markerBase(net, m).height, mat = new THREE.MeshLambertMaterial({ color: m.color ?? DEFAULT_MARKER_COLOR });
+    const pole = new THREE.Mesh(poleGeo, mat); pole.position.set(m.x, base + 3, m.y); pole.castShadow = true;
+    const head = new THREE.Mesh(headGeo, mat); head.position.set(m.x, base + 6.9, m.y); head.castShadow = true;
+    head.userData.marker = m.id;
+    group.add(pole, head);
+    if (m.label) {
+      const canvas = document.createElement("canvas"), g = canvas.getContext("2d")!;
+      g.font = `600 28px ${pal.sans}`;
+      const w = Math.min(1024, Math.ceil(g.measureText(m.label).width) + 32);
+      canvas.width = w; canvas.height = 48;
+      g.font = `600 28px ${pal.sans}`;
+      g.fillStyle = m.color ?? DEFAULT_MARKER_COLOR; g.beginPath(); g.roundRect(0, 0, w, 48, 10); g.fill();
+      g.fillStyle = "#ffffff"; g.textBaseline = "middle"; g.fillText(m.label, 16, 25);
+      const tex = new THREE.CanvasTexture(canvas);
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false }));
+      sprite.position.set(m.x, base + 9.6, m.y); sprite.scale.set((w / 48) * 2.4, 2.4, 1);
+      group.add(sprite);
+    }
+  }
+  return group;
 }

@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useDeepSubject } from "subjecto/react";
+import { Crosshair, Gauge, Orbit, Plane } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { buildRoadGeo, heightFn, laneSign } from "@/render/geometry";
-import { buildBuildings, buildFurniture, buildRoads, buildingShell, laneSignMaterials, type Furniture } from "@/render/scene3d";
+import { buildBuildings, buildFurniture, buildMarkers, buildRoads, buildingShell, laneSignMaterials, type Furniture } from "@/render/scene3d";
 import { satelliteMosaic } from "@/render/satellite";
 import type { BuildingDef } from "@/engine/types";
 import { readPalette, speedColor, type Palette } from "@/render/palette";
@@ -14,11 +16,32 @@ import { underlayImg$ } from "@/state/underlay-image";
 import { simController } from "@/state/sim-controller";
 import { viewCmd$ } from "@/state/commands";
 import * as ops from "@/state/ops";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Kbd } from "@/components/ui/kbd";
+import { Button } from "@/components/ui/button";
+import { Cockpit, type CockpitApi } from "./heli-cockpit";
 
 const CAR3D = ["#ffffff", "#f1f2ee", "#e2e5e1", "#cdd1cd"];
 
+/** orbit: the usual turntable camera; heli: fly freely; track: the helicopter follows the selected vehicle */
+type CamMode = "orbit" | "heli" | "track";
+const HELI_MIN = 4, HELI_MAX = 1500;
+/** the helicopter's top speed over the ground: 200 km/h */
+const HELI_VMAX = 200 / 3.6;
+
 export function View3D() {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const hudRef = useRef<HTMLSpanElement>(null);
+  const [mode, setMode] = useState<CamMode>("orbit");
+  const [note, setNote] = useState("");
+  const [selection] = useDeepSubject(ui, "selection");
+  const modeApi = useRef<(m: CamMode) => void>(null);
+  const cockpitApi = useRef<CockpitApi>(null);
+  const [cockpit, setCockpit] = useState(true);
+  const cockpitOn = useRef(cockpit);
+  useEffect(() => { cockpitOn.current = cockpit; }, [cockpit]);
+  useEffect(() => { modeApi.current?.(mode); }, [mode]);
+  const vehicleSelected = selection?.kind === "vehicle";
 
   useEffect(() => {
     const wrap = wrapRef.current!;
@@ -47,7 +70,7 @@ export function View3D() {
       red: new THREE.MeshBasicMaterial({ color: pal.stop }), off: new THREE.MeshLambertMaterial({ color: "#555" }),
     };
     const laneMats = laneSignMaterials();
-    let roads: THREE.Group | null = null, furniture: Furniture | null = null, builtVersion = -1, builtLayers = "";
+    let roads: THREE.Group | null = null, furniture: Furniture | null = null, markers: THREE.Group | null = null, builtVersion = -1, builtLayers = "";
     /** is this layer on (drawn) */
     const shown = (l: string) => u.layers.includes(l as LayerId);
     const buildingsOn = () => u.display.buildings && shown("buildings");
@@ -164,6 +187,9 @@ export function View3D() {
       const geo = buildRoadGeo(simController.compiled, network$.getValue()), hf = heightFn(simController.compiled, network$.getValue());
       roads = buildRoads(geo, pal, hf, shown); scene.add(roads);
       furniture = buildFurniture(geo, pal, sigMats, hf, laneMats, shown); scene.add(furniture.group);
+      // markers (on the roof of a building they stand on)
+      if (markers) { scene.remove(markers); markers.traverse(o => { if (o instanceof THREE.Sprite) o.material.map?.dispose(); }); }
+      markers = buildMarkers(network$.getValue(), pal); markers.visible = shown("markers"); scene.add(markers);
       builtLayers = u.layers.join("+");
       syncBuildings();
       syncSatellite();
@@ -195,6 +221,17 @@ export function View3D() {
       underlayImg$.subscribe(syncUnderlay),
       viewCmd$.subscribe(c => {
         if (!c) return;
+        if (camMode !== "orbit") {
+          // fit returns to the orbit camera; north turns the helicopter to face north
+          if (c.cmd === "fit") { setMode("orbit"); setCamMode("orbit"); home(); }
+          else if (c.cmd === "north") { if (camMode === "heli") yaw = 0; else chase.angle = -Math.PI / 2 - chase.heading; }
+          else if (c.cmd === "zoomIn" || c.cmd === "zoomOut") {
+            const k = c.cmd === "zoomIn" ? 1 / 1.4 : 1.4;
+            if (camMode === "heli") camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, camera.position.y * k));
+            else chase.dist = Math.max(8, Math.min(600, chase.dist * k));
+          }
+          return;
+        }
         if (c.cmd === "fit") home();
         else if (c.cmd === "north") {
           // swing the camera round the target so the view faces north (plan −y = world −z)
@@ -211,6 +248,186 @@ export function View3D() {
     ];
     const mq = matchMedia("(prefers-color-scheme: dark)");
     mq.addEventListener("change", applyTheme);
+
+    // helicopter: Z Q S D (French keyboard) or the arrows fly forward, left, back, right; dragging the mouse looks around,
+    // E / Page Up climb, A / Page Down descend, the wheel too; Shift goes faster.
+    // Tracking keeps the helicopter behind the selected vehicle; drag to circle it, arrows for distance and side.
+    let camMode: CamMode = "orbit", yaw = 0, pitch = -0.35, hudText = "";
+    const vel = new THREE.Vector3(), held = new Set<string>(), dir = new THREE.Vector3();
+    const chase = { angle: 0, dist: 45, height: 22, heading: NaN, id: "" };
+    // the simulation moves vehicles in 0.1 s steps (a few times a second on screen), so the tracked one is followed
+    // through a smoothed point: it glides at the vehicle's speed and eases back onto each new position.
+    // The tracked vehicle is drawn there too (ox, oz: smoothed minus actual), so it sits still in the windscreen.
+    const follow = { ok: false, vid: NaN, x: 0, y: 0, z: 0, rawX: NaN, rawZ: NaN, rawAt: 0, ox: 0, oz: 0 };
+    const followOffset = (v: { id: number }) => camMode === "track" && follow.ok && v.id === follow.vid;
+    // what the cockpit's instruments show; bank leans into the tracked vehicle's turns
+    const flight = { alt: 0, speed: 0, vs: 0, heading: 0, pitch: 0, roll: 0, range: NaN }, lastPos = new THREE.Vector3();
+    let bank = 0, lastSwing = NaN;
+    const lookAt = new THREE.Vector3();
+    function fromCamera() {
+      camera.getWorldDirection(dir);
+      yaw = Math.atan2(-dir.x, -dir.z); pitch = Math.max(-1.5, Math.min(0.5, Math.asin(dir.y)));
+      camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, camera.position.y));
+    }
+    function setCamMode(m: CamMode) {
+      if (m === camMode) return;
+      const was = camMode;
+      camMode = m; vel.set(0, 0, 0); held.clear(); hudText = "";
+      if (m === "orbit") {
+        // orbit round the ground point the helicopter was looking at (or straight below)
+        camera.getWorldDirection(dir);
+        if (dir.y < -0.05) {
+          const t = Math.min(camera.position.y / -dir.y, 2000);
+          controls.target.set(camera.position.x + dir.x * t, 0, camera.position.z + dir.z * t);
+        } else {
+          const flat = Math.hypot(dir.x, dir.z) || 1, t = Math.max(30, camera.position.y);
+          controls.target.set(camera.position.x + (dir.x / flat) * t, 0, camera.position.z + (dir.z / flat) * t);
+        }
+        controls.enabled = true; controls.update();
+      } else {
+        controls.enabled = false;
+        if (was === "orbit") fromCamera();
+        if (m === "track") { chase.heading = NaN; chase.id = ""; }
+        follow.ok = false;
+      }
+      renderer.domElement.style.cursor = m === "orbit" ? "" : "grab";
+    }
+    modeApi.current = setCamMode;
+    const typing = (e: Event) => !!(e.target as HTMLElement)?.closest?.("input,textarea,select,[contenteditable],[role=combobox],[role=slider],[role=tablist],[role=menu],[role=listbox]");
+    const FLY_KEYS = new Set(["arrowup", "arrowdown", "arrowleft", "arrowright", "z", "q", "s", "d", "e", "a", "pageup", "pagedown", "shift"]);
+    const onKey = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (e.type === "keyup") { held.delete(k); if (k === "shift") held.delete("shift"); return; }
+      if (camMode === "orbit" || u.view !== "3d" || e.metaKey || e.ctrlKey || e.altKey || typing(e) || !FLY_KEYS.has(k)) return;
+      // Shift+E / Shift+Q stay layer shortcuts only when not flying; here they mean "faster"
+      e.preventDefault(); e.stopPropagation();
+      held.add(k);
+    };
+    const onBlur = () => held.clear();
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKey, true);
+    window.addEventListener("blur", onBlur);
+    let look: { x: number; y: number; id: number } | null = null;
+    const onLookDown = (e: PointerEvent) => {
+      if (camMode === "orbit") return;
+      look = { x: e.clientX, y: e.clientY, id: e.pointerId };
+      renderer.domElement.setPointerCapture(e.pointerId);
+      renderer.domElement.style.cursor = "grabbing";
+    };
+    const onLookMove = (e: PointerEvent) => {
+      if (!look || e.pointerId !== look.id || camMode === "orbit") return;
+      const dx = e.clientX - look.x, dy = e.clientY - look.y;
+      look.x = e.clientX; look.y = e.clientY;
+      if (camMode === "heli") { yaw -= dx * 0.004; pitch = Math.max(-1.5, Math.min(0.5, pitch - dy * 0.004)); }
+      else { chase.angle -= dx * 0.006; chase.height = Math.max(HELI_MIN, Math.min(400, chase.height + dy * 0.25)); }
+    };
+    const onLookUp = (e: PointerEvent) => {
+      if (!look || e.pointerId !== look.id) return;
+      look = null;
+      if (renderer.domElement.hasPointerCapture(e.pointerId)) renderer.domElement.releasePointerCapture(e.pointerId);
+      renderer.domElement.style.cursor = camMode === "orbit" ? "" : "grab";
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (camMode === "orbit") return;
+      e.preventDefault();
+      // like zooming: scroll up comes down closer, scroll down climbs
+      const k = Math.exp(Math.max(-1, Math.min(1, e.deltaY * 0.0015)));
+      if (camMode === "heli") camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, camera.position.y * k));
+      else { chase.dist = Math.max(8, Math.min(600, chase.dist * k)); chase.height = Math.max(HELI_MIN, Math.min(400, chase.height * k)); }
+    };
+    renderer.domElement.addEventListener("pointerdown", onLookDown);
+    renderer.domElement.addEventListener("pointermove", onLookMove);
+    renderer.domElement.addEventListener("pointerup", onLookUp);
+    renderer.domElement.addEventListener("pointercancel", onLookUp);
+    renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
+
+    function fly(dt: number, now: number, sim: typeof simController.sim) {
+      const fast = held.has("shift") ? 3 : 1;
+      const axis = (a: string, b: string) => (held.has(a) ? 1 : 0) - (held.has(b) ? 1 : 0);
+      const fwd = axis("arrowup", "arrowdown") + axis("z", "s"), side = axis("arrowright", "arrowleft") + axis("d", "q");
+      const climb = axis("e", "a") + axis("pageup", "pagedown");
+      let speed = 0;
+      if (camMode === "heli") {
+        // faster high up, slower near the ground; the helicopter eases in and out of motion
+        const cruise = Math.min(HELI_VMAX, Math.max(12, camera.position.y * 0.9) * fast);
+        // (diagonally no faster than straight ahead)
+        const sy = Math.sin(yaw), cy = Math.cos(yaw), k = cruise / Math.max(1, Math.hypot(fwd, side));
+        const want = new THREE.Vector3((-sy * fwd + cy * side) * k, climb * Math.max(6, cruise * 0.5), (-cy * fwd - sy * side) * k);
+        vel.lerp(want, 1 - Math.exp(-dt * 2.5));
+        camera.position.addScaledVector(vel, dt);
+        camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, camera.position.y));
+        camera.rotation.order = "YXZ"; camera.rotation.set(pitch, yaw, -0.05 * side * Math.min(1, vel.length() / 20));
+        speed = Math.hypot(vel.x, vel.z);
+        flight.roll = -camera.rotation.z; flight.range = NaN;
+      } else if (camMode === "track") {
+        const sel = u.selection, v = sel?.kind === "vehicle" && sim ? sim.vehicles.find(x => String(x.id) === sel.id && !x.dead) : undefined;
+        if (!v) {
+          // the vehicle finished its trip (or the selection moved on): hover where we are
+          setNote(sel?.kind === "vehicle" ? "The vehicle left the network: flying freely." : "Nothing to track: flying freely.");
+          setMode("heli"); setCamMode("heli"); fromCamera();
+          return;
+        }
+        if (chase.id !== sel!.id) { chase.id = sel!.id; chase.heading = NaN; follow.ok = false; setNote(""); }
+        chase.angle += side * dt * 1.2 * fast;
+        chase.dist = Math.max(8, Math.min(600, chase.dist * Math.exp(-fwd * dt * fast)));
+        chase.height = Math.max(HELI_MIN, Math.min(400, chase.height + climb * dt * Math.max(6, chase.height * 0.8) * fast));
+        const q = sim!.pose(v), rx = (q.fx + q.rx) / 2, rz = (q.fy + q.ry) / 2;
+        const h = Math.atan2(q.fy - q.ry, q.fx - q.rx);
+        // metres per real second along the vehicle (0 while paused)
+        const ms = v.v * simController.rate, ux = Math.cos(h), uz = Math.sin(h);
+        if (rx !== follow.rawX || rz !== follow.rawZ) { follow.rawX = rx; follow.rawZ = rz; follow.rawAt = now; }
+        // where the vehicle should be by now, judging from its last position and speed
+        const age = Math.min(0.25, (now - follow.rawAt) / 1000), ex = rx + ux * ms * age, ez = rz + uz * ms * age;
+        if (!follow.ok || follow.vid !== v.id || Math.hypot(ex - follow.x, ez - follow.z) > 25) {
+          follow.ok = true; follow.vid = v.id; follow.x = ex; follow.z = ez; follow.y = v.z * LEVEL_H;
+        } else {
+          const k = 1 - Math.exp(-dt * 4);
+          follow.x += ux * ms * dt; follow.z += uz * ms * dt;
+          follow.x += (ex - follow.x) * k; follow.z += (ez - follow.z) * k; follow.y += (v.z * LEVEL_H - follow.y) * k;
+        }
+        follow.ox = follow.x - rx; follow.oz = follow.z - rz;
+        const mx = follow.x, mz = follow.z, y0 = follow.y;
+        // smooth the vehicle's heading so the helicopter swings round turns instead of snapping
+        if (Number.isNaN(chase.heading)) chase.heading = h;
+        else { let d = h - chase.heading; d = Math.atan2(Math.sin(d), Math.cos(d)); chase.heading += d * (1 - Math.exp(-dt * 1.5)); }
+        const a = chase.heading + Math.PI + chase.angle;
+        const want = new THREE.Vector3(mx + Math.cos(a) * chase.dist, y0 + chase.height, mz + Math.sin(a) * chase.dist);
+        const before = camera.position.clone();
+        camera.position.lerp(want, 1 - Math.exp(-dt * 3));
+        // no faster than its top speed, even when it has a long way to catch up
+        const sx = camera.position.x - before.x, sz = camera.position.z - before.z, step = Math.hypot(sx, sz), cap = HELI_VMAX * dt;
+        if (step > cap) { camera.position.x = before.x + (sx / step) * cap; camera.position.z = before.z + (sz / step) * cap; }
+        speed = before.distanceTo(camera.position) / Math.max(dt, 1e-3);
+        lookAt.set(mx, y0 + 1.5, mz);
+        camera.lookAt(lookAt);
+        // lean into the swing round the vehicle, as a helicopter banks into a turn
+        const swing = chase.heading + chase.angle;
+        if (!Number.isNaN(lastSwing) && dt > 0) {
+          let w = swing - lastSwing; w = Math.atan2(Math.sin(w), Math.cos(w));
+          bank += (Math.max(-0.3, Math.min(0.3, (w / dt) * 0.35)) - bank) * (1 - Math.exp(-dt * 2));
+        }
+        lastSwing = swing;
+        camera.rotateZ(-bank);
+        flight.roll = bank; flight.range = camera.position.distanceTo(lookAt);
+      }
+      if (camMode !== "track") { lastSwing = NaN; bank = 0; }
+      if (cockpitOn.current) {
+        // the airframe's vibration
+        const t = now / 1000;
+        camera.rotateX(0.0011 * Math.sin(t * 23) + 0.0006 * Math.sin(t * 61));
+        camera.rotateZ(0.0009 * Math.sin(t * 17 + 1));
+      }
+      const text = `${Math.round(camera.position.y)} m up · ${Math.round(speed * 3.6)} km/h`;
+      if (text !== hudText && hudRef.current) { hudText = text; hudRef.current.textContent = text; }
+      if (cockpitApi.current && dt > 0) {
+        const vs = (camera.position.y - lastPos.y) / dt, ease = 1 - Math.exp(-dt * 4);
+        camera.getWorldDirection(dir);
+        flight.alt = camera.position.y; flight.vs += (vs - flight.vs) * ease; flight.speed += (speed - flight.speed) * ease;
+        flight.heading = (Math.atan2(dir.x, -dir.z) * 180) / Math.PI; flight.pitch = Math.asin(Math.max(-1, Math.min(1, dir.y)));
+        cockpitApi.current.update(flight);
+      }
+      lastPos.copy(camera.position);
+    }
 
     // picking: select on click (no drag)
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
@@ -248,19 +465,25 @@ export function View3D() {
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointerup", onUp);
 
-    let raf = 0, hlFor = "", lastHeading = NaN;
+    let raf = 0, hlFor = "", lastHeading = NaN, lastNow = 0;
     const compassEl = () => wrap.parentElement?.querySelector<HTMLElement>("[data-compass]");
     const frame = (now: number) => {
+      const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
+      lastNow = now;
       if (u.view === "3d") {
         simController.advance();
         if (builtVersion !== simController.version || builtLayers !== u.layers.join("+")) { rebuild(); hlFor = ""; }
         if (homed !== u.planId) { homed = u.planId; home(); }
         const sim = simController.sim, vsim = shown("vehicles") ? sim : null;
+        // the helicopter moves first: drawing the tracked vehicle needs its smoothed position
+        if (camMode !== "orbit") fly(dt, now, sim);
         // vehicles
         let n = 0, ng = 0;
         if (vsim) for (const v of vsim.vehicles) {
           if (v.dead || n + 2 >= MAXV) continue;
-          const q = vsim.pose(v), mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2, y0 = v.z * LEVEL_H;
+          const q = vsim.pose(v), y0 = v.z * LEVEL_H;
+          let mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
+          if (followOffset(v)) { mx += follow.ox; mz += follow.oz; }
           const dx = q.fx - q.rx, dz = q.fy - q.ry, m = Math.hypot(dx, dz) || 1, a = Math.atan2(-dz, dx), ux = dx / m, uz = dz / m;
           const sc = u.display.bySpeed ? speedColor(pal, v.v / Math.max(1, v.v0)) : null;
           dummy.rotation.set(0, a, 0);
@@ -285,7 +508,9 @@ export function View3D() {
         if (vsim && Math.floor(now / 380) % 2 === 0) for (const v of vsim.vehicles) {
           const b = vsim.blinker(v);
           if (!b || nl + 2 > 16000) continue;
-          const q = vsim.pose(v), mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
+          const q = vsim.pose(v);
+          let mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
+          if (followOffset(v)) { mx += follow.ox; mz += follow.oz; }
           const dx = q.fx - q.rx, dz = q.fy - q.ry, m = Math.hypot(dx, dz) || 1, ux = dx / m, uz = dz / m;
           const nx = -uz * b, nz = ux * b, half = v.len / 2 - 0.15, side = v.width / 2 + 0.02, h = (v.kind === "car" ? 0.6 : 0.9) + v.z * LEVEL_H;
           dummy.rotation.set(0, Math.atan2(-dz, dx), 0); dummy.scale.set(1, 1, 1);
@@ -318,7 +543,7 @@ export function View3D() {
         ring.visible = false;
         if (sel?.kind === "vehicle" && sim) {
           const v = sim.vehicles.find(x => String(x.id) === sel.id && !x.dead);
-          if (v) { const q = sim.pose(v); ring.position.set((q.fx + q.rx) / 2, 0.12 + v.z * LEVEL_H, (q.fy + q.ry) / 2); const s = Math.max(3.5, v.len * 0.8); ring.scale.set(s, s, s); ring.visible = true; }
+          if (v) { const q = sim.pose(v), o = followOffset(v); ring.position.set((q.fx + q.rx) / 2 + (o ? follow.ox : 0), 0.12 + v.z * LEVEL_H, (q.fy + q.ry) / 2 + (o ? follow.oz : 0)); const s = Math.max(3.5, v.len * 0.8); ring.scale.set(s, s, s); ring.visible = true; }
         } else if (sel?.kind === "node") {
           const nd = net.nodes.find(x => x.id === sel.id);
           if (nd) { ring.position.set(nd.x, 0.12, nd.y); ring.scale.set(12, 12, 12); ring.visible = true; }
@@ -345,9 +570,10 @@ export function View3D() {
           }
           hl.geometry = geo;
         }
-        controls.update();
+        if (camMode === "orbit") controls.update();
         // compass: heading of the camera's view direction, 0° = looking north
-        const heading = Math.round((Math.atan2(controls.target.x - camera.position.x, -(controls.target.z - camera.position.z)) * 180) / Math.PI * 10) / 10;
+        camera.getWorldDirection(dir);
+        const heading = Math.round((Math.atan2(dir.x, -dir.z) * 180) / Math.PI * 10) / 10;
         if (heading !== lastHeading) { lastHeading = heading; compassEl()?.style.setProperty("--heading", `${-heading}deg`); }
         renderer.render(scene, camera);
       }
@@ -362,6 +588,15 @@ export function View3D() {
       mq.removeEventListener("change", applyTheme);
       renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointerup", onUp);
+      renderer.domElement.removeEventListener("pointerdown", onLookDown);
+      renderer.domElement.removeEventListener("pointermove", onLookMove);
+      renderer.domElement.removeEventListener("pointerup", onLookUp);
+      renderer.domElement.removeEventListener("pointercancel", onLookUp);
+      renderer.domElement.removeEventListener("wheel", onWheel);
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKey, true);
+      window.removeEventListener("blur", onBlur);
+      modeApi.current = null;
       controls.dispose();
       if (houses) { houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); }
       ulMat.map?.dispose(); ulMat.dispose(); ulMesh.geometry.dispose();
@@ -373,5 +608,49 @@ export function View3D() {
     };
   }, []);
 
-  return <div ref={wrapRef} className="absolute inset-0 overflow-hidden" aria-label="3D view of the street plan" />;
+  return (
+    <>
+      <div ref={wrapRef} className="absolute inset-0 overflow-hidden" aria-label="3D view of the street plan" />
+      {mode !== "orbit" && cockpit && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} />}
+      <div className="absolute top-3 right-3 z-10 flex max-w-72 flex-col items-end gap-1.5">
+        <ToggleGroup
+          type="single" value={mode} aria-label="Camera"
+          onValueChange={v => { if (v) { setNote(""); setMode(v as CamMode); } }}
+          className="bg-background/95 shadow-sm backdrop-blur"
+        >
+          <ToggleGroupItem value="orbit" aria-label="Orbit camera" title="Orbit camera"><Orbit /> Orbit</ToggleGroupItem>
+          <ToggleGroupItem value="heli" aria-label="Fly a helicopter" title="Fly a helicopter"><Plane /> Helicopter</ToggleGroupItem>
+          <ToggleGroupItem
+            value="track" disabled={!vehicleSelected && mode !== "track"} aria-label="Track the selected vehicle"
+            title={vehicleSelected ? "The helicopter follows the selected vehicle" : "Click a vehicle first, then track it"}
+          ><Crosshair /> Track</ToggleGroupItem>
+        </ToggleGroup>
+        {mode !== "orbit" && (
+          <Button size="sm" variant={cockpit ? "default" : "outline"} aria-pressed={cockpit} onClick={() => setCockpit(c => !c)}
+            title="Show or hide the cockpit" className="h-8 shadow-sm"><Gauge /> Cockpit</Button>
+        )}
+        {mode !== "orbit" && (
+          <div className="rounded-lg border bg-background/95 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground shadow-sm backdrop-blur">
+            <div className="mb-1 font-medium text-foreground tabular-nums"><span ref={hudRef} /></div>
+            {mode === "heli" ? (
+              <>
+                <div><Kbd>Z</Kbd> <Kbd>S</Kbd> forward, back · <Kbd>Q</Kbd> <Kbd>D</Kbd> left, right (or arrows)</div>
+                <div>Drag the mouse to look around</div>
+                <div><Kbd>E</Kbd>/<Kbd>PgUp</Kbd> climb · <Kbd>A</Kbd>/<Kbd>PgDn</Kbd> descend · or scroll</div>
+                <div><Kbd>Shift</Kbd> faster · click a vehicle, then Track</div>
+              </>
+            ) : (
+              <>
+                <div>Following the selected vehicle; click another to switch</div>
+                <div>Drag to circle round it · <Kbd>Q</Kbd> <Kbd>D</Kbd> too</div>
+                <div><Kbd>Z</Kbd> <Kbd>S</Kbd> closer, further · scroll zooms</div>
+                <div><Kbd>E</Kbd>/<Kbd>A</Kbd> higher, lower</div>
+              </>
+            )}
+          </div>
+        )}
+        {note && <div className="rounded-md bg-background/95 px-2 py-1 text-[11px] shadow-sm">{note}</div>}
+      </div>
+    </>
+  );
 }

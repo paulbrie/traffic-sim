@@ -8,7 +8,7 @@ import { DELETABLE, deleteSelected, describeSelection } from "@/state/bulk";
 import { commit, network$, select, selectedAll, selectMany, ui, type Selection } from "@/state/store";
 import { Section } from "./fields";
 
-const KIND: Partial<Record<Selection["kind"], string>> = { node: "Point", link: "Road", stop: "Stop", line: "Bus line", building: "Building", connector: "Connector", lane: "Lane", vehicle: "Vehicle", zone: "Zone" };
+const KIND: Partial<Record<Selection["kind"], string>> = { node: "Point", link: "Road", stop: "Stop", line: "Bus line", building: "Building", connector: "Connector", lane: "Lane", vehicle: "Vehicle", zone: "Zone", marker: "Marker" };
 
 /** several objects selected together (Shift+click, Shift+drag a box): what they are, and delete them all */
 export function MultiSelection() {
@@ -21,6 +21,7 @@ export function MultiSelection() {
     if (s.kind === "link") return net.links.find(l => l.id === s.id)?.name || s.id;
     if (s.kind === "building") return net.buildings?.find(b => b.id === s.id)?.name || s.id;
     if (s.kind === "stop") return net.stops.find(x => x.id === s.id)?.name || s.id;
+    if (s.kind === "marker") return net.markers?.find(x => x.id === s.id)?.label || s.id;
     return s.id;
   };
   const remove = () => { commit(deleteSelected(net, deletable)); select(null); };

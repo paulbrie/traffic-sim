@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { MapPin } from "lucide-react";
 import { batch } from "subjecto";
 import { buildRoadGeo, type RoadGeo } from "@/render/geometry";
-import { buildPaths, connectorsOf, drawScene, toScreen, toWorld, underlayHandles, type Camera, type Overlay, type PathCache, type UnderlayHandle } from "@/render/draw2d";
+import { MARKER_HEAD, buildPaths, connectorsOf, drawScene, toScreen, toWorld, underlayHandles, type Camera, type Overlay, type PathCache, type UnderlayHandle } from "@/render/draw2d";
 import { readPalette, type Palette } from "@/render/palette";
 import { connShapeKey, connectorHandles, connectorId, linkExtent, LW, type CNode, type Edge, type LanePiece } from "@/engine/compile";
 import { pointInPoly } from "@/engine/buildings";
@@ -29,6 +29,7 @@ type Drag =
   | { mode: "connEnd"; id: string; which: "start" | "end" }
   | { mode: "connNew"; from: string; sx: number; sy: number; moved: boolean }
   | { mode: "box"; a: Vec; b: Vec }
+  | { mode: "marker"; id: string; moved: boolean; sx: number; sy: number }
   | { mode: "outline"; node: string; idx: number }
   | { mode: "ul-move"; start: Vec; x0: number; y0: number }
   | { mode: "ul-rotate"; a0: number; rot0: number }
@@ -171,6 +172,17 @@ export function PlanCanvas() {
       const [lid, dir, ln] = from.split("|"), c = simController.compiled, e = c.edgeByKey.get(`${lid}:${dir}`);
       if (!e || !e.lanes[Number(ln)]) return null;
       return lanesLeavingNear(c, e, Number(ln));
+    }
+    /** the marker under the pointer: its pin head, or the point it marks */
+    function hitMarker(sx: number, sy: number): string | null {
+      if (!u.layers.includes("markers")) return null;
+      let best: string | null = null, bd = Infinity;
+      for (const m of net.markers ?? []) {
+        const q = toScreen(cam, m.x, m.y), dh = Math.hypot(q.x - sx, q.y + MARKER_HEAD.dy - sy), dp = Math.hypot(q.x - sx, q.y - sy);
+        const d = Math.min(dh <= MARKER_HEAD.r + 4 ? dh : Infinity, dp <= 7 ? dp : Infinity);
+        if (d < bd) { bd = d; best = m.id; }
+      }
+      return best;
     }
     /** lanes are wide enough on screen to aim at one end (about 12 px a lane) */
     const lanesAimable = () => cam.scale * 3.2 >= 12;
@@ -497,6 +509,19 @@ export function PlanCanvas() {
         return;
       }
 
+      // markers: the marker tool places one (or picks one up); with the select tool one is picked before anything else
+      const mk = tool === "marker" || tool === "select" ? hitMarker(sx, sy) : null;
+      if (mk) {
+        if (e.shiftKey && tool === "select") { toggleSelect({ kind: "marker", id: mk }); return; }
+        select({ kind: "marker", id: mk });
+        drag = { mode: "marker", id: mk, moved: false, sx, sy };
+        return;
+      }
+      if (tool === "marker") {
+        const [n2, m] = ops.addMarker(net, w);
+        commit(n2); select({ kind: "marker", id: m.id });
+        return;
+      }
       if (tool === "stop") {
         const l = hitLink(w);
         if (!l) return;
@@ -553,6 +578,7 @@ export function PlanCanvas() {
       }
       if (on("stops") && geo) for (const s of geo.stops) if (inside(s.p)) out.push({ kind: "stop", id: s.id });
       if (on("buildings")) for (const bd of net.buildings ?? []) if (bd.pts.every(inside)) out.push({ kind: "building", id: bd.id });
+      if (on("markers")) for (const m of net.markers ?? []) if (inside(m)) out.push({ kind: "marker", id: m.id });
       return out;
     }
 
@@ -586,6 +612,12 @@ export function PlanCanvas() {
       if (drag?.mode === "ul-scale") {
         const d = drag;
         setUnderlay(cur => ({ ...cur, mpp: Math.max(1e-4, (d.mpp0 * Math.hypot(w.x - cur.x, w.y - cur.y)) / d.d0) }));
+        return;
+      }
+      if (drag?.mode === "marker") {
+        if (!drag.moved && Math.hypot(sx - drag.sx, sy - drag.sy) < 3) return;
+        drag.moved = true;
+        commit(ops.updateMarker(net, drag.id, { x: w.x, y: w.y }), `marker:${drag.id}`);
         return;
       }
       if (drag?.mode === "node") {
@@ -652,7 +684,7 @@ export function PlanCanvas() {
       if (JSON.stringify(hv) !== JSON.stringify(hover)) { hover = hv; }
       ulHover = u.tool === "image" && !u.calib.active ? hitUnderlay(sx, sy) : null;
       const ulCursor = ulHover === "move" ? "move" : ulHover === "rotate" ? "grab" : ulHover ? (ulHover === "c0" || ulHover === "c2" ? "nwse-resize" : "nesw-resize") : null;
-      canvas.style.cursor = drag ? "grabbing" : u.calib.active ? "crosshair" : ulCursor ?? (u.tool === "pan" || u.tool === "image" || spaceHeld ? "grab" : u.tool === "road" || u.tool === "stop" ? "crosshair" : hv ? "pointer" : "default");
+      canvas.style.cursor = drag ? "grabbing" : u.calib.active ? "crosshair" : ulCursor ?? (u.tool === "pan" || u.tool === "image" || spaceHeld ? "grab" : u.tool === "road" || u.tool === "stop" || u.tool === "marker" ? "crosshair" : hv ? "pointer" : "default");
       markDirty();
     }
 
@@ -835,6 +867,7 @@ export function PlanCanvas() {
           satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, highlight: highlightedLayers(u.layers), show: u.layers, maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
           focusNodes: focusNodes(),
           box: drag?.mode === "box" ? { a: drag.a, b: drag.b } : null,
+          markersSel: selectedAll(u).filter(x => x.kind === "marker").map(x => x.id),
           group: u.extra.length ? (() => {
             const c = simController.compiled, ex = u.extra;
             return {

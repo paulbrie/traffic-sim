@@ -6,7 +6,7 @@ import * as ops from "./ops";
 import type { Selection } from "./store";
 
 /** objects of these kinds can be deleted */
-export const DELETABLE = new Set<Selection["kind"]>(["node", "link", "stop", "line", "building", "connector"]);
+export const DELETABLE = new Set<Selection["kind"]>(["node", "link", "stop", "line", "building", "connector", "marker"]);
 
 /**
  * Delete everything in `list` (what can be deleted): lane connectors first, each against the plan as it is
@@ -19,6 +19,7 @@ export function deleteSelected(net: Network, list: readonly Selection[]): Networ
     const [, inKey, a, outKey, b] = s.id.split("|");
     n = changeConnection(n, compile(n, { outlines: false }), inKey, Number(a), outKey, Number(b), null);
   }
+  for (const s of list) if (s.kind === "marker") n = ops.deleteMarker(n, s.id);
   for (const s of list) if (s.kind === "stop") n = ops.deleteStop(n, s.id);
   for (const s of list) if (s.kind === "line") n = ops.deleteLine(n, s.id);
   for (const s of list) if (s.kind === "building") n = ops.deleteBuilding(n, s.id);
@@ -30,7 +31,7 @@ export function deleteSelected(net: Network, list: readonly Selection[]): Networ
 const KIND_NAME: Partial<Record<Selection["kind"], [string, string]>> = {
   node: ["point", "points"], link: ["road", "roads"], stop: ["stop", "stops"], line: ["bus line", "bus lines"],
   building: ["building", "buildings"], connector: ["lane connector", "lane connectors"], lane: ["lane", "lanes"],
-  vehicle: ["vehicle", "vehicles"], zone: ["zone", "zones"],
+  vehicle: ["vehicle", "vehicles"], zone: ["zone", "zones"], marker: ["marker", "markers"],
 };
 /** "3 roads, 2 points, 1 stop" */
 export function describeSelection(list: readonly Selection[]): string {

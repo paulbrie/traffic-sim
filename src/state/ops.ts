@@ -1,6 +1,6 @@
 /** Pure network edit operations. Each returns a new Network (never mutates). */
 import { newId, makeNode } from "@/engine/sample";
-import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type ReversibleDef, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape, type LaneTargets } from "@/engine/types";
+import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type ReversibleDef, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape, type LaneTargets, type MarkerDef } from "@/engine/types";
 import { connShapeKey, exitLanesOf, laneAllowed, linkExtent, type Compiled } from "@/engine/compile";
 import { greenWaveOffsets, withCustomPhases } from "@/engine/signals";
 
@@ -1150,4 +1150,19 @@ export function extendReversible(net: Network, id: string): Network {
   if (!add.length) return net;
   const set = new Set(add.map(l => l.id));
   return { ...net, links: net.links.map(l => (set.has(l.id) ? withRev(l, id) : l)) };
+}
+
+// ---------------------------------------------------------------- markers
+/** Place a marker on the map at `p` (labelled "Marker n"). */
+export function addMarker(net: Network, p: Vec): [Network, MarkerDef] {
+  const m: MarkerDef = { id: newId("m"), x: round(p.x), y: round(p.y), label: `Marker ${(net.markers?.length ?? 0) + 1}` };
+  return [{ ...net, markers: [...(net.markers ?? []), m] }, m];
+}
+export function updateMarker(net: Network, id: string, patch: Partial<Omit<MarkerDef, "id">>): Network {
+  const markers = (net.markers ?? []).map(m => (m.id === id ? { ...m, ...patch, ...(patch.x !== undefined ? { x: round(patch.x) } : {}), ...(patch.y !== undefined ? { y: round(patch.y) } : {}) } : m));
+  return { ...net, markers };
+}
+export function deleteMarker(net: Network, id: string): Network {
+  const markers = (net.markers ?? []).filter(m => m.id !== id);
+  return { ...net, markers: markers.length ? markers : undefined };
 }

@@ -35,6 +35,7 @@ import { JunctionShapeSection } from "./junction-shape";
 import { ReversibleSection } from "./reversible-lane";
 import { CarriagewaysSection } from "./carriageways";
 import { MultiSelection } from "./multi-selection";
+import { MarkerInspector } from "./marker-inspector";
 import { deleteSelected } from "@/state/bulk";
 import { resetApproach } from "@/state/connections";
 
@@ -56,6 +57,7 @@ export function Inspector() {
   if (sel.kind === "lane") return <LaneInspector id={sel.id} />;
   if (sel.kind === "zone") return <ZonesSection />;
   if (sel.kind === "connector") return <ConnectorInspector id={sel.id} />;
+  if (sel.kind === "marker") { const m = net.markers?.find(x => x.id === sel.id); return m ? <MarkerInspector net={net} m={m} /> : <PlanSummary net={net} />; }
   return <PlanSummary net={net} />;
 }
 

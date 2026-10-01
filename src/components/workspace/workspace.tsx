@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, ChevronDown, Eye, Bus, Hand, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, ChevronDown, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -274,6 +274,7 @@ const TOOLS: { id: Tool; label: string; key: string; icon: React.ReactNode }[] =
   { id: "select", label: "Select and move", key: "V", icon: <MousePointer2 /> },
   { id: "road", label: "Draw roads", key: "R", icon: <Route /> },
   { id: "stop", label: "Place bus stops", key: "B", icon: <Bus /> },
+  { id: "marker", label: "Place markers", key: "K", icon: <MapPin /> },
   { id: "image", label: "Move reference image", key: "I", icon: <ImageIcon /> },
   { id: "pan", label: "Pan", key: "H", icon: <Hand /> },
 ];
@@ -458,6 +459,7 @@ function StatusBar() {
     ? "Drag to orbit · right-drag to pan · scroll to zoom · click to select"
     : tool === "road" ? "Click to place points · C toggles curved · click a road to join it · Shift for 15° · Esc to finish"
       : tool === "stop" ? "Click the side of a road where buses should stop"
+        : tool === "marker" ? "Click to place a marker (on a building: on its roof in 3D) · drag a marker to move it"
         : tool === "image" ? "Drag the image to move · corners scale · round handle rotates (Shift: 15°)"
         : "Double-click a road to add a bend point · scroll to pan · ⌘/Ctrl + scroll to zoom";
   return (
@@ -576,6 +578,7 @@ function useShortcuts() {
       if (k === "v") setTool("select");
       else if (k === "r" && u.view === "2d" && !u.readOnly) setTool("road");
       else if (k === "b" && u.view === "2d" && !u.readOnly) setTool("stop");
+      else if (k === "k" && u.view === "2d" && !u.readOnly) setTool("marker");
       else if (k === "i" && u.view === "2d" && !u.readOnly) { setTool("image"); u.panel = "image"; }
       else if (k === "c" && u.tool === "road") u.draft.curved = !u.draft.curved;
       else if (k === "h") setTool("pan");
@@ -597,6 +600,7 @@ function useShortcuts() {
         if (sel.kind === "node") commit(ops.deleteNode(net, sel.id));
         else if (sel.kind === "link") commit(ops.deleteLink(net, sel.id));
         else if (sel.kind === "stop") commit(ops.deleteStop(net, sel.id));
+        else if (sel.kind === "marker") commit(ops.deleteMarker(net, sel.id));
         else if (sel.kind === "line") commit(ops.deleteLine(net, sel.id));
         else if (sel.kind === "building") commit(ops.deleteBuilding(net, sel.id));
         else if (sel.kind === "connector") {

@@ -1,5 +1,6 @@
 /** Canvas 2D renderer for the plan view (world units = metres). */
 import { connectorHandles, connectorId, connectorPreview, type Compiled, type ConnectorView, type Piece } from "@/engine/compile";
+import { DEFAULT_MARKER_COLOR } from "@/engine/markers";
 import type { Poly } from "@/engine/geom";
 import type { SimMirror as Sim, VehicleView as Vehicle } from "@/engine/sim/mirror";
 import type { BuildingDef, BuildingUse, LinkDef, Network, Vec } from "@/engine/types";
@@ -155,6 +156,8 @@ export interface Overlay {
   focusNodes?: readonly number[];
   /** lane ends a connector can be started from (click or drag from them), marked when zoomed in */
   laneEnds?: readonly Vec[];
+  /** markers selected (by id): drawn with a ring */
+  markersSel?: readonly string[];
   /** a selection box being dragged (Shift+drag), world coordinates */
   box?: { a: Vec; b: Vec } | null;
   /** more objects selected with the main selection (Shift+click, a box): highlighted like it */
@@ -580,6 +583,7 @@ export function drawScene(
   if (ul && (ul.editing || (ul.u.visible && !ul.img))) drawUnderlayFrame(ctx, cam, pal, ul.u, ul.editing && !ul.u.locked, ul.hover);
   if (ov.junctions && on("junctions")) drawJunctionTags(ctx, cam, pal, compiled, sim);
   if (on("counters")) drawCounters(ctx, cam, pal, net, compiled, sim);
+  if (on("markers") && net.markers?.length) drawMarkers(ctx, cam, pal, net, ov.markersSel ?? []);
   if (ov.highlight.includes("lanes")) drawLaneIds(ctx, cam, pal, compiled);
   if (ov.selection) drawSelectionIds(ctx, cam, pal, geo, net, compiled, sim, ov.selection, ov.alsoSelected);
   if (ov.selection?.kind === "node") drawFlows(ctx, cam, pal, net, ov.selection.id);
@@ -867,6 +871,31 @@ function drawCounters(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, 
     const w = ctx.measureText(text).width + 10, x = q.x + 8, y = q.y + 14;
     ctx.fillStyle = pal.primary; roundRect(ctx, x, y - 9, w, 18, 4); ctx.fill();
     ctx.fillStyle = "#fff"; ctx.fillText(text, x + 5, y + 0.5);
+  }
+}
+
+/** where a marker's pin head is on screen, from the point it marks (the pin stands up from it) */
+export const MARKER_HEAD = { dy: -20, r: 8 };
+/** markers on the map (screen space): a pin standing on the point, its label beside the head */
+function drawMarkers(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, net: Network, selected: readonly string[]) {
+  ctx.font = `600 12px ${pal.sans}`; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  for (const m of net.markers ?? []) {
+    const q = toScreen(cam, m.x, m.y);
+    if (q.x < -150 || q.y < -40 || q.x > cam.w + 150 || q.y > cam.h + 40) continue;
+    const col = m.color ?? DEFAULT_MARKER_COLOR, hx = q.x, hy = q.y + MARKER_HEAD.dy, sel = selected.includes(m.id);
+    // the stem and the point it marks
+    ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(hx, hy + MARKER_HEAD.r - 1); ctx.stroke();
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(q.x, q.y, 2.5, 0, Math.PI * 2); ctx.fill();
+    if (sel) { ctx.strokeStyle = pal.select; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(hx, hy, MARKER_HEAD.r + 4, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(hx, hy, MARKER_HEAD.r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(hx, hy, 2.5, 0, Math.PI * 2); ctx.fill();
+    if (m.label) {
+      const w = ctx.measureText(m.label).width + 12, x = hx + MARKER_HEAD.r + 4;
+      ctx.fillStyle = pal.bg; ctx.globalAlpha = 0.92; roundRect(ctx, x, hy - 10, w, 20, 5); ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = col; ctx.lineWidth = 1.5; roundRect(ctx, x, hy - 10, w, 20, 5); ctx.stroke();
+      ctx.fillStyle = pal.fg; ctx.fillText(m.label, x + 6, hy + 0.5);
+    }
   }
 }
 
