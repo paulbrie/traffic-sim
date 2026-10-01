@@ -178,7 +178,8 @@ export function PlanCanvas() {
       if (!lanesAimable() || !(u.layers.includes("lanes") || u.layers.includes("connectors"))) return null;
       let best: string | null = null, bd = 11;
       for (const e of simController.compiled.edges) {
-        if (e.to.ringR > 0 || e.to.gateway) continue;
+        // (a road's loose end too: an entry point or dead end can be linked to a road starting nearby)
+        if (e.to.ringR > 0) continue;
         for (const lp of e.lanes) {
           const p = lp.poly.at(lp.len), q = toScreen(cam, p.x, p.y), d = Math.hypot(q.x - sx, q.y - sy);
           if (d < bd) { bd = d; best = `${e.link.id}|${e.dir}|${lp.lane}`; }
@@ -276,7 +277,7 @@ export function PlanCanvas() {
       if (sel.kind === "node") n = c.nodeById.get(sel.id);
       else if (sel.kind === "lane") { const [lid, dir] = sel.id.split("|"); n = c.edgeByKey.get(`${lid}:${dir}`)?.to; }
       else if (sel.kind === "connector") n = c.nodeById.get(sel.id.split("|")[0]);
-      return n && n.ringR === 0 && n.degree >= 2 ? n.cluster.map(k => k.idx) : [];
+      return n && n.ringR === 0 && n.degree >= 1 ? n.cluster.map(k => k.idx) : [];
     }
     /** the nearest lane connector through a junction (only those of `only`, node indexes, when given) */
     function hitConnector(p: Vec, only?: Set<number>): string | null {

@@ -69,7 +69,7 @@ function ConnectFromLane({ id }: { id: string }) {
   const [linkId, dirS, laneS] = id.split("|"), lane = Number(laneS);
   const c = simController.compiled, e = c.edgeByKey.get(`${linkId}:${dirS}`);
   // (also from a lane ending at a plain road point: to a lane starting at another node nearby)
-  if (!e || e.to.ringR > 0 || e.to.gateway || e.to.degree < 1) return null;
+  if (!e || e.to.ringR > 0 || e.to.degree < 1) return null;
   const ref = junctionRefs(c).get(e.to.def.id) ?? "the junction";
   const picking = from === id;
   const add = (outKey: string, b: number) => {

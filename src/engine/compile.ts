@@ -709,7 +709,7 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     }
     // a junction's shape comes from the lanes through it: the road ends plus every lane path at its
     // full width, so the road always covers its lanes (and the kerbs follow the turns)
-    if (opts.outlines !== false && !n.ringR && (n.degree >= 3 || n.controlled || n.rounded)) {
+    if (opts.outlines !== false && !n.ringR && (n.degree >= 3 || n.controlled || n.rounded || outlineArms(n).length > n.arms.length)) {
       const inp = outlineInputs(n, 0), got = shapeCache.get(inp.key);
       if (got) { n.polygon = got.polygon; n.surface = got.surface; }
       else if (got === null) { /* merging failed before: keep the simple outline */ }
@@ -797,8 +797,10 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       for (const n of nodes) { const r = find(n.idx); groups.set(r, [...(groups.get(r) ?? []), n]); }
       for (const g of groups.values()) if (g.length > 1) for (const n of g) {
         n.cluster = g;
-        // (a plain road point in it is a junction now: traffic through it has paths joining or crossing it)
-        if (n.degree >= 2 && !n.gateway) n.controlled = true;
+        // (a plain road point in it is a junction now: traffic through it has paths joining or crossing it;
+        // so is a road's loose end, an entry point or a dead end: its road carries on through connectors)
+        if (n.degree === 1) { n.gateway = false; n.deadEnd = false; }
+        if (n.degree >= 1) n.controlled = true;
       }
     }
   }
@@ -1409,9 +1411,22 @@ export const clearConflictCache = () => { confCache.clear(); confEndCache.clear(
  */
 /** what a junction's outline is made of (and a key for it: the same shapes give the same outline) */
 interface OutlineInputs { n: CNode; polys: Ring[][]; pieces: Ring[][]; key: string }
+/**
+ * The road ends a junction's outline is made of: its own, and those of other nodes its connectors lead into
+ * (a junction over several nodes: the asphalt reaches the lanes they join)
+ */
+function outlineArms(n: CNode): Arm[] {
+  let out: Arm[] | null = null;
+  for (const ms of n.moves.values()) for (const m of ms) {
+    if (m.out.from === n) continue;
+    const a = m.out.from.arms.find(x => x.outEdge === m.out);
+    if (a && !(out ?? n.arms).includes(a)) (out ??= [...n.arms]).push(a);
+  }
+  return out ?? n.arms;
+}
 function outlineInputs(n: CNode, inset: number): OutlineInputs {
   const polys: Ring[][] = [], pieces: Ring[][] = [], extra = CURB - inset;
-  for (const a of n.arms) {
+  for (const a of outlineArms(n)) {
     const r = { x: -a.mu.y, y: a.mu.x }, m = a.mouth, lo = a.lo + inset, hi = a.hi - inset;
     const d = Math.min(1.5, Math.max(0.3, a.setback * 0.5));
     const pt = (side: number, back: number): Pair => [m.x + r.x * side - a.mu.x * back, m.y + r.y * side - a.mu.y * back];
@@ -1447,7 +1462,7 @@ function mergeOutline({ n, polys, pieces }: OutlineInputs): Vec[] | null {
   // (on a 1 cm grid, without repeated points: the merge is robust then)
   const snap = (ps: Ring[][]) => ps.map(poly => poly.map(ring => ring.map(([x, y]) => [Math.round(x * 100) / 100, Math.round(y * 100) / 100] as Pair).filter((q, i, r) => i === 0 || q[0] !== r[i - 1][0] || q[1] !== r[i - 1][1])).filter(ring => ring.length >= 4));
   polys.splice(0, polys.length, ...snap(polys).filter(p => p.length)); pieces.splice(0, pieces.length, ...snap(pieces).filter(p => p.length));
-  const arms = polys.slice(0, n.arms.length);
+  const arms = polys.slice(0, outlineArms(n).length);
   try { merged = polygonClipping.union(polys[0], ...polys.slice(1)); }
   catch {
     // one shape at a time (a shape that trips the merge is retried nudged by a millimetre, then left out)
@@ -1500,7 +1515,7 @@ function kerbInset(n: CNode, outline: Vec[]): Vec[] | null {
   // road splits into carriageways), and whether at an arm's kerb corner (where the road's kerb ends)
   const mouthsOf = (p: Vec) => {
     const out: { a: Arm; corner: boolean }[] = [];
-    for (const a of n.arms) {
+    for (const a of outlineArms(n)) {
       const dx = p.x - a.mouth.x, dy = p.y - a.mouth.y, along = dx * a.mu.x + dy * a.mu.y, side = dx * -a.mu.y + dy * a.mu.x;
       if (Math.abs(along) < 0.3 && side > a.lo - 0.05 && side < a.hi + 0.05) out.push({ a, corner: side < a.lo + 0.1 || side > a.hi - 0.1 });
     }

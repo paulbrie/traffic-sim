@@ -412,7 +412,8 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
     const w = Math.max(...n.arms.map(a => a.w));
     geo.junctions.push({
       nodeId: n.def.id,
-      polygon: n.degree >= 2 ? n.polygon : [], surface: n.degree >= 2 ? n.surface : [],
+      // (a road's loose end in a junction over several nodes too: its asphalt reaches the lanes it joins)
+      polygon: n.degree >= 2 || n.cluster.length > 1 ? n.polygon : [], surface: n.degree >= 2 || n.cluster.length > 1 ? n.surface : [],
       ring: n.ringR > 0 ? { c: n.pos, r: n.ringR, ...(n.ring2 ? { r2: n.ringR2 } : {}) } : null,
       deadEnd: n.deadEnd ? { c: { x: n.pos.x - n.arms[0].u.x * 1, y: n.pos.y - n.arms[0].u.y * 1 }, r: Math.max(6.5, w + 0.5) } : null,
       on: onN(n),

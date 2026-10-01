@@ -985,3 +985,23 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   console.log(`lights per connector: converted as they are drive the same ${sameDrive}; protected left from a shared lane: left in phases ${[...phaseOf.L].map(p => p + 1)}, straight in ${[...phaseOf.S].map(p => p + 1)}; two nodes one junction: lights follow ${follows}, ${sim2.stats.trips} trips, ${overlap} overlaps, ${sim2.stats.towed} towed | ok ${ok}`);
   if (!ok) process.exit(1);
 }
+
+// two roads that don't meet, their loose ends 10 m apart: a connector from one's lane end to the other's
+// lane start makes them one road through a junction (the loose ends are no longer entry points)
+{
+  const W = makeNode(-200, 0), X = makeNode(0, 0), Y = makeNode(10, 2), E = makeNode(210, 2);
+  const a = makeLink(W, X, 1, 1), b = makeLink(Y, E, 1, 1);
+  let net = sanitizeNetwork({ version: 1, nodes: [W, X, Y, E], stops: [], lines: [], links: [a, b], flows: [{ id: "f", from: W.id, to: E.id, rate: 400 }] });
+  let c = compile(net);
+  const ein = c.edgeByKey.get(`${a.id}:1`)!, offered = lanesLeavingNear(c, ein, 0).some(x => x.e.key === `${b.id}:1`);
+  const r = connectLanes(net, c, ein.key, 0, `${b.id}:1`, 0)!;
+  net = sanitizeNetwork(r.net); c = compile(net);
+  const x = c.nodeById.get(X.id)!, y = c.nodeById.get(Y.id)!;
+  const joined = x.cluster.includes(y) && !x.gateway && !y.gateway && x.controlled;
+  const sim = new Sim(c, { cars: 0, trucks: 0, seed: 3 });
+  for (let t = 0; t < 3000; t++) sim.step();
+  const f = sim.flowStats(0)!;
+  const ok = offered && joined && f.arrived > 10 && sim.stats.towed === 0;
+  console.log(`connector between loose road ends: offered ${offered}, one junction ${joined}, ${f.arrived} of ${f.sent} arrived across it, ${sim.stats.towed} towed | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
