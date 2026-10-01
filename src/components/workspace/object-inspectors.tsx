@@ -82,10 +82,10 @@ function ConnectFromLane({ id }: { id: string }) {
   return (
     <Section title="Connect to another lane">
       <Button size="sm" variant={picking ? "secondary" : "outline"} className="justify-self-start" onClick={() => { ui.getValue().connectFrom = picking ? null : id; }}>
-        {picking ? "Cancel (Esc)" : "Pick the lane on the map"}
+        {picking ? "Done (Esc)" : "Pick lanes on the map"}
       </Button>
       <p className="text-xs text-muted-foreground">
-        {picking ? `Click a lane leaving ${ref} (highlighted) to connect lane ${lane + 1} to it.` : `A connector from the end of this lane through ${ref} to a lane leaving it, even where there was no turn. Or pick it here:`}
+        {picking ? `Click lanes leaving ${ref} (highlighted) to connect lane ${lane + 1} to them, as many as you like.` : `Connectors from the end of this lane through ${ref} to lanes leaving it (as many as you like), even where there was no turn. Or pick them here:`}
       </p>
       <div className="grid gap-1.5">
         {outs.map(({ a, o }) => (
@@ -136,7 +136,7 @@ function ConnectorShape({ v }: { v: ReturnType<typeof connectorsOf>[number] }) {
         <NumberField id="k2" label="Joins along its lane" unit="m" value={h.k2} min={0.5} max={200} step={0.5} digits={1} onCommit={x => set([h.k1, x], `k2:${key}`)} />
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {h.custom ? "Shaped by hand." : "Automatic shape."} Drag the two round handles on the map (each slides along its lane; hold Shift to move one freely) to reshape it;
+        {h.custom ? "Shaped by hand." : "Automatic shape."} Drag the two round handles on the map (each slides along its lane; hold Shift to move one freely) to reshape it, or a square end onto another lane end to connect it there;
         the junction&apos;s outline follows its lanes, and vehicles drive the new path.
       </p>
       {h.custom && <Button variant="outline" size="sm" className="justify-self-start" onClick={() => set(null)}>Automatic shape</Button>}

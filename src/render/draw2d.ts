@@ -493,6 +493,7 @@ export function drawScene(
   if (ul && (ul.editing || (ul.u.visible && !ul.img))) drawUnderlayFrame(ctx, cam, pal, ul.u, ul.editing && !ul.u.locked, ul.hover);
   if (ov.junctions) drawJunctionTags(ctx, cam, pal, compiled, sim);
   drawCounters(ctx, cam, pal, net, compiled, sim);
+  if (ov.highlight.includes("lanes")) drawLaneIds(ctx, cam, pal, compiled);
   if (ov.selection) drawSelectionIds(ctx, cam, pal, geo, net, compiled, sim, ov.selection, ov.alsoSelected);
   if (ov.selection?.kind === "node") drawFlows(ctx, cam, pal, net, ov.selection.id);
   if (ov.highlight.includes("zones") || ov.selection?.kind === "zone") drawZones(ctx, cam, pal, net, ov.selection?.kind === "zone" ? ov.selection.id : null);
@@ -579,6 +580,9 @@ export function drawScene(
         ctx.fillStyle = hov === id ? pal.select : pal.bg; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       }
+      // its two ends: square handles to drag onto another lane end
+      for (const q of [P, Q]) { ctx.fillStyle = pal.select; ctx.strokeStyle = pal.bg; ctx.lineWidth = 2; ctx.beginPath(); ctx.rect(q.x - 5, q.y - 5, 10, 10); ctx.fill(); ctx.stroke(); }
+      ctx.strokeStyle = pal.select;
     }
   }
   if (ov.pendingPoint) {
@@ -797,6 +801,33 @@ function drawSelectionIds(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palet
     const w = ctx.measureText(t.text).width + 10;
     ctx.fillStyle = pal.select; roundRect(ctx, q.x - w / 2, q.y - 24, w, 17, 4); ctx.fill();
     ctx.fillStyle = "#ffffff"; ctx.fillText(t.text, q.x, q.y - 15.5);
+  }
+}
+
+/** with the lanes layer highlighted: each lane's id (as selected: "linkId|dir|lane") at its middle, when zoomed in enough to read */
+function drawLaneIds(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, compiled: Compiled) {
+  if (cam.scale < 3) return;
+  ctx.setTransform(cam.dpr, 0, 0, cam.dpr, 0, 0);
+  ctx.font = `500 9.5px ${pal.mono}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  // (neighbouring lanes' labels staggered along them; a label that would cover one already placed is left out)
+  const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+  for (const e of compiled.edges) for (const lp of e.lanes) {
+    if (lp.len < 2) continue;
+    const f = e.n > 1 ? 0.3 + (0.4 * lp.lane) / (e.n - 1) : 0.5;
+    const text = `${e.link.id}|${e.dir}|${lp.lane}`, w = ctx.measureText(text).width + 6;
+    // the first of a few points along the lane that is on screen and free (long lanes are often half off it)
+    let q: Vec | null = null, r = { x0: 0, y0: 0, x1: 0, y1: 0 };
+    for (const g of [f, 0.15, 0.85, 0.5, 0.05, 0.95, 0.3, 0.7]) {
+      const at = lp.poly.at(lp.len * g), p = toScreen(cam, at.x, at.y);
+      if (p.x < w / 2 || p.y < 8 || p.x > cam.w - w / 2 || p.y > cam.h - 8) continue;
+      const rr = { x0: p.x - w / 2, y0: p.y - 7, x1: p.x + w / 2, y1: p.y + 7 };
+      if (placed.some(o => rr.x0 < o.x1 && rr.x1 > o.x0 && rr.y0 < o.y1 && rr.y1 > o.y0)) continue;
+      q = p; r = rr; break;
+    }
+    if (!q) continue;
+    placed.push(r);
+    ctx.fillStyle = "rgba(14,116,144,0.88)"; roundRect(ctx, r.x0, r.y0, w, 14, 3); ctx.fill();
+    ctx.fillStyle = "#ffffff"; ctx.fillText(text, q.x, q.y + 0.5);
   }
 }
 
