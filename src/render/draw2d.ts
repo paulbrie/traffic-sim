@@ -148,6 +148,8 @@ export interface Overlay {
   connectors: boolean;
   /** junctions (node indexes) whose connectors are drawn anyway: the one selected, or of a selected lane / connector */
   focusNodes?: readonly number[];
+  /** lane ends a connector can be started from (click or drag from them), marked when zoomed in */
+  laneEnds?: readonly Vec[];
   /** the layer whose objects are highlighted ("all" = none) */
   /** layers whose objects are highlighted (lane outlines, connectors, rings around junctions…) */
   highlight: readonly string[];
@@ -609,6 +611,10 @@ export function drawScene(
     if (n) { const q = toScreen(cam, n.x, n.y); ctx.strokeStyle = pal.select; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(q.x, q.y, 11, 0, Math.PI * 2); ctx.stroke(); }
   }
   if (sel?.kind === "link") {
+  if (ov.laneEnds?.length && !ov.connectPick) {
+    ctx.lineWidth = 1.5; ctx.strokeStyle = pal.select; ctx.fillStyle = "#ffffff";
+    for (const e of ov.laneEnds) { const q = toScreen(cam, e.x, e.y); ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+  }
     const l = net.links.find(x => x.id === sel.id);
     if (l) drawLinkHandles(ctx, cam, pal, net, l, ov.hover?.kind === "handle" ? ov.hover.id : null);
   }

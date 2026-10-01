@@ -27,6 +27,7 @@ type Drag =
   | { mode: "handle"; linkId: string; handle: "c1" | "c2" | "bend"; moved: boolean }
   | { mode: "conn"; id: string; which: "k1" | "k2" }
   | { mode: "connEnd"; id: string; which: "start" | "end" }
+  | { mode: "connNew"; from: string; sx: number; sy: number; moved: boolean }
   | { mode: "outline"; node: string; idx: number }
   | { mode: "ul-move"; start: Vec; x0: number; y0: number }
   | { mode: "ul-rotate"; a0: number; rot0: number }
@@ -169,6 +170,35 @@ export function PlanCanvas() {
       const [lid, dir, ln] = from.split("|"), c = simController.compiled, e = c.edgeByKey.get(`${lid}:${dir}`);
       if (!e || !e.lanes[Number(ln)]) return null;
       return lanesLeavingNear(c, e, Number(ln));
+    }
+    /** lanes are wide enough on screen to aim at one end (about 12 px a lane) */
+    const lanesAimable = () => cam.scale * 3.2 >= 12;
+    /** the end of a lane arriving at a junction under the pointer ("linkId|dir|lane"), zoomed in enough */
+    function hitLaneEnd(sx: number, sy: number): string | null {
+      if (!lanesAimable() || !(u.layers.includes("lanes") || u.layers.includes("connectors"))) return null;
+      let best: string | null = null, bd = 11;
+      for (const e of simController.compiled.edges) {
+        if (e.to.ringR > 0 || e.to.gateway) continue;
+        for (const lp of e.lanes) {
+          const p = lp.poly.at(lp.len), q = toScreen(cam, p.x, p.y), d = Math.hypot(q.x - sx, q.y - sy);
+          if (d < bd) { bd = d; best = `${e.link.id}|${e.dir}|${lp.lane}`; }
+        }
+      }
+      return best;
+    }
+    /** drawing a connector from `from`: the lane it would go to at a point (its start ring, or on the lane) */
+    function connectTargetAt(from: string, w: Vec) {
+      const ts = connectTargets(from);
+      if (!ts) return null;
+      const r = Math.max(LW, pxToM(14));
+      return ts.map(t => { const q = t.lp.poly.at(0); return { t, d: Math.hypot(q.x - w.x, q.y - w.y) }; }).filter(x => x.d < r).sort((a, b) => a.d - b.d)[0]?.t
+        ?? ts.find(t => t.lp.poly.project(w.x, w.y).d < LW * 0.6) ?? null;
+    }
+    /** start drawing a connector from a lane's end (its lane selected, the lanes it can go to shown) */
+    function startConnect(from: string) {
+      select({ kind: "lane", id: from });
+      ui.getValue().connectFrom = from;
+      markDirty();
     }
     /** index of the outline point (of the junction whose outline is being edited) under the pointer, or -1 */
     function hitOutlinePoint(sx: number, sy: number): number {
@@ -365,7 +395,10 @@ export function PlanCanvas() {
       // drawing a lane connector: a click on a lane leaving the junction ends it there
       const cf = ui.getValue().connectFrom;
       if (cf) {
-        const pick = connectTargets(cf)?.find(t => t.lp.poly.project(w.x, w.y).d < LW * 0.6);
+        const pick = connectTargetAt(cf, w);
+        // (another lane's end: draw from there instead)
+        const other = pick ? null : hitLaneEnd(sx, sy);
+        if (other && other !== cf) { startConnect(other); drag = { mode: "connNew", from: other, sx, sy, moved: false }; return; }
         if (pick) {
           // (stay in picking: more lanes can be clicked; Esc or Done ends it)
           const [lid, dir, ln] = cf.split("|"), r = connectLanes(net, simController.compiled, `${lid}:${dir}`, Number(ln), pick.e.key, pick.lp.lane);
@@ -474,6 +507,9 @@ export function PlanCanvas() {
       if (ce) { drag = { mode: "connEnd", id: ce.id, which: ce.which }; return; }
       const ch = hitConnHandle(sx, sy);
       if (ch) { drag = { mode: "conn", id: ch.id, which: ch.which }; return; }
+      // the end of a lane (zoomed in): a connector from it, dragged to a lane, or click the lanes after
+      const le = tool === "select" ? hitLaneEnd(sx, sy) : null;
+      if (le) { startConnect(le); drag = { mode: "connNew", from: le, sx, sy, moved: false }; return; }
       // select tool: the curve handles of the selected road, then whatever the layers that are on pick
       const h = u.layers.includes("roads") ? hitHandle(sx, sy) : null;
       if (h && u.selection?.kind === "link") { drag = { mode: "handle", linkId: u.selection.id, handle: h, moved: false }; return; }
@@ -537,6 +573,7 @@ export function PlanCanvas() {
         return;
       }
       if (drag?.mode === "connEnd") { markDirty(); return; }
+      if (drag?.mode === "connNew") { if (Math.hypot(sx - drag.sx, sy - drag.sy) > 4) drag.moved = true; markDirty(); return; }
       if (drag?.mode === "conn") {
         const d = drag, v = connectorsOf(simController.compiled).find(x => connectorId(x) === d.id);
         if (!v) return;
@@ -589,6 +626,20 @@ export function PlanCanvas() {
 
     function onPointerUp(e: PointerEvent) {
       try { canvas.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+      // a connector drawn from a lane's end, dropped on a lane: made (a plain click keeps picking lanes)
+      if (drag?.mode === "connNew") {
+        const d = drag;
+        drag = null;
+        if (d.moved) {
+          const { sx, sy } = local(e), t = connectTargetAt(d.from, toWorld(cam, sx, sy));
+          const [lid, dir, ln] = d.from.split("|");
+          const r = t ? connectLanes(net, simController.compiled, `${lid}:${dir}`, Number(ln), t.e.key, t.lp.lane) : null;
+          ui.getValue().connectFrom = null;
+          if (r) { commit(r.net); select({ kind: "connector", id: r.id }); }
+        }
+        markDirty();
+        return;
+      }
       // a connector end dropped on another lane end: the connector goes there instead
       if (drag?.mode === "connEnd") {
         const d = drag, t = connEndTargets(d.id, d.which), { sx, sy } = local(e), w = toWorld(cam, sx, sy);
@@ -742,6 +793,8 @@ export function PlanCanvas() {
           buildings: u.display.buildings,
           satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, highlight: highlightedLayers(u.layers), maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
           focusNodes: focusNodes(),
+          // (the junction being edited, zoomed in: its lanes' ends, where a connector can be started)
+          laneEnds: lanesAimable() ? focusNodes().flatMap(i => simController.compiled.nodes[i].arms.flatMap(a => a.inEdge?.lanes.map(lp => lp.poly.at(lp.len)) ?? [])) : [],
           connectPick: (() => {
             if (drag?.mode === "connEnd") {
               const t = connEndTargets(drag.id, drag.which);
@@ -753,7 +806,7 @@ export function PlanCanvas() {
             const cf = u.connectFrom, ts = cf ? connectTargets(cf) : null;
             if (!cf || !ts) return null;
             const [lid, dir, ln] = cf.split("|"), lp = simController.compiled.edgeByKey.get(`${lid}:${dir}`)!.lanes[Number(ln)];
-            const cw = cursorWorld, over = cw ? ts.find(t => t.lp.poly.project(cw.x, cw.y).d < LW * 0.6) : undefined;
+            const cw = cursorWorld, over = cw ? connectTargetAt(cf, cw) : null;
             return { from: lp.poly.at(lp.len), targets: ts.map(t => t.lp.poly.pts), ends: ts.map(t => t.lp.poly.at(0)), snap: over ? over.lp.poly.at(0) : null, cursor: cursorWorld };
           })(),
           shape: (() => {
