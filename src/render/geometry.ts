@@ -1,5 +1,5 @@
 /** Static road geometry derived from the compiled network, shared by 2D and 3D renderers. */
-import { CURB, LEVEL_H, armEnd, connectorPreview, exitLane, laneAllowed, linkCenter, linkZ, type Arm, type CNode, type Movement, type Compiled, type Edge } from "@/engine/compile";
+import { CURB, LEVEL_H, armEnd, connectorPreview, exitLane, isRev, laneAllowed, linkCenter, linkZ, type Arm, type CNode, type Movement, type Compiled, type Edge } from "@/engine/compile";
 import { Poly, normAngle } from "@/engine/geom";
 import type { LinkDef, MedianKind, Network, Vec } from "@/engine/types";
 
@@ -142,7 +142,7 @@ function armLines(n: CNode, a: Arm, byLink: Map<string, { f: Edge | null; b: Edg
   if (!es) return [];
   const flip = a.link.to === n.def.id ? -1 : 1, out: { y: number; kind: "lane" | "center"; dashed: boolean }[] = [];
   const l = a.link;
-  if (es.f && es.b && !(l.median ?? 0) && !es.f.left && !es.b.left) {
+  if (es.f && es.b && !(l.median ?? 0) && !es.f.left && !es.b.left && !isRev(l)) {
     if (l.lanesF === 1 && l.lanesB === 1) out.push({ y: 0, kind: "center", dashed: true });
     else out.push({ y: 0.2 * flip, kind: "center", dashed: false }, { y: -0.2 * flip, kind: "center", dashed: false });
   }
@@ -216,7 +216,9 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
     if (twoWay) {
       const f = sides.find(x => x.sg > 0)!, b = sides.find(x => x.sg < 0)!, m = link.median ?? 0;
       const hasMedian = m > 0 || f.e.left > 0 || b.e.left > 0 || (f.e.dropLane >= 0 && f.e.dropLane === f.e.left) || (b.e.dropLane >= 0 && b.e.dropLane === b.e.left);
-      if (!hasMedian) {
+      if (isRev(link)) {
+        // a reversible middle lane: no centre line (its own double dashed lines are drawn with the lanes below)
+      } else if (!hasMedian) {
         if (link.lanesF === 1 && link.lanesB === 1) geo.lines.push({ poly: center, dashed: true, kind: "center", on });
         else { geo.lines.push({ poly: center.offset(0.2), dashed: false, kind: "center", on }, { poly: center.offset(-0.2), dashed: false, kind: "center", on }); }
       } else {
@@ -254,6 +256,11 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
           continue;
         }
         const off = e.base + k * e.lw;
+        // beside a reversible middle lane: a double dashed line, the whole way
+        if (e.rev && k === 1) {
+          for (const d of [-0.12, 0.12]) geo.lines.push({ poly: ec.offset(off + d), dashed: true, kind: "lane", on });
+          continue;
+        }
         // the last metres before a junction's stop line are solid (no changing lanes there)
         const solid = e.to.controlled && !e.to.ringR && e.to.degree >= 2 && ec.len > 30 ? Math.min(20, ec.len * 0.3) : 0;
         const cut = Math.max(from, ec.len - solid);

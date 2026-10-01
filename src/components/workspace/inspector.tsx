@@ -31,6 +31,7 @@ import { arrowLetters } from "@/engine/compile";
 import { JunctionEventLog, RoadEventLog, VehicleEventLog } from "./event-log";
 import { LaneConnectionsSection } from "./lane-connections";
 import { JunctionShapeSection } from "./junction-shape";
+import { ReversibleSection } from "./reversible-lane";
 
 const CONTROL_LABEL: Record<Control, string> = { priority: "Priority (first come)", free: "Free (go when clear)", stop: "All-way stop", lights: "Traffic lights", roundabout: "Roundabout" };
 const SPEEDS = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 130];
@@ -415,7 +416,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
                 <SelectContent>
                   <SelectItem value="none">No lane ends</SelectItem>
                   <SelectItem value="right">Right lane merges left</SelectItem>
-                  <SelectItem value="left">Left lane merges right</SelectItem>
+                  {!link.rev && <SelectItem value="left">Left lane merges right</SelectItem>}
                 </SelectContent>
               </Select>
               {(d === 1 ? link.dropF : link.dropB) ? (
@@ -430,7 +431,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
             <span className="text-xs text-muted-foreground">Turn bays before the junction ahead</span>
             <div className="grid grid-cols-[1fr_auto_5.5rem] items-center gap-x-2 gap-y-1.5 text-xs">
               <span>Left</span>
-              <Stepper label="left turn bays" value={bays.left} min={0} max={Math.min(MAX_BAYS, room - bays.right)} onChange={v => setB({ left: v })} />
+              <Stepper label="left turn bays" value={bays.left} min={0} max={link.rev ? 0 : Math.min(MAX_BAYS, room - bays.right)} onChange={v => setB({ left: v })} />
               <NumberField id={`bl${d}`} label="Left bay length" hideLabel unit="m" value={bays.leftLen} min={10} max={400} step={5} digits={0} className={bays.left ? "" : "invisible"} onCommit={v => setB({ leftLen: Math.round(v) })} />
               <span>Right{bus ? " (not with a bus lane)" : ""}</span>
               <Stepper label="right turn bays" value={bays.right} min={0} max={bus ? 0 : Math.min(MAX_BAYS, room - bays.left)} onChange={v => setB({ right: v })} />
@@ -515,7 +516,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
       <Section title="Lanes">
         {lanesRow(1, `Towards ${dir.name} (${dir.deg.toFixed(0)}°)`, link.lanesF, link.busF, n => set({ lanesF: n, busF: n >= 1 && link.busF, turnsF: null, greenF: ops.resizeGreens(link.greenF, lanesAtLine({ ...link, lanesF: n }, 1)) }), b => set({ busF: b, ...(b && link.baysF?.right ? { baysF: link.baysF.left ? { ...link.baysF, right: 0 } : null, turnsF: null } : {}) }), link.lanesB)}
         {lanesRow(-1, `Towards ${back.name} (${back.deg.toFixed(0)}°)`, link.lanesB, link.busB, n => set({ lanesB: n, busB: n >= 1 && link.busB, turnsB: null, greenB: ops.resizeGreens(link.greenB, lanesAtLine({ ...link, lanesB: n }, -1)) }), b => set({ busB: b, ...(b && link.baysB?.right ? { baysB: link.baysB.left ? { ...link.baysB, right: 0 } : null, turnsB: null } : {}) }), link.lanesF)}
-        {link.lanesF > 0 && link.lanesB > 0 && (
+        {link.lanesF > 0 && link.lanesB > 0 && !link.rev && (
           <div className="grid gap-2 rounded-md border p-2.5">
             <div className="grid grid-cols-[1fr_5.5rem] items-center gap-2">
               <span className="text-sm">Median</span>
@@ -539,6 +540,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
           <Button variant="outline" size="sm" onClick={() => commit(ops.reverseLink(net, link.id))}><ArrowLeftRight /> Swap sides</Button>
         </div>
       </Section>
+      <ReversibleSection net={net} link={link} />
       {laneArrows.some(Boolean) && (
         <Section title="At the junction ahead">
           <p className="text-xs text-muted-foreground">Lane arrows set where each lane may go. A give-way or stop sign makes this approach wait for traffic on roads without a sign. Turning shares set how traffic splits between the exits.</p>

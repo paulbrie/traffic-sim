@@ -324,6 +324,66 @@ function paintLevel(ctx: CanvasRenderingContext2D, c: LayerPaths, pal: Palette, 
   ctx.globalAlpha = 1;
 }
 
+/** what a reversible corridor's lane sign shows to direction `d` (1, 2) at gantry `k` of that direction's way along it */
+export type LaneSign = "open" | "closed" | "leave";
+export function revSign(state: number | undefined, d: 1 | 2, entry: boolean): LaneSign {
+  const open = d === 1 ? 1 : 3;
+  if (state === open) return "open";
+  // closing: the entry gantry tells drivers to move over; further on it shows closed (as in the brief)
+  if (state === open + 1) return entry ? "leave" : "closed";
+  return "closed";
+}
+/** gantries along a reversible corridor's roads, in each direction: at the start of each road and every 400 m */
+const GANTRY_EVERY = 400;
+/**
+ * LED lane signs over each lane of a reversible corridor's roads, for each direction: a green arrow
+ * (open), a red X (closed) or a yellow arrow slanting toward the lane beside (move over: closing).
+ * The fixed lanes always show green; the middle lane follows the corridor's state.
+ */
+function drawLaneSigns(ctx: CanvasRenderingContext2D, pal: Palette, compiled: Compiled, sim: Sim | null, px: number) {
+  const S = 2.2; // sign size (m; a lane is about 3.2 m wide)
+  for (const c of compiled.corridors) {
+    const state = sim?.rev[c.idx]?.state;
+    for (const d of [1, 2] as const) {
+      c.edges[d - 1].forEach((e, ei) => {
+        const L = e.lanes[1]?.len ?? e.length;
+        const at: number[] = [];
+        for (let s = Math.min(6, L * 0.15); s < L - 10 || at.length === 0; s += GANTRY_EVERY) at.push(s);
+        at.forEach((s0, gi) => {
+          for (const lp of e.lanes) {
+            const s = s0 * (lp.len / Math.max(1e-6, L)), p = lp.poly.at(s), t = lp.poly.tangent(s);
+            const sign: LaneSign = lp.lane === 0 && e.rev ? (sim ? revSign(state, d, ei === 0 && gi === 0) : "closed") : "open";
+            drawLaneSign(ctx, pal, p, t, sign, S, px);
+          }
+        });
+      });
+    }
+  }
+}
+function drawLaneSign(ctx: CanvasRenderingContext2D, pal: Palette, p: Vec, t: Vec, sign: LaneSign, S: number, px: number) {
+  ctx.save();
+  ctx.translate(p.x, p.y); ctx.rotate(Math.atan2(t.y, t.x));
+  // (in this frame +x is the way traffic goes, +y its right)
+  const h = S / 2;
+  ctx.fillStyle = "#111827"; ctx.fillRect(-h, -h, S, S);
+  ctx.lineWidth = Math.max(S * 0.14, px * 1.5); ctx.lineCap = "round"; ctx.lineJoin = "round";
+  const k = S * 0.3;
+  ctx.beginPath();
+  if (sign === "closed") {
+    ctx.strokeStyle = pal.stop;
+    ctx.moveTo(-k, -k); ctx.lineTo(k, k); ctx.moveTo(-k, k); ctx.lineTo(k, -k);
+  } else if (sign === "open") {
+    ctx.strokeStyle = pal.go;
+    ctx.moveTo(-k, 0); ctx.lineTo(k, 0); ctx.moveTo(k * 0.2, -k * 0.75); ctx.lineTo(k, 0); ctx.lineTo(k * 0.2, k * 0.75);
+  } else {
+    // slanting forward and to the right: into the fixed lane beside
+    ctx.strokeStyle = pal.slow;
+    ctx.moveTo(-k, -k); ctx.lineTo(k, k); ctx.moveTo(k * 0.05, k); ctx.lineTo(k, k); ctx.lineTo(k, k * 0.05);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 export function drawScene(
   ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, geo: RoadGeo, paths: PathCache,
   net: Network, compiled: Compiled, sim: Sim | null, ov: Overlay,
@@ -478,6 +538,9 @@ export function drawScene(
       ctx.closePath(); ctx.fill();
     }
   }
+
+  // reversible lanes: the lane signs on their gantries
+  if (compiled.corridors.length && scale > 1.2) drawLaneSigns(ctx, pal, compiled, sim, px);
 
   // bus stops
   for (const s of geo.stops) {

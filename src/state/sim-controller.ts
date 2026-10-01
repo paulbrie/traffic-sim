@@ -186,6 +186,12 @@ class SimController {
     this.post({ type: "clearEvents" });
   }
 
+  /** set a reversible corridor's lane by hand ("auto" hands it back to the corridor's mode) */
+  reversibleCommand(corridorId: string, cmd: "closed" | "1" | "2" | "auto") {
+    const c = this.compiled.corridors.find(x => x.def.id === corridorId);
+    if (c) this.post({ type: "reversible", idx: c.idx, cmd });
+  }
+
   /** called every animation frame: returns true if a new snapshot arrived since the last call */
   advance(): boolean {
     if (ui.getValue().sim.running) this.ensureSim();

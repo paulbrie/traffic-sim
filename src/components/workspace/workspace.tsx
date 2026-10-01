@@ -21,6 +21,7 @@ import { MAX_LANES, type Network, type PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 import { allLayersOn, commit, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool } from "@/state/store";
 import { simController } from "@/state/sim-controller";
+import { changeConnection } from "@/state/connections";
 import { sendView, viewport } from "@/state/commands";
 import { OsmImportDialog, describeStats, type OsmImportMode } from "@/components/osm/osm-import-dialog";
 import { bboxCenter, unproject, type BBox } from "@/lib/osm/area";
@@ -594,6 +595,13 @@ function useShortcuts() {
         else if (sel.kind === "stop") commit(ops.deleteStop(net, sel.id));
         else if (sel.kind === "line") commit(ops.deleteLine(net, sel.id));
         else if (sel.kind === "building") commit(ops.deleteBuilding(net, sel.id));
+        else if (sel.kind === "connector") {
+          // a lane connector ("node|inKey|inLane|outKey|outLane"): just this one goes, the lane's others stay
+          const [node, inKey, a, outKey, b] = sel.id.split("|");
+          commit(changeConnection(net, simController.compiled, inKey, Number(a), outKey, Number(b), null));
+          select({ kind: "node", id: node });
+          return;
+        }
         else return;
         select(null);
       }
