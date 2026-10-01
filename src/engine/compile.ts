@@ -638,6 +638,19 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       }
       if (best) { if (ein.thru > eout.thru) m.skip = best; else m.shift = best; }
     }
+    // a lane connection set by hand between two roads with no turn between them adds that turn
+    // (classed by its angle, like the automatic ones)
+    if (n.def.laneMap && !n.ringR) for (const key of Object.keys(n.def.laneMap)) {
+      const [ik, ok] = key.split(">"), ein = edgeByKey.get(ik), eout = edgeByKey.get(ok);
+      if (!ein || !eout || ein.to !== n || eout.from !== n || !ein.lanes.length || !eout.lanes.length) continue;
+      let list = n.moves.get(ein.idx);
+      if (!list) n.moves.set(ein.idx, (list = []));
+      if (list.some(m => m.out === eout)) continue;
+      const tin = ein.lanes[0].poly.tangent(ein.lanes[0].len), tout = eout.lanes[0].poly.tangent(0);
+      const uturn = ein.link === eout.link, delta = uturn ? Math.PI : signedAngle(tin, tout);
+      const turn: Turn = uturn || Math.abs(delta) > 2.7 ? "U" : delta > 0.52 ? "R" : delta < -0.52 ? "L" : "S";
+      list.push({ node: n, in: ein, out: eout, turn, delta, lo: 0, hi: ein.n - 1, rank: list.length });
+    }
     // lane connections set by hand win over the automatic ones (a turn with no lane left is dropped)
     if (n.def.laneMap && !n.ringR) for (const [k, list] of n.moves) {
       const next = list.filter(m => {

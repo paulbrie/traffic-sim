@@ -596,3 +596,20 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   console.log(`outlines cached: ${cold.pendingShapes.length} missing at first, ${warm.pendingShapes.length} once worked out, same shapes ${same}; simulation without outlines identical ${a.stats.trips === b.stats.trips} | ok ${ok}`);
   if (!ok) process.exit(1);
 }
+
+// adding a lane connector by hand where no turn existed (here the lane arrows leave out the right turn):
+// the turn comes back, only from that lane, classed by its angle, and traffic uses it
+{
+  const J = makeNode(0, 0, "priority", false), W = makeNode(-200, 0), E = makeNode(200, 0), S = makeNode(0, 200);
+  const wj = makeLink(W, J, 2, 2, { turnsF: ["S", "S"] }), je = makeLink(J, E, 2, 2), js = makeLink(J, S, 1, 1);
+  const base: Network = { version: 1, nodes: [J, W, E, S], stops: [], lines: [], links: [wj, je, js] };
+  const before = compile(sanitizeNetwork(base)), inKey = `${wj.id}:1`;
+  const had = (before.nodeById.get(J.id)!.moves.get(before.edgeByKey.get(inKey)!.idx) ?? []).some(m => m.out.link.id === js.id);
+  const net = sanitizeNetwork({ ...base, nodes: base.nodes.map(n => (n.id === J.id ? { ...n, laneMap: { [`${inKey}>${js.id}:1`]: [null, 0] } } : n)) });
+  const c = compile(net), m = (c.nodeById.get(J.id)!.moves.get(c.edgeByKey.get(inKey)!.idx) ?? []).find(x => x.out.link.id === js.id);
+  const sim = new Sim(c, { cars: 150, trucks: 0, seed: 4 }); sim.run(3000);
+  const used = sim.turnCounts.get(`${c.edgeByKey.get(inKey)!.idx}>${c.edgeByKey.get(`${js.id}:1`)!.idx}`) ?? 0;
+  const ok = !had && !!m && m.turn === "R" && m.lo === 1 && m.hi === 1 && exitLane(m, 1, false) === 0 && used > 0;
+  console.log(`add a lane connector: turn before ${had}, after ${m ? `${m.turn} from lane ${m.lo + 1}` : "none"}, taken ${used} times | ok ${ok}`);
+  if (!ok) process.exit(1);
+}

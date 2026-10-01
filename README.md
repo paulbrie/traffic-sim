@@ -85,7 +85,8 @@ Shift it moves freely), or type how far they reach; vehicles drive the new path.
 which lane of each exit, per turn. They are worked out automatically; change any of them by hand (or take a lane off
 a turn with –), and the arrow puts a turn back to automatic. Clicking a single lane connector on the map offers the
 same. The section also lists problems: a road that leads nowhere, a lane with no connection, an exit lane nothing
-feeds, and lanes of one approach whose paths cross. Stored per node (`laneMap`); lane arrows decide which turns exist.
+feeds, and lanes of one approach whose paths cross. *Add a connector* links any lane coming in to any lane going out,
+even where there was no turn (it becomes one, whatever the lane arrows say). Stored per node (`laneMap`).
 **Free junctions** (no signs, no lights): vehicles waiting at the line go in the order they arrived, so every
 entering lane gets its turn and one still on its way can't jump them; crossings that end in the same lane zip in,
 each following the one ahead. **Slip lanes** (junction inspector → Slip lanes): a free right turn that leaves the approach before the junction, curves
