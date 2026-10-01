@@ -1,6 +1,7 @@
-import { Sim, sampleTown, compile, connectorPreview, exitLane, connectionIssues, alignableNodes, measureRun, optimizeSignals } from "../src/engine";
+import { Sim, sampleTown, compile, connectorPreview, throughConns, exitLane, connectionIssues, alignableNodes, measureRun, optimizeSignals } from "../src/engine";
 import { Poly } from "../src/engine/geom";
 import { changeConnection, connectLanes } from "../src/state/connections";
+import { carriagewayRun, splitCarriageways, type Run } from "../src/state/carriageways";
 import { Recorder } from "../src/engine/sim/recorder";
 import { makeLink, makeNode } from "../src/engine/sample";
 import { isJunction } from "../src/engine/refs";
@@ -789,5 +790,78 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const si = small.info();
   const ok = info.frames === 600 && info.from === 1 && info.to === 600 && f.tick === 300 && sameIds && samePhases && worst < 0.01 && worstRear < 0.06 && si.bytes <= 50_000 && si.frames < 50 && si.to === s.tick;
   console.log(`replay: ${info.frames} steps kept (${(info.bytes / 1024).toFixed(0)} kB), step 300 matches (front ${worst.toFixed(3)} m, rear ${worstRear.toFixed(2)} m, lights ${samePhases}); small budget keeps ${si.frames} newest | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// a side road that only turns right in and out touches one direction of the main road: the other
+// direction drives straight through (never stops or asks), nothing overlaps; with the left turns back,
+// every direction belongs to the junction again
+{
+  const J = makeNode(0, 0, "priority", false), W = makeNode(-300, 0), E = makeNode(300, 0), S = makeNode(0, 250);
+  const wj = makeLink(W, J, 1, 1), je = makeLink(J, E, 1, 1), sj = makeLink(S, J, 1, 1, { signF: "yield" });
+  const full = sanitizeNetwork({ version: 1, nodes: [J, W, E, S], stops: [], lines: [], links: [wj, je, sj] });
+  const c0 = compile(full), n0 = c0.nodeById.get(J.id)!, before = throughConns(c0, n0).size;
+  // switch the left turns off (into and out of the side road)
+  const laneMap: Record<string, null[]> = {};
+  for (const list of n0.moves.values()) for (const m of list) if (m.turn === "L") laneMap[`${m.in.key}>${m.out.key}`] = [null];
+  const net = sanitizeNetwork({ ...full, nodes: full.nodes.map(n => (n.id === J.id ? { ...n, laneMap } : n)) });
+  const c = compile(net), n = c.nodeById.get(J.id)!;
+  // (conflict answers are kept per compile: the one before is done with)
+  const thru = [...throughConns(c, n)], farS = thru.find(x => x.move.turn === "S"), far = farS?.inEdge;
+  const sim = new Sim(c, { cars: 160, trucks: 0, seed: 4 });
+  // requests the junction gets for a path driven through (there should be none)
+  let overlap = 0, asks = 0, farThrough = 0;
+  const S0 = sim as unknown as { arbitrate(st: { req: Map<number, { conn: unknown }> }): void };
+  const arb = S0.arbitrate.bind(sim);
+  S0.arbitrate = st => { for (const r of st.req.values()) if (thru.includes(r.conn as never)) asks++; arb(st); };
+  const seen = new Set<number>();
+  for (let t = 0; t < 4000; t++) {
+    sim.step();
+    const on = sim.vehicles.filter(v => !v.dead && v.piece.kind === "conn");
+    for (const v of on) if (v.piece === farS && !seen.has(v.id)) { seen.add(v.id); farThrough++; }
+    for (let i = 0; i < on.length; i++) for (let k = i + 1; k < on.length; k++) { const p = on[i].piece.poly.at(on[i].s), q = on[k].piece.poly.at(on[k].s); if (Math.hypot(p.x - q.x, p.y - q.y) < 2) overlap++; }
+  }
+  // the near side's straight on is joined by the right turn out of the side road: it stays part of the junction
+  const nearS = [...n.moves.values()].flat().find(m => m.turn === "S" && m.in !== far);
+  const ok = before === 0 && !!farS && far!.link.id !== sj.id && !(n.moves.get(far!.idx) ?? []).some(m => m.out.link.id === sj.id)
+    && !!nearS && !thru.some(x => x.move === nearS) && asks === 0 && farThrough > 20 && overlap === 0 && sim.stats.towed === 0;
+  console.log(`one-sided junction: ${before} through with left turns, ${thru.length} without (${thru.map(x => x.move.turn).join(", ")}); far side ${farThrough} vehicles through, ${asks} requests for those paths; ${sim.stats.trips} trips, ${overlap} overlaps, ${sim.stats.towed} towed | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// splitting a two-way road into two carriageways: the run goes straight on through the side-road
+// junctions; each side road joins the carriageway on its own side (a junction on one direction only), no
+// turning round where the road splits, traffic flows; with openings in a wide gap a side road still
+// reaches the far direction
+{
+  const J = makeNode(0, 0, "priority", false), W = makeNode(-300, 0), E = makeNode(300, 0), Sg = makeNode(0, 250), K = makeNode(150, -10, "priority", false), Ng = makeNode(150, -250);
+  const wj = makeLink(W, J, 2, 2), jk = makeLink(J, K, 2, 2), ke = makeLink(K, E, 2, 2), sj = makeLink(Sg, J, 1, 1, { signF: "yield" }), nk = makeLink(Ng, K, 1, 1, { signF: "yield" });
+  const net = sanitizeNetwork({ version: 1, nodes: [J, W, E, Sg, K, Ng], stops: [], lines: [], links: [wj, jk, ke, sj, nk] });
+  const run = carriagewayRun(net, jk.id);
+  const runOk = !("error" in run) && run.links.length === 3 && run.nodes[0] === W.id && run.nodes[3] === E.id;
+  const res = (gap: number, openings: boolean, cars: number) => {
+    const r = splitCarriageways(net, run as Run, { gap, openings });
+    if ("error" in r) throw new Error(r.error);
+    const n2 = sanitizeNetwork({ ...r.net, flows: [{ id: "f", from: Sg.id, to: W.id, rate: 300 }] }), c = compile(n2);
+    const fwd = new Set(r.forward), bwd = new Set(r.backward);
+    // the side roads' new ends: S (south: right of eastbound traffic) on the eastbound carriageway, N on the westbound one
+    const at = (l: string) => { const L = n2.links.find(x => x.id === l)!, node = L.to; return n2.links.filter(x => x.id !== l && (x.from === node || x.to === node)).map(x => x.id); };
+    const on = (l: string, mine: Set<string>, other: Set<string>) => at(l).filter(x => mine.has(x)).length === 2 && !at(l).some(x => other.has(x));
+    const sides = on(sj.id, fwd, bwd) && on(nk.id, bwd, fwd);
+    const uTurns = c.nodes.filter(n => n.def.align).flatMap(n => [...n.moves.values()].flat()).filter(m => m.turn === "U").length;
+    const sim = new Sim(c, { cars, trucks: 0, seed: 2 });
+    let overlap = 0;
+    for (let t = 0; t < 4000; t++) {
+      sim.step();
+      const on = sim.vehicles.filter(v => !v.dead && v.piece.kind === "conn");
+      for (let i = 0; i < on.length; i++) for (let k = i + 1; k < on.length; k++) { const p = on[i].piece.poly.at(on[i].s), q = on[k].piece.poly.at(on[k].s); if (Math.hypot(p.x - q.x, p.y - q.y) < 2) overlap++; }
+    }
+    const f = sim.flowStats(0)!;
+    return { r, c, sides, uTurns, overlap, trips: sim.stats.trips, towed: sim.stats.towed, crossed: f.arrived, warnings: c.warnings.length };
+  };
+  const plain = res(2, false, 120), open = res(16, true, 50);
+  const ok = runOk && plain.r.junctions === 2 && plain.sides && plain.uTurns === 0 && plain.overlap === 0 && plain.towed === 0 && plain.trips > 200 && plain.warnings === 0 && plain.crossed === 0
+    && open.sides && open.overlap === 0 && open.towed <= 1 && open.crossed > 5 && open.r.net.links.length === plain.r.net.links.length + 2;
+  console.log(`carriageways: run of ${"error" in run ? 0 : run.links.length} roads, ${plain.r.junctions} junctions split, side roads on their own side ${plain.sides}, U-turns at the splits ${plain.uTurns}; ${plain.trips} trips, ${plain.overlap} overlaps, ${plain.towed} towed; S→W left: ${plain.crossed} without openings, ${open.crossed} with (${open.trips} trips, ${open.towed} towed) | ok ${ok}`);
   if (!ok) process.exit(1);
 }

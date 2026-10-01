@@ -32,6 +32,7 @@ import { JunctionEventLog, RoadEventLog, VehicleEventLog } from "./event-log";
 import { LaneConnectionsSection } from "./lane-connections";
 import { JunctionShapeSection } from "./junction-shape";
 import { ReversibleSection } from "./reversible-lane";
+import { CarriagewaysSection } from "./carriageways";
 
 const CONTROL_LABEL: Record<Control, string> = { priority: "Priority (first come)", free: "Free (go when clear)", stop: "All-way stop", lights: "Traffic lights", roundabout: "Roundabout" };
 const SPEEDS = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 130];
@@ -541,6 +542,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
         </div>
       </Section>
       <ReversibleSection net={net} link={link} />
+      <CarriagewaysSection key={link.id} net={net} link={link} />
       {laneArrows.some(Boolean) && (
         <Section title="At the junction ahead">
           <p className="text-xs text-muted-foreground">Lane arrows set where each lane may go. A give-way or stop sign makes this approach wait for traffic on roads without a sign. Turning shares set how traffic splits between the exits.</p>

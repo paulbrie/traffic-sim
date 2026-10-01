@@ -130,6 +130,8 @@ export interface CNode {
   ring: RingArm[] | null;
   /** the inner circulating lane of a two-lane roundabout, and its radius */
   ring2: RingArm[] | null; ringR2: number;
+  /** crossings that drive straight through, nothing else at the junction crossing or joining them (see throughConns; worked out when first needed) */
+  through?: Set<Conn>;
 }
 
 export interface CFlow { idx: number; def: FlowDef; from: CNode; to: CNode }
@@ -1052,6 +1054,33 @@ export function connectorPreview(c: Compiled, only?: (n: CNode, m: Movement) => 
   }
   return out;
 }
+/**
+ * The crossings of a junction that traffic drives through without stopping: their paths cross no other
+ * path there and join no lane another path joins (e.g. the far direction of a two-way road where a side
+ * road only turns right in and out). Only at priority and free junctions without pedestrians, never
+ * past a stop sign or as a U-turn. Every lane-to-lane path the junction's turns use is built to check.
+ */
+export function throughConns(c: Compiled, n: CNode): Set<Conn> {
+  if (n.through) return n.through;
+  const out = (n.through = new Set<Conn>()), ctl = n.def.control;
+  if (!n.controlled || n.degree < 3 || n.ringR > 0 || n.peds > 0 || (ctl !== "priority" && ctl !== "free")) return out;
+  const all: { m: Movement; cs: Conn[] }[] = [];
+  for (const list of n.moves.values()) for (const m of list) {
+    const cs: Conn[] = [];
+    for (let a = 0; a < m.in.n; a++) {
+      if (!laneAllowed(m, a)) continue;
+      for (const b of new Set([...exitLanesOf(m, a), exitLane(m, a, true)])) cs.push(c.getConn(m, a, b));
+    }
+    all.push({ m, cs });
+  }
+  for (const x of all) {
+    if (!x.cs.length || x.m.turn === "U" || (ctl === "priority" && x.m.in.sign === "stop")) continue;
+    if (all.some(y => y.cs.some(b => x.cs.some(a => a !== b && conflicts(a, b))))) continue;
+    for (const a of x.cs) out.add(a);
+  }
+  return out;
+}
+
 export interface ConnectionIssue {
   node: CNode;
   /** "error": traffic can't get through as drawn; "warn": probably not what was meant */
@@ -1343,21 +1372,23 @@ function kerbInset(n: CNode, outline: Vec[]): Vec[] | null {
   for (let i = 0; i < pts.length; i++) { const b = pts[(i + 1) % pts.length], d = Math.hypot(b.x - pts[i].x, b.y - pts[i].y); if (d > ll) { ll = d; li = i; } }
   const la = pts[li], lb = pts[(li + 1) % pts.length], probe = { x: (la.x + lb.x) / 2 - ((lb.y - la.y) / ll) * 0.05, y: (la.y + lb.y) / 2 + ((lb.x - la.x) / ll) * 0.05 };
   const sgn = pointInPolygon(probe, pts) ? 1 : -1; // +1: the left of each edge (−dy, dx) is inside
-  // the arm whose mouth line a point lies on (and whether at its kerb corner, where the road's kerb ends)
-  const mouthOf = (p: Vec) => {
+  // the arms whose mouth line a point lies on (several where roads side by side overlap, e.g. where a
+  // road splits into carriageways), and whether at an arm's kerb corner (where the road's kerb ends)
+  const mouthsOf = (p: Vec) => {
+    const out: { a: Arm; corner: boolean }[] = [];
     for (const a of n.arms) {
       const dx = p.x - a.mouth.x, dy = p.y - a.mouth.y, along = dx * a.mu.x + dy * a.mu.y, side = dx * -a.mu.y + dy * a.mu.x;
-      if (Math.abs(along) < 0.3 && side > a.lo - 0.05 && side < a.hi + 0.05) return { a, corner: side < a.lo + 0.1 || side > a.hi - 0.1 };
+      if (Math.abs(along) < 0.3 && side > a.lo - 0.05 && side < a.hi + 0.05) out.push({ a, corner: side < a.lo + 0.1 || side > a.hi - 0.1 });
     }
-    return null;
+    return out;
   };
   const bands: Ring[][] = [];
   const disc = (p: Vec, r: number): Ring[] => { const ring: Ring = []; for (let k = 0; k <= 8; k++) { const t = (k % 8) * Math.PI / 4; ring.push([p.x + Math.cos(t) * r, p.y + Math.sin(t) * r]); } return [ring]; };
   for (let i = 0; i < pts.length; i++) {
     const a = pts[i], b = pts[(i + 1) % pts.length];
     // (an edge along a mouth line, not one leaving it into the junction)
-    const ma = mouthOf(a), mb = mouthOf(b);
-    const mouth = !!ma && !!mb && ma.a === mb.a && Math.abs(((b.x - a.x) * ma.a.mu.x + (b.y - a.y) * ma.a.mu.y) / (Math.hypot(b.x - a.x, b.y - a.y) || 1)) < 0.5;
+    const ma = mouthsOf(a), mb = mouthsOf(b), len0 = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const mouth = ma.some(x => mb.some(y => y.a === x.a) && Math.abs(((b.x - a.x) * x.a.mu.x + (b.y - a.y) * x.a.mu.y) / len0) < 0.5);
     if (!mouth) {
       const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
       if (len < 1e-6) continue;
@@ -1365,8 +1396,7 @@ function kerbInset(n: CNode, outline: Vec[]): Vec[] | null {
       const o = 0.02; // (a hair outside, so no sliver of kerb is left along the edge)
       bands.push([[[a.x - nx * o, a.y - ny * o], [b.x - nx * o, b.y - ny * o], [b.x + nx * CURB, b.y + ny * CURB], [a.x + nx * CURB, a.y + ny * CURB], [a.x - nx * o, a.y - ny * o]]]);
     }
-    const m0 = mouthOf(a);
-    if (!m0 || m0.corner) bands.push(disc(a, CURB));
+    if (!ma.length || ma.every(x => x.corner)) bands.push(disc(a, CURB));
   }
   const ring: Ring = [...pts.map(p => [p.x, p.y] as Pair), [pts[0].x, pts[0].y]];
   const key = ring.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ");

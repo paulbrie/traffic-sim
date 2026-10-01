@@ -16,6 +16,9 @@ export abstract class SimMotion extends SimJunctions {
     // the next junction, when it is not the end of the road the vehicle is on (a short road after the
     // junction it is crossing or let into, or a joint between road segments): it may ask early
     let aheadConn: Conn | null = null, aheadD = 0;
+    // driving through a junction while queued behind a vehicle that may not go: not sure to get past
+    // it, so the junction after isn't asked early (the booking would hold up traffic there meanwhile)
+    let held = false;
     const curLim = this.lim(v, v.piece);
 
     // walk pieces ahead
@@ -106,10 +109,12 @@ export abstract class SimMotion extends SimJunctions {
         const cross = this.crossingFor(v, ri, lane);
         if (!cross) break; // route ends on this edge (exit or destination)
         const node = e.to, c0 = cross[0] as Conn;
-        if (node.controlled && !(first && v.granted && v.conn === c0)) {
+        const thru = node.controlled && this.drivesThrough(c0);
+        if (thru && first && (this.index.get(p.id) ?? []).some(u => u !== v && u.s > v.s && !this.mayGo(u))) held = true;
+        if (node.controlled && !(first && v.granted && v.conn === c0) && !thru) {
           let mayGo = false;
           if (first) { pendConn = c0; pendD = endD; }
-          else if (!aheadConn && (v.early?.conn === c0 || (endD < this.P.requestDist && !node.ring && !this.mustStop(node, e)))) {
+          else if (!aheadConn && !held && (v.early?.conn === c0 || (endD < this.P.requestDist && !node.ring && !this.mustStop(node, e)))) {
             aheadConn = c0; aheadD = endD; mayGo = !!v.early?.granted && v.early.conn === c0;
           }
           if (!mayGo) {
@@ -234,7 +239,7 @@ export abstract class SimMotion extends SimJunctions {
       if (stopFirst && v.stoppedAt !== pendConn && pendD < 3 && v.v < 0.25) { v.stoppedAt = pendConn; if (v.reqFor === pendConn) v.reqFor = null; }
       const mayAsk = (!stopFirst || v.stoppedAt === pendConn) && laneOk;
       // only the first vehicle in a lane (or one following a vehicle that may go) asks for the junction
-      const behindWaiting = !!leader && leader.piece === v.piece && !(leader.granted && leader.conn);
+      const behindWaiting = !!leader && leader.piece === v.piece && !this.mayGo(leader);
       if (pendD < this.P.requestDist && mayAsk && !behindWaiting) {
         if (v.reqFor !== pendConn) {
           v.reqFor = pendConn; v.reqAt = this.tick;
@@ -280,7 +285,7 @@ export abstract class SimMotion extends SimJunctions {
   protected askEarly(v: Vehicle, c: Conn, d: number) {
     if (v.early) { v.early.d = d; if (v.early.granted) return; }
     const node = c.node, st = this.ns[node.idx], lp = c.inEdge.lanes[c.inLane];
-    if ((this.index.get(lp.id) ?? []).some(u => u !== v && !(u.granted && u.conn))) return;
+    if ((this.index.get(lp.id) ?? []).some(u => u !== v && !this.mayGo(u))) return;
     if (!v.early) {
       v.early = { conn: c, at: this.tick, d, granted: false };
       const from = c.inEdge.from;
@@ -440,7 +445,7 @@ export abstract class SimMotion extends SimJunctions {
         }
         const cross = this.crossingFor(v, v.ri, v.lane);
         if (!cross) { this.kill(v, "removed"); return; }
-        if (e.to.controlled && (!v.granted || v.conn !== cross[0])) { v.s = p.len - 0.01; v.v = 0; return; }
+        if (e.to.controlled && (!v.granted || v.conn !== cross[0]) && !this.drivesThrough(cross[0])) { v.s = p.len - 0.01; v.v = 0; return; }
         this.recordEma(v, e);
         this.evRoad(e, v, "leave-road", `into ${this.nodeName(e.to)}: ${cross[0].kind === "conn" ? this.mv(cross[0]) : "the junction"} at ${(v.v * 3.6).toFixed(0)} km/h, ${((this.tick - v.enterT) * DT).toFixed(0)} s on this road`);
         v.s -= p.len; v.trail = [p, ...v.trail].slice(0, 2);

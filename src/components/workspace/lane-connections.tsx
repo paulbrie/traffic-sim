@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { AlertTriangle, CircleAlert, Plus, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { connectionIssues, currentTargets, type CNode, type Edge, type Movement } from "@/engine/compile";
+import { connectionIssues, currentTargets, throughConns, type CNode, type Edge, type Movement } from "@/engine/compile";
 import type { LaneTargets, Network, NodeDef } from "@/engine/types";
 import { connectLanes } from "@/state/connections";
 import { commit, select } from "@/state/store";
@@ -39,6 +39,7 @@ export function LaneConnectionsSection({ net, node }: { net: Network; node: Node
   if (!cn || cn.ringR > 0 || cn.degree < 2) return null;
   const set = (key: string, lanes: LaneTargets[] | null) => commit(ops.setLaneMap(net, node.id, key, lanes));
   const shown = new Set<string>();
+  const through = new Set([...throughConns(c, cn)].map(x => x.move));
   const approaches = cn.arms.filter(a => a.inEdge).map(a => ({ arm: a, e: a.inEdge!, moves: cn.moves.get(a.inEdge!.idx) ?? [] }));
   const name = (l: { name: string; id: string }) => l.name || l.id;
   return (
@@ -52,7 +53,9 @@ export function LaneConnectionsSection({ net, node }: { net: Network; node: Node
             shown.add(key);
             return (
               <div key={key} className="grid grid-cols-[6.5rem_1fr_auto] items-center gap-1.5 text-xs">
-                <span className="truncate" title={`${TURN_NAME[m.turn]} to ${name(m.out.link)}`}>{TURN_NAME[m.turn]} → {name(m.out.link)}</span>
+                <span className="truncate" title={`${TURN_NAME[m.turn]} to ${name(m.out.link)}${through.has(m) ? ": drives through without stopping (no other path here crosses or joins it)" : ""}`}>
+                  {TURN_NAME[m.turn]} → {name(m.out.link)}{through.has(m) && <span className="ml-1 rounded bg-emerald-500/15 px-1 text-[10px] text-emerald-700 dark:text-emerald-400">through</span>}
+                </span>
                 <span className="flex flex-wrap gap-1">
                   {lanes.map((t, a) => { const b = first(t), extra = Array.isArray(t) ? t.slice(1) : []; return a === e.dropLane ? null : (
                     <label key={a} className="flex items-center gap-0.5 rounded border px-1" title={`Lane ${a + 1} of ${name(e.link)}${extra.length ? ` (also into lane ${extra.map(x => x + 1).join(", ")}; picking here keeps just one)` : ""}`}>
@@ -90,6 +93,11 @@ export function LaneConnectionsSection({ net, node }: { net: Network; node: Node
       <p className="text-[11px] text-muted-foreground">
         Each box is a lane of the approach (1 = leftmost) and the lane it drives into; – means that lane doesn&apos;t take this turn.
         Changes here win over the automatic connections; the arrow puts a turn back to automatic. Lane arrows on the road decide which turns exist.
+      </p>
+      <p className="text-[11px] text-muted-foreground">
+        A turn marked <span className="text-emerald-700 dark:text-emerald-400">through</span> crosses and joins no other path here, so its
+        traffic drives on without stopping (e.g. the far side of a two-way road when the side road only turns right in and out).
+        Switch off the turns that cross a direction to leave that direction out of the junction.
       </p>
     </Section>
   );

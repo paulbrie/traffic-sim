@@ -87,6 +87,17 @@ a turn with –), and the arrow puts a turn back to automatic. Clicking a single
 same. The section also lists problems: a road that leads nowhere, a lane with no connection, an exit lane nothing
 feeds, and lanes of one approach whose paths cross. *Add a connector* links any lane coming in to any lane going out,
 even where there was no turn (it becomes one, whatever the lane arrows say). Stored per node (`laneMap`).
+**Driving through** a junction: at priority and free junctions without pedestrians, a turn whose paths cross and
+join no other path there (e.g. the far side of a two-way road when the side road only turns right in and out) is
+driven without stopping or asking; it is tagged *through* in Lane connections, and at 4-way junctions its lane lines
+and centre line carry on across. Switch off the turns that cross a direction to leave that direction out of a
+junction (`throughConns` in `compile.ts`). **Carriageways** (road inspector → Carriageways): splits a two-way road
+into two one-way roads with a gap between them — the selected roads (`Shift`+click), or the road and its
+continuation straight on through junctions, up to lights, roundabouts and entry points. Each junction on the way is
+split too, every side road joining the carriageway on its own side; with a gap of 15 m or more, *openings* add a
+crossing through the gap at each junction so side roads still reach the other direction. The road splits a little
+before the junction at each end (with *Line up lanes* on, no turning round there), so that junction keeps its shape
+(`src/state/carriageways.ts`).
 **Free junctions** (no signs, no lights): vehicles waiting at the line go in the order they arrived, so every
 entering lane gets its turn and one still on its way can't jump them; crossings that end in the same lane zip in,
 each following the one ahead. **Slip lanes** (junction inspector → Slip lanes): a free right turn that leaves the approach before the junction, curves

@@ -1,5 +1,5 @@
 /** Static road geometry derived from the compiled network, shared by 2D and 3D renderers. */
-import { CURB, LEVEL_H, armEnd, connectorPreview, exitLane, isRev, laneAllowed, linkCenter, linkZ, type Arm, type CNode, type Movement, type Compiled, type Edge } from "@/engine/compile";
+import { CURB, LEVEL_H, armEnd, connectorPreview, exitLane, isRev, laneAllowed, linkCenter, linkZ, throughConns, type Arm, type CNode, type Movement, type Compiled, type Edge } from "@/engine/compile";
 import { Poly, normAngle } from "@/engine/geom";
 import type { LinkDef, MedianKind, Network, Vec } from "@/engine/types";
 
@@ -428,6 +428,7 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
       for (const seg of hatchInside(pts, 1.6)) geo.lines.push({ poly: new Poly(seg), dashed: false, kind: "hatch", on });
     }
     if (n.def.laneLines && !n.ringR) for (const pts of junctionLaneLines(c, n)) geo.lines.push({ poly: new Poly(pts), dashed: true, kind: "lane", on });
+    else for (const l of throughLines(c, n)) geo.lines.push({ ...l, on });
   }
   const lineColor = new Map<string, string>();
   for (const l of net.lines) for (const s of l.stops) if (!lineColor.has(s)) lineColor.set(s, l.color);
@@ -480,6 +481,41 @@ function hatchInside(poly: Vec[], gap: number): number[][] {
     }
     xs.sort((p, q) => p - q);
     for (let m = 0; m + 1 < xs.length; m += 2) out.push([xs[m], k - xs[m], xs[m + 1], k - xs[m + 1]]);
+  }
+  return out;
+}
+
+/**
+ * Traffic driving straight through a junction of four or more roads where nothing crosses its paths
+ * (see throughConns) keeps its markings across it: the lines between its lanes, and the centre line
+ * beside the inner lane of a two-way road. (At 3-way junctions straight-on lines carry on anyway.)
+ */
+function throughLines(c: Compiled, n: CNode): { poly: Poly; dashed: boolean; kind: "lane" | "center" }[] {
+  if (n.degree < 4) return [];
+  const through = throughConns(c, n);
+  if (!through.size) return [];
+  const out: { poly: Poly; dashed: boolean; kind: "lane" | "center" }[] = [];
+  // a boundary across a road's end, `off` m right of its centre line
+  const end = (e: Edge, off: number, atEnd: boolean) => {
+    const s = atEnd ? e.center.len - e.trimB : e.trimA, p = e.center.at(s), t = e.center.tangent(s);
+    return { at: { x: p.x - t.y * off, y: p.y + t.x * off }, t: { x: t.x, y: t.y } };
+  };
+  const line = (ei: Edge, oi: number, eo: Edge, oo: number) => { const p = end(ei, oi, true), q = end(eo, oo, false); return bridge(p.at, p.t, q.at, q.t); };
+  for (const list of n.moves.values()) for (const m of list) {
+    if (m.turn !== "S" || Math.abs(m.delta) > 0.6) continue;
+    // lane → lane driven through on this movement
+    const to = new Map<number, number>();
+    for (const x of through) if (x.move === m && !to.has(x.inLane)) to.set(x.inLane, x.outLane);
+    for (const [a, b] of to) {
+      if (to.get(a + 1) === b + 1) { const l = line(m.in, m.in.base + (a + 1) * m.in.lw, m.out, m.out.base + (b + 1) * m.out.lw); if (l) out.push({ poly: l, dashed: true, kind: "lane" }); }
+      const li = m.in.link, lo = m.out.link;
+      if (a !== 0 || b !== 0 || !(li.lanesF > 0 && li.lanesB > 0 && lo.lanesF > 0 && lo.lanesB > 0) || li.median || lo.median) continue;
+      const single = li.lanesF === 1 && li.lanesB === 1;
+      for (const d of single ? [0] : [-0.2, 0.2]) {
+        const l = line(m.in, m.in.base + d, m.out, m.out.base + d);
+        if (l) out.push({ poly: l, dashed: single, kind: "center" });
+      }
+    }
   }
   return out;
 }

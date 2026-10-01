@@ -1,10 +1,21 @@
-import { conflicts, conflictEnd, zipFrom, type CNode, type Conn, type Edge } from "../compile";
+import { conflicts, conflictEnd, throughConns, zipFrom, type CNode, type Conn, type Edge, type Piece } from "../compile";
 import { DT, type Vehicle, type Occ, type NodeState, type PedCross, type Req } from "./base";
 import { SimReversible } from "./reversible";
 
 
 /** Junctions: who may enter (reservations of conflicting paths, stop and give-way signs, lights), roundabout entry, per-junction statistics. */
 export abstract class SimJunctions extends SimReversible {
+  /** a crossing nothing else at its junction crosses or joins: driven through without stopping or asking */
+  protected drivesThrough(p: Piece): boolean {
+    return p.kind === "conn" && p.role === "turn" && throughConns(this.net, p.node).has(p);
+  }
+  /** may go on into the junction ahead: let in, or driving through it */
+  protected mayGo(u: Vehicle): boolean {
+    if (u.granted && u.conn) return true;
+    if (u.piece.kind !== "lane") return false;
+    const c = this.crossingFor(u, u.ri, u.lane);
+    return !!c && this.drivesThrough(c[0]);
+  }
   /** all-way stop, or a stop sign on this approach to a priority junction */
   protected mustStop(node: CNode, e: Edge) {
     if (!node.controlled || node.degree < 2) return false;
@@ -140,7 +151,7 @@ export abstract class SimJunctions extends SimReversible {
       if (v.dead) return false;
       // someone cut in ahead of a waiting grant holder (a late lane change): it must queue again
       if (!o.entered && v.piece.kind === "lane" && v.piece.edge === o.conn.inEdge) {
-        const ahead = (this.index.get(v.piece.id) ?? []).some(u => u !== v && !u.dead && u.s > v.s && !(u.granted && u.conn));
+        const ahead = (this.index.get(v.piece.id) ?? []).some(u => u !== v && !u.dead && u.s > v.s && !this.mayGo(u));
         if (ahead) { this.ev(st.node, v, "revoke", "a vehicle cut in ahead in the same lane"); v.granted = false; v.conn = null; return false; }
       }
       if (v.piece === o.conn) { o.entered = true; return true; }
