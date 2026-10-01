@@ -530,12 +530,25 @@ function useAutosave(planId: string) {
     const subs = [ui.subscribe("save/status", onChange), network$.subscribe(onChange), settings$.subscribe(onChange), underlay$.subscribe(onChange)];
     const hide = () => { if (document.hidden && ui.getValue().save.status === "dirty") doSave(planId); };
     const unload = (e: BeforeUnloadEvent) => { const st = ui.getValue().save.status; if (st === "dirty" || st === "saving") { e.preventDefault(); } };
+    // Cmd/Ctrl+S: save now (even with nothing changed), from anywhere on the page
+    const saveKey = async (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "s" || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      const u = ui.getValue();
+      if (u.readOnly) { toast.info("View only: this plan can't be saved from here."); return; }
+      if (u.save.status === "conflict") { toast.warning("Someone else saved this plan meanwhile: choose whose version to keep (in the save status) first."); return; }
+      await doSave(planId);
+      const st = ui.getValue().save;
+      if (st.status === "saved") toast.success(`Saved (revision ${st.revision})`);
+    };
     document.addEventListener("visibilitychange", hide);
     window.addEventListener("beforeunload", unload);
+    window.addEventListener("keydown", saveKey, true);
     return () => {
       subs.forEach(x => x.unsubscribe());
       document.removeEventListener("visibilitychange", hide);
       window.removeEventListener("beforeunload", unload);
+      window.removeEventListener("keydown", saveKey, true);
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = null; dirtySince = 0;
     };

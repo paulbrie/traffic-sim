@@ -461,6 +461,52 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   if (!ok) process.exit(1);
 }
 
+// reversible middle lane along a corridor of two roads through a junction: lane 0 of both directions is
+// the same strip; it opens one way at a time (timer, traffic each way, or by hand), closing waits until the
+// vehicles in it have driven out, and nobody is ever in it the wrong way or while closed
+{
+  const corridor = (mode: "timer" | "dynamic" | "manual", r1: number, r2: number) => {
+    const W = makeNode(-400, 0), E = makeNode(400, 0), N = makeNode(0, -250), J = makeNode(0, 0, "priority", false);
+    const net = sanitizeNetwork({
+      version: 1, nodes: [W, J, E, N], stops: [], lines: [],
+      links: [{ ...makeLink(W, J, 1, 1), rev: "c1" }, { ...makeLink(J, E, 1, 1), rev: "c1" }, makeLink(N, J, 1, 1, { signF: "yield" })],
+      reversibles: [{ id: "c1", name: "T", start: W.id, mode, open1: 120, open2: 120, gap: 5, minDensity: 12, ratio: 1.5, minOpen: 60, initial: "closed" }],
+      flows: [{ id: "f1", from: W.id, to: E.id, rate: r1 }, { id: "f2", from: E.id, to: W.id, rate: r2 }],
+    });
+    return { c: compile(net), J };
+  };
+  const drive = (sim: Sim, ticks: number, cmds: [number, "closed" | "1" | "2" | "auto"][] = []) => {
+    const seq: number[] = []; let wrong = 0; const used = [0, 0];
+    for (let t = 0; t < ticks; t++) {
+      for (const [at, cmd] of cmds) if (at === t) sim.reversibleCommand(0, cmd);
+      sim.step();
+      const s = sim.reversibleState(0)!.state;
+      if (seq[seq.length - 1] !== s) seq.push(s);
+      for (const v of sim.vehicles) {
+        if (v.dead || v.piece.kind !== "lane" || v.piece.lane !== 0 || !v.piece.edge.rev) continue;
+        const d = v.piece.edge.cdir;
+        if ((d === 1 && s !== 1 && s !== 2) || (d === 2 && s !== 3 && s !== 4)) wrong++;
+        used[d - 1]++;
+      }
+    }
+    return { seq: seq.join(""), wrong, used };
+  };
+  const { c, J } = corridor("timer", 900, 500), cc = c.corridors[0];
+  const [f0, b0] = [cc.edges[0][0], cc.edges[1][cc.edges[1].length - 1]];
+  const shared = f0.rev && b0.rev && f0.n === 2 && Math.abs(f0.lanes[0].offset) < 0.01 && Math.abs(b0.lanes[0].offset) < 0.01;
+  // turns from the fixed lanes only; straight on from both
+  const moves = c.nodeById.get(J.id)!.moves.get(f0.idx) ?? [];
+  const turnsOk = moves.every(m => (m.turn === "S" ? m.lo === 0 && m.hi === 1 : m.lo === 1));
+  const sim = new Sim(c, { cars: 0, trucks: 0, seed: 4 }), timer = drive(sim, 9000);
+  const dyn1 = drive(new Sim(corridor("dynamic", 1400, 300).c, { cars: 0, trucks: 0, seed: 4 }), 3000);
+  const dyn2 = drive(new Sim(corridor("dynamic", 300, 1400).c, { cars: 0, trucks: 0, seed: 4 }), 3000);
+  const man = drive(new Sim(corridor("manual", 800, 800).c, { cars: 0, trucks: 0, seed: 4 }), 7000, [[300, "1"], [3000, "2"], [6000, "closed"]]);
+  const ok = shared && turnsOk && c.warnings.length === 0 && timer.seq.startsWith("120340120") && timer.wrong === 0 && timer.used[0] > 0 && timer.used[1] > 0 && sim.stats.towed === 0
+    && dyn1.seq.startsWith("01") && dyn2.seq.startsWith("03") && dyn1.wrong + dyn2.wrong === 0 && man.seq.startsWith("0120340") && man.wrong === 0;
+  console.log(`reversible lane: shared strip ${shared}, turns ${turnsOk}; timer ${timer.seq} (in it ${timer.used.join("/")} vehicle-ticks, wrong way ${timer.wrong}, towed ${sim.stats.towed}); dynamic ${dyn1.seq} / ${dyn2.seq}; by hand ${man.seq} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
 // free junction: two two-lane roads joining one lane. Vehicles waiting at the line take turns, so
 // every entering lane gets its share (nobody on its way jumps them), and they zip in without overlapping
 {

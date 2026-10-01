@@ -9,7 +9,7 @@
 import { pieceLevel, pieceZ, type CNode, type Compiled } from "../compile";
 import { isJunction } from "../refs";
 import { signalAspect, type Aspect } from "../signals";
-import type { JunctionEvent, Kind, Stats, TestTrip, Vehicle } from "./base";
+import type { JunctionEvent, Kind, RevStateCode, Stats, TestTrip, Vehicle } from "./base";
 
 /** a pedestrian crossing right now: its arm, people waiting, people crossing and how far across (0..1) */
 export interface PedView { arm: number; waiting: number; crossing: number; progress: number }
@@ -85,7 +85,11 @@ export interface Snapshot {
   /** reserved paths as x, y pairs (when watched) */
   reservations?: Float32Array[];
   vehicle?: VehicleDetail | null;
+  /** reversible corridors (compiled order): their lane's state (see REV_STATES) and how long in it, etc. */
+  rev?: RevView[];
 }
+/** a reversible corridor's lane as the page sees it */
+export interface RevView { state: RevStateCode; t: number; inside: number; density: [number, number]; hold: "closed" | "1" | "2" | null }
 
 // ---------------------------------------------------------------- worker side
 
@@ -129,6 +133,7 @@ export class SnapshotWriter {
       tick: sim.tick, stats: { ...sim.stats, history: sim.stats.history.slice() },
       ids, kinds, tints, states, stateNames, geo, phase, stage, stageT, occupied, cycleAt, waiting, events, resetEvents,
       peds: sim.net.nodes.filter(n => n.peds > 0).map(n => [n.idx, sim.pedView(n.idx)] as [number, PedView[]]),
+      ...(sim.net.corridors.length ? { rev: sim.net.corridors.map(c => sim.reversibleState(c.idx)!) } : {}),
     };
     const transfer = [ids.buffer, kinds.buffer, tints.buffer, states.buffer, geo.buffer, phase.buffer, stage.buffer, stageT.buffer, occupied.buffer, cycleAt.buffer, waiting.buffer] as ArrayBuffer[];
 
@@ -221,6 +226,8 @@ export class SimMirror {
 
   get time() { return this.tick * 0.1; }
 
+  /** reversible corridors' lanes (compiled order; empty until the simulation runs) */
+  rev: RevView[] = [];
   apply(s: Snapshot) {
     this.snap = s; this.tick = s.tick; this.stats = s.stats;
     const n = s.ids.length, list = this.vehicles;
@@ -250,6 +257,7 @@ export class SimMirror {
     if (s.cycles) this.cycles = new Map(s.cycles);
     this.reserved = s.reservations ?? [];
     if (s.vehicle !== undefined) this.vehicle = s.vehicle;
+    this.rev = s.rev ?? [];
   }
 
   pose(v: VehicleView) { return { fx: v.fx, fy: v.fy, rx: v.rx, ry: v.ry }; }

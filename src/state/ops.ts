@@ -1,6 +1,6 @@
 /** Pure network edit operations. Each returns a new Network (never mutates). */
 import { newId, makeNode } from "@/engine/sample";
-import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape, type LaneTargets } from "@/engine/types";
+import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type ReversibleDef, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape, type LaneTargets } from "@/engine/types";
 import { linkExtent, type Compiled } from "@/engine/compile";
 import { greenWaveOffsets, withCustomPhases } from "@/engine/signals";
 
@@ -178,8 +178,10 @@ function pruneRefs(net: Network): Network {
   const nodeIds = new Set(nodes.map(n => n.id));
   const groups = net.signalGroups?.map(g => ({ ...g, members: g.members.filter(m => nodeIds.has(m.node)) })).filter(g => g.members.length);
   const flows = net.flows?.filter(f => nodeIds.has(f.from) && nodeIds.has(f.to));
+  const reversibles = net.reversibles?.filter(r => net.links.some(l => l.rev === r.id));
   return {
     ...net,
+    ...(net.reversibles ? { reversibles } : {}),
     nodes,
     stops,
     lines: net.lines.map(l => ({ ...l, stops: l.stops.filter(s => stopIds.has(s)) })),
@@ -962,4 +964,103 @@ export function mergeLinks(net: Network, ids: string[]): { net: Network; id: str
     return { ...s, link: merged.id, pos: round(pos * 1000) / 1000, dir: (w.rev ? -s.dir : s.dir) as 1 | -1 };
   });
   return { net: pruneRefs({ ...net, links: [...net.links.filter(l => !set.has(l.id)), merged], stops }), id: merged.id, err: fit.err };
+}
+
+// ---------------------------------------------------------------- reversible middle lanes
+/** the outward direction of a road where it leaves node `at` (toward its first control point or far end) */
+function leavingDir(net: Network, l: LinkDef, at: string): Vec | null {
+  const n = nodeById(net, at), far = nodeById(net, l.from === at ? l.to : l.from);
+  if (!n || !far) return null;
+  const q = l.c1 && l.c2 ? (l.from === at ? l.c1 : l.c2) : far;
+  const dx = q.x - n.x, dy = q.y - n.y, d = Math.hypot(dx, dy);
+  return d > 1e-6 ? { x: dx / d, y: dy / d } : null;
+}
+const twoWay = (l: LinkDef) => l.lanesF > 0 && l.lanesB > 0;
+/**
+ * The road straight on from `linkId` both ways, through junctions and road joints: two-way roads
+ * within 30° of straight on, up to a roundabout, an entry / exit point, or where nothing carries on.
+ * In order from one end to the other.
+ */
+export function straightChain(net: Network, linkId: string): string[] {
+  const first = linkById(net, linkId);
+  if (!first || !twoWay(first)) return [];
+  const seen = new Set([first.id]);
+  const walk = (from: LinkDef, node: string): string[] => {
+    const out: string[] = [];
+    let cur = from, at = node;
+    for (let hop = 0; hop < 200; hop++) {
+      const nd = nodeById(net, at);
+      if (!nd || nd.control === "roundabout") break;
+      const back = leavingDir(net, cur, at);
+      if (!back) break;
+      let best: LinkDef | null = null, bd = -0.866; // straight on = opposite of where we came from
+      for (const l of linksAt(net, at)) {
+        if (seen.has(l.id) || !twoWay(l) || (l.rev && l.rev !== first.rev)) continue;
+        const u = leavingDir(net, l, at);
+        if (!u) continue;
+        const d = u.x * back.x + u.y * back.y;
+        if (d < bd) { bd = d; best = l; }
+      }
+      if (!best) break;
+      seen.add(best.id); out.push(best.id);
+      at = best.from === at ? best.to : best.from; cur = best;
+    }
+    return out;
+  };
+  const ahead = walk(first, first.to), behind = walk(first, first.from);
+  return [...behind.reverse(), first.id, ...ahead];
+}
+/** a road's settings for (or without) a reversible middle lane: lane numbering at its ends changes */
+function withRev(l: LinkDef, rev: string | null): LinkDef {
+  const next: LinkDef = { ...l, rev, ...(rev ? { median: undefined, medianKind: undefined, baysF: l.baysF?.right ? { ...l.baysF, left: 0 } : null, baysB: l.baysB?.right ? { ...l.baysB, left: 0 } : null, dropF: l.dropF?.side === "left" ? null : l.dropF ?? null, dropB: l.dropB?.side === "left" ? null : l.dropB ?? null } : {}) };
+  return { ...next, turnsF: null, turnsB: null, greenF: resizeGreens(l.greenF, lanesAtLine(next, 1)), greenB: resizeGreens(l.greenB, lanesAtLine(next, -1)) };
+}
+/**
+ * Give a two-way road a reversible middle lane: just this road, or (`whole`) the whole road straight
+ * on through its junctions (see straightChain). Direction 1 runs from the chain's first end.
+ */
+export function addReversible(net: Network, linkId: string, whole: boolean): [Network, ReversibleDef | null] {
+  const ids = whole ? straightChain(net, linkId) : linkById(net, linkId) && twoWay(linkById(net, linkId)!) ? [linkId] : [];
+  const ls = ids.map(id => linkById(net, id)!).filter(l => !l.rev);
+  if (!ls.length) return [net, null];
+  // the end the chain starts from: the node of the first road not shared with the second
+  const a = ls[0], b = ls[1];
+  const start = !b ? a.from : a.from === b.from || a.from === b.to ? a.to : a.from;
+  const n = (net.reversibles?.length ?? 0) + 1;
+  const def: ReversibleDef = { id: newId("rv"), name: `Reversible lane ${n}`, start, mode: "timer", open1: 900, open2: 900, gap: 10, minDensity: 15, ratio: 1.5, minOpen: 300, initial: "closed" };
+  const set = new Set(ls.map(l => l.id));
+  return [{ ...net, links: net.links.map(l => (set.has(l.id) ? withRev(l, def.id) : l)), reversibles: [...(net.reversibles ?? []), def] }, def];
+}
+export function updateReversible(net: Network, id: string, patch: Partial<Omit<ReversibleDef, "id">>): Network {
+  return { ...net, reversibles: (net.reversibles ?? []).map(r => (r.id === id ? { ...r, ...patch } : r)) };
+}
+/** remove a corridor: its roads go back to fixed lanes */
+export function deleteReversible(net: Network, id: string): Network {
+  return { ...net, links: net.links.map(l => (l.rev === id ? withRev(l, null) : l)), reversibles: (net.reversibles ?? []).filter(r => r.id !== id) };
+}
+/** take one road out of its corridor (only a road at either end, so the rest stays one road) */
+export function leaveReversible(net: Network, linkId: string): Network {
+  const l = linkById(net, linkId);
+  if (!l?.rev) return net;
+  const others = net.links.filter(x => x.rev === l.rev && x.id !== l.id);
+  if (!others.length) return deleteReversible(net, l.rev);
+  const sharedEnds = [l.from, l.to].filter(nd => others.some(x => x.from === nd || x.to === nd)).length;
+  if (sharedEnds > 1) return net;
+  const n2 = { ...net, links: net.links.map(x => (x.id === linkId ? withRev(x, null) : x)) };
+  // direction 1 starts at the far end of the road taken out, if it started there
+  const def = net.reversibles?.find(r => r.id === l.rev);
+  if (def && (def.start === l.from || def.start === l.to)) return updateReversible(n2, def.id, { start: def.start === l.from ? l.to : l.from });
+  return n2;
+}
+/** extend a corridor by the road straight on from either of its ends */
+export function extendReversible(net: Network, id: string): Network {
+  const ls = net.links.filter(l => l.rev === id);
+  if (!ls.length) return net;
+  const chain = straightChain(net, ls[0].id).map(x => linkById(net, x)!);
+  // the corridor's roads must be a run within the chain; take the neighbours at both ends of that run
+  const idx = chain.map((l, i) => (l.rev === id ? i : -1)).filter(i => i >= 0);
+  const lo = Math.min(...idx), hi = Math.max(...idx), add = [chain[lo - 1], chain[hi + 1]].filter((l): l is LinkDef => !!l && !l.rev);
+  if (!add.length) return net;
+  const set = new Set(add.map(l => l.id));
+  return { ...net, links: net.links.map(l => (set.has(l.id) ? withRev(l, id) : l)) };
 }

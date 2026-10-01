@@ -207,8 +207,10 @@ export const LANE_WIDTH = { min: 2.5, max: 4.2, default: 3.2 };
 export function lanesAtLine(link: LinkDef, dir: 1 | -1): number {
   const n = dir === 1 ? link.lanesF : link.lanesB;
   if (n <= 0) return 0;
+  // a reversible middle lane (two-way roads) is lane 0 of both directions; it rules out left bays
+  const rev = link.rev && link.lanesF > 0 && link.lanesB > 0 ? 1 : 0;
   const b = dir === 1 ? link.baysF : link.baysB;
-  return n + (b ? b.left + b.right : 0);
+  return n + rev + (b ? (rev ? 0 : b.left) + b.right : 0);
 }
 
 export type ApproachSign = "yield" | "stop";

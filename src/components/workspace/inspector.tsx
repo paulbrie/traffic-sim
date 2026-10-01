@@ -101,6 +101,7 @@ function PlanSummary({ net }: { net: Network }) {
           <li><Kbd>R</Kbd> Road tool: click to place points, click an existing road to join it, <Kbd>Esc</Kbd> to finish. Hold <Kbd>Shift</Kbd> for 15° angles.</li>
           <li><Kbd>V</Kbd> Select: drag junctions, drag the square handle to curve a road, then fine-tune the two curve handles.</li>
           <li><Kbd>B</Kbd> Bus stop: click the side of the road the bus drives on.</li>
+          <li><Kbd>⌘S</Kbd> / <Kbd>Ctrl S</Kbd> Save now (the plan also saves itself a moment after each change).</li>
           <li>Layers (top bar) choose what clicks on the map select; all are on to start with. <Kbd>Shift</Kbd> + a letter switches one on or off: <Kbd>R</Kbd> roads, <Kbd>L</Kbd> lanes, <Kbd>J</Kbd> junctions… (<Kbd>A</Kbd> all). The letters are shown in the layer menu.</li>
           <li>Type exact coordinates, lengths and bearings in this panel. Arrow keys nudge by one step, <Kbd>Shift</Kbd> by ten.</li>
           <li>Dead ends where traffic enters and leaves the plan are shown as squares.</li>
