@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { commit, stats$, ui } from "@/state/store";
+import { commit, settings$, stats$, ui } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import * as ops from "@/state/ops";
 import type { LinkDef, Network, ReversibleDef, ReversibleMode } from "@/engine/types";
@@ -47,6 +47,8 @@ function AddReversible({ net, link }: { net: Network; link: LinkDef }) {
 
 function CorridorPanel({ net, link, def }: { net: Network; link: LinkDef; def: ReversibleDef }) {
   useSubject(stats$); // live state (~4×/s)
+  const [settings] = useSubject(settings$);
+  const hold = settings.revHold?.[def.id] ?? null, readOnly = ui.getValue().readOnly;
   const c = simController.compiled.corridors.find(x => x.def.id === def.id);
   const set = (patch: Partial<Omit<ReversibleDef, "id">>, key?: string) => commit(ops.updateReversible(net, def.id, patch), key);
   const roads = net.links.filter(l => l.rev === def.id);
@@ -54,7 +56,7 @@ function CorridorPanel({ net, link, def }: { net: Network; link: LinkDef; def: R
   const d1 = first && last ? compass(last.pos.x - first.pos.x, last.pos.y - first.pos.y).name : "1";
   const d2 = first && last ? compass(first.pos.x - last.pos.x, first.pos.y - last.pos.y).name : "2";
   const name = (d: "1" | "2") => `towards ${d === "1" ? d1 : d2}`;
-  const sim = simController.sim, live = c && sim ? sim.rev[c.idx] : undefined, running = ui.getValue().sim.running || !!sim;
+  const sim = simController.sim, live = c && sim ? sim.rev[c.idx] : undefined;
   const status = !live ? null : (["Closed", `Open ${name("1")}`, `Closing (was ${name("1")})`, `Open ${name("2")}`, `Closing (was ${name("2")})`] as const)[live.state];
   const tone = !live ? "" : live.state === 1 || live.state === 3 ? "text-[var(--sig-go)]" : live.state === 0 ? "text-destructive" : "text-amber-600 dark:text-amber-400";
   const cmd = (x: "closed" | "1" | "2" | "auto") => simController.reversibleCommand(def.id, x);
@@ -74,18 +76,18 @@ function CorridorPanel({ net, link, def }: { net: Network; link: LinkDef; def: R
       {c && (
         <div className="grid gap-2 rounded-md border p-2.5">
           <div className="flex items-baseline justify-between gap-2">
-            <span className={cn("text-sm font-medium", tone)}>{status ?? "Not running"}</span>
-            {live && <span className="text-[11px] text-muted-foreground tabular">{Math.round(live.t)} s{live.hold ? " · set by hand" : ""}</span>}
+            <span className={cn("text-sm font-medium", tone)}>{status ?? "Traffic not running"}</span>
+            <span className="text-[11px] text-muted-foreground tabular">{live ? `${Math.round(live.t)} s` : ""}{hold ? `${live ? " · " : ""}set by hand: ${hold === "closed" ? "closed" : `open ${name(hold)}`}` : ""}</span>
           </div>
           {live && (live.state === 2 || live.state === 4) && <p className="text-xs text-muted-foreground">Entries shut; {live.inside} vehicle{live.inside === 1 ? "" : "s"} still driving out of the lane.</p>}
           {live && def.mode === "dynamic" && <p className="text-[11px] text-muted-foreground tabular">Traffic: {live.density[0].toFixed(0)} vehicles/km per lane {name("1")}, {live.density[1].toFixed(0)} {name("2")}.</p>}
           <div className="grid grid-cols-2 gap-1.5">
-            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!running} onClick={() => cmd("1")}>Open {name("1")}</Button>
-            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!running} onClick={() => cmd("2")}>Open {name("2")}</Button>
-            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!running} onClick={() => cmd("closed")}>Close</Button>
-            <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={!running || !live?.hold} onClick={() => cmd("auto")}>Back to {MODES.find(m => m.id === def.mode)!.label.toLowerCase()}</Button>
+            <Button size="sm" variant={hold === "1" ? "secondary" : "outline"} className="h-7 text-xs" disabled={readOnly} aria-pressed={hold === "1"} onClick={() => cmd("1")}>Open {name("1")}</Button>
+            <Button size="sm" variant={hold === "2" ? "secondary" : "outline"} className="h-7 text-xs" disabled={readOnly} aria-pressed={hold === "2"} onClick={() => cmd("2")}>Open {name("2")}</Button>
+            <Button size="sm" variant={hold === "closed" ? "secondary" : "outline"} className="h-7 text-xs" disabled={readOnly} aria-pressed={hold === "closed"} onClick={() => cmd("closed")}>Close</Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={readOnly || !hold} onClick={() => cmd("auto")}>Back to {MODES.find(m => m.id === def.mode)!.label.toLowerCase()}</Button>
           </div>
-          <p className="text-[11px] text-muted-foreground">{running ? "Switching always goes through closing: entries shut, the lane empties, then it stays closed for the gap below." : "Run traffic to switch it by hand."}</p>
+          <p className="text-[11px] text-muted-foreground">Set by hand, it stays so (saved with the plan, also after a restart) until handed back. Switching always goes through closing: entries shut, the lane empties, then it stays closed for the gap below.</p>
         </div>
       )}
 

@@ -3,13 +3,13 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { buildRoadGeo, heightFn } from "@/render/geometry";
-import { buildBuildings, buildFurniture, buildRoads, buildingShell, type Furniture } from "@/render/scene3d";
+import { buildRoadGeo, heightFn, laneSign } from "@/render/geometry";
+import { buildBuildings, buildFurniture, buildRoads, buildingShell, laneSignMaterials, type Furniture } from "@/render/scene3d";
 import { satelliteMosaic } from "@/render/satellite";
 import type { BuildingDef } from "@/engine/types";
 import { readPalette, speedColor, type Palette } from "@/render/palette";
 import { LEVEL_H, linkExtent } from "@/engine/compile";
-import { network$, select, ui, underlay$, type UiState } from "@/state/store";
+import { network$, select, ui, underlay$, type LayerId, type UiState } from "@/state/store";
 import { underlayImg$ } from "@/state/underlay-image";
 import { simController } from "@/state/sim-controller";
 import { viewCmd$ } from "@/state/commands";
@@ -46,17 +46,21 @@ export function View3D() {
       green: new THREE.MeshBasicMaterial({ color: pal.go }), yellow: new THREE.MeshBasicMaterial({ color: pal.slow }),
       red: new THREE.MeshBasicMaterial({ color: pal.stop }), off: new THREE.MeshLambertMaterial({ color: "#555" }),
     };
-    let roads: THREE.Group | null = null, furniture: Furniture | null = null, builtVersion = -1;
+    const laneMats = laneSignMaterials();
+    let roads: THREE.Group | null = null, furniture: Furniture | null = null, builtVersion = -1, builtLayers = "";
+    /** is this layer on (drawn) */
+    const shown = (l: string) => u.layers.includes(l as LayerId);
+    const buildingsOn = () => u.display.buildings && shown("buildings");
     // buildings are rebuilt only when the buildings themselves (or the theme) change
     let houses: { mesh: THREE.Mesh; owner: Int32Array; list: BuildingDef[] } | null = null;
     function syncBuildings(force = false) {
       const list = network$.getValue().buildings ?? [];
-      if (houses && houses.list === list && !force) { houses.mesh.visible = u.display.buildings; return; }
+      if (houses && houses.list === list && !force) { houses.mesh.visible = buildingsOn(); return; }
       if (houses) { scene.remove(houses.mesh); houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); houses = null; }
       if (!list.length) return;
       const b = buildBuildings(list, pal);
       houses = { ...b, list };
-      houses.mesh.visible = u.display.buildings;
+      houses.mesh.visible = buildingsOn();
       scene.add(houses.mesh);
     }
     const box = new THREE.BoxGeometry(1, 1, 1); box.translate(0, 0.5, 0);
@@ -158,8 +162,9 @@ export function View3D() {
       if (roads) { scene.remove(roads); roads.traverse(o => { if (o instanceof THREE.Mesh) o.geometry.dispose(); }); }
       if (furniture) { scene.remove(furniture.group); }
       const geo = buildRoadGeo(simController.compiled, network$.getValue()), hf = heightFn(simController.compiled, network$.getValue());
-      roads = buildRoads(geo, pal, hf); scene.add(roads);
-      furniture = buildFurniture(geo, pal, sigMats, hf); scene.add(furniture.group);
+      roads = buildRoads(geo, pal, hf, shown); scene.add(roads);
+      furniture = buildFurniture(geo, pal, sigMats, hf, laneMats, shown); scene.add(furniture.group);
+      builtLayers = u.layers.join("+");
       syncBuildings();
       syncSatellite();
       builtVersion = simController.version;
@@ -185,7 +190,7 @@ export function View3D() {
     const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
 
     const subs = [
-      ui.subscribe("**", () => { u = ui.getValue(); if (houses) houses.mesh.visible = u.display.buildings; syncSatellite(); }),
+      ui.subscribe("**", () => { u = ui.getValue(); if (houses) houses.mesh.visible = buildingsOn(); syncSatellite(); }),
       underlay$.subscribe(syncUnderlay),
       underlayImg$.subscribe(syncUnderlay),
       viewCmd$.subscribe(c => {
@@ -248,14 +253,14 @@ export function View3D() {
     const frame = (now: number) => {
       if (u.view === "3d") {
         simController.advance();
-        if (builtVersion !== simController.version) { rebuild(); hlFor = ""; }
+        if (builtVersion !== simController.version || builtLayers !== u.layers.join("+")) { rebuild(); hlFor = ""; }
         if (homed !== u.planId) { homed = u.planId; home(); }
-        const sim = simController.sim;
+        const sim = simController.sim, vsim = shown("vehicles") ? sim : null;
         // vehicles
         let n = 0, ng = 0;
-        if (sim) for (const v of sim.vehicles) {
+        if (vsim) for (const v of vsim.vehicles) {
           if (v.dead || n + 2 >= MAXV) continue;
-          const q = sim.pose(v), mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2, y0 = v.z * LEVEL_H;
+          const q = vsim.pose(v), mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2, y0 = v.z * LEVEL_H;
           const dx = q.fx - q.rx, dz = q.fy - q.ry, m = Math.hypot(dx, dz) || 1, a = Math.atan2(-dz, dx), ux = dx / m, uz = dz / m;
           const sc = u.display.bySpeed ? speedColor(pal, v.v / Math.max(1, v.v0)) : null;
           dummy.rotation.set(0, a, 0);
@@ -277,10 +282,10 @@ export function View3D() {
         }
         // blinkers
         let nl = 0;
-        if (sim && Math.floor(now / 380) % 2 === 0) for (const v of sim.vehicles) {
-          const b = sim.blinker(v);
+        if (vsim && Math.floor(now / 380) % 2 === 0) for (const v of vsim.vehicles) {
+          const b = vsim.blinker(v);
           if (!b || nl + 2 > 16000) continue;
-          const q = sim.pose(v), mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
+          const q = vsim.pose(v), mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
           const dx = q.fx - q.rx, dz = q.fy - q.ry, m = Math.hypot(dx, dz) || 1, ux = dx / m, uz = dz / m;
           const nx = -uz * b, nz = ux * b, half = v.len / 2 - 0.15, side = v.width / 2 + 0.02, h = (v.kind === "car" ? 0.6 : 0.9) + v.z * LEVEL_H;
           dummy.rotation.set(0, Math.atan2(-dz, dx), 0); dummy.scale.set(1, 1, 1);
@@ -296,6 +301,7 @@ export function View3D() {
         // signals and stop labels
         if (furniture) {
           for (const h of furniture.heads) h.mesh.material = sim ? sigMats[sim.signalFor(h.nodeIdx, h.arm, h.lane) ?? "red"] : sigMats.off;
+          for (const L of furniture.laneSigns) L.mesh.material = laneMats[laneSign(sim?.rev[L.corr]?.state, L.cdir, L.entry, L.rev)];
           for (const L of furniture.labels) {
             const st = simController.compiled.stopById.get(L.id);
             const text = st ? `${st.def.name}${sim ? ` · ${Math.floor(st.waiting)}` : ""}` : "";
@@ -359,6 +365,7 @@ export function View3D() {
       controls.dispose();
       if (houses) { houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); }
       ulMat.map?.dispose(); ulMat.dispose(); ulMesh.geometry.dispose();
+      for (const m of Object.values(laneMats)) { m.map?.dispose(); m.dispose(); }
       satMat.map?.dispose(); satMat.dispose(); satMesh.geometry.dispose();
       renderer.dispose();
       wrap.removeChild(renderer.domElement);

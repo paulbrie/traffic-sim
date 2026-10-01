@@ -301,5 +301,12 @@ export function sanitizeSettings(input: unknown): PlanSettings {
     seed: Math.round(num(s.seed, 1, 1e9, DEFAULT_SETTINGS.seed)),
     ...(typeof s.through === "number" && isFinite(s.through) ? { through: Math.min(1, Math.max(0, s.through)) } : {}),
     ...(params ? { params } : {}),
+    ...(revHold(s.revHold) ?? {}),
   };
+}
+function revHold(v: unknown): { revHold: Record<string, "closed" | "1" | "2"> } | null {
+  if (!v || typeof v !== "object") return null;
+  const out: Record<string, "closed" | "1" | "2"> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>).slice(0, 100)) if (k.length <= 64 && (x === "closed" || x === "1" || x === "2")) out[k] = x;
+  return Object.keys(out).length ? { revHold: out } : null;
 }

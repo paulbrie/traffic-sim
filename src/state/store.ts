@@ -13,7 +13,7 @@ import type { Vec } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 
 export type Tool = "select" | "road" | "segment" | "stop" | "pan" | "image";
-/** the kinds of object the map can select (TransModeler-style layers); any combination can be on */
+/** the kinds of object the map shows and can select (TransModeler-style layers); any combination can be on */
 export type LayerId = "roads" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones";
 /** `key`: Shift + this letter switches the layer on or off (Shift+A: all of them) */
 export const LAYERS: { id: LayerId; label: string; key: string }[] = [
@@ -64,7 +64,7 @@ export interface UiState {
   /** scale calibration: pick two points on the reference image, then type their real distance */
   calib: { active: boolean; a: Vec | null; b: Vec | null };
   history: { canUndo: boolean; canRedo: boolean };
-  /** layers whose objects the map selects (all by default); their highlights show once narrowed to a few (see LAYER_HIGHLIGHT_MAX) */
+  /** layers whose objects the map draws and selects (all by default); their highlights show once narrowed to a few (see LAYER_HIGHLIGHT_MAX) */
   layers: LayerId[];
   /** the layer listed in the data table */
   tableLayer: LayerId;

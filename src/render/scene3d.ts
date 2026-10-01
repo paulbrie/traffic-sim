@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import { Poly } from "@/engine/geom";
 import type { BuildingDef, Vec } from "@/engine/types";
-import type { HeightFn, On, RoadGeo, Strip } from "./geometry";
+import type { HeightFn, LaneSign, On, RoadGeo, Strip } from "./geometry";
 import { buildingColor, type Palette } from "./palette";
 
 class Batch {
@@ -65,6 +65,28 @@ export interface Furniture {
   group: THREE.Group;
   heads: { mesh: THREE.Mesh; nodeIdx: number; arm: number; lane?: number }[];
   labels: { sprite: THREE.Sprite; canvas: HTMLCanvasElement; tex: THREE.CanvasTexture; id: string }[];
+  /** reversible corridors' lane-sign panels (their picture is set every frame, see laneSign) */
+  laneSigns: { mesh: THREE.Mesh; corr: number; cdir: 1 | 2; entry: boolean; rev: boolean }[];
+}
+
+/** the three pictures a lane sign shows, as a driver sees them (lit, on black) */
+export function laneSignMaterials(): Record<LaneSign, THREE.MeshBasicMaterial> {
+  const make = (draw: (g: CanvasRenderingContext2D) => void) => {
+    const cv = document.createElement("canvas"); cv.width = cv.height = 128;
+    const g = cv.getContext("2d")!;
+    g.fillStyle = "#0b0f14"; g.fillRect(0, 0, 128, 128);
+    g.lineWidth = 16; g.lineCap = "round"; g.lineJoin = "round";
+    g.beginPath(); draw(g); g.stroke();
+    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+    return new THREE.MeshBasicMaterial({ map: tex });
+  };
+  return {
+    // green arrow pointing down: this lane is open to you
+    open: make(g => { g.strokeStyle = "#22c55e"; g.moveTo(64, 22); g.lineTo(64, 104); g.moveTo(34, 74); g.lineTo(64, 104); g.lineTo(94, 74); }),
+    closed: make(g => { g.strokeStyle = "#ef4444"; g.moveTo(30, 30); g.lineTo(98, 98); g.moveTo(98, 30); g.lineTo(30, 98); }),
+    // yellow arrow slanting down to the right: move over into the lane beside
+    leave: make(g => { g.strokeStyle = "#facc15"; g.moveTo(32, 32); g.lineTo(96, 96); g.moveTo(52, 96); g.lineTo(96, 96); g.lineTo(96, 52); }),
+  };
 }
 
 /**
@@ -105,17 +127,22 @@ function shrink(s: Strip): Strip {
   return { left: new Poly(l), right: new Poly(r) };
 }
 
-export function buildRoads(geo: RoadGeo, pal: Palette, hf?: HeightFn): THREE.Group {
+/** layers that are on (see LAYERS in the store): only their objects are built */
+export type Shown = (layer: string) => boolean;
+const ALL: Shown = () => true;
+
+export function buildRoads(geo: RoadGeo, pal: Palette, hf?: HeightFn, show: Shown = ALL): THREE.Group {
   const g = new THREE.Group();
+  const R = show("roads"), Ln = show("lanes"), J = show("junctions");
   const curb = new Batch(), asphalt = new Batch(), bus = new Batch(), mark = new Batch(), yellow = new Batch(), island = new Batch(), deck = new Batch();
   const all = [curb, asphalt, bus, mark, yellow, island];
   // everything that follows sits on this road / junction (its height profile)
   const on = (o: On) => { const f = hf && !hf.flat ? (x: number, y: number) => hf.at(o, x, y) : null; for (const b of all) b.lift = f; };
-  for (const s of geo.surfaces) {
+  if (R) for (const s of geo.surfaces) {
     on(s.on); curb.strip(s.curb, 0.04); asphalt.strip(s.asphalt, 0.1);
     if (hf && !hf.flat) bridgeDeck(deck, s, (x, y) => hf.at(s.on, x, y));
   }
-  for (const j of geo.junctions) {
+  if (J) for (const j of geo.junctions) {
     on(j.on);
     if (j.polygon.length >= 3) {
       curb.polygon(j.polygon, 0.045); asphalt.polygon(j.surface.length >= 3 ? j.surface : j.polygon, 0.105);
@@ -123,18 +150,20 @@ export function buildRoads(geo: RoadGeo, pal: Palette, hf?: HeightFn): THREE.Gro
     if (j.ring) { asphalt.disk(j.ring.c, j.ring.r + 2.4, 0.107); curb.disk(j.ring.c, j.ring.r + 3, 0.047); }
     if (j.deadEnd) { asphalt.disk(j.deadEnd.c, j.deadEnd.r, 0.107); curb.disk(j.deadEnd.c, j.deadEnd.r + 0.6, 0.047); }
   }
-  for (const b of geo.busBands) { on(b.on); bus.strip(b, 0.16); }
-  for (const m of geo.medians) if (m.kind === "raised") { on(m.on); curb.strip(m.strip, 0.2); island.strip(shrink(m.strip), 0.24); }
-  for (const isl of geo.islands) { on(isl.on); curb.polygon(isl.pts, 0.2); island.polygon(isl.pts, 0.24); }
-  for (const z of geo.zebras) { on(z.on); mark.polygon(z.pts, 0.19); }
+  if (Ln) for (const b of geo.busBands) { on(b.on); bus.strip(b, 0.16); }
+  if (R) for (const m of geo.medians) if (m.kind === "raised") { on(m.on); curb.strip(m.strip, 0.2); island.strip(shrink(m.strip), 0.24); }
+  if (R) for (const isl of geo.islands) { on(isl.on); curb.polygon(isl.pts, 0.2); island.polygon(isl.pts, 0.24); }
+  if (J) for (const z of geo.zebras) { on(z.on); mark.polygon(z.pts, 0.19); }
   for (const l of geo.lines) {
+    // (lane lines with the lanes, turn guides with the junctions, the rest with the roads)
+    if (!(l.kind === "lane" || l.kind === "bus" ? Ln : l.kind === "guide" ? J : R)) continue;
     on(l.on);
     if (l.kind === "hatch") mark.line(l.poly, 0.12, 0.2);
     else if (l.kind === "guide") mark.line(l.poly, 0.1, 0.2, [1, 1.6]);
     else if (l.kind === "center") yellow.line(l.poly, 0.16, 0.2, l.dashed ? [3, 4] : undefined);
     else mark.line(l.poly, l.kind === "bus" ? 0.22 : 0.15, 0.2, l.dashed ? [3, 4] : undefined);
   }
-  for (const s of geo.stopLines) {
+  if (J) for (const s of geo.stopLines) {
     on(s.on);
     const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y, L = Math.hypot(dx, dy) || 1, tx = -dy / L * 0.25, ty = dx / L * 0.25;
     if (s.kind === "yield") {
@@ -148,7 +177,7 @@ export function buildRoads(geo: RoadGeo, pal: Palette, hf?: HeightFn): THREE.Gro
   }
   g.add(curb.mesh(pal.curb), asphalt.mesh(pal.asphalt), bus.mesh(pal.bus), mark.mesh(pal.mark), yellow.mesh(pal.divider), island.mesh(pal.island));
   if (deck.pos.length) g.add(deck.mesh("#a3a7ab"));
-  for (const j of geo.junctions) if (j.ring) {
+  if (J) for (const j of geo.junctions) if (j.ring) {
     const ir = Math.max(2, (j.ring.r2 ?? j.ring.r) - 2.4), z = hf ? hf.at(j.on, j.ring.c.x, j.ring.c.y) : 0;
     const isl = new THREE.Mesh(new THREE.CylinderGeometry(ir, ir + 0.2, 0.35, 40), new THREE.MeshLambertMaterial({ color: pal.island }));
     isl.position.set(j.ring.c.x, 0.18 + z, j.ring.c.y); isl.receiveShadow = true; g.add(isl);
@@ -160,7 +189,7 @@ export function buildRoads(geo: RoadGeo, pal: Palette, hf?: HeightFn): THREE.Gro
   return g;
 }
 
-export function buildFurniture(geo: RoadGeo, pal: Palette, sigMats: Record<"green" | "yellow" | "red" | "off", THREE.Material>, hf?: HeightFn): Furniture {
+export function buildFurniture(geo: RoadGeo, pal: Palette, sigMats: Record<"green" | "yellow" | "red" | "off", THREE.Material>, hf?: HeightFn, laneMats?: Record<LaneSign, THREE.Material>, show: Shown = ALL): Furniture {
   const group = new THREE.Group();
   // signals and signs stand at their junction's height, bus stops at their road's
   const lift = (o: THREE.Object3D, z: number) => { if (z) o.position.y += z; return o; };
@@ -168,7 +197,7 @@ export function buildFurniture(geo: RoadGeo, pal: Palette, sigMats: Record<"gree
   const labels: Furniture["labels"] = [];
   const pole = new THREE.MeshLambertMaterial({ color: "#3e444b" });
   const masts = new Set<string>();
-  for (const s of geo.signals) {
+  for (const s of show("signals") ? geo.signals : []) {
     const zs = hf ? hf.node(s.nodeIdx) : 0;
     if (s.kind === "lights" && s.lane !== undefined && s.pole) {
       // mast at the kerb with an arm over the lanes; one head above each lane
@@ -205,7 +234,7 @@ export function buildFurniture(geo: RoadGeo, pal: Palette, sigMats: Record<"gree
       group.add(lift(p, zs), lift(sign, zs));
     }
   }
-  for (const s of geo.stops) {
+  for (const s of show("stops") ? geo.stops : []) {
     const ang = Math.atan2(s.dir.y, s.dir.x);
     const shelter = new THREE.Group();
     const roof = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.12, 1.5), pole); roof.position.y = 2.5; roof.castShadow = true;
@@ -222,7 +251,29 @@ export function buildFurniture(geo: RoadGeo, pal: Palette, sigMats: Record<"gree
     group.add(sprite);
     labels.push({ sprite, canvas, tex, id: s.id });
   }
-  return { group, heads, labels };
+  // reversible corridors: a gantry over each direction's lanes, a sign panel above each lane facing the traffic
+  const laneSigns: Furniture["laneSigns"] = [];
+  const panelGeo = new THREE.PlaneGeometry(1.5, 1.5), backGeo = new THREE.BoxGeometry(1.7, 1.7, 0.18);
+  for (const gt of show("signals") ? geo.gantries : []) {
+    const z = hf ? hf.at(gt.on, gt.kerb.x, gt.kerb.y) : 0, H = 6.2;
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.18, H + 0.6, 8), pole);
+    post.position.set(gt.kerb.x, (H + 0.6) / 2 + z, gt.kerb.y); post.castShadow = true;
+    const far = gt.signs.reduce((a, s) => (Math.hypot(s.p.x - gt.kerb.x, s.p.y - gt.kerb.y) > Math.hypot(a.p.x - gt.kerb.x, a.p.y - gt.kerb.y) ? s : a), gt.signs[0]);
+    const dx = far.p.x - gt.kerb.x, dy = far.p.y - gt.kerb.y, len = Math.hypot(dx, dy) + 1.2, ux = dx / (len - 1.2 || 1), uy = dy / (len - 1.2 || 1);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(len, 0.35, 0.35), pole);
+    bar.position.set(gt.kerb.x + ux * len / 2, H + 0.4 + z, gt.kerb.y + uy * len / 2); bar.rotation.y = -Math.atan2(uy, ux); bar.castShadow = true;
+    group.add(post, bar);
+    for (const s of gt.signs) {
+      const zs = hf ? hf.at(gt.on, s.p.x, s.p.y) : z;
+      // the panel faces drivers coming along the lane (its front is toward where they come from)
+      const look = (o: THREE.Object3D) => o.lookAt(s.p.x - gt.dir.x * 10, H - 0.6 + zs, s.p.y - gt.dir.y * 10);
+      const back = new THREE.Mesh(backGeo, pole); back.position.set(s.p.x + gt.dir.x * 0.1, H - 0.6 + zs, s.p.y + gt.dir.y * 0.1); look(back);
+      const panel = new THREE.Mesh(panelGeo, laneMats?.closed ?? sigMats.off); panel.position.set(s.p.x, H - 0.6 + zs, s.p.y); look(panel);
+      group.add(back, panel);
+      laneSigns.push({ mesh: panel, corr: gt.corr, cdir: gt.cdir, entry: gt.entry, rev: s.rev });
+    }
+  }
+  return { group, heads, labels, laneSigns };
 }
 
 /** walls and roof of one footprint, as triangles (x, height, y) */

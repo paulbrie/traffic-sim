@@ -506,6 +506,18 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
     && dyn1.seq.startsWith("01") && dyn2.seq.startsWith("03") && dyn1.wrong + dyn2.wrong === 0 && man.seq.startsWith("0120340") && man.wrong === 0;
   console.log(`reversible lane: shared strip ${shared}, turns ${turnsOk}; timer ${timer.seq} (in it ${timer.used.join("/")} vehicle-ticks, wrong way ${timer.wrong}, towed ${sim.stats.towed}); dynamic ${dyn1.seq} / ${dyn2.seq}; by hand ${man.seq} | ok ${ok}`);
   if (!ok) process.exit(1);
+
+  // set by hand in the plan's settings: a timer corridor (open to 1 at the start) closes at once, opens to 2 and stays so
+  const held = new Sim(corridor("timer", 800, 800).c, { cars: 0, trucks: 0, seed: 4, revHold: { c1: "2" } });
+  const h = drive(held, 6000);
+  // a replay frame shows the lane as it was at that step
+  const rs = new Sim(corridor("timer", 800, 800).c, { cars: 0, trucks: 0, seed: 4 }), rr = new Recorder();
+  const seen: { tick: number; state: number; inside: number; t: number }[] = [];
+  for (let t = 0; t < 3000; t++) { rs.step(); rr.record(rs); if (t % 97 === 0) { const x = rs.reversibleState(0)!; seen.push({ tick: rs.tick, state: x.state, inside: x.inside, t: x.t }); } }
+  const replayOk = seen.every(x => { const r = rr.frameAt(x.tick, rs)?.rev?.[0]; return !!r && r.state === x.state && r.inside === Math.min(255, x.inside) && Math.abs(r.t - x.t) < 0.11; });
+  const ok2 = h.seq === "203" && h.wrong === 0 && held.reversibleState(0)!.hold === "2" && replayOk && new Set(seen.map(x => x.state)).size >= 3;
+  console.log(`reversible lane kept as set by hand: ${h.seq}; in replay frames ${replayOk} (${seen.length} steps compared) | ok ${ok2}`);
+  if (!ok2) process.exit(1);
 }
 
 // free junction: two two-lane roads joining one lane. Vehicles waiting at the line take turns, so

@@ -8,7 +8,7 @@
 import { compile, getShape, putShapes, type Compiled, type JunctionShape } from "@/engine/compile";
 import { SimMirror, type Snapshot, type Watch } from "@/engine/sim/mirror";
 import type { Network } from "@/engine/types";
-import { network$, settings$, stats$, ui } from "./store";
+import { network$, setSettings, settings$, stats$, ui } from "./store";
 import type { ToWorker } from "./sim.worker";
 import type { RecordingInfo } from "@/engine/sim/recorder";
 
@@ -186,10 +186,15 @@ class SimController {
     this.post({ type: "clearEvents" });
   }
 
-  /** set a reversible corridor's lane by hand ("auto" hands it back to the corridor's mode) */
+  /**
+   * Set a reversible corridor's lane by hand ("auto" hands it back to the corridor's mode). It goes in
+   * the plan's settings (kept with the plan; the running simulation picks it up without restarting).
+   */
   reversibleCommand(corridorId: string, cmd: "closed" | "1" | "2" | "auto") {
-    const c = this.compiled.corridors.find(x => x.def.id === corridorId);
-    if (c) this.post({ type: "reversible", idx: c.idx, cmd });
+    if (ui.getValue().readOnly) return;
+    const s = settings$.getValue(), hold = { ...(s.revHold ?? {}) };
+    if (cmd === "auto") delete hold[corridorId]; else hold[corridorId] = cmd;
+    setSettings({ ...s, revHold: Object.keys(hold).length ? hold : undefined });
   }
 
   /** called every animation frame: returns true if a new snapshot arrived since the last call */

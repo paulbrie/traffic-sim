@@ -36,7 +36,7 @@ export function downloadEvents(events: JunctionEvent[], format: "csv" | "jsonl",
 const KIND_STYLE: Partial<Record<JunctionEvent["kind"], string>> = {
   deny: "text-amber-600 dark:text-amber-400", revoke: "text-amber-600 dark:text-amber-400",
   "wrong-lane": "text-destructive", "turn-changed": "text-destructive", towed: "text-destructive", reroute: "text-destructive",
-  grant: "text-[var(--sig-go)]", signal: "text-primary", "enter-road": "text-[var(--sig-go)]", appear: "text-[var(--sig-go)]", state: "text-primary",
+  grant: "text-[var(--sig-go)]", signal: "text-primary", reversible: "text-primary", "enter-road": "text-[var(--sig-go)]", appear: "text-[var(--sig-go)]", state: "text-primary",
 };
 
 /** Per-junction recorder: switch, latest events, downloads. */

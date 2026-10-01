@@ -31,6 +31,12 @@ export interface RoadGeo {
   /** `lane` set: one head per lane (junctions with custom phases), hung from a mast at `pole` */
   signals: { nodeIdx: number; arm: number; p: Vec; dir: Vec; kind: "lights" | "stop" | "yield"; lane?: number; pole?: Vec }[];
   stops: { id: string; name: string; p: Vec; dir: Vec; color: string; on: On }[];
+  /**
+   * Reversible corridors' lane-sign gantries, per direction: across that direction's lanes at the start of
+   * each of its roads and every 400 m. `kerb` is where the post stands; each sign hangs over a lane
+   * (`rev`: the middle lane, whose sign follows the corridor; `entry`: the first gantry that way).
+   */
+  gantries: { corr: number; cdir: 1 | 2; entry: boolean; kerb: Vec; dir: Vec; on: On; signs: { p: Vec; rev: boolean }[] }[];
 }
 
 export function edgesByLink(c: Compiled) {
@@ -172,7 +178,7 @@ function clipHalf(poly: Vec[], f: (p: Vec) => number): Vec[] {
 }
 
 export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
-  const geo: RoadGeo = { surfaces: [], medians: [], islands: [], zebras: [], junctions: [], busBands: [], lines: [], stopLines: [], arrows: [], signals: [], stops: [], levels: [] };
+  const geo: RoadGeo = { surfaces: [], medians: [], islands: [], zebras: [], junctions: [], busBands: [], lines: [], stopLines: [], arrows: [], signals: [], stops: [], levels: [], gantries: [] };
   const byLink = edgesByLink(c);
   const onL = (l: LinkDef): On => ({ lv: l.level ?? 0, link: l.id }), onN = (n: CNode): On => ({ lv: n.level, node: n.def.id });
   for (const link of net.links) {
@@ -440,8 +446,38 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
   }
   geo.levels = [...new Set([...geo.surfaces.map(x => x.on.lv), ...geo.junctions.map(x => x.on.lv)])].sort((a, b) => a - b);
   if (!geo.levels.length) geo.levels = [0];
+  for (const cc of c.corridors) for (const d of [1, 2] as const) {
+    cc.edges[d - 1].forEach((e, ei) => {
+      const ref = e.lanes[e.lanes.length - 1], L = ref.len;
+      for (let s = Math.min(6, L * 0.15), gi = 0; gi === 0 || s < L - 10; s += GANTRY_EVERY, gi++) {
+        const at = (lp: typeof ref) => lp.poly.at(s * (lp.len / Math.max(1e-6, L)));
+        const p = at(ref), t = ref.poly.tangent(s), out = e.lw / 2 + CURB + 0.6;
+        geo.gantries.push({
+          corr: cc.idx, cdir: d, entry: ei === 0 && gi === 0, dir: { x: t.x, y: t.y }, on: onL(e.link),
+          kerb: { x: p.x - t.y * out, y: p.y + t.x * out },
+          signs: e.lanes.map(lp => ({ p: at(lp), rev: e.rev && lp.lane === 0 })),
+        });
+      }
+    });
+  }
   return geo;
 }
+/** what a lane sign shows: green arrow, red X, yellow arrow slanting toward the lane beside (move over) */
+export type LaneSign = "open" | "closed" | "leave";
+/**
+ * A sign over a corridor's lane for direction `cdir`, the corridor's middle lane being in `state`
+ * (see REV_STATES; undefined = not running): fixed lanes are always open; the middle lane is open
+ * when open that way, and while it closes the entry gantry says move over and those further on X.
+ */
+export function laneSign(state: number | undefined, cdir: 1 | 2, entry: boolean, rev: boolean): LaneSign {
+  if (!rev) return "open";
+  const open = cdir === 1 ? 1 : 3;
+  if (state === open) return "open";
+  if (state === open + 1) return entry ? "leave" : "closed";
+  return "closed";
+}
+/** gantries along a reversible corridor's roads: at the start of each road and every this many metres */
+export const GANTRY_EVERY = 400;
 
 /**
  * Heights (m) for 3D: at a point of a road (following its profile between its junctions) or of a

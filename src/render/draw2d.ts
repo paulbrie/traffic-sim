@@ -3,7 +3,7 @@ import { connectorHandles, connectorId, connectorPreview, type Compiled, type Co
 import type { Poly } from "@/engine/geom";
 import type { SimMirror as Sim, VehicleView as Vehicle } from "@/engine/sim/mirror";
 import type { BuildingDef, BuildingUse, LinkDef, Network, Vec } from "@/engine/types";
-import type { RoadGeo, Strip } from "./geometry";
+import { laneSign, type LaneSign, type RoadGeo, type Strip } from "./geometry";
 import { buildingColor, speedColor, type Palette } from "./palette";
 import { underlayCorners, type Underlay } from "@/lib/underlay";
 import { junctionRefs } from "@/engine/refs";
@@ -18,10 +18,15 @@ export interface LayerPaths {
   level: number;
   /** where the roads of this level are off the ground: their shadow, cast further the higher they are */
   shadow: Path2D;
-  curb: Path2D; asphalt: Path2D; island: Path2D; islandEdge: Path2D; bus: Path2D;
-  laneDash: Path2D; laneSolid: Path2D; centerDash: Path2D; centerSolid: Path2D; hatch: Path2D; guide: Path2D; zebra: Path2D;
-  stopLine: Path2D; yieldLine: Path2D; arrows: Path2D;
+  /** roads (layer "roads"): surface, kerb, islands and medians, centre lines and hatching */
+  curb: Path2D; asphalt: Path2D; island: Path2D; islandEdge: Path2D; centerDash: Path2D; centerSolid: Path2D; hatch: Path2D;
+  /** lanes (layer "lanes"): lane lines, bus lanes, lane arrows */
+  bus: Path2D; laneDash: Path2D; laneSolid: Path2D; arrows: Path2D;
+  /** junctions (layer "junctions"): their area, roundabout islands, zebras, stop and give-way lines, turn guides */
+  jCurb: Path2D; jAsphalt: Path2D; jIsland: Path2D; jIslandEdge: Path2D; guide: Path2D; zebra: Path2D; stopLine: Path2D; yieldLine: Path2D;
 }
+/** which of the layers drawn into the cached road images are on */
+export interface RoadLayers { roads: boolean; lanes: boolean; junctions: boolean }
 export interface PathCache {
   /** lowest level first: drawn in this order, so bridges cover what passes beneath */
   layers: LayerPaths[];
@@ -71,7 +76,7 @@ export function buildPaths(geo: RoadGeo): PathCache {
     if (!c) byLevel.set(on.lv, (c = {
       level: on.lv, shadow: new Path2D(), curb: new Path2D(), asphalt: new Path2D(), island: new Path2D(), islandEdge: new Path2D(), bus: new Path2D(),
       laneDash: new Path2D(), laneSolid: new Path2D(), centerDash: new Path2D(), centerSolid: new Path2D(), hatch: new Path2D(), guide: new Path2D(), zebra: new Path2D(),
-      stopLine: new Path2D(), yieldLine: new Path2D(), arrows: new Path2D(),
+      stopLine: new Path2D(), yieldLine: new Path2D(), arrows: new Path2D(), jCurb: new Path2D(), jAsphalt: new Path2D(), jIsland: new Path2D(), jIslandEdge: new Path2D(),
     }));
     return c;
   };
@@ -87,19 +92,19 @@ export function buildPaths(geo: RoadGeo): PathCache {
     const c = L(j.on);
     // kerb out to the roads' kerb edge, asphalt inside it, so the white edge runs on unbroken
     if (j.polygon.length >= 3) {
-      poly(c.asphalt, j.surface.length >= 3 ? j.surface : j.polygon); poly(c.curb, j.polygon);
+      poly(c.jAsphalt, j.surface.length >= 3 ? j.surface : j.polygon); poly(c.jCurb, j.polygon);
       if (j.on.lv > 0) poly(c.shadow, j.polygon.map(p => ({ x: p.x + SHADOW.x * j.on.lv, y: p.y + SHADOW.y * j.on.lv })));
     }
     if (j.ring) {
-      c.asphalt.moveTo(j.ring.c.x + j.ring.r + 2.4, j.ring.c.y); c.asphalt.arc(j.ring.c.x, j.ring.c.y, j.ring.r + 2.4, 0, Math.PI * 2);
-      c.curb.moveTo(j.ring.c.x + j.ring.r + 3, j.ring.c.y); c.curb.arc(j.ring.c.x, j.ring.c.y, j.ring.r + 3, 0, Math.PI * 2);
+      c.jAsphalt.moveTo(j.ring.c.x + j.ring.r + 2.4, j.ring.c.y); c.jAsphalt.arc(j.ring.c.x, j.ring.c.y, j.ring.r + 2.4, 0, Math.PI * 2);
+      c.jCurb.moveTo(j.ring.c.x + j.ring.r + 3, j.ring.c.y); c.jCurb.arc(j.ring.c.x, j.ring.c.y, j.ring.r + 3, 0, Math.PI * 2);
       const ir = Math.max(2, (j.ring.r2 ?? j.ring.r) - 2.4);
-      c.island.moveTo(j.ring.c.x + ir, j.ring.c.y); c.island.arc(j.ring.c.x, j.ring.c.y, ir, 0, Math.PI * 2);
-      c.islandEdge.moveTo(j.ring.c.x + ir, j.ring.c.y); c.islandEdge.arc(j.ring.c.x, j.ring.c.y, ir, 0, Math.PI * 2);
+      c.jIsland.moveTo(j.ring.c.x + ir, j.ring.c.y); c.jIsland.arc(j.ring.c.x, j.ring.c.y, ir, 0, Math.PI * 2);
+      c.jIslandEdge.moveTo(j.ring.c.x + ir, j.ring.c.y); c.jIslandEdge.arc(j.ring.c.x, j.ring.c.y, ir, 0, Math.PI * 2);
     }
     if (j.deadEnd) {
-      c.asphalt.moveTo(j.deadEnd.c.x + j.deadEnd.r, j.deadEnd.c.y); c.asphalt.arc(j.deadEnd.c.x, j.deadEnd.c.y, j.deadEnd.r, 0, Math.PI * 2);
-      c.curb.moveTo(j.deadEnd.c.x + j.deadEnd.r + 0.6, j.deadEnd.c.y); c.curb.arc(j.deadEnd.c.x, j.deadEnd.c.y, j.deadEnd.r + 0.6, 0, Math.PI * 2);
+      c.jAsphalt.moveTo(j.deadEnd.c.x + j.deadEnd.r, j.deadEnd.c.y); c.jAsphalt.arc(j.deadEnd.c.x, j.deadEnd.c.y, j.deadEnd.r, 0, Math.PI * 2);
+      c.jCurb.moveTo(j.deadEnd.c.x + j.deadEnd.r + 0.6, j.deadEnd.c.y); c.jCurb.arc(j.deadEnd.c.x, j.deadEnd.c.y, j.deadEnd.r + 0.6, 0, Math.PI * 2);
     }
   }
   for (const b of geo.busBands) stripPath(L(b.on).bus, b);
@@ -150,9 +155,10 @@ export interface Overlay {
   focusNodes?: readonly number[];
   /** lane ends a connector can be started from (click or drag from them), marked when zoomed in */
   laneEnds?: readonly Vec[];
-  /** the layer whose objects are highlighted ("all" = none) */
   /** layers whose objects are highlighted (lane outlines, connectors, rings around junctions…) */
   highlight: readonly string[];
+  /** layers that are on: only their objects are drawn (see LAYERS; none = just the background) */
+  show: readonly string[];
   /** roads as thin outlines only (no surface, markings or names), to see the map or image under them */
   maskRoads?: boolean;
   /** the route tracer's route, as x, y points */
@@ -237,11 +243,12 @@ function blit(ctx: CanvasRenderingContext2D, img: HTMLCanvasElement | undefined,
   ctx.drawImage(img, 0, 0);
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * (w / 2 - cam.cx * scale), dpr * (h / 2 - cam.cy * scale));
 }
+const roadLayers = (ov: Overlay): RoadLayers => ({ roads: ov.show.includes("roads"), lanes: ov.show.includes("lanes"), junctions: ov.show.includes("junctions") });
 function background(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, paths: PathCache, net: Network, ov: Overlay): Background {
   const { w, h, dpr } = cam, W = Math.max(1, Math.round(w * dpr)), H = Math.max(1, Math.round(h * dpr));
   const ul = ov.underlay?.u.visible && ov.underlay.img ? ov.underlay : null;
   const key = [cam.cx, cam.cy, cam.scale, W, H, dpr, idOf(paths), idOf(pal), ov.buildings ? idOf(net.buildings) : 0, ov.satellite ? idOf(net.geo) : 0,
-    ov.satBrightness ?? 1, ov.gridOn ? ov.snapStep : 0, ov.maskRoads ? 1 : 0,
+    ov.satBrightness ?? 1, ov.gridOn ? ov.snapStep : 0, ov.maskRoads ? 1 : 0, ov.show.join("+"),
     ul ? [idOf(ul.img), ul.u.x, ul.u.y, ul.u.rot, ul.u.mpp, ul.u.opacity, ul.u.w, ul.u.h].join(":") : 0].join(",");
   let bg = backgrounds.get(ctx);
   if (bg && bg.key === key && !bg.stale) return bg;
@@ -257,7 +264,7 @@ function background(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, pa
     const c = (b.layers[i] = b.layers[i]?.width === W && b.layers[i]?.height === H ? b.layers[i] : makeCanvas(W, H)), lg = c.getContext("2d")!;
     lg.setTransform(1, 0, 0, 1, 0, 0); lg.clearRect(0, 0, W, H);
     lg.setTransform(dpr * cam.scale, 0, 0, dpr * cam.scale, dpr * (w / 2 - cam.cx * cam.scale), dpr * (h / 2 - cam.cy * cam.scale));
-    paintLevel(lg, levels[i], pal, 1 / cam.scale, cam.scale);
+    paintLevel(lg, levels[i], pal, 1 / cam.scale, cam.scale, roadLayers(ov));
   }
   b.layers.length = Math.max(1, levels.length);
   return b;
@@ -290,7 +297,7 @@ function paintBase(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, pat
     ctx.drawImage(ul.img, -u.w / 2, -u.h / 2, u.w, u.h);
     ctx.restore();
   }
-  if (ov.buildings && net.buildings?.length) {
+  if (ov.buildings && ov.show.includes("buildings") && net.buildings?.length) {
     // over satellite imagery, footprints are see-through so the photo still shows
     if (ov.satellite && net.geo) ctx.globalAlpha = 0.4;
     drawBuildings(ctx, pal, net.buildings, px);
@@ -298,74 +305,57 @@ function paintBase(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, pat
   }
   if (ov.maskRoads) {
     // just the outline of each road, so what is underneath (imagery, reference image) shows
+    if (!ov.show.includes("roads")) return;
     ctx.strokeStyle = "#22d3ee"; ctx.globalAlpha = 0.85; ctx.lineWidth = px * 1.2; ctx.lineJoin = "round";
     for (const p of paths.linkPaths.values()) ctx.stroke(p);
     ctx.globalAlpha = 1;
   } else if (paths.layers.length) {
-    paintLevel(ctx, paths.layers[0], pal, px, scale);
+    paintLevel(ctx, paths.layers[0], pal, px, scale, roadLayers(ov));
   }
 }
-/** one level's roads, junctions and markings */
-function paintLevel(ctx: CanvasRenderingContext2D, c: LayerPaths, pal: Palette, px: number, scale: number) {
-  ctx.fillStyle = "rgba(0,0,0,0.28)"; ctx.fill(c.shadow, "nonzero");
+/** one level's roads, junctions and markings (only the layers that are on) */
+function paintLevel(ctx: CanvasRenderingContext2D, c: LayerPaths, pal: Palette, px: number, scale: number, show: RoadLayers) {
+  const { roads: R, lanes: Ln, junctions: J } = show;
+  if (!R && !Ln && !J) return;
+  if (R || J) { ctx.fillStyle = "rgba(0,0,0,0.28)"; ctx.fill(c.shadow, "nonzero"); }
   // below ground (tunnels, underpasses): faded
   const a0 = c.level < 0 ? 0.55 : 1;
   ctx.globalAlpha = a0;
-  ctx.fillStyle = pal.curb; ctx.fill(c.curb, "nonzero");
-  ctx.fillStyle = pal.asphalt; ctx.fill(c.asphalt, "nonzero");
-  ctx.fillStyle = pal.bus; ctx.fill(c.bus);
-  ctx.fillStyle = pal.island; ctx.fill(c.island);
-  ctx.strokeStyle = pal.curb; ctx.lineWidth = 0.6; ctx.stroke(c.islandEdge);
+  ctx.fillStyle = pal.curb; if (R) ctx.fill(c.curb, "nonzero"); if (J) ctx.fill(c.jCurb, "nonzero");
+  ctx.fillStyle = pal.asphalt; if (R) ctx.fill(c.asphalt, "nonzero"); if (J) ctx.fill(c.jAsphalt, "nonzero");
+  if (Ln) { ctx.fillStyle = pal.bus; ctx.fill(c.bus); }
+  ctx.fillStyle = pal.island; if (R) ctx.fill(c.island); if (J) ctx.fill(c.jIsland);
+  ctx.strokeStyle = pal.curb; ctx.lineWidth = 0.6; if (R) ctx.stroke(c.islandEdge); if (J) ctx.stroke(c.jIslandEdge);
   ctx.lineCap = "butt";
-  ctx.strokeStyle = pal.mark; ctx.lineWidth = Math.max(0.15, px * 1); ctx.setLineDash([3, 4]); ctx.stroke(c.laneDash);
-  ctx.setLineDash([]); ctx.lineWidth = Math.max(0.2, px * 1.2); ctx.stroke(c.laneSolid);
-  ctx.strokeStyle = pal.divider; ctx.lineWidth = Math.max(0.15, px * 1); ctx.setLineDash([3, 4]); ctx.stroke(c.centerDash);
-  ctx.setLineDash([]); ctx.stroke(c.centerSolid);
-  ctx.strokeStyle = pal.mark; ctx.globalAlpha = 0.75 * a0; ctx.lineWidth = Math.max(0.12, px * 0.8); ctx.stroke(c.hatch); ctx.globalAlpha = a0;
-  if (scale > 1.2) {
-    ctx.fillStyle = pal.mark; ctx.globalAlpha = 0.85 * a0; ctx.fill(c.zebra);
-    ctx.globalAlpha = 0.55 * a0; ctx.lineWidth = Math.max(0.12, px * 0.8); ctx.setLineDash([1, 1.6]); ctx.stroke(c.guide); ctx.setLineDash([]); ctx.globalAlpha = a0;
+  if (Ln) {
+    ctx.strokeStyle = pal.mark; ctx.lineWidth = Math.max(0.15, px * 1); ctx.setLineDash([3, 4]); ctx.stroke(c.laneDash);
+    ctx.setLineDash([]); ctx.lineWidth = Math.max(0.2, px * 1.2); ctx.stroke(c.laneSolid);
   }
-  ctx.strokeStyle = pal.mark; ctx.lineWidth = 0.5; ctx.stroke(c.stopLine);
-  ctx.setLineDash([0.9, 0.7]); ctx.stroke(c.yieldLine); ctx.setLineDash([]);
-  if (scale > 1) { ctx.lineWidth = Math.max(0.22, px * 1.1); ctx.lineJoin = "round"; ctx.stroke(c.arrows); }
+  if (R) {
+    ctx.strokeStyle = pal.divider; ctx.lineWidth = Math.max(0.15, px * 1); ctx.setLineDash([3, 4]); ctx.stroke(c.centerDash);
+    ctx.setLineDash([]); ctx.stroke(c.centerSolid);
+    ctx.strokeStyle = pal.mark; ctx.globalAlpha = 0.75 * a0; ctx.lineWidth = Math.max(0.12, px * 0.8); ctx.stroke(c.hatch); ctx.globalAlpha = a0;
+  }
+  if (J) {
+    if (scale > 1.2) {
+      ctx.fillStyle = pal.mark; ctx.globalAlpha = 0.85 * a0; ctx.fill(c.zebra);
+      ctx.strokeStyle = pal.mark; ctx.globalAlpha = 0.55 * a0; ctx.lineWidth = Math.max(0.12, px * 0.8); ctx.setLineDash([1, 1.6]); ctx.stroke(c.guide); ctx.setLineDash([]); ctx.globalAlpha = a0;
+    }
+    ctx.strokeStyle = pal.mark; ctx.lineWidth = 0.5; ctx.stroke(c.stopLine);
+    ctx.setLineDash([0.9, 0.7]); ctx.stroke(c.yieldLine); ctx.setLineDash([]);
+  }
+  if (Ln && scale > 1) { ctx.strokeStyle = pal.mark; ctx.lineWidth = Math.max(0.22, px * 1.1); ctx.lineJoin = "round"; ctx.stroke(c.arrows); }
   ctx.globalAlpha = 1;
 }
 
-/** what a reversible corridor's lane sign shows to direction `d` (1, 2) at gantry `k` of that direction's way along it */
-export type LaneSign = "open" | "closed" | "leave";
-export function revSign(state: number | undefined, d: 1 | 2, entry: boolean): LaneSign {
-  const open = d === 1 ? 1 : 3;
-  if (state === open) return "open";
-  // closing: the entry gantry tells drivers to move over; further on it shows closed (as in the brief)
-  if (state === open + 1) return entry ? "leave" : "closed";
-  return "closed";
-}
-/** gantries along a reversible corridor's roads, in each direction: at the start of each road and every 400 m */
-const GANTRY_EVERY = 400;
 /**
  * LED lane signs over each lane of a reversible corridor's roads, for each direction: a green arrow
  * (open), a red X (closed) or a yellow arrow slanting toward the lane beside (move over: closing).
- * The fixed lanes always show green; the middle lane follows the corridor's state.
  */
-function drawLaneSigns(ctx: CanvasRenderingContext2D, pal: Palette, compiled: Compiled, sim: Sim | null, px: number) {
-  const S = 2.2; // sign size (m; a lane is about 3.2 m wide)
-  for (const c of compiled.corridors) {
-    const state = sim?.rev[c.idx]?.state;
-    for (const d of [1, 2] as const) {
-      c.edges[d - 1].forEach((e, ei) => {
-        const L = e.lanes[1]?.len ?? e.length;
-        const at: number[] = [];
-        for (let s = Math.min(6, L * 0.15); s < L - 10 || at.length === 0; s += GANTRY_EVERY) at.push(s);
-        at.forEach((s0, gi) => {
-          for (const lp of e.lanes) {
-            const s = s0 * (lp.len / Math.max(1e-6, L)), p = lp.poly.at(s), t = lp.poly.tangent(s);
-            const sign: LaneSign = lp.lane === 0 && e.rev ? (sim ? revSign(state, d, ei === 0 && gi === 0) : "closed") : "open";
-            drawLaneSign(ctx, pal, p, t, sign, S, px);
-          }
-        });
-      });
-    }
+function drawLaneSigns(ctx: CanvasRenderingContext2D, pal: Palette, geo: RoadGeo, sim: Sim | null, px: number) {
+  for (const g of geo.gantries) {
+    const state = sim?.rev[g.corr]?.state;
+    for (const s of g.signs) drawLaneSign(ctx, pal, s.p, g.dir, laneSign(state, g.cdir, g.entry, s.rev), 2.2, px);
   }
 }
 function drawLaneSign(ctx: CanvasRenderingContext2D, pal: Palette, p: Vec, t: Vec, sign: LaneSign, S: number, px: number) {
@@ -397,6 +387,8 @@ export function drawScene(
   net: Network, compiled: Compiled, sim: Sim | null, ov: Overlay,
 ) {
   const { w, h, dpr, scale } = cam;
+  /** is this layer on (drawn) */
+  const on = (l: string) => ov.show.includes(l), showVehicles = !!sim && on("vehicles");
   // everything that doesn't move comes from cached images, redrawn only when the view or the plan changes
   const bg = background(ctx, cam, pal, paths, net, ov);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -419,14 +411,14 @@ export function drawScene(
     paths.layers.forEach((c, i) => {
       if (i > 0) blit(ctx, bg.layers[i], dpr, scale, w, h, cam);
       const a0 = c.level < 0 ? 0.55 : 1;
-      if (sim) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo && v.level <= c.level, a0, view); }
+      if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo && v.level <= c.level, a0, view); }
       prev = c.level;
     });
-    if (sim) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo, 1, view); }
+    if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo, 1, view); }
   }
 
   const allConnectors = ov.connectors || ov.highlight.includes("connectors");
-  if (allConnectors || ov.focusNodes?.length) {
+  if ((allConnectors || ov.focusNodes?.length) && on("connectors")) {
     const focus = allConnectors ? null : new Set(ov.focusNodes);
     const list = focus ? connectorsOf(compiled).filter(c => focus.has(c.node.idx)) : connectorsOf(compiled);
     ctx.strokeStyle = "#e8c547"; ctx.globalAlpha = 0.9; ctx.lineWidth = Math.max(0.18, px * 1.2); ctx.lineCap = "round";
@@ -481,7 +473,7 @@ export function drawScene(
 
   // reservations and selected vehicle route
   if (sim) {
-    if (ov.reservations) {
+    if (ov.reservations && on("junctions")) {
       ctx.strokeStyle = pal.select; ctx.globalAlpha = 0.5; ctx.lineWidth = 1.1; ctx.lineCap = "round";
       for (const pts of sim.reservations()) {
         ctx.beginPath(); ctx.moveTo(pts[0], pts[1]);
@@ -499,7 +491,7 @@ export function drawScene(
       ctx.setLineDash([]);
       }
     }
-    if (ov.maskRoads) drawVehicles(ctx, pal, sim, ov.bySpeed, px);
+    if (ov.maskRoads && showVehicles) drawVehicles(ctx, pal, sim, ov.bySpeed, px);
     if (sv) {
       const q = sim.pose(sv);
       ctx.strokeStyle = pal.select; ctx.lineWidth = px * 2;
@@ -508,7 +500,7 @@ export function drawScene(
   }
 
   // pedestrians: walking across the zebra, or waiting at the kerb
-  if (sim && scale > 1.2) for (const n of compiled.nodes) {
+  if (showVehicles && sim && scale > 1.2) for (const n of compiled.nodes) {
     if (!n.peds) continue;
     for (const p of sim.pedView(n.idx)) {
       const a = n.degree === 2 ? n.arms[0] : n.arms[p.arm];
@@ -527,7 +519,7 @@ export function drawScene(
   }
 
   // signals & stop signs
-  for (const s of geo.signals) {
+  if (on("signals")) for (const s of geo.signals) {
     if (s.kind === "lights") {
       const st = sim ? sim.signalFor(s.nodeIdx, s.arm, s.lane) : null;
       // per-lane heads (custom phases) sit on the lane, just before the stop line, and are smaller
@@ -550,10 +542,10 @@ export function drawScene(
   }
 
   // reversible lanes: the lane signs on their gantries
-  if (compiled.corridors.length && scale > 1.2) drawLaneSigns(ctx, pal, compiled, sim, px);
+  if (geo.gantries.length && scale > 1.2 && on("signals")) drawLaneSigns(ctx, pal, geo, sim, px);
 
   // bus stops
-  for (const s of geo.stops) {
+  if (on("stops")) for (const s of geo.stops) {
     const sel = ov.selection?.kind === "stop" && ov.selection.id === s.id;
     ctx.save(); ctx.translate(s.p.x, s.p.y); ctx.rotate(Math.atan2(s.dir.y, s.dir.x));
     ctx.fillStyle = s.color; ctx.fillRect(-2.2, -0.9, 4.4, 1.8);
@@ -564,8 +556,8 @@ export function drawScene(
   // ---- screen-space overlays ----
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (ul && (ul.editing || (ul.u.visible && !ul.img))) drawUnderlayFrame(ctx, cam, pal, ul.u, ul.editing && !ul.u.locked, ul.hover);
-  if (ov.junctions) drawJunctionTags(ctx, cam, pal, compiled, sim);
-  drawCounters(ctx, cam, pal, net, compiled, sim);
+  if (ov.junctions && on("junctions")) drawJunctionTags(ctx, cam, pal, compiled, sim);
+  if (on("counters")) drawCounters(ctx, cam, pal, net, compiled, sim);
   if (ov.highlight.includes("lanes")) drawLaneIds(ctx, cam, pal, compiled);
   if (ov.selection) drawSelectionIds(ctx, cam, pal, geo, net, compiled, sim, ov.selection, ov.alsoSelected);
   if (ov.selection?.kind === "node") drawFlows(ctx, cam, pal, net, ov.selection.id);
@@ -580,8 +572,8 @@ export function drawScene(
       ctx.beginPath(); ctx.arc(q.x, q.y, 11, 0, Math.PI * 2); ctx.stroke();
     }
   }
-  if (ov.labels && !ov.maskRoads && scale > 0.35) drawStreetNames(ctx, cam, pal, geo, net);
-  if (ov.labels && scale > 1.1) {
+  if (ov.labels && !ov.maskRoads && scale > 0.35 && on("roads")) drawStreetNames(ctx, cam, pal, geo, net);
+  if (ov.labels && scale > 1.1 && on("stops")) {
     ctx.font = `500 11px ${pal.sans}`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
     for (const s of geo.stops) {
       const q = toScreen(cam, s.p.x, s.p.y);
@@ -597,6 +589,8 @@ export function drawScene(
       if (q.x < -20 || q.y < -20 || q.x > w + 20 || q.y > h + 20) continue;
       const selected = sel?.kind === "node" && sel.id === n.id, hovered = ov.hover?.kind === "node" && ov.hover.id === n.id;
       const cn = compiled.nodeById.get(n.id);
+      // (road ends and joints with the roads; junctions and entry points with their own layers)
+      if (!selected && !on("roads") && !(cn && ((on("junctions") && cn.controlled && cn.degree >= 2) || (on("entries") && cn.gateway)))) continue;
       const r = selected || hovered ? 6 : 4.5;
       ctx.lineWidth = 1.5;
       ctx.fillStyle = selected ? pal.select : pal.bg;
@@ -611,22 +605,22 @@ export function drawScene(
     if (n) { const q = toScreen(cam, n.x, n.y); ctx.strokeStyle = pal.select; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(q.x, q.y, 11, 0, Math.PI * 2); ctx.stroke(); }
   }
   if (sel?.kind === "link") {
-  if (ov.laneEnds?.length && !ov.connectPick) {
-    ctx.lineWidth = 1.5; ctx.strokeStyle = pal.select; ctx.fillStyle = "#ffffff";
-    for (const e of ov.laneEnds) { const q = toScreen(cam, e.x, e.y); ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
-  }
     const l = net.links.find(x => x.id === sel.id);
     if (l) drawLinkHandles(ctx, cam, pal, net, l, ov.hover?.kind === "handle" ? ov.hover.id : null);
   }
   // drawing a lane connector: the lanes it may end in, and a line from its start to the pointer
+  if (ov.laneEnds?.length && !ov.connectPick) {
+    ctx.lineWidth = 1.5; ctx.strokeStyle = pal.select; ctx.fillStyle = "#ffffff";
+    for (const e of ov.laneEnds) { const q = toScreen(cam, e.x, e.y); ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+  }
   if (ov.connectPick) {
     const cp = ov.connectPick;
     ctx.strokeStyle = pal.select; ctx.lineWidth = 3; ctx.globalAlpha = 0.55; ctx.lineCap = "round";
+    for (const pts of cp.targets) { ctx.beginPath(); for (let k = 0; k < pts.length; k += 2) { const q = toScreen(cam, pts[k], pts[k + 1]); if (k) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); } ctx.stroke(); }
+    ctx.globalAlpha = 1;
     // where it can attach: a ring at each lane end, the one it would snap to filled
     ctx.lineWidth = 2;
     for (const e of cp.ends ?? []) { const q = toScreen(cam, e.x, e.y); ctx.fillStyle = "#ffffff"; ctx.strokeStyle = pal.select; ctx.beginPath(); ctx.arc(q.x, q.y, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
-    for (const pts of cp.targets) { ctx.beginPath(); for (let k = 0; k < pts.length; k += 2) { const q = toScreen(cam, pts[k], pts[k + 1]); if (k) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); } ctx.stroke(); }
-    ctx.globalAlpha = 1;
     const a = toScreen(cam, cp.from.x, cp.from.y);
     ctx.fillStyle = pal.select; ctx.beginPath(); ctx.arc(a.x, a.y, 5, 0, Math.PI * 2); ctx.fill();
     const to = cp.snap ?? cp.cursor;

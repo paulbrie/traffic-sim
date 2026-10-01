@@ -14,10 +14,16 @@ const CLEAR_MIN = 3;
  * closed for the corridor's gap before opening either way.
  */
 export abstract class SimReversible extends SimSignals {
-  /** set what a corridor's lane should be, overriding its mode ("auto" hands back to the mode) */
+  /**
+   * Set what a corridor's lane should be, overriding its mode ("auto" hands back to the mode). The page
+   * does this through the plan's settings (PlanSettings.revHold), so it is kept with the plan.
+   */
   reversibleCommand(idx: number, cmd: "closed" | "1" | "2" | "auto") {
-    const st = this.revs[idx];
-    if (st) st.hold = cmd === "auto" ? null : cmd;
+    const c = this.net.corridors[idx];
+    if (!c) return;
+    const hold = { ...(this.settings.revHold ?? {}) };
+    if (cmd === "auto") delete hold[c.def.id]; else hold[c.def.id] = cmd;
+    this.settings = { ...this.settings, revHold: hold };
   }
   /** a corridor's state for the page: code (see REV_STATES), seconds in it, vehicles in the lane, density each way, set by hand */
   reversibleState(idx: number) {
@@ -29,6 +35,7 @@ export abstract class SimReversible extends SimSignals {
     const cs = this.net.corridors;
     for (let i = 0; i < cs.length; i++) {
       const c = cs[i], st = this.revs[i], t = (this.tick - st.since) * DT;
+      st.hold = this.settings.revHold?.[c.def.id] ?? null;
       if (c.def.mode === "dynamic" && this.tick % 50 === 0) st.density = [this.density(c, 1), this.density(c, 2)];
       if (st.state === 2 || st.state === 4) {
         // clearing: done once nobody is left in the lane

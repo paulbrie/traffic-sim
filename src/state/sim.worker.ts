@@ -18,7 +18,6 @@ export type ToWorker =
   | { type: "log"; all: boolean; nodes: string[]; links: string[]; vehicles: number[] }
   | { type: "watch"; watch: Watch }
   | { type: "clearEvents" }
-  | { type: "reversible"; idx: number; cmd: "closed" | "1" | "2" | "auto" }
   | { type: "test"; from: string; to: string; lane: number | null; req: number }
   | { type: "replay"; tick: number; req: number }
   | { type: "record"; on: boolean };
@@ -73,7 +72,6 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     case "log": log = { all: m.all, nodes: m.nodes, links: m.links, vehicles: m.vehicles }; applyLog(); break;
     case "watch": watch = m.watch; dirty = true; break;
     case "clearEvents": if (sim) { sim.events.length = 0; writer.reset(); dirty = true; } break;
-    case "reversible": if (sim) { sim.reversibleCommand(m.idx, m.cmd); dirty = true; } break;
     case "test": {
       if (!sim) startSim();
       const result = sim ? sim.sendTest(m.from, m.to, m.lane ?? undefined) : { error: "The simulation isn't ready." };

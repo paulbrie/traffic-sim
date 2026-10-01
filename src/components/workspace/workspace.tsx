@@ -187,7 +187,7 @@ export function toggleAllLayers() {
   u.layers = allLayersOn(u.layers) ? [] : LAYERS.map(l => l.id);
 }
 
-/** which kinds of object the map selects (any combination; highlighted once narrowed to a few), and the data table */
+/** which kinds of object the map shows and selects (any combination; highlighted once narrowed to a few), and the data table */
 function LayerPicker() {
   const [layers] = useDeepSubject(ui, "layers");
   const [dataview, setDataview] = useDeepSubject(ui, "dataview");
@@ -201,7 +201,7 @@ function LayerPicker() {
     <div className="flex items-center gap-1.5">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="h-8 w-44 justify-start font-normal" aria-label={`Layers: what the map selects (${label})`}>
+          <Button variant="outline" size="sm" className="h-8 w-44 justify-start font-normal" aria-label={`Layers: what the map shows and selects (${label})`}>
             <Layers className="size-3.5 text-muted-foreground" />
             <span className="flex-1 text-left">{label}</span>
             <ChevronDown className="size-4 opacity-50" />
@@ -230,7 +230,7 @@ function LayerPicker() {
           </DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
           <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
-            Clicks on the map select objects of the layers that are on. With {LAYER_HIGHLIGHT_MAX} or fewer on, their objects are highlighted too.
+            Only the layers that are on are drawn, and clicks on the map select their objects. With {LAYER_HIGHLIGHT_MAX} or fewer on, their objects are highlighted too.
           </DropdownMenuLabel>
         </DropdownMenuContent>
       </DropdownMenu>

@@ -6,7 +6,11 @@
  */
 import { pieceLevel, pieceZ } from "../compile";
 import type { Sim } from "./index";
-import type { Snapshot } from "./mirror";
+import type { RevView, Snapshot } from "./mirror";
+import { DT, type RevStateCode } from "./base";
+
+/** a reversible lane set by hand, as stored in a frame (0 = not) */
+const HOLDS = [null, "closed", "1", "2"] as const;
 
 const KINDS = ["car", "truck", "bus"] as const;
 const G = 11;
@@ -34,17 +38,19 @@ export class Recorder {
 
   /** keep the current step */
   record(sim: Sim) {
-    const vs = sim.vehicles, N = sim.net.nodes.length;
+    const vs = sim.vehicles, N = sim.net.nodes.length, C = sim.net.corridors.length;
     let n = 0;
     for (let i = 0; i < vs.length; i++) if (!vs[i].dead) n++;
     // (heights only matter on plans with bridges or tunnels)
     if (this.flat === null || this.flatNet !== sim.net) { this.flatNet = sim.net; this.flat = sim.net.nodes.every(nd => nd.level === 0) && sim.net.edges.every(e => !e.link.level); }
     // layout: 4-byte fields, then 2-byte, then 1-byte (so every view is aligned)
-    const size = n * 4 + n * 8 + n * 2 + N * 2 + n * 7 + N;
+    // (reversible corridors: the tick their state began; then state + set by hand, vehicles in the lane, density each way)
+    const size = n * 4 + n * 8 + C * 4 + n * 2 + N * 2 + n * 7 + N + C * 4;
     const buf = new ArrayBuffer(Math.ceil(size / 4) * 4);
     let o = 0;
     const ids = new Int32Array(buf, o, n); o += n * 4;
     const xy = new Float32Array(buf, o, n * 2); o += n * 8;
+    const rs = new Int32Array(buf, o, C); o += C * 4;
     const hd = new Int16Array(buf, o, n); o += n * 2;
     const ph = new Int16Array(buf, o, N); o += N * 2;
     const vv = new Uint8Array(buf, o, n); o += n;
@@ -54,7 +60,14 @@ export class Recorder {
     const zz = new Int8Array(buf, o, n); o += n;
     const st = new Uint8Array(buf, o, n); o += n;
     const cl = new Uint8Array(buf, o, n); o += n;
-    const sg = new Int8Array(buf, o, N);
+    const sg = new Int8Array(buf, o, N); o += N;
+    const rv = new Uint8Array(buf, o, C * 4);
+    for (let k = 0; k < C; k++) {
+      const r = sim.reversibleState(k)!;
+      rs[k] = Math.round(sim.tick - r.t / DT);
+      rv[k * 4] = r.state | (HOLDS.indexOf(r.hold) << 4); rv[k * 4 + 1] = Math.min(255, r.inside);
+      rv[k * 4 + 2] = Math.min(255, Math.round(r.density[0])); rv[k * 4 + 3] = Math.min(255, Math.round(r.density[1]));
+    }
     const flat = this.flat;
     for (let j = 0, i = 0; j < vs.length; j++) {
       const v = vs[j];
@@ -93,10 +106,11 @@ export class Recorder {
     let lo = this.head, hi = this.frames.length - 1;
     if (tick <= this.frames[lo].tick) hi = lo;
     while (lo < hi) { const m = (lo + hi + 1) >> 1; if (this.frames[m].tick <= tick) lo = m; else hi = m - 1; }
-    const f = this.frames[lo], n = f.n, N = sim.net.nodes.length, buf = f.buf;
+    const f = this.frames[lo], n = f.n, N = sim.net.nodes.length, C = sim.net.corridors.length, buf = f.buf;
     let o = 0;
     const ids = new Int32Array(buf, o, n); o += n * 4;
     const xy = new Float32Array(buf, o, n * 2); o += n * 8;
+    const rs = new Int32Array(buf, o, C); o += C * 4;
     const hd = new Int16Array(buf, o, n); o += n * 2;
     const ph = new Int16Array(buf, o, N); o += N * 2;
     const vv = new Uint8Array(buf, o, n); o += n;
@@ -106,7 +120,12 @@ export class Recorder {
     const zz = new Int8Array(buf, o, n); o += n;
     const st = new Uint8Array(buf, o, n); o += n;
     const cl = new Uint8Array(buf, o, n); o += n;
-    const sg = new Int8Array(buf, o, N);
+    const sg = new Int8Array(buf, o, N); o += N;
+    const rv = new Uint8Array(buf, o, C * 4);
+    const rev: RevView[] = Array.from({ length: C }, (_, k) => ({
+      state: (rv[k * 4] & 15) as RevStateCode, hold: HOLDS[rv[k * 4] >> 4] ?? null, t: (f.tick - rs[k]) * DT,
+      inside: rv[k * 4 + 1], density: [rv[k * 4 + 2], rv[k * 4 + 3]] as [number, number],
+    }));
     const outIds = Int32Array.from(ids), kinds = new Uint8Array(n), tints = new Uint8Array(n), states = Uint16Array.from(st), geo = new Float32Array(n * G);
     let cars = 0, trucks = 0, buses = 0;
     for (let i = 0; i < n; i++) {
@@ -124,6 +143,7 @@ export class Recorder {
       ids: outIds, kinds, tints, states, stateNames: this.stateNames.slice(), geo,
       phase: Int16Array.from(ph), stage: Int8Array.from(sg), stageT: new Float32Array(N), occupied: new Int16Array(N), cycleAt: new Float32Array(N).fill(NaN),
       waiting: Float32Array.from(sim.net.stops, s => s.waiting), events: [], resetEvents: false, peds: [],
+      ...(C ? { rev } : {}),
     };
   }
 }

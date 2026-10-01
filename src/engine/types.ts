@@ -401,6 +401,11 @@ export interface PlanSettings {
   through?: number | null;
   /** tuned simulation parameters (only those that differ from the defaults; see params.ts) */
   params?: Partial<SimParams>;
+  /**
+   * Reversible lanes set by hand, by corridor (ReversibleDef id): what each should be, overriding the
+   * corridor's mode until handed back. Kept with the plan, so a restart or a reload keeps them.
+   */
+  revHold?: Record<string, "closed" | "1" | "2">;
 }
 
 export const DEFAULT_SIGNAL: SignalTiming = { green: 18, yellow: 3, allRed: 2, minGreen: 6, actuated: true };
