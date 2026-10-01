@@ -1,4 +1,5 @@
 import { Sim, sampleTown, compile, connectorPreview, exitLane, connectionIssues, alignableNodes, measureRun, optimizeSignals } from "../src/engine";
+import { Poly } from "../src/engine/geom";
 import { makeLink, makeNode } from "../src/engine/sample";
 import { isJunction } from "../src/engine/refs";
 import * as mirrorModule from "../src/engine/sim/mirror";
@@ -671,5 +672,21 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const moves = c.nodeById.get(J.id)!.moves.get(c.edgeByKey.get(`${wj.id}:1`)!.idx) ?? [];
   const ok = moves.length === 1 && moves[0].out.link.id === js.id && !c.warnings.some(w => /lane arrows/.test(w));
   console.log(`arrows ahead on a merge: ${moves.map(m => `${m.turn} to ${m.out.link.id === js.id ? "south" : "north"}`).join(", ")}; warnings ${c.warnings.length} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// a lane beside a curved road keeps its direction to its very end: a cut a hair from a vertex of the
+// centre line used to leave a near-zero segment that the offset turned around (a connector then looped back)
+{
+  const pts: number[] = [];
+  for (let k = 0; k <= 60; k++) { const t = (k / 60) * 1.2; pts.push(Math.sin(t) * 120, -Math.cos(t) * 120); }
+  const line = new Poly(pts), vertex = line.cum[50];
+  let worst = 1;
+  for (const gap of [0.005, 0.011, 0.015, 0.03, 0.1]) {
+    const lane = line.slice(0, vertex + gap).offset(8), t = lane.tangent(lane.len), c = line.tangent(vertex + gap);
+    worst = Math.min(worst, t.x * c.x + t.y * c.y);
+  }
+  const ok = worst > 0.99;
+  console.log(`lane end direction after a cut near a vertex: worst alignment ${worst.toFixed(3)} | ok ${ok}`);
   if (!ok) process.exit(1);
 }

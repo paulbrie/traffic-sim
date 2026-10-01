@@ -45,9 +45,9 @@ export class Poly {
     a = Math.max(0, Math.min(this.len, a)); b = Math.max(a, Math.min(this.len, b));
     const out: number[] = [];
     const pa = this.at(a); out.push(pa.x, pa.y);
-    // (no vertex within a centimetre of either end: a near-zero segment there would turn an offset of the
-    // line — a lane beside the centreline — around on a curve)
-    for (let k = 0; k < this.cum.length; k++) if (this.cum[k] > a + 0.01 && this.cum[k] < b - 0.01) out.push(this.pts[2 * k], this.pts[2 * k + 1]);
+    // (no vertex within 25 cm of either end: a near-zero segment there turns around when the line is
+    // offset — a lane beside the centreline — on a curve, and the lane would end pointing backwards)
+    for (let k = 0; k < this.cum.length; k++) if (this.cum[k] > a + 0.25 && this.cum[k] < b - 0.25) out.push(this.pts[2 * k], this.pts[2 * k + 1]);
     const pb = this.at(b); out.push(pb.x, pb.y);
     if (out.length === 2) out.push(pb.x + 1e-3, pb.y);
     return new Poly(out);
