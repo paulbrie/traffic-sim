@@ -34,6 +34,8 @@ import { LaneConnectionsSection } from "./lane-connections";
 import { JunctionShapeSection } from "./junction-shape";
 import { ReversibleSection } from "./reversible-lane";
 import { CarriagewaysSection } from "./carriageways";
+import { MultiSelection } from "./multi-selection";
+import { deleteSelected } from "@/state/bulk";
 import { resetApproach } from "@/state/connections";
 
 const CONTROL_LABEL: Record<Control, string> = { priority: "Priority (first come)", free: "Free (go when clear)", stop: "All-way stop", lights: "Traffic lights", roundabout: "Roundabout" };
@@ -41,8 +43,11 @@ const SPEEDS = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 130];
 
 export function Inspector() {
   const [sel] = useDeepSubject(ui, "selection");
+  const [extra] = useDeepSubject(ui, "extra");
   const [net] = useSubject(network$);
   if (!sel) return <PlanSummary net={net} />;
+  // several objects selected together (other than just roads, which keep the road inspector: merging…)
+  if (extra.length) return <MultiSelection />;
   if (sel.kind === "node") { const n = ops.nodeById(net, sel.id); return n ? <NodeInspector net={net} node={n} /> : <PlanSummary net={net} />; }
   if (sel.kind === "link") { const l = ops.linkById(net, sel.id); return l ? <LinkInspector net={net} link={l} /> : <PlanSummary net={net} />; }
   if (sel.kind === "stop") { const s = net.stops.find(x => x.id === sel.id); return s ? <StopInspector net={net} id={s.id} /> : <PlanSummary net={net} />; }
@@ -506,6 +511,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
           <div className="flex gap-2">
             <Button size="sm" className="flex-1" onClick={mergeSelectedRoads}><Merge /> Merge into one road <Kbd className="ml-1">M</Kbd></Button>
             <Button size="sm" variant="ghost" onClick={() => setMulti([])}>Clear</Button>
+            <Button size="sm" variant="ghost" className="text-destructive" title="Delete the selected roads (Del)" aria-label="Delete the selected roads" onClick={() => { commit(deleteSelected(net, [link.id, ...multi].map(id => ({ kind: "link" as const, id })))); select(null); }}><Trash2 /></Button>
           </div>
           {multi.length === 1 && (
             <Button size="sm" variant="outline" className="justify-start" onClick={smoothSelectedJoin} title="Make the two roads flow into each other where they meet, keeping them separate"><Spline /> Smooth the join between them <Kbd className="ml-1">S</Kbd></Button>

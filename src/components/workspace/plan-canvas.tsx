@@ -9,7 +9,7 @@ import { readPalette, type Palette } from "@/render/palette";
 import { connShapeKey, connectorHandles, connectorId, linkExtent, LW, type CNode, type Edge, type LanePiece } from "@/engine/compile";
 import { pointInPoly } from "@/engine/buildings";
 import type { Network, Vec } from "@/engine/types";
-import { commit, endGesture, highlightedLayers, network$, select, toggleRoad, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
+import { commit, endGesture, highlightedLayers, network$, select, selectMany, selectedAll, toggleSelect, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { noteDraw } from "@/state/perf";
 import { changeConnection, connectLanes, lanesArrivingNear, lanesLeavingNear, setConnectorShape } from "@/state/connections";
@@ -28,6 +28,7 @@ type Drag =
   | { mode: "conn"; id: string; which: "k1" | "k2" }
   | { mode: "connEnd"; id: string; which: "start" | "end" }
   | { mode: "connNew"; from: string; sx: number; sy: number; moved: boolean }
+  | { mode: "box"; a: Vec; b: Vec }
   | { mode: "outline"; node: string; idx: number }
   | { mode: "ul-move"; start: Vec; x0: number; y0: number }
   | { mode: "ul-rotate"; a0: number; rot0: number }
@@ -525,14 +526,34 @@ export function PlanCanvas() {
       if (le) { startConnect(le); drag = { mode: "connNew", from: le, sx, sy, moved: false }; return; }
       const pick = pickInLayers(u.layers, sx, sy, w);
       if (pick) {
-        // Shift+click: add the road to the selected roads (or take it out)
-        if (pick.kind === "link" && e.shiftKey && u.selection?.kind === "link") toggleRoad(pick.id); else select(pick);
+        // Shift+click: add it to what is selected (or take it out): roads, points, stops, buildings, connectors…
+        if (e.shiftKey) { toggleSelect(pick); if (pick.kind === "node") return; } else select(pick);
         // junctions and points can be dragged; buildings, lanes and connectors cover so much of the map that a drag from them pans
         if (pick.kind === "node") drag = { mode: "node", id: pick.id, moved: false, sx, sy };
         else if (pick.kind === "building" || pick.kind === "lane" || pick.kind === "connector") drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: false };
         return;
       }
+      // Shift+drag on the empty map: a box, selecting what is in it
+      if (e.shiftKey && tool === "select") { drag = { mode: "box", a: w, b: w }; return; }
       drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: true };
+    }
+    /** what a selection box from `a` to `b` takes in (among the layers that are on): whole roads, points, stops, buildings */
+    function inBox(a: Vec, b: Vec): Selection[] {
+      const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+      const inside = (p: Vec) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1, on = (l: LayerId) => u.layers.includes(l);
+      const c = simController.compiled, out: Selection[] = [];
+      if (on("roads")) for (const l of net.links) {
+        const A = ops.nodeById(net, l.from), B = ops.nodeById(net, l.to), mid = c.linkCenters.get(l.id)?.at((c.linkCenters.get(l.id)?.len ?? 0) / 2);
+        if (A && B && inside(A) && inside(B) && (!mid || inside(mid))) out.push({ kind: "link", id: l.id });
+      }
+      for (const n of net.nodes) {
+        const cn = c.nodeById.get(n.id);
+        const ok = on("roads") || (cn && ((on("junctions") && cn.controlled && cn.degree >= 2) || (on("entries") && cn.gateway)));
+        if (ok && inside(n)) out.push({ kind: "node", id: n.id });
+      }
+      if (on("stops") && geo) for (const s of geo.stops) if (inside(s.p)) out.push({ kind: "stop", id: s.id });
+      if (on("buildings")) for (const bd of net.buildings ?? []) if (bd.pts.every(inside)) out.push({ kind: "building", id: bd.id });
+      return out;
     }
 
     function onPointerMove(e: PointerEvent) {
@@ -584,6 +605,7 @@ export function PlanCanvas() {
       }
       if (drag?.mode === "connEnd") { markDirty(); return; }
       if (drag?.mode === "connNew") { if (Math.hypot(sx - drag.sx, sy - drag.sy) > 4) drag.moved = true; markDirty(); return; }
+      if (drag?.mode === "box") { drag.b = w; markDirty(); return; }
       if (drag?.mode === "conn") {
         const d = drag, v = connectorsOf(simController.compiled).find(x => connectorId(x) === d.id);
         if (!v) return;
@@ -636,6 +658,15 @@ export function PlanCanvas() {
 
     function onPointerUp(e: PointerEvent) {
       try { canvas.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+      // a selection box: what is in it joins what was selected
+      if (drag?.mode === "box") {
+        const d = drag;
+        drag = null;
+        const found = inBox(d.a, d.b);
+        if (found.length) selectMany([...selectedAll(), ...found]);
+        markDirty();
+        return;
+      }
       // a connector drawn from a lane's end, dropped on a lane: made (a plain click keeps picking lanes)
       if (drag?.mode === "connNew") {
         const d = drag;
@@ -803,6 +834,17 @@ export function PlanCanvas() {
           buildings: u.display.buildings,
           satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, highlight: highlightedLayers(u.layers), show: u.layers, maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
           focusNodes: focusNodes(),
+          box: drag?.mode === "box" ? { a: drag.a, b: drag.b } : null,
+          group: u.extra.length ? (() => {
+            const c = simController.compiled, ex = u.extra;
+            return {
+              links: ex.filter(x => x.kind === "link").map(x => x.id),
+              nodes: ex.flatMap(x => { const n = x.kind === "node" ? ops.nodeById(net, x.id) : null; return n ? [{ x: n.x, y: n.y }] : []; }),
+              stops: ex.flatMap(x => { const st = x.kind === "stop" ? geo?.stops.find(q => q.id === x.id) : null; return st ? [st.p] : []; }),
+              buildings: ex.flatMap(x => { const bd = x.kind === "building" ? net.buildings?.find(q => q.id === x.id) : null; return bd ? [bd.pts] : []; }),
+              connectors: ex.flatMap(x => { const v = x.kind === "connector" ? connectorsOf(c).find(q => connectorId(q) === x.id) : null; return v ? [v.pts] : []; }),
+            };
+          })() : null,
           // (the junction being edited, zoomed in: its lanes' ends, where a connector can be started)
           laneEnds: lanesAimable() ? focusNodes().flatMap(i => simController.compiled.nodes[i].arms.flatMap(a => a.inEdge?.lanes.map(lp => laneEndGrip(a.inEdge!, lp)) ?? [])) : [],
           connectPick: (() => {

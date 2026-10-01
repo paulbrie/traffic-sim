@@ -155,6 +155,10 @@ export interface Overlay {
   focusNodes?: readonly number[];
   /** lane ends a connector can be started from (click or drag from them), marked when zoomed in */
   laneEnds?: readonly Vec[];
+  /** a selection box being dragged (Shift+drag), world coordinates */
+  box?: { a: Vec; b: Vec } | null;
+  /** more objects selected with the main selection (Shift+click, a box): highlighted like it */
+  group?: { links: readonly string[]; nodes: readonly Vec[]; stops: readonly Vec[]; buildings: readonly (readonly Vec[])[]; connectors: readonly ArrayLike<number>[] } | null;
   /** layers whose objects are highlighted (lane outlines, connectors, rings around junctions…) */
   highlight: readonly string[];
   /** layers that are on: only their objects are drawn (see LAYERS; none = just the background) */
@@ -453,6 +457,24 @@ export function drawScene(
   if (ov.selection?.kind === "building") {
     const b = net.buildings?.find(x => x.id === ov.selection!.id);
     if (b) drawBuildingSelection(ctx, pal, compiled, b, px);
+  }
+
+  // more objects selected with it
+  if (ov.group) {
+    const g = ov.group;
+    ctx.strokeStyle = pal.select; ctx.fillStyle = pal.select;
+    for (const id of g.links) { const p = paths.linkPaths.get(id); if (p) { ctx.lineWidth = px * 3; ctx.stroke(p); ctx.globalAlpha = 0.12; ctx.fill(p); ctx.globalAlpha = 1; } }
+    ctx.lineWidth = Math.max(1, px * 4); ctx.lineCap = "round";
+    for (const c of g.connectors) strokePts(ctx, c);
+    ctx.lineWidth = px * 2.5;
+    for (const pts of g.buildings) { ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke(); ctx.globalAlpha = 0.15; ctx.fill(); ctx.globalAlpha = 1; }
+    for (const q of [...g.nodes, ...g.stops]) { ctx.beginPath(); ctx.arc(q.x, q.y, Math.max(2.5, px * 9), 0, Math.PI * 2); ctx.stroke(); }
+  }
+  if (ov.box) {
+    const a = ov.box.a, b = ov.box.b;
+    ctx.strokeStyle = pal.select; ctx.lineWidth = px * 1.5; ctx.setLineDash([px * 6, px * 4]);
+    ctx.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y)); ctx.setLineDash([]);
+    ctx.fillStyle = pal.select; ctx.globalAlpha = 0.08; ctx.fillRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y)); ctx.globalAlpha = 1;
   }
 
   // the highlighted layers' objects, and a selected lane or connector

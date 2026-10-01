@@ -50,6 +50,8 @@ export interface UiState {
   draft: { lanesF: number; lanesB: number; busF: boolean; busB: boolean; speed: number; curved: boolean };
   /** more roads selected with the one in `selection` (Shift+click), e.g. to merge them */
   multi: string[];
+  /** more objects of any kind selected with it (Shift+click, Shift+drag a box), e.g. to delete them together */
+  extra: Selection[];
   /** route tracer: from an entry point to an exit, starting in an entry lane (null = the kerb-side one) */
   trace: { from: string | null; to: string | null; lane: number | null };
   display: { bySpeed: boolean; reservations: boolean; labels: boolean; buildings: boolean; junctions: boolean; satellite: boolean; connectors: boolean; maskRoads: boolean; /** satellite imagery brightness (0.3–1) */ satBrightness: number; /** the CPU / memory load panel */ perf: boolean };
@@ -90,6 +92,7 @@ export const ui = new DeepSubject<UiState>(
     draft: { lanesF: 1, lanesB: 1, busF: false, busB: false, speed: 50, curved: false },
     trace: { from: null, to: null, lane: null },
     multi: [],
+    extra: [],
     display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85, perf: false },
     sim: { running: false, speed: 3, epoch: 0 },
     save: { status: "saved", revision: 1, savedAt: null, message: "" },
@@ -222,7 +225,7 @@ export function select(sel: Selection | null) {
   const cur = u.selection;
   if (cur === sel || (cur && sel && cur.kind === sel.kind && cur.id === sel.id)) return;
   batch(() => {
-    u.selection = sel ? { ...sel } : null; if (u.multi.length) u.multi = [];
+    u.selection = sel ? { ...sel } : null; if (u.multi.length) u.multi = []; if (u.extra.length) u.extra = [];
     // (the junction editor belongs to its junction: selecting something else ends it)
     const keep = sel?.kind === "node" ? sel.id : null;
     if (u.shape.edit && u.shape.edit !== keep) u.shape.edit = null;
@@ -245,17 +248,43 @@ export function toggleRoad(id: string) {
   });
 }
 
+const sameSel = (a: Selection, b: Selection) => a.kind === b.kind && a.id === b.id;
+/** everything selected: the main selection, the roads with it, and the rest */
+export function selectedAll(u: UiState = ui.getValue()): Selection[] {
+  return u.selection ? [u.selection, ...u.multi.map(id => ({ kind: "link", id }) as Selection), ...u.extra] : [];
+}
+/** select these together (the first is the one the inspector shows; roads after a road stay "more roads", for merging) */
+export function selectMany(list: Selection[]) {
+  const u = ui.getValue(), uniq: Selection[] = [];
+  for (const x of list) if (!uniq.some(y => sameSel(x, y))) uniq.push({ ...x });
+  const [first, ...rest] = uniq;
+  if (!first) { select(null); return; }
+  if (!u.selection || !sameSel(u.selection, first)) select(first);
+  batch(() => {
+    const roads = first.kind === "link" ? rest.filter(x => x.kind === "link").map(x => x.id) : [];
+    u.multi = roads;
+    u.extra = rest.filter(x => !(x.kind === "link" && roads.includes(x.id)));
+  });
+}
+/** Shift+click: add this to what is selected, or take it out again */
+export function toggleSelect(sel: Selection) {
+  const all = selectedAll();
+  selectMany(all.some(x => sameSel(x, sel)) ? all.filter(x => !sameSel(x, sel)) : [...all, sel]);
+}
+
 function pruneSelection(net: Network) {
-  const sel = ui.getValue().selection;
-  if (!sel) return;
-  const exists =
+  // what is selected and no longer exists (deleted, undone) goes; the next one left takes its place
+  const alive = (sel: Selection) =>
     sel.kind === "node" ? net.nodes.some(n => n.id === sel.id)
       : sel.kind === "link" ? net.links.some(l => l.id === sel.id)
         : sel.kind === "stop" ? net.stops.some(s => s.id === sel.id)
           : sel.kind === "line" ? net.lines.some(l => l.id === sel.id)
             : sel.kind === "building" ? (net.buildings ?? []).some(b => b.id === sel.id)
               : true;
-  if (!exists) ui.getValue().selection = null;
+  const all = selectedAll();
+  if (all.every(alive)) return;
+  const left = all.filter(alive);
+  if (left.length) selectMany(left); else ui.getValue().selection = null;
 }
 
 export function setTool(tool: Tool) {

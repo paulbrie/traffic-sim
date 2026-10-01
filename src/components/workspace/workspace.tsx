@@ -19,7 +19,8 @@ import { Kbd } from "@/components/ui/kbd";
 import { savePlan } from "@/server/actions";
 import { MAX_LANES, type Network, type PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
-import { allLayersOn, commit, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool } from "@/state/store";
+import { allLayersOn, commit, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll } from "@/state/store";
+import { DELETABLE, deleteSelected } from "@/state/bulk";
 import { simController } from "@/state/sim-controller";
 import { changeConnection } from "@/state/connections";
 import { sendView, viewport } from "@/state/commands";
@@ -590,6 +591,9 @@ function useShortcuts() {
         const sel = u.selection, net = network$.getValue();
         if (!sel) return;
         e.preventDefault();
+        // several selected (Shift+click, Shift+drag): all of them go, in one step
+        const all = selectedAll(u);
+        if (all.length > 1) { commit(deleteSelected(net, all.filter(x => DELETABLE.has(x.kind)))); select(null); return; }
         if (sel.kind === "node") commit(ops.deleteNode(net, sel.id));
         else if (sel.kind === "link") commit(ops.deleteLink(net, sel.id));
         else if (sel.kind === "stop") commit(ops.deleteStop(net, sel.id));
