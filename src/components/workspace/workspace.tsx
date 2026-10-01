@@ -32,6 +32,7 @@ import * as ops from "@/state/ops";
 import { cn } from "@/lib/utils";
 import { PlanCanvas } from "./plan-canvas";
 import { PerfPanel } from "./perf-panel";
+import { ReplayBar } from "./replay-bar";
 import { CollapsibleSections } from "./fields";
 import { Inspector } from "./inspector";
 import { TrafficPanel } from "./traffic-panel";
@@ -77,6 +78,7 @@ export function Workspace({ plan, user }: { plan: WorkspacePlan; user: MenuUser 
               <SatelliteCredit />
               <SpeedLegend />
               <PerfPanel />
+              {view === "2d" && <ReplayBar />}
               <StatusBar />
             </div>
             {dataview && <Dataview />}
@@ -241,6 +243,7 @@ function LayerPicker() {
 /** editor settings (in the top bar): the grid step for drawing and snapping */
 function SettingsMenu() {
   const [snap, setSnap] = useDeepSubject(ui, "snap");
+  const [record, setRecord] = useDeepSubject(ui, "record");
   const keep = (e: Event) => e.preventDefault();
   return (
     <DropdownMenu>
@@ -250,6 +253,11 @@ function SettingsMenu() {
         </DropdownMenuTrigger>
       </Tip>
       <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuCheckboxItem checked={record} onCheckedChange={v => setRecord(!!v)} onSelect={keep}>
+          Record steps for replay
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuLabel className="pt-0 text-[10px] font-normal text-muted-foreground">Keeps every simulation step (up to 512 MB) for the replay bar; on very big plans it slows the simulation by about a quarter.</DropdownMenuLabel>
+        <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">Grid step (drawing and snapping)</DropdownMenuLabel>
         {[0.5, 1, 2, 5, 10, 20].map(st => (
           <DropdownMenuCheckboxItem key={st} checked={snap.step === st} onCheckedChange={() => setSnap({ ...snap, step: st })} onSelect={keep}>{st} m</DropdownMenuCheckboxItem>

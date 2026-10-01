@@ -76,6 +76,8 @@ export interface UiState {
   shape: { edit: string | null; paint: { node: string; kind: "hatch" | "island"; pts: Vec[] } | null };
   /** drawing a lane connector: the lane it starts from ("linkId|dir|lane"); the next lane clicked on the map ends it */
   connectFrom: string | null;
+  /** keep every simulation step for the replay bar (costs time and memory on big plans) */
+  record: boolean;
 }
 
 export const ui = new DeepSubject<UiState>(
@@ -103,6 +105,7 @@ export const ui = new DeepSubject<UiState>(
     readOnly: false,
     shape: { edit: null, paint: null },
     connectFrom: null,
+    record: true,
   },
   { name: "ui" },
 );

@@ -6,7 +6,7 @@
  */
 import polygonClipping from "polygon-clipping";
 import { Poly, connectorPoints, connectorReach, cubicPoints, signedAngle, normAngle, hull, dist } from "./geom";
-import { MAX_LANES, type FlowDef, type LaneTargets, type LinkDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
+import { MAX_LANES, type FlowDef, type LaneTargets, type LinkDef, type ReversibleDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
 import { attachBuildings, type Place } from "./buildings";
 
 export const LW = 3.2;          // lane width (m)
@@ -58,6 +58,10 @@ export interface Edge {
   dropStop: number;
   /** a single-lane direction reserved for buses: other vehicles never route onto it */
   busOnly: boolean;
+  /** lane 0 is the road's reversible middle lane (shared with the other direction's lane 0) */
+  rev: boolean;
+  /** its reversible corridor (index into Compiled.corridors; -1 = none or not usable) and which of its directions this is (1, 2) */
+  corr: number; cdir: 0 | 1 | 2;
   /** sign at the junction this edge runs into (only used at priority junctions) */
   sign: "yield" | "stop" | null;
   center: Poly;          // full centreline in travel direction
@@ -133,6 +137,12 @@ export interface CFlow { idx: number; def: FlowDef; from: CNode; to: CNode }
 export interface CZone { idx: number; def: ZoneDef; entries: CNode[]; places: Place[]; placeW: number }
 export interface CZoneFlow { idx: number; def: ZoneFlowDef; from: CZone; to: CZone }
 
+/**
+ * A reversible corridor: its roads in order from `def.start` (direction 1) to the far end, and the
+ * edges of each direction in travel order (`edges[0]` direction 1, `edges[1]` direction 2).
+ */
+export interface CCorridor { idx: number; def: ReversibleDef; links: LinkDef[]; nodes: CNode[]; edges: [Edge[], Edge[]]; length: number }
+
 export interface CStop { def: StopDef; edge: Edge; s: number; waiting: number }
 export interface CLine { def: LineDef; stops: CStop[] }
 
@@ -156,6 +166,8 @@ export interface Compiled {
   /** zones (their usable entry points and buildings) and the demand between them */
   zones: CZone[];
   zoneFlows: CZoneFlow[];
+  /** reversible-lane corridors (only those whose roads form one continuous road) */
+  corridors: CCorridor[];
   warnings: string[];
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
   /** each road's centre line as laid out (with any "line up lanes" shift), by link id */
@@ -233,12 +245,20 @@ export const pieceLevel = (p: Piece) => (p.kind === "lane" ? p.edge.link.level ?
 export const laneBase = (n: number, nOther: number, median = 0, lw = LW) => (nOther === 0 ? -(n * lw) / 2 : median / 2);
 /** a road's lane width */
 export const laneWidth = (link: LinkDef) => link.laneWidth ?? LW;
+/** the road has a reversible middle lane (two-way roads in a corridor) */
+export const isRev = (link: LinkDef) => !!link.rev && link.lanesF > 0 && link.lanesB > 0;
+/**
+ * The space between the two directions as laid out: the median, or minus one lane on a road with a
+ * reversible middle lane, whose lane 0 in both directions is then the same strip in the middle.
+ */
+export const laneMedian = (link: LinkDef) => (isRev(link) ? -laneWidth(link) : link.median ?? 0);
 
 /** lanes of one direction along a link: through lanes plus turn bays, and the bays */
 export function dirLanes(link: LinkDef, dir: 1 | -1) {
-  const thru = Math.min(MAX_LANES, dir === 1 ? link.lanesF : link.lanesB);
+  // (a reversible middle lane counts as a through lane of both directions: lane 0)
+  const rev = isRev(link) ? 1 : 0, own = Math.min(MAX_LANES, dir === 1 ? link.lanesF : link.lanesB), thru = own > 0 ? own + rev : 0;
   const b = thru > 0 ? (dir === 1 ? link.baysF : link.baysB) : null;
-  const left = b?.left ?? 0, right = b?.right ?? 0;
+  const left = rev ? 0 : b?.left ?? 0, right = b?.right ?? 0;
   return { thru, left, right, n: thru > 0 ? thru + left + right : 0, leftLen: b?.leftLen ?? 0, rightLen: b?.rightLen ?? 0 };
 }
 
@@ -278,7 +298,7 @@ function alignShifts(net: Network, nodeById: Map<string, CNode>, on = (nd: NodeD
         if (d < bd) { bd = d; best = t; }
       }
       if (!best) continue;
-      const T = best.l, lw = laneWidth(T), m = T.median ?? 0, nF = dirLanes(T, 1).n, nB = dirLanes(T, -1).n;
+      const T = best.l, lw = laneWidth(T), m = laneMedian(T), nF = dirLanes(T, 1).n, nB = dirLanes(T, -1).n;
       // the lanes it continues: those leaving here if it arrives, those arriving if it leaves
       const useF = arrives ? best.atFrom : !best.atFrom;
       // only a true continuation: as many lanes as that direction has (lanes added or dropped are mapped instead)
@@ -297,7 +317,7 @@ function alignShifts(net: Network, nodeById: Map<string, CNode>, on = (nd: NodeD
 
 /** lateral extent of a link in the from→to right-normal frame */
 export function linkExtent(link: LinkDef): [number, number] {
-  const nF = dirLanes(link, 1).n, nB = dirLanes(link, -1).n, m = link.median ?? 0, lw = laneWidth(link);
+  const nF = dirLanes(link, 1).n, nB = dirLanes(link, -1).n, m = laneMedian(link), lw = laneWidth(link);
   let lo = Infinity, hi = -Infinity;
   if (nF > 0) { const b = laneBase(nF, nB, m, lw); lo = Math.min(lo, b); hi = Math.max(hi, b + nF * lw); }
   if (nB > 0) { const b = laneBase(nB, nF, m, lw); lo = Math.min(lo, -(b + nB * lw)); hi = Math.max(hi, -b); }
@@ -345,7 +365,7 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
         from: dir === 1 ? A : B, to: dir === 1 ? B : A,
         n, bus: (dir === 1 ? link.busF : link.busB) && d.thru >= 2, busOnly: (dir === 1 ? link.busF : link.busB) && d.thru === 1, sign: (dir === 1 ? link.signF : link.signB) ?? null,
         left: d.left, right: d.right, thru: d.thru, open: [], leftAt: 0, rightAt: 0, kerb: d.left + d.thru - 1, dropLane: -1, dropFrom: 0, dropEnd: 0, dropStop: 0,
-        speed: Math.max(10, link.speed || 50) / 3.6, base: laneBase(n, nOther, link.median ?? 0, laneWidth(link)), lw: laneWidth(link),
+        speed: Math.max(10, link.speed || 50) / 3.6, base: laneBase(n, nOther, laneMedian(link), laneWidth(link)), lw: laneWidth(link), rev: isRev(link), corr: -1, cdir: 0,
         center: dir === 1 ? center : center.reversed(), trimA: 0, trimB: 0, lanes: [], length: 0, reverse: null, inArm: -1, outArm: -1,
       };
       edges.push(e); edgeByKey.set(e.key, e);
@@ -576,6 +596,13 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       // two-lane roundabout, approach with 2+ lanes: the kerb lane to the first exit, the others further round
       if (n.ringR > 0 && n.def.ringLanes === 2 && nl >= 2 && list.length) {
         for (const m of list) { if (m.turn === "R") { m.lo = m.hi = nl - 1; } else { m.lo = 0; m.hi = nl - 2; } }
+      }
+      // a reversible middle lane (lane 0) carries straight on: turns are made from the fixed lanes
+      // (at a roundabout every way round the ring is fine); with no way straight on it takes what
+      // the lane beside it takes
+      if (ein.rev && nl >= 2 && list.length && !n.ringR) {
+        for (const m of list) if (m.turn !== "S" && m.lo === 0) { m.lo = 1; if (m.hi < 1) m.hi = 1; }
+        if (!list.some(m => m.lo === 0)) for (const m of list) if (m.lo <= 1 && m.hi >= 1) m.lo = 0;
       }
       // per-lane turn overrides drawn on the road ("left only", "ahead + right", …)
       const custom = ein.dir === 1 ? ein.link.turnsF : ein.link.turnsB;
@@ -836,6 +863,36 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     zoneFlows.push({ idx: zoneFlows.length, def, from, to });
   }
 
+  // ---- reversible corridors: their roads must chain end to end ----
+  const corridors: CCorridor[] = [];
+  for (const def of net.reversibles ?? []) {
+    const ls = net.links.filter(l => l.rev === def.id && isRev(l) && linkInfo.has(l.id));
+    if (!ls.length) continue;
+    const at = new Map<string, LinkDef[]>();
+    for (const l of ls) for (const id of [l.from, l.to]) (at.get(id) ?? at.set(id, []).get(id)!).push(l);
+    const ends = [...at].filter(([, v]) => v.length === 1).map(([id]) => id);
+    if (ends.length !== 2 || [...at.values()].some(v => v.length > 2)) {
+      warnings.push(`Reversible lane "${def.name}": its roads don't make one continuous road, so the lane stays closed.`);
+      continue;
+    }
+    const start = ends.includes(def.start) ? def.start : ends[0];
+    const links: LinkDef[] = [], chain: CNode[] = [nodeById.get(start)!], e1: Edge[] = [];
+    let cur = start, prev: LinkDef | null = null;
+    while (links.length < ls.length) {
+      const l = at.get(cur)!.find(x => x !== prev);
+      if (!l) break;
+      const info = linkInfo.get(l.id)!, fwd = l.from === cur;
+      links.push(l); e1.push((fwd ? info.ef : info.eb)!);
+      cur = fwd ? l.to : l.from; prev = l; chain.push(nodeById.get(cur)!);
+    }
+    if (links.length !== ls.length) { warnings.push(`Reversible lane "${def.name}": its roads don't make one continuous road, so the lane stays closed.`); continue; }
+    const e2 = e1.map(e => e.reverse!).reverse();
+    const cc: CCorridor = { idx: corridors.length, def, links, nodes: chain, edges: [e1, e2], length: e1.reduce((a, e) => a + e.length, 0) };
+    for (const e of e1) { e.corr = cc.idx; e.cdir = 1; }
+    for (const e of e2) { e.corr = cc.idx; e.cdir = 2; }
+    corridors.push(cc);
+  }
+
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const b of net.buildings ?? []) for (const p of b.pts) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
   for (const n of net.nodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); }
@@ -843,7 +900,7 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
   if (!isFinite(minX)) { minX = -200; minY = -150; maxX = 200; maxY = 150; }
 
   const compiled: Compiled = {
-    nodes, edges, pieces, nodeById, edgeByKey, stops, stopById, lines, places, flows, zones, zoneFlows, warnings,
+    nodes, edges, pieces, nodeById, edgeByKey, stops, stopById, lines, places, flows, zones, zoneFlows, corridors, warnings,
     bounds: { minX, minY, maxX, maxY }, linkCenters, pendingShapes,
     getConn(move, a, b) {
       const cache = (move.conns ??= []), k = a * 8 + b;
@@ -1087,6 +1144,11 @@ export function connectorHandles(n: CNode, move: Movement, a: number, b: number)
 export const connectorId = (v: { node: CNode; move: Movement; inLane: number; outLane: number }) => `${v.node.def.id}|${v.move.in.key}|${v.inLane}|${v.move.out.key}|${v.outLane}`;
 
 /** which exit lane a vehicle in lane a ends up in for a movement (always a through lane of the exit: its bays open further on) */
+/**
+ * The lane movement `m` leads into from lane `a`: a reversible middle lane is entered only straight on
+ * from the reversible lane before it (everyone else joins the fixed lanes; they may change into it
+ * where it is open).
+ */
 export function exitLane(move: Movement, a: number, isBus: boolean): number {
   if (move.map) {
     // set by hand; a lane without one (inside lo..hi) follows its nearest connected neighbour
@@ -1094,12 +1156,16 @@ export function exitLane(move: Movement, a: number, isBus: boolean): number {
     for (let d = 0; d < move.map.length && best < 0; d++) for (const q of [a - d, a + d]) if (q >= 0 && q < move.map.length && move.map[q] >= 0) { best = move.map[q]; break; }
     return best >= 0 ? best : move.out.left;
   }
-  const out = move.out, lo = out.left, nOut = out.thru;
+  const out = move.out;
+  // from the reversible lane straight on into the next one; otherwise the reversible lanes don't count
+  const fromRev = move.in.rev && a === 0, ra = move.in.rev && a > 0 ? 1 : 0;
+  const r = out.rev && !(fromRev && move.turn === "S") && out.thru > 1 ? 1 : 0;
+  const lo = out.left + r, nOut = out.thru - r;
   let b: number;
   if (move.turn === "U") b = 0;
   else if (move.turn === "L" || move.merge === "left") b = Math.min(Math.max(0, a - move.lo), nOut - 1);
   else if (move.turn === "R" || move.merge === "right") b = Math.max(0, nOut - 1 - (move.hi - a));
-  else b = Math.max(0, Math.min(a - move.in.left - (move.in.dropLane === move.in.left ? 1 : 0) - (move.skip ?? 0) + (move.shift ?? 0), nOut - 1));
+  else b = Math.max(0, Math.min(a - move.in.left - ra - (move.in.dropLane === move.in.left ? 1 : 0) - (move.skip ?? 0) + (move.shift ?? 0), nOut - 1));
   if (out.bus) {
     if (isBus && move.in.bus && a === move.in.kerb) b = nOut - 1;
     else if (!isBus && b >= nOut - 1) b = Math.max(0, nOut - 2);

@@ -6,6 +6,7 @@
 import { compile, type Compiled } from "@/engine/compile";
 import { DT, Sim } from "@/engine/sim";
 import { SnapshotWriter, type Watch } from "@/engine/sim/mirror";
+import { Recorder } from "@/engine/sim/recorder";
 import type { Network, PlanSettings } from "@/engine/types";
 
 export type ToWorker =
@@ -17,7 +18,9 @@ export type ToWorker =
   | { type: "log"; all: boolean; nodes: string[]; links: string[]; vehicles: number[] }
   | { type: "watch"; watch: Watch }
   | { type: "clearEvents" }
-  | { type: "test"; from: string; to: string; lane: number | null; req: number };
+  | { type: "test"; from: string; to: string; lane: number | null; req: number }
+  | { type: "replay"; tick: number; req: number }
+  | { type: "record"; on: boolean };
 
 let compiled: Compiled | null = null, settings: PlanSettings | null = null, sim: Sim | null = null, gen = 0;
 let running = false, speed = 3, acc = 0, last = performance.now(), lastPost = 0, dirty = false;
@@ -29,6 +32,9 @@ const heapMB = () => { const m = (performance as unknown as { memory?: { usedJSH
 let log = { all: false, nodes: [] as string[], links: [] as string[], vehicles: [] as number[] };
 let watch: Watch = { vehicle: null, nodes: [], reservations: false };
 const writer = new SnapshotWriter();
+/** every step kept, for replaying it on the page */
+const recorder = new Recorder();
+let recording = true;
 
 function applyLog() {
   if (!sim || !compiled) return;
@@ -39,7 +45,7 @@ function applyLog() {
 }
 function startSim() {
   if (!compiled || !settings) return;
-  sim = new Sim(compiled, settings); acc = 0; writer.reset(); applyLog(); dirty = true;
+  sim = new Sim(compiled, settings); acc = 0; writer.reset(); recorder.clear(); applyLog(); dirty = true;
 }
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
@@ -48,13 +54,20 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     case "load": {
       const had = !!sim;
       // (the simulation doesn't need junction outlines: skip the slow part)
-      compiled = compile(m.network, { outlines: false }); settings = m.settings; gen = m.gen; sim = null;
+      compiled = compile(m.network, { outlines: false }); settings = m.settings; gen = m.gen; sim = null; recorder.clear();
       if (had) startSim();
       break;
     }
     case "settings": settings = m.settings; if (sim) sim.settings = { ...m.settings }; break;
     case "start": if (!sim) startSim(); break;
-    case "reset": sim = null; acc = 0; break;
+    case "reset": sim = null; acc = 0; recorder.clear(); break;
+    case "record": recording = m.on; if (!recording) recorder.clear(); dirty = true; break;
+    case "replay": {
+      // a kept step, shown instead of the live one (the page asks for each step it shows)
+      const snap = sim ? recorder.frameAt(m.tick, sim) : null;
+      if (snap) self.postMessage({ type: "replayFrame", gen, req: m.req, snap, rec: recorder.info() });
+      break;
+    }
     case "run": running = m.running; speed = m.speed; break;
     case "log": log = { all: m.all, nodes: m.nodes, links: m.links, vehicles: m.vehicles }; applyLog(); break;
     case "watch": watch = m.watch; dirty = true; break;
@@ -78,7 +91,7 @@ function loop() {
     acc += dt * speed;
     while (acc >= DT) {
       const t0 = performance.now();
-      sim.step(); acc -= DT; moved = true; rateTicks++;
+      sim.step(); if (recording) recorder.record(sim); acc -= DT; moved = true; rateTicks++;
       stepMs += performance.now() - t0; stepN++;
       if (performance.now() - now > 40) { acc = 0; break; } // can't keep up: run slower, don't pile up a backlog
     }
@@ -92,7 +105,7 @@ function loop() {
     }
     if (!running) rate = 0;
     const { snap, transfer } = writer.write(sim, watch, now);
-    self.postMessage({ type: "snapshot", gen, snap, rate, load }, transfer);
+    self.postMessage({ type: "snapshot", gen, snap, rate, load, rec: recorder.info() }, transfer);
     lastPost = now; dirty = false;
   }
   busyMs += performance.now() - now;

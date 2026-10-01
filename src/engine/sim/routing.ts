@@ -113,6 +113,8 @@ export abstract class SimRouting extends SimBase {
       for (const u of this.index.get(lp.id) ?? []) rear = Math.min(rear, u.s - u.len);
       if (rear > 10) return (x.cT ??= this.net.crossing(m, a, x.target));
     }
+    // straight on in a reversible middle lane into one that isn't open (or clearing) this way: the lane beside it
+    if (x.b0 === 0 && m.out.rev && !this.laneUsable(m.out, 0, true)) return this.net.crossing(m, a, 1);
     return (x.c0 ??= this.net.crossing(m, a, x.b0));
   }
   /** the exit lanes for chooseExitLane without its live check: the usual one, and the one it would prefer */
@@ -136,6 +138,8 @@ export abstract class SimRouting extends SimBase {
     let target = b0;
     if (want) target = Math.min(Math.max(b0, want.lo), want.hi);
     target = Math.min(bHi, Math.max(bLo, target));
+    // a reversible middle lane is only entered straight on from the one before it (see exitLane)
+    if (out.rev && target === 0 && !(m.in.rev && a === 0 && m.turn === "S")) target = b0;
     return [b0, target];
   }
   /** lanes the vehicle will need on route edge `idx` for the next junction it turns at */

@@ -347,6 +347,9 @@ export abstract class SimMotion extends SimJunctions {
       const stopHere = v.dest.kind === "stop" && v.dest.stop.edge === e;
       if ((stopHere || e.bus) && hi >= e.kerb) { lo = e.kerb; urgent = Math.min(urgent, toEnd); }
     }
+    // a reversible middle lane: not one to aim for unless it's open this way (those already in it may
+    // stay while it clears); in it when it may not be (closed, or open the other way): out at once
+    if (e.rev && !this.laneUsable(e, 0, v.lane === 0)) { lo = Math.max(lo, 1); if (v.lane === 0) urgent = 0; }
     if (lo > hi) lo = hi;
     return { lo, hi, urgent };
   }
@@ -377,6 +380,8 @@ export abstract class SimMotion extends SimJunctions {
     const bayRoad = e.left > 0 || e.right > 0 || e.dropLane >= 0;
     for (const c of [a - 1, a + 1]) {
       if (c < 0 || c >= e.n) continue;
+      // a reversible middle lane only while it's open this way
+      if (c === 0 && e.rev && !this.revOpenFor(e)) continue;
       // a turn bay only from where it opens
       if (e.open[c] > 0 && v.s * (e.lanes[c].len / p.len) < e.open[c]) continue;
       const mandatory = dir !== 0 && Math.sign(c - a) === dir;

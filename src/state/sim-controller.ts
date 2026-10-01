@@ -10,6 +10,7 @@ import { SimMirror, type Snapshot, type Watch } from "@/engine/sim/mirror";
 import type { Network } from "@/engine/types";
 import { network$, settings$, stats$, ui } from "./store";
 import type { ToWorker } from "./sim.worker";
+import type { RecordingInfo } from "@/engine/sim/recorder";
 
 export type TestResult = { id: number } | { error: string };
 
@@ -49,9 +50,17 @@ class SimController {
     if (this.started) return;
     this.started = true;
     this.worker = new Worker(new URL("./sim.worker.ts", import.meta.url), { type: "module" });
-    this.worker.onmessage = (e: MessageEvent<{ type: "snapshot"; gen: number; snap: Snapshot; rate?: number; load?: WorkerLoad } | { type: "test"; req: number; result: TestResult }>) => {
+    this.worker.onmessage = (e: MessageEvent<{ type: "snapshot"; gen: number; snap: Snapshot; rate?: number; load?: WorkerLoad; rec?: RecordingInfo } | { type: "replayFrame"; gen: number; req: number; snap: Snapshot; rec: RecordingInfo } | { type: "test"; req: number; result: TestResult }>) => {
       if (e.data.type === "test") { const cb = this.pending.get(e.data.req); this.pending.delete(e.data.req); cb?.(e.data.result); return; }
       if (e.data.gen !== this.gen || !this.sim) return;
+      if (e.data.rec) this.rec = e.data.rec;
+      if (e.data.type === "replayFrame") {
+        // a kept step, while replaying (the newest asked for wins)
+        if (this.replay && e.data.req === this.replayReq) { this.sim.apply(e.data.snap); this.replay.tick = e.data.snap.tick; this.replayBusy = false; this.fresh = true; stats$.next(this.sim.stats); }
+        return;
+      }
+      // (while replaying, the live steps aren't shown)
+      if (this.replay) { this.rate = e.data.rate ?? 0; return; }
       this.sim.apply(e.data.snap);
       this.rate = e.data.rate ?? 0;
       if (e.data.load) this.simLoad = e.data.load;
@@ -63,11 +72,17 @@ class SimController {
     settings$.subscribe(s => this.post({ type: "settings", settings: { ...s } }));
     ui.subscribe("sim/epoch", () => this.reset());
     ui.subscribe("eventLog", () => this.applyLog());
-    ui.subscribe("sim", () => { const s = ui.getValue().sim; this.post({ type: "run", running: s.running, speed: s.speed }); });
+    ui.subscribe("record", () => { const on = ui.getValue().record; this.post({ type: "record", on }); if (!on && this.replay) this.goLive(); });
+    ui.subscribe("sim", () => {
+      const s = ui.getValue().sim;
+      if (s.running && this.replay) this.goLive(); // (running again: back to the live simulation)
+      this.post({ type: "run", running: s.running, speed: s.speed });
+    });
     for (const path of ["selection", "display", "view"] as const) ui.subscribe(path, () => this.applyWatch());
     const s = ui.getValue().sim;
     this.post({ type: "run", running: s.running, speed: s.speed });
     this.applyLog(); this.applyWatch();
+    this.post({ type: "record", on: ui.getValue().record });
   }
 
   private outlineWorker: Worker | null = null;
@@ -132,7 +147,29 @@ class SimController {
     this.post({ type: "watch", watch });
   }
 
+  /** the steps kept in memory, for replaying them (ticks from..to) */
+  rec: RecordingInfo = { from: 0, to: 0, frames: 0, bytes: 0 };
+  /** replaying: the step shown (null = live) */
+  replay: { tick: number } | null = null;
+  private replayReq = 0;
+  private replayBusy = false;
+  /** show the kept step at `tick` (pauses the live simulation; one request at a time, the newest wins) */
+  replayAt(tick: number) {
+    if (!this.replay) { this.replay = { tick }; ui.getValue().sim.running = false; }
+    this.replay.tick = tick;
+    this.replayBusy = true;
+    this.post({ type: "replay", tick, req: ++this.replayReq });
+  }
+  /** is a replayed step still on its way */
+  get replayPending() { return this.replayBusy; }
+  /** back to the live simulation (where it was: replaying doesn't change it) */
+  goLive() {
+    this.replay = null; this.replayBusy = false;
+    this.applyWatch(); // (asks for a fresh live snapshot)
+  }
+
   reset() {
+    this.replay = null; this.replayBusy = false; this.rec = { from: 0, to: 0, frames: 0, bytes: 0 };
     this.sim = null;
     this.post({ type: "reset" });
     this.forgetLoggedVehicles();

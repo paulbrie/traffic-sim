@@ -16,7 +16,7 @@ import type { Poly } from "../geom";
 import type { Vehicle } from "./base";
 import { SimDemand } from "./demand";
 
-export { DT, type Kind, type Dest, type Vehicle, type JunctionEvent, type Stats } from "./base";
+export { DT, REV_STATES, type Kind, type Dest, type Vehicle, type JunctionEvent, type Stats } from "./base";
 
 /** a transit flow's results: vehicles sent, arrived at its exit, diverted to another exit, removed when stuck, waiting to enter, still driving; average travel time (s); failed spawns for lack of a route */
 export interface FlowStats { sent: number; arrived: number; diverted: number; towed: number; backlog: number; inPlan: number; avgTravel: number; noRoute: number }
@@ -32,6 +32,7 @@ export class Sim extends SimDemand {
     this.updateSignals();
     this.spawnLoop();
     this.buildIndex();
+    if (this.revs.length) this.updateReversibles();
     for (const v of this.vehicles) if (!v.dead) this.think(v);
     if (this.logLinks.size || this.logVehicles.size) this.logStates();
     for (const v of this.vehicles) if (!v.dead && (v.id + this.tick) % 5 === 0) this.considerLaneChange(v);

@@ -48,7 +48,7 @@ export function PerfPanel() {
     </span>
   );
   return (
-    <div className="pointer-events-none absolute right-3 bottom-12 z-10 grid w-64 gap-1.5 rounded-lg border bg-background/95 px-3 py-2 text-[11px] shadow-sm backdrop-blur" aria-label="CPU and memory load">
+    <div className="pointer-events-none absolute right-3 bottom-24 z-10 grid w-64 gap-1.5 rounded-lg border bg-background/95 px-3 py-2 text-[11px] shadow-sm backdrop-blur" aria-label="CPU and memory load">
       <div className="flex justify-between font-medium"><span>Load</span><span className="text-muted-foreground">{cores ? `${cores} CPU threads` : ""}</span></div>
       <div className="grid grid-cols-[5.5rem_1fr] gap-x-2 gap-y-1 tabular">
         <span className="text-muted-foreground">Page</span>

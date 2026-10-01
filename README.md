@@ -155,6 +155,11 @@ lanes and lane connectors can be selected and inspected. The table button next t
 sortable, filterable table of the chosen layer under the map, with live columns while traffic runs; click a row to
 select and focus the object, double-click an underlined cell (or use its list / checkbox) to edit it (undoable).
 
+**Replay** (bar at the bottom of the plan view): every simulation step is kept in memory (compactly, up to
+512 MB; the oldest go first) and can be replayed like a video: drag to any step, step back and forward, play back
+at the chosen speed; Live returns to the running simulation (replaying doesn't change it; running again goes live).
+Settings menu → Record steps for replay turns it off on very big plans. In `src/engine/sim/recorder.ts`.
+
 **Load panel** (Traffic panel → Display → Show CPU and memory load): frames per second, time spent drawing and time
 blocked on the page; how busy the simulation worker is (share of time working, ms per step, speed reached) and the
 outline worker; JavaScript memory where Chrome reports it. Browsers don't let a page see Chrome's own CPU use, so the

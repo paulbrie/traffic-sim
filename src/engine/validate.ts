@@ -1,4 +1,4 @@
-import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type PlanSettings, type Vec, type ConnShape, type LaneTargets } from "./types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type ReversibleDef, type PlanSettings, type Vec, type ConnShape, type LaneTargets } from "./types";
 import { sanitizeParams } from "./params";
 
 const num = (v: unknown, lo: number, hi: number, def: number) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
@@ -82,10 +82,22 @@ export function sanitizeNetwork(input: unknown): Network {
     };
   });
   const ids = new Set(nodes.map(n => n.id));
+  // reversible corridors (kept below only if some road still belongs to one)
+  const revDefs = arr("reversibles").filter(r => typeof r.id === "string" && r.id).slice(0, 100).map((r): ReversibleDef => ({
+    id: str(r.id, "", 64), name: str(r.name, "Reversible lane", 80), start: str(r.start),
+    mode: r.mode === "dynamic" || r.mode === "manual" ? r.mode : "timer",
+    open1: Math.round(num(r.open1, 0, 4 * 3600, 900)), open2: Math.round(num(r.open2, 0, 4 * 3600, 900)), gap: Math.round(num(r.gap, 0, 600, 10)),
+    minDensity: num(r.minDensity, 1, 150, 15), ratio: num(r.ratio, 1.05, 10, 1.5), minOpen: Math.round(num(r.minOpen, 30, 3600, 300)),
+    initial: r.initial === "1" || r.initial === "2" ? r.initial : "closed",
+  }));
+  const revIds = new Set(revDefs.map(r => r.id));
   const links = arr("links").filter(l => typeof l.id === "string" && ids.has(l.from as string) && ids.has(l.to as string) && l.from !== l.to).map(l => {
     const lanesF = Math.round(num(l.lanesF, 0, MAX_LANES, 1)), lanesB = Math.round(num(l.lanesB, 0, MAX_LANES, 1));
     const busF = l.busF === true, busB = l.busB === true;
-    const baysF = bays(l.baysF, lanesF, busF), baysB = bays(l.baysB, lanesB, busB);
+    // a reversible middle lane (two-way roads only) takes the centre side: no left bays, no left lane ending, no median
+    const rev = lanesF > 0 && lanesB > 0 && typeof l.rev === "string" && revIds.has(l.rev) ? l.rev : null;
+    const noLeft = (b: Bays | null): Bays | null => (b && rev ? (b.right ? { ...b, left: 0 } : null) : b);
+    const baysF = noLeft(bays(l.baysF, lanesF, busF)), baysB = noLeft(bays(l.baysB, lanesB, busB));
     // a lane that ends: needs 2+ lanes, not on a side with turn bays or (right) a bus lane
     const drop = (v: unknown, lanes: number, bus: boolean, b: Bays | null): LaneDrop | null => {
       if (!v || typeof v !== "object" || lanes < 2) return null;
@@ -93,9 +105,11 @@ export function sanitizeNetwork(input: unknown): Network {
       if (!side || (side === "right" && (bus || b?.right)) || (side === "left" && b?.left)) return null;
       return { side, len: Math.round(num(d.len, 10, 300, 60)) };
     };
-    const dropF = drop(l.dropF, lanesF, busF, baysF), dropB = drop(l.dropB, lanesB, busB, baysB);
-    const atF = lanesF + (baysF ? baysF.left + baysF.right : 0), atB = lanesB + (baysB ? baysB.left + baysB.right : 0);
-    const median = lanesF > 0 && lanesB > 0 ? Math.round(num(l.median, 0, MAX_MEDIAN, 0) * 10) / 10 : 0;
+    const dropOk = (d: LaneDrop | null) => (d && rev && d.side === "left" ? null : d);
+    const dropF = dropOk(drop(l.dropF, lanesF, busF, baysF)), dropB = dropOk(drop(l.dropB, lanesB, busB, baysB));
+    const r1 = rev ? 1 : 0;
+    const atF = lanesF + r1 + (baysF ? baysF.left + baysF.right : 0), atB = lanesB + r1 + (baysB ? baysB.left + baysB.right : 0);
+    const median = lanesF > 0 && lanesB > 0 && !rev ? Math.round(num(l.median, 0, MAX_MEDIAN, 0) * 10) / 10 : 0;
     return {
       id: str(l.id), name: str(l.name, "", 120), from: str(l.from), to: str(l.to),
       c1: vec(l.c1), c2: vec(l.c2),
@@ -110,8 +124,10 @@ export function sanitizeNetwork(input: unknown): Network {
       ...(typeof l.laneWidth === "number" && isFinite(l.laneWidth) && Math.abs(l.laneWidth - LANE_WIDTH.default) > 0.01 ? { laneWidth: Math.round(num(l.laneWidth, LANE_WIDTH.min, LANE_WIDTH.max, LANE_WIDTH.default) * 10) / 10 } : {}),
       ...(Number.isInteger(l.level) && (l.level as number) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, l.level as number)) } : {}),
       ...(typeof l.slip === "string" && ids.has(l.slip) && l.slip !== l.from && l.slip !== l.to ? { slip: l.slip } : {}),
+      ...(rev ? { rev } : {}),
     };
   }).filter(l => l.lanesF + l.lanesB > 0);
+  const reversibles = revDefs.filter(r => links.some(l => l.rev === r.id));
   const linkIds = new Set(links.map(l => l.id));
   const stops = arr("stops").filter(s => linkIds.has(s.link as string)).map(s => ({
     id: str(s.id), name: str(s.name, "Stop", 80), link: str(s.link), dir: (s.dir === -1 ? -1 : 1) as 1 | -1, pos: num(s.pos, 0, 1, 0.5),
@@ -150,7 +166,7 @@ export function sanitizeNetwork(input: unknown): Network {
     ...(typeof f.trucks === "number" && isFinite(f.trucks) && f.trucks > 0 ? { trucks: Math.min(1, f.trucks) } : {}),
   }));
   const geo = sanitizeGeo(src.geo);
-  return { version: 1, nodes, links, stops, lines, ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(zones.length ? { zones } : {}), ...(zoneFlows.length ? { zoneFlows } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
+  return { version: 1, nodes, links, stops, lines, ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(zones.length ? { zones } : {}), ...(zoneFlows.length ? { zoneFlows } : {}), ...(reversibles.length ? { reversibles } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
 }
 
 /** most buildings a plan keeps (an imported district of a few km²) */

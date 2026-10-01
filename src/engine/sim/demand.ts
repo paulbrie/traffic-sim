@@ -250,7 +250,7 @@ export abstract class SimDemand extends SimMotion {
 
 /** lanes a vehicle may start in: the through lanes (bays open further on), not the bus lane unless it is a bus */
 function entryLanes(e: Edge, kind: Kind): [number, number] {
-  // (not a lane that ends further on)
-  const lo = e.left + (e.dropLane === e.left ? 1 : 0), hi = e.left + e.thru - 1 - (e.dropLane >= 0 && e.dropLane !== e.left ? 1 : 0);
+  // (not a lane that ends further on, nor a reversible middle lane: vehicles change into that where it's open)
+  const lo = e.left + (e.dropLane === e.left || e.rev ? 1 : 0), hi = e.left + e.thru - 1 - (e.dropLane >= 0 && e.dropLane !== e.left ? 1 : 0);
   return [lo, kind !== "bus" && e.bus ? Math.max(lo, hi - 1) : hi];
 }

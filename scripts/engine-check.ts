@@ -1,6 +1,7 @@
 import { Sim, sampleTown, compile, connectorPreview, exitLane, connectionIssues, alignableNodes, measureRun, optimizeSignals } from "../src/engine";
 import { Poly } from "../src/engine/geom";
 import { changeConnection, connectLanes } from "../src/state/connections";
+import { Recorder } from "../src/engine/sim/recorder";
 import { makeLink, makeNode } from "../src/engine/sample";
 import { isJunction } from "../src/engine/refs";
 import * as mirrorModule from "../src/engine/sim/mirror";
@@ -722,5 +723,25 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
     for (let i = 0; i < on.length; i++) for (let k = i + 1; k < on.length; k++) { const p = on[i].piece.poly.at(on[i].s), q = on[k].piece.poly.at(on[k].s); if (Math.hypot(p.x - q.x, p.y - q.y) < 2) overlap++; } }
   const ok = JSON.stringify(targets) === "[0,1,2]" && views.join() === "0,1,2" && JSON.stringify(removed) === "[0,2]" && sim.stats.trips > 10 && overlap === 0;
   console.log(`one lane to several: targets ${JSON.stringify(targets)}, connectors to ${views.join(",")}, after removing one ${JSON.stringify(removed)}; ${sim.stats.trips} trips, ${overlap} overlaps | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// replay: every step is kept; a kept step shows the vehicles where they were then (and the lights);
+// over the memory budget the oldest steps go
+{
+  const s = new Sim(sampleTown(), { cars: 150, trucks: 10, seed: 3 }), rec = new Recorder();
+  let at300: { id: number; x: number; y: number; rx: number; ry: number }[] = [], ph300: number[] = [];
+  for (let t = 0; t < 600; t++) {
+    s.step(); rec.record(s);
+    if (s.tick === 300) { at300 = s.vehicles.filter(v => !v.dead).map(v => { const p = s.pose(v); return { id: v.id, x: p.fx, y: p.fy, rx: p.rx, ry: p.ry }; }); ph300 = s.net.nodes.map((_, k) => s.nodeState(k).phase); }
+  }
+  const info = rec.info(), f = rec.frameAt(300, s)!;
+  let worst = 0, worstRear = 0;
+  at300.forEach((v, i) => { worst = Math.max(worst, Math.hypot(f.geo[i * 11] - v.x, f.geo[i * 11 + 1] - v.y)); worstRear = Math.max(worstRear, Math.hypot(f.geo[i * 11 + 2] - v.rx, f.geo[i * 11 + 3] - v.ry)); });
+  const sameIds = at300.every((v, i) => f.ids[i] === v.id), samePhases = ph300.every((p, k) => f.phase[k] === p);
+  const small = new Recorder(50_000); for (let t = 0; t < 50; t++) { s.step(); small.record(s); }
+  const si = small.info();
+  const ok = info.frames === 600 && info.from === 1 && info.to === 600 && f.tick === 300 && sameIds && samePhases && worst < 0.01 && worstRear < 0.06 && si.bytes <= 50_000 && si.frames < 50 && si.to === s.tick;
+  console.log(`replay: ${info.frames} steps kept (${(info.bytes / 1024).toFixed(0)} kB), step 300 matches (front ${worst.toFixed(3)} m, rear ${worstRear.toFixed(2)} m, lights ${samePhases}); small budget keeps ${si.frames} newest | ok ${ok}`);
   if (!ok) process.exit(1);
 }

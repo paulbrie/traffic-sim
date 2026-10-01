@@ -172,6 +172,12 @@ export interface LinkDef {
   dropF?: LaneDrop | null;
   dropB?: LaneDrop | null;
   /**
+   * The reversible corridor (ReversibleDef id) this two-way road belongs to: it gets a reversible
+   * middle lane, lane 0 of both directions (so `turnsF` / `greenF` have lanesF + 1 entries), opened
+   * to one direction at a time. Turn bays and lanes ending on the centre side are not used then.
+   */
+  rev?: string | null;
+  /**
    * Elevation order: 0 = ground (missing), 1, 2, … = bridges / flyovers above it, -1, … = underpasses
    * and tunnels. Roads only meet where they share a junction, so a bridge simply passes over what
    * is below; the level decides what is drawn on top, and the height in 3D (the roads leading onto
@@ -313,6 +319,35 @@ export interface GeoRef { lat: number; lon: number }
 /** a latitude/longitude rectangle */
 export interface GeoArea { south: number; west: number; north: number; east: number }
 
+/** how a reversible corridor decides which way its middle lane is open */
+export type ReversibleMode = "timer" | "dynamic" | "manual";
+/**
+ * A reversible middle lane along a chain of roads (through the junctions on it). Direction 1 runs
+ * from `start` (one end node of the chain) to the other end. The lane is open to one direction at
+ * a time: closing shuts its entries and waits until the vehicles in it have driven out, then it
+ * stays closed at least `gap` seconds before opening either way.
+ */
+export interface ReversibleDef {
+  id: string;
+  name: string;
+  /** the node direction 1 starts from (an end of the chain) */
+  start: string;
+  mode: ReversibleMode;
+  /** timer: seconds open to direction 1, then to direction 2 (0 = never that way), repeating */
+  open1: number;
+  open2: number;
+  /** seconds the lane stays closed (empty) between directions */
+  gap: number;
+  /** dynamic: vehicles per km per lane in a direction's fixed lanes before it gets the lane */
+  minDensity: number;
+  /** dynamic: how many times busier the other direction must be to switch (> 1) */
+  ratio: number;
+  /** dynamic: least time open before switching or closing (s) */
+  minOpen: number;
+  /** manual (and when the simulation starts): "closed", or open to direction 1 or 2 */
+  initial: "closed" | "1" | "2";
+}
+
 export interface Network {
   version: 1;
   nodes: NodeDef[];
@@ -326,6 +361,8 @@ export interface Network {
   /** zones and the demand between them */
   zones?: ZoneDef[];
   zoneFlows?: ZoneFlowDef[];
+  /** reversible-lane corridors (their roads have `rev` set to the corridor's id) */
+  reversibles?: ReversibleDef[];
   /** set for plans imported from a map, so later imports line up; `areas` are the frames imported so far */
   geo?: (GeoRef & { areas?: GeoArea[] }) | null;
 }

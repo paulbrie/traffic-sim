@@ -1,10 +1,10 @@
 import { conflicts, conflictEnd, zipFrom, type CNode, type Conn, type Edge } from "../compile";
 import { DT, type Vehicle, type Occ, type NodeState, type PedCross, type Req } from "./base";
-import { SimSignals } from "./signals";
+import { SimReversible } from "./reversible";
 
 
 /** Junctions: who may enter (reservations of conflicting paths, stop and give-way signs, lights), roundabout entry, per-junction statistics. */
-export abstract class SimJunctions extends SimSignals {
+export abstract class SimJunctions extends SimReversible {
   /** all-way stop, or a stop sign on this approach to a priority junction */
   protected mustStop(node: CNode, e: Edge) {
     if (!node.controlled || node.degree < 2) return false;

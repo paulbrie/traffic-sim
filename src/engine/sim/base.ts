@@ -61,6 +61,23 @@ export interface Vehicle {
   splits?: Map<number, Edge>;
 }
 
+/** a reversible corridor's middle lane: closed, open to direction 1, closing (clearing) from direction 1, open to 2, closing from 2 */
+export const REV_STATES = ["closed", "open 1", "clearing 1", "open 2", "clearing 2"] as const;
+export type RevStateCode = 0 | 1 | 2 | 3 | 4;
+export interface RevState {
+  state: RevStateCode;
+  /** tick the state began */
+  since: number;
+  /** set by hand (Sim.reversibleCommand): what it should be, overriding the corridor's mode; null = its mode decides */
+  hold: "closed" | "1" | "2" | null;
+  /** the direction it was last open to (1, 2), so a timer alternates */
+  last: 1 | 2;
+  /** vehicles in the middle lane (counted while clearing) */
+  inside: number;
+  /** vehicles per km per lane each way (dynamic mode; updated every few seconds) */
+  density: [number, number];
+}
+
 export interface Occ { v: Vehicle; conn: Conn; entered: boolean; /** permissive turn clearing on yellow/all-red */ sneak?: boolean }
 export interface Req { v: Vehicle; conn: Conn; d: number; at: number; /** asked before reaching the road into the junction (see Vehicle.early) */ early?: boolean }
 export interface JunctionEvent {
@@ -73,7 +90,7 @@ export interface JunctionEvent {
   veh: number | null;
   vkind: string | null;
   kind: "approach" | "request" | "grant" | "deny" | "revoke" | "enter" | "leave" | "lane" | "wrong-lane" | "turn-changed" | "reroute" | "signal" | "towed"
-    | "appear" | "enter-road" | "state" | "leave-road" | "exit" | "arrive";
+    | "appear" | "enter-road" | "state" | "leave-road" | "exit" | "arrive" | "reversible";
   detail: string;
   /** machine-readable bits for analysis (lanes are 1-based) */
   data?: { turn?: string; from?: string; to?: string; lane?: number; outLane?: number; lo?: number; hi?: number; sig?: string | null; code?: string };
@@ -242,6 +259,14 @@ export abstract class SimBase {
   /** vehicles that crossed each node so far, and the ticks of recent crossings (last minute) */
   protected nodeThrough: number[] = [];
   protected nodeRecent: number[][] = [];
+  /** reversible corridors, parallel to net.corridors */
+  protected revs: RevState[] = [];
+  /** a reversible middle lane open to edge `e`'s direction: vehicles may change into it */
+  protected revOpenFor(e: Edge) { return e.corr >= 0 && this.revs[e.corr].state === (e.cdir === 1 ? 1 : 3); }
+  /** open or clearing in edge `e`'s direction: vehicles already in the lane carry on */
+  protected revInside(e: Edge) { if (e.corr < 0) return false; const s = this.revs[e.corr].state; return e.cdir === 1 ? s === 1 || s === 2 : s === 3 || s === 4; }
+  /** may vehicles move into (or be in) lane `k` of edge `e`; `already` = the vehicle is in it now */
+  protected laneUsable(e: Edge, k: number, already = false) { return !e.rev || k !== 0 || (already ? this.revInside(e) : this.revOpenFor(e)); }
   // ------------------------------------------------------------ junction event log
   /** node indexes whose events are recorded (see `logAll` to record every junction) */
   logNodes = new Set<number>();
@@ -284,6 +309,10 @@ export abstract class SimBase {
     this.flowState = this.net.flows.map(() => ({ sent: 0, arrived: 0, diverted: 0, towed: 0, travelSum: 0, backlog: 0, noRoute: 0 }));
     this.zoneFlowState = this.net.zoneFlows.map(() => ({ sent: 0, arrived: 0, diverted: 0, towed: 0, travelSum: 0, backlog: 0, noRoute: 0 }));
     this.counters = this.net.edges.map(e => (e.link.counter ? { total: 0, cars: 0, trucks: 0, buses: 0, speedSum: 0, recent: [] } : null));
+    this.revs = this.net.corridors.map(c => {
+      const d = c.def, first: RevStateCode = d.mode === "timer" ? (d.open1 > 0 ? 1 : d.open2 > 0 ? 3 : 0) : d.mode === "manual" ? (d.initial === "1" ? 1 : d.initial === "2" ? 3 : 0) : 0;
+      return { state: first, since: 0, hold: null, last: first === 3 ? 2 : first === 1 ? 1 : 2, inside: 0, density: [0, 0] };
+    });
   }
   get time() { return this.tick * DT; }
   // ------------------------------------------------------------ helpers
