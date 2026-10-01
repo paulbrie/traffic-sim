@@ -317,7 +317,7 @@ function paintLevel(ctx: CanvasRenderingContext2D, c: LayerPaths, pal: Palette, 
   }
   ctx.strokeStyle = pal.mark; ctx.lineWidth = 0.5; ctx.stroke(c.stopLine);
   ctx.setLineDash([0.9, 0.7]); ctx.stroke(c.yieldLine); ctx.setLineDash([]);
-  if (scale > 2.2) { ctx.lineWidth = 0.22; ctx.lineJoin = "round"; ctx.stroke(c.arrows); }
+  if (scale > 1) { ctx.lineWidth = Math.max(0.22, px * 1.1); ctx.lineJoin = "round"; ctx.stroke(c.arrows); }
   ctx.globalAlpha = 1;
 }
 

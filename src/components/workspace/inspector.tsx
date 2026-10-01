@@ -27,6 +27,7 @@ import { ZonePicker, ZonesSection } from "./zones";
 import { LaneArrowsEditor, SignPicker } from "./lane-arrows";
 import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
 import { junctionRefs } from "@/engine/refs";
+import { arrowLetters } from "@/engine/compile";
 import { JunctionEventLog, RoadEventLog } from "./event-log";
 import { LaneConnectionsSection } from "./lane-connections";
 import { JunctionShapeSection } from "./junction-shape";
@@ -469,7 +470,20 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
     return [
       <LaneArrowsEditor
         key={d} compiled={compiled} link={L} dir={dd} heading={heading} roadName={roadName}
-        onChange={t => upd(F ? { turnsF: t } : { turnsB: t })}
+        onChange={t => {
+          // lane arrows set now win over lane connections set by hand at that junction for turns they leave out
+          let next = ops.updateLink(net, L.id, F ? { turnsF: t } : { turnsB: t });
+          const node = net.nodes.find(x => x.id === a.e.to.def.id), list = a.e.to.moves.get(a.e.idx) ?? [];
+          if (t && node?.laneMap) {
+            for (const key of Object.keys(node.laneMap)) {
+              if (!key.startsWith(`${a.e.key}>`)) continue;
+              const m = list.find(x => `${a.e.key}>${x.out.key}` === key);
+              const ls = m ? arrowLetters(list, m) : null;
+              if (!ls || !t.some(lt => [...ls].some(x => lt.includes(x)))) next = ops.setLaneMap(next, node.id, key, null);
+            }
+          }
+          commit(next);
+        }}
         onSign={x => upd(F ? { signF: x } : { signB: x })}
         onSplit={x => upd(F ? { splitF: x } : { splitB: x })}
       />,

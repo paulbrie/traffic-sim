@@ -613,3 +613,15 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   console.log(`add a lane connector: turn before ${had}, after ${m ? `${m.turn} from lane ${m.lo + 1}` : "none"}, taken ${used} times | ok ${ok}`);
   if (!ok) process.exit(1);
 }
+
+// lane arrows "ahead" on a road merging at an angle (no straight movement there): ahead means carrying
+// on into the road it merges with, so the arrows apply (and leave out the turn back the other way)
+{
+  const J = makeNode(0, 0, "priority", false), N = makeNode(0, -200), S = makeNode(0, 200), W = makeNode(-150, -120);
+  const ns = makeLink(N, J, 2, 2), js = makeLink(J, S, 2, 2), wj = makeLink(W, J, 1, 0, { turnsF: ["S"] });
+  const c = compile(sanitizeNetwork({ version: 1, nodes: [J, N, S, W], stops: [], lines: [], links: [ns, js, wj] }));
+  const moves = c.nodeById.get(J.id)!.moves.get(c.edgeByKey.get(`${wj.id}:1`)!.idx) ?? [];
+  const ok = moves.length === 1 && moves[0].out.link.id === js.id && !c.warnings.some(w => /lane arrows/.test(w));
+  console.log(`arrows ahead on a merge: ${moves.map(m => `${m.turn} to ${m.out.link.id === js.id ? "south" : "north"}`).join(", ")}; warnings ${c.warnings.length} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}

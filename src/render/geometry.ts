@@ -291,11 +291,15 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
           geo.signals.push({ nodeIdx: node.idx, arm, p: { x: end.x + r.x * off - t.x * 0.8, y: end.y + r.y * off - t.y * 0.8 }, dir: t, kind: kind === "signal" ? "lights" : kind === "yield" ? "yield" : "stop" });
         }
         const moves = node.moves.get(e.idx) || [];
-        if (moves.length > 1 && ec.len > 18) {
+        // an arrow at the end of every lane approaching a junction: the arrows set on the road when there
+        // are some (what you set is what you see), else where the lane goes
+        const custom = e.dir === 1 ? e.link.turnsF : e.link.turnsB, own = custom && custom.length === e.n ? custom : null;
+        if (moves.length && ec.len > 4) {
           for (let k = 0; k < e.n; k++) {
             if (k === e.dropLane) continue;
-            const turns = moves.filter(m => laneAllowed(m, k)).map(m => m.turn).join("");
-            const s = ec.len - 9, p = ec.at(s), tt = ec.tangent(s), off = e.base + (k + 0.5) * e.lw;
+            const turns = own ? own[k] : moves.filter(m => laneAllowed(m, k)).map(m => m.turn).join("");
+            if (!turns) continue;
+            const s = ec.len - Math.min(9, ec.len * 0.5), p = ec.at(s), tt = ec.tangent(s), off = e.base + (k + 0.5) * e.lw;
             geo.arrows.push({ p: { x: p.x - tt.y * off, y: p.y + tt.x * off }, dir: tt, turns, on });
           }
         }

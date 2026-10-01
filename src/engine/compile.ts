@@ -578,10 +578,10 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       // per-lane turn overrides drawn on the road ("left only", "ahead + right", …)
       const custom = ein.dir === 1 ? ein.link.turnsF : ein.link.turnsB;
       if (custom && custom.length === nl && list.length) {
-        const letter = (m: Movement) => (m.turn === "U" ? "L" : m.turn);
         const next: Movement[] = [];
         for (const m of list) {
-          const lanes = custom.map((t, i) => (t.includes(letter(m)) ? i : -1)).filter(i => i >= 0);
+          const ls = arrowLetters(list, m);
+          const lanes = custom.map((t, i) => ([...ls].some(x => t.includes(x)) ? i : -1)).filter(i => i >= 0);
           if (!lanes.length) continue; // this turn is not allowed from any lane
           m.lo = Math.min(...lanes); m.hi = Math.max(...lanes);
           next.push(m);
@@ -949,6 +949,21 @@ function buildConn(n: CNode, move: Movement, a: number, b: number, id: number): 
  * showing them doesn't change a run. Roundabouts are left out (their ring is drawn instead).
  */
 export interface ConnectorView { node: CNode; move: Movement; inLane: number; outLane: number; pts: Float32Array }
+/**
+ * The lane-arrow letters a movement answers to: its own (a U-turn counts as left), and "S" for the
+ * straightest one when the approach has no straight movement (a road merging at an angle: "ahead"
+ * means carrying on into it), if it is within 60° of straight.
+ */
+export function arrowLetters(list: readonly Movement[], m: Movement): Set<string> {
+  const out = new Set<string>([m.turn === "U" ? "L" : m.turn]);
+  if (m.turn !== "U" && !list.some(x => x.turn === "S")) {
+    let best: Movement | null = null;
+    for (const x of list) if (x.turn !== "U" && (!best || Math.abs(x.delta) < Math.abs(best.delta))) best = x;
+    if (best === m && Math.abs(m.delta) < 1.05) out.add("S");
+  }
+  return out;
+}
+
 /** may vehicles in lane `a` of its approach take movement `m` */
 export const laneAllowed = (m: Movement, a: number) => a >= m.lo && a <= m.hi && (!m.map || m.map[a] >= 0);
 
