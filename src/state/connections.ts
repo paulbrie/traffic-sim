@@ -58,8 +58,11 @@ export function writeOut(net: Network, c: Compiled, nodeId: string): Network {
 /** a lane of a road at another node can be joined: nearby (within CROSS_REACH), on the same level, not a roundabout's */
 const reachable = (ein: Edge, a: number, eout: Edge, b: number) => {
   const p = ein.lanes[a], q = eout.lanes[b];
-  return !!p && !!q && eout.from.ringR === 0 && ein.to.ringR === 0 && (eout.link.level ?? 0) === (ein.link.level ?? 0) && eout.link !== ein.link
-    && dist(p.poly.at(p.len), q.poly.at(0)) <= CROSS_REACH;
+  if (!p || !q || eout.from.ringR > 0 || ein.to.ringR > 0 || (eout.link.level ?? 0) !== (ein.link.level ?? 0) || eout.link === ein.link) return false;
+  // (not back where its own road started, nor behind the end of the lane: ahead or beside it)
+  if (eout.from === ein.from) return false;
+  const P = p.poly.at(p.len), t = p.poly.tangent(p.len), Q = q.poly.at(0);
+  return dist(P, Q) <= CROSS_REACH && (Q.x - P.x) * t.x + (Q.y - P.y) * t.y >= -5;
 };
 
 /** the lanes a connector from lane `a` of `ein` may end in: those leaving its junction, or starting at another node nearby */

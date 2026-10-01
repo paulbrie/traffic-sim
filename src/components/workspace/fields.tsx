@@ -13,7 +13,7 @@ export function IdChip({ id, className }: { id: string; className?: string }) {
   return (
     <button
       type="button" title="Copy the ID"
-      className={cn("rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] font-normal tracking-normal normal-case text-muted-foreground hover:bg-accent hover:text-foreground", className)}
+      className={cn("min-w-0 max-w-full truncate rounded bg-muted px-1.5 py-0.5 text-left font-mono text-[11px] font-normal tracking-normal normal-case text-muted-foreground hover:bg-accent hover:text-foreground", className)}
       onClick={e => { e.stopPropagation(); navigator.clipboard?.writeText(id).then(() => toast.success(`Copied ${id}`), () => {}); }}
     >{id}</button>
   );

@@ -235,10 +235,24 @@ export function PlanCanvas() {
       }
       return best;
     }
-    /** the nearest lane connector through a junction */
-    function hitConnector(p: Vec): string | null {
+    /**
+     * The junction being edited (its nodes, by index): the one selected, or that of a selected lane (where
+     * it leads) or connector. Its connectors are drawn and can be clicked even with the connector layer off.
+     */
+    function focusNodes(): number[] {
+      const c = simController.compiled, sel = u.selection;
+      if (!sel) return [];
+      let n: CNode | undefined;
+      if (sel.kind === "node") n = c.nodeById.get(sel.id);
+      else if (sel.kind === "lane") { const [lid, dir] = sel.id.split("|"); n = c.edgeByKey.get(`${lid}:${dir}`)?.to; }
+      else if (sel.kind === "connector") n = c.nodeById.get(sel.id.split("|")[0]);
+      return n && n.ringR === 0 && n.degree >= 2 ? n.cluster.map(k => k.idx) : [];
+    }
+    /** the nearest lane connector through a junction (only those of `only`, node indexes, when given) */
+    function hitConnector(p: Vec, only?: Set<number>): string | null {
       let best: string | null = null, bd = Math.max(1.2, pxToM(8));
       for (const c of connectorsOf(simController.compiled)) {
+        if (only && !only.has(c.node.idx)) continue;
         const q = c.pts;
         for (let k = 2; k < q.length; k += 2) {
           const ax = q[k - 2], ay = q[k - 1], dx = q[k] - ax, dy = q[k + 1] - ay, L2 = dx * dx + dy * dy || 1;
@@ -251,8 +265,10 @@ export function PlanCanvas() {
     }
     /**
      * What a click selects among the layers that are on, smallest objects first (the order of the
-     * "all layers" default): points and junctions, bus stops, vehicles, lane connectors (where drawn),
-     * roads, lanes (where roads are off), buildings. Zones pick entry points and buildings.
+     * "all layers" default): points and junctions, bus stops, vehicles, lane connectors (where drawn: all of
+     * them, or the junction being edited), lanes (zoomed in enough to aim at one), roads, then lanes (zoomed
+     * out, with roads off), buildings. Roads come last of the street objects: what is on them is picked first.
+     * Zones pick entry points and buildings.
      */
     function pickInLayers(layers: readonly LayerId[], sx: number, sy: number, w: Vec): Selection | null {
       const c = simController.compiled, on = (l: LayerId) => layers.includes(l);
@@ -264,7 +280,12 @@ export function PlanCanvas() {
       if (on("stops")) { const id = hitStop(w); if (id) return { kind: "stop", id }; }
       if (on("vehicles")) { const v = simController.sim?.vehicleNear(w.x, w.y, Math.max(3, pxToM(10))); if (v) return { kind: "vehicle", id: String(v.id) }; }
       // (connectors are only drawn when highlighted or switched on in the display options)
-      if (on("connectors") && (u.display.connectors || highlightedLayers(layers).includes("connectors"))) { const id = hitConnector(w); if (id) return { kind: "connector", id }; }
+      if (on("connectors")) {
+        const all = u.display.connectors || highlightedLayers(layers).includes("connectors"), focus = focusNodes();
+        if (all || focus.length) { const id = hitConnector(w, all ? undefined : new Set(focus)); if (id) return { kind: "connector", id }; }
+      }
+      // lanes before their road once a lane is wide enough on screen to aim at (about 12 px)
+      if (on("lanes") && cam.scale * 3.2 >= 12) { const id = hitLane(w); if (id) return { kind: "lane", id }; }
       // (with road surfaces hidden, roads can always be picked: their outline is all there is to click)
       const roadsOn = on("roads") || u.display.maskRoads;
       if (roadsOn || on("counters")) { const l = hitLink(w); if (l && (roadsOn || ops.linkById(net, l.id)?.counter)) return { kind: "link", id: l.id }; }
@@ -720,15 +741,20 @@ export function PlanCanvas() {
           calib: u.calib.active ? { a: u.calib.a, b: u.calib.b, cursor: cursorWorld } : null,
           buildings: u.display.buildings,
           satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, highlight: highlightedLayers(u.layers), maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
+          focusNodes: focusNodes(),
           connectPick: (() => {
             if (drag?.mode === "connEnd") {
               const t = connEndTargets(drag.id, drag.which);
-              return t ? { from: t.fixed, targets: t.list.map(x => x.lp.poly.pts), cursor: cursorWorld } : null;
+              if (!t) return null;
+              // (the same snapping as when it is dropped)
+              const cw = cursorWorld, snap = cw ? t.list.map(x => ({ x, d: Math.hypot(x.p.x - cw.x, x.p.y - cw.y) })).filter(x => x.d < Math.max(LW, pxToM(14))).sort((a, b) => a.d - b.d)[0]?.x.p ?? null : null;
+              return { from: t.fixed, targets: t.list.map(x => x.lp.poly.pts), ends: t.list.map(x => x.p), snap, cursor: cursorWorld };
             }
             const cf = u.connectFrom, ts = cf ? connectTargets(cf) : null;
             if (!cf || !ts) return null;
             const [lid, dir, ln] = cf.split("|"), lp = simController.compiled.edgeByKey.get(`${lid}:${dir}`)!.lanes[Number(ln)];
-            return { from: lp.poly.at(lp.len), targets: ts.map(t => t.lp.poly.pts), cursor: cursorWorld };
+            const cw = cursorWorld, over = cw ? ts.find(t => t.lp.poly.project(cw.x, cw.y).d < LW * 0.6) : undefined;
+            return { from: lp.poly.at(lp.len), targets: ts.map(t => t.lp.poly.pts), ends: ts.map(t => t.lp.poly.at(0)), snap: over ? over.lp.poly.at(0) : null, cursor: cursorWorld };
           })(),
           shape: (() => {
             const sh = u.shape, on = sh.edit ? ops.nodeById(net, sh.edit) : null;

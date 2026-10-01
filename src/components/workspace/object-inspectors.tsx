@@ -25,7 +25,7 @@ function Rows({ rows }: { rows: [string, React.ReactNode][] }) {
 function Head({ kind, title, id }: { kind: string; title: string; id?: string }) {
   return (
     <div className="border-b px-4 py-3">
-      <div className="flex items-center gap-2 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{kind}{id && <IdChip id={id} />}</div>
+      <div className="flex min-w-0 items-center gap-2 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"><span className="shrink-0">{kind}</span>{id && <IdChip id={id} />}</div>
       <div className="truncate font-medium">{title}</div>
     </div>
   );
@@ -143,7 +143,7 @@ function ConnectorEdit({ v }: { v: ReturnType<typeof connectorsOf>[number] }) {
           {Array.from({ length: m.out.n }, (_, q) => <option key={q} value={q}>{q + 1}</option>)}
         </select>
       </label>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={() => apply(null)}>Remove this connection</Button>
         {manual && <Button variant="ghost" size="sm" title="All of this junction's connectors back to automatic" onClick={() => { commit(resetConnectors(network$.getValue(), nodeId)); select({ kind: "node", id: nodeId }); }}>Junction back to automatic</Button>}
       </div>

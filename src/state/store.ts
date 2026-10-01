@@ -86,7 +86,7 @@ export const ui = new DeepSubject<UiState>(
     tool: "select",
     selection: null,
     view: "2d",
-    snap: { grid: true, step: 5, angle: true },
+    snap: { grid: false, step: 5, angle: true },
     draft: { lanesF: 1, lanesB: 1, busF: false, busB: false, speed: 50, curved: false },
     trace: { from: null, to: null, lane: null },
     multi: [],

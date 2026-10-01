@@ -115,7 +115,11 @@ export function buildPaths(geo: RoadGeo): PathCache {
 
 export interface Overlay {
   /** drawing a lane connector: where it starts, the lanes it may end in, the pointer */
-  connectPick?: { from: Vec; targets: ArrayLike<number>[]; cursor: Vec | null } | null;
+  /**
+   * Drawing or moving a lane connector: the fixed end, the lanes it may go to (with the points it would attach
+   * at), the one it would snap to now, and the pointer.
+   */
+  connectPick?: { from: Vec; targets: ArrayLike<number>[]; ends?: Vec[]; snap?: Vec | null; cursor: Vec | null } | null;
   /** junction editor: the outline being edited (its points), a painted area being drawn, the pointer */
   shape?: { outline: Vec[] | null; paint: Vec[] | null; cursor: Vec | null };
   selection: { kind: string; id: string } | null;
@@ -142,6 +146,8 @@ export interface Overlay {
   onTile?: () => void;
   /** draw every lane connector through the junctions */
   connectors: boolean;
+  /** junctions (node indexes) whose connectors are drawn anyway: the one selected, or of a selected lane / connector */
+  focusNodes?: readonly number[];
   /** the layer whose objects are highlighted ("all" = none) */
   /** layers whose objects are highlighted (lane outlines, connectors, rings around junctions…) */
   highlight: readonly string[];
@@ -417,8 +423,10 @@ export function drawScene(
     if (sim) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo, 1, view); }
   }
 
-  if (ov.connectors || ov.highlight.includes("connectors")) {
-    const list = connectorsOf(compiled);
+  const allConnectors = ov.connectors || ov.highlight.includes("connectors");
+  if (allConnectors || ov.focusNodes?.length) {
+    const focus = allConnectors ? null : new Set(ov.focusNodes);
+    const list = focus ? connectorsOf(compiled).filter(c => focus.has(c.node.idx)) : connectorsOf(compiled);
     ctx.strokeStyle = "#e8c547"; ctx.globalAlpha = 0.9; ctx.lineWidth = Math.max(0.18, px * 1.2); ctx.lineCap = "round";
     ctx.beginPath();
     for (const { pts } of list) { ctx.moveTo(pts[0], pts[1]); for (let k = 2; k < pts.length; k += 2) ctx.lineTo(pts[k], pts[k + 1]); }
@@ -608,11 +616,16 @@ export function drawScene(
   if (ov.connectPick) {
     const cp = ov.connectPick;
     ctx.strokeStyle = pal.select; ctx.lineWidth = 3; ctx.globalAlpha = 0.55; ctx.lineCap = "round";
+    // where it can attach: a ring at each lane end, the one it would snap to filled
+    ctx.lineWidth = 2;
+    for (const e of cp.ends ?? []) { const q = toScreen(cam, e.x, e.y); ctx.fillStyle = "#ffffff"; ctx.strokeStyle = pal.select; ctx.beginPath(); ctx.arc(q.x, q.y, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
     for (const pts of cp.targets) { ctx.beginPath(); for (let k = 0; k < pts.length; k += 2) { const q = toScreen(cam, pts[k], pts[k + 1]); if (k) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); } ctx.stroke(); }
     ctx.globalAlpha = 1;
     const a = toScreen(cam, cp.from.x, cp.from.y);
     ctx.fillStyle = pal.select; ctx.beginPath(); ctx.arc(a.x, a.y, 5, 0, Math.PI * 2); ctx.fill();
-    if (cp.cursor) { const b = toScreen(cam, cp.cursor.x, cp.cursor.y); ctx.setLineDash([6, 4]); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]); }
+    const to = cp.snap ?? cp.cursor;
+    if (to) { const b = toScreen(cam, to.x, to.y); ctx.strokeStyle = pal.select; ctx.setLineDash(cp.snap ? [] : [6, 4]); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]); }
+    if (cp.snap) { const b = toScreen(cam, cp.snap.x, cp.snap.y); ctx.fillStyle = pal.select; ctx.beginPath(); ctx.arc(b.x, b.y, 9, 0, Math.PI * 2); ctx.fill(); }
   }
   // junction editor: the outline's points (drag; double-click an edge to add, Alt+click to remove),
   // and the painted area being drawn (click points, double-click or Enter to finish)
@@ -855,7 +868,8 @@ function drawSelectionIds(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palet
     if (lp) tags.push({ at: lp.poly.at(lp.len / 2), text: sel.id });
   } else if (sel.kind === "connector") {
     const c = connectorsOf(compiled).find(x => connectorId(x) === sel.id);
-    if (c) { const k = Math.floor(c.pts.length / 4) * 2; tags.push({ at: { x: c.pts[k], y: c.pts[k + 1] }, text: sel.id }); }
+    // (readable: its junction, the lane it leaves and where it goes; the full id is in the inspector)
+    if (c) { const k = Math.floor(c.pts.length / 4) * 2, ref = junctionRefs(compiled).get(c.node.def.id) ?? c.node.def.id; tags.push({ at: { x: c.pts[k], y: c.pts[k + 1] }, text: `${ref} · ${c.inLane + 1} → ${c.move.out.link.name || c.move.out.link.id} ${c.outLane + 1}` }); }
   }
   ctx.font = `500 11px ${pal.mono}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
   for (const t of tags) {
