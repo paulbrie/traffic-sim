@@ -12,7 +12,7 @@ import type { Network, Vec } from "@/engine/types";
 import { commit, endGesture, highlightedLayers, network$, select, toggleRoad, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { noteDraw } from "@/state/perf";
-import { changeConnection, connectLanes } from "@/state/connections";
+import { changeConnection, connectLanes, lanesArrivingNear, lanesLeavingNear, setConnectorShape } from "@/state/connections";
 import { viewCmd$, viewport } from "@/state/commands";
 import { underlayImg$ } from "@/state/underlay-image";
 import { worldToImage, type Underlay } from "@/lib/underlay";
@@ -164,11 +164,11 @@ export function PlanCanvas() {
       }
       return best;
     }
-    /** drawing a connector from lane `from` ("linkId|dir|lane"): the lanes it may end in (those leaving its junction) */
+    /** drawing a connector from lane `from` ("linkId|dir|lane"): the lanes it may end in (leaving its junction, or starting nearby) */
     function connectTargets(from: string) {
       const [lid, dir, ln] = from.split("|"), c = simController.compiled, e = c.edgeByKey.get(`${lid}:${dir}`);
       if (!e || !e.lanes[Number(ln)]) return null;
-      return e.to.arms.flatMap(a => (a.outEdge ? a.outEdge.lanes.map(lp => ({ e: a.outEdge!, lp })) : []));
+      return lanesLeavingNear(c, e, Number(ln));
     }
     /** index of the outline point (of the junction whose outline is being edited) under the pointer, or -1 */
     function hitOutlinePoint(sx: number, sy: number): number {
@@ -191,11 +191,10 @@ export function PlanCanvas() {
     function connEndTargets(id: string, which: "start" | "end") {
       const v = connectorsOf(simController.compiled).find(x => connectorId(x) === id);
       if (!v) return null;
-      const n = v.node;
-      const list = n.arms.flatMap(a => {
-        const e = which === "end" ? a.outEdge : a.inEdge;
-        return e ? e.lanes.map(lp => ({ e, lp, p: which === "end" ? lp.poly.at(0) : lp.poly.at(lp.len) })) : [];
-      });
+      const n = v.node, c = simController.compiled;
+      // (lanes of its junction, or of another node nearby)
+      const list = (which === "end" ? lanesLeavingNear(c, v.move.in, v.inLane) : lanesArrivingNear(c, v.move.out, v.outLane))
+        .map(x => ({ ...x, p: which === "end" ? x.lp.poly.at(0) : x.lp.poly.at(x.lp.len) }));
       const h = connectorHandles(n, v.move, v.inLane, v.outLane);
       return { v, list, fixed: which === "end" ? h.P : h.Q };
     }
@@ -526,12 +525,12 @@ export function PlanCanvas() {
           // Shift (or already free): the handle goes wherever it is dragged
           const rel = (p: Vec) => ({ x: p.x - np.x, y: p.y - np.y });
           const c1 = d.which === "k1" ? rel(w) : rel(h.h1), c2 = d.which === "k2" ? rel(w) : rel(h.h2);
-          commit(ops.setConnShape(net, v.node.def.id, key, { c1, c2 }), `conn:${d.id}`);
+          commit(setConnectorShape(net, v.node.def.id, key, { c1, c2 }), `conn:${d.id}`);
         } else {
           // each handle slides along its lane's direction (the path stays tangent to both lanes)
           const k = d.which === "k1" ? (w.x - h.P.x) * h.tp.x + (w.y - h.P.y) * h.tp.y : (h.Q.x - w.x) * h.tq.x + (h.Q.y - w.y) * h.tq.y;
           const reach: [number, number] = d.which === "k1" ? [Math.max(0.5, k), h.k2] : [h.k1, Math.max(0.5, k)];
-          commit(ops.setConnShape(net, v.node.def.id, key, reach), `conn:${d.id}`);
+          commit(setConnectorShape(net, v.node.def.id, key, reach), `conn:${d.id}`);
         }
         return;
       }

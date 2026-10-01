@@ -1,4 +1,4 @@
-import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type ReversibleDef, type PlanSettings, type Vec, type ConnShape, type LaneTargets } from "./types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type ReversibleDef, type PlanSettings, type Vec, type ConnShape, type ConnectorDef, type LaneTargets } from "./types";
 import { sanitizeParams } from "./params";
 
 const num = (v: unknown, lo: number, hi: number, def: number) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
@@ -27,6 +27,8 @@ function phases(v: unknown) {
     ...(typeof p?.name === "string" && p.name ? { name: str(p.name, "", 60) } : {}),
     green: num(p?.green, 3, 180, DEFAULT_SIGNAL.green),
     ...(typeof p?.minGreen === "number" ? { minGreen: num(p.minGreen, 1, 120, DEFAULT_SIGNAL.minGreen) } : {}),
+    // (lights per connector: the connectors green in it, by key "in|a>out|b")
+    ...(Array.isArray(p?.conns) ? { conns: [...new Set((p.conns as unknown[]).filter((k): k is string => typeof k === "string" && /^[\w-]{1,64}:-?1\|\d>[\w-]{1,64}:-?1\|\d$/.test(k)))].slice(0, 512) } : {}),
   }));
 }
 
@@ -68,6 +70,8 @@ export function sanitizeNetwork(input: unknown): Network {
       ...(n.ringLanes === 2 ? { ringLanes: 2 as const } : {}),
       ...(laneMapOf(n.laneMap) ?? {}),
       ...(connShapeOf(n.connShape) ?? {}),
+      ...(connectorsOf(n.connectors) ?? {}),
+      ...(closedOf(n.closed) ?? {}),
       ...(ptsOf(n.outline, 400) ? { outline: ptsOf(n.outline, 400)! } : {}),
       ...(paintOf(n.paint) ?? {}),
       ...(n.laneLines === true ? { laneLines: true } : {}),
@@ -238,26 +242,54 @@ function paintOf(v: unknown): { paint: { kind: "hatch" | "island"; pts: Vec[] }[
   return out.length ? { paint: out } : null;
 }
 
-/** hand-set connector shapes: well-formed keys, two handle lengths (0.5–200 m), at most 256 */
+/** a connector's curve: free handle points (relative to the node, within 300 m), or two handle lengths (0.5–200 m) */
+function shapeOf(r: unknown): ConnShape | null {
+  if (r && typeof r === "object" && !Array.isArray(r)) {
+    const f = (p: unknown) => { const x = Number((p as Vec)?.x), y = Number((p as Vec)?.y); return isFinite(x) && isFinite(y) && Math.abs(x) < 300 && Math.abs(y) < 300 ? { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 } : null; };
+    const c1 = f((r as { c1?: unknown }).c1), c2 = f((r as { c2?: unknown }).c2);
+    return c1 && c2 ? { c1, c2 } : null;
+  }
+  if (!Array.isArray(r) || r.length !== 2) return null;
+  const [a, b] = r.map(Number);
+  if (!isFinite(a) || !isFinite(b)) return null;
+  const c = (x: number) => Math.round(Math.min(200, Math.max(0.5, x)) * 100) / 100;
+  return [c(a), c(b)];
+}
+
+/** hand-set connector shapes: well-formed keys, at most 256 */
 function connShapeOf(v: unknown): { connShape: Record<string, ConnShape> } | null {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   const out: Record<string, ConnShape> = {};
   for (const [k, r] of Object.entries(v as Record<string, unknown>).slice(0, 256)) {
     if (!/^[\w-]{1,64}:-?1\|\d>[\w-]{1,64}:-?1\|\d$/.test(k)) continue;
-    // free handle points (relative to the node, within 300 m)
-    if (r && typeof r === "object" && !Array.isArray(r)) {
-      const f = (p: unknown) => { const x = Number((p as Vec)?.x), y = Number((p as Vec)?.y); return isFinite(x) && isFinite(y) && Math.abs(x) < 300 && Math.abs(y) < 300 ? { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 } : null; };
-      const c1 = f((r as { c1?: unknown }).c1), c2 = f((r as { c2?: unknown }).c2);
-      if (c1 && c2) out[k] = { c1, c2 };
-      continue;
-    }
-    if (!Array.isArray(r) || r.length !== 2) continue;
-    const [a, b] = r.map(Number);
-    if (!isFinite(a) || !isFinite(b)) continue;
-    const c = (x: number) => Math.round(Math.min(200, Math.max(0.5, x)) * 100) / 100;
-    out[k] = [c(a), c(b)];
+    const sh = shapeOf(r);
+    if (sh) out[k] = sh;
   }
   return Object.keys(out).length ? { connShape: out } : null;
+}
+
+const EDGE_KEY = /^[\w-]{1,64}:-?1$/;
+/** a junction's connectors: edge keys, lanes in range, no repeats, at most 512 */
+function connectorsOf(v: unknown): { connectors: ConnectorDef[] } | null {
+  if (!Array.isArray(v)) return null;
+  const lane = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x >= 0 && x < MAX_LANES_AT_LINE;
+  const out: ConnectorDef[] = [], seen = new Set<string>();
+  for (const c of v.slice(0, 512)) {
+    const x = c as Record<string, unknown>;
+    if (!x || typeof x.in !== "string" || typeof x.out !== "string" || !EDGE_KEY.test(x.in) || !EDGE_KEY.test(x.out) || !lane(x.a) || !lane(x.b)) continue;
+    const k = `${x.in}|${x.a}>${x.out}|${x.b}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const sh = x.shape === undefined ? null : shapeOf(x.shape);
+    out.push({ in: x.in, a: x.a as number, out: x.out, b: x.b as number, ...(sh ? { shape: sh } : {}) });
+  }
+  // (an empty list is kept: every road here unconnected on purpose is still set by hand)
+  return { connectors: out };
+}
+function closedOf(v: unknown): { closed: string[] } | null {
+  if (!Array.isArray(v)) return null;
+  const out = [...new Set(v.filter((x): x is string => typeof x === "string" && EDGE_KEY.test(x)))].slice(0, 64);
+  return out.length ? { closed: out } : null;
 }
 
 export function sanitizeSettings(input: unknown): PlanSettings {

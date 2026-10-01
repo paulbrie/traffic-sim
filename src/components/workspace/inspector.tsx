@@ -33,6 +33,7 @@ import { LaneConnectionsSection } from "./lane-connections";
 import { JunctionShapeSection } from "./junction-shape";
 import { ReversibleSection } from "./reversible-lane";
 import { CarriagewaysSection } from "./carriageways";
+import { resetApproach } from "@/state/connections";
 
 const CONTROL_LABEL: Record<Control, string> = { priority: "Priority (first come)", free: "Free (go when clear)", stop: "All-way stop", lights: "Traffic lights", roundabout: "Roundabout" };
 const SPEEDS = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 130];
@@ -134,7 +135,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
       </Section>
       {(degree >= 3 || crossing) && (
         <Section title="Control">
-          <Select value={crossing && node.control === "roundabout" ? "priority" : node.control} onValueChange={v => set({ control: v as Control })}>
+          <Select value={crossing && node.control === "roundabout" ? "priority" : node.control} onValueChange={v => commit((cn?.cluster ?? []).reduce((nw, k) => ops.updateNode(nw, k.def.id, { control: v as Control }), ops.updateNode(net, node.id, { control: v as Control })))}>
             <SelectTrigger className="w-full" aria-label="Junction control"><SelectValue /></SelectTrigger>
             <SelectContent>{(Object.keys(CONTROL_LABEL) as Control[]).filter(k => !(crossing && k === "roundabout")).map(k => <SelectItem key={k} value={k}>{CONTROL_LABEL[k]}</SelectItem>)}</SelectContent>
           </Select>
@@ -477,7 +478,9 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
           // lane arrows set now win over lane connections set by hand at that junction for turns they leave out
           let next = ops.updateLink(net, L.id, F ? { turnsF: t } : { turnsB: t });
           const node = net.nodes.find(x => x.id === a.e.to.def.id), list = a.e.to.moves.get(a.e.idx) ?? [];
-          if (t && node?.laneMap) {
+          // (connectors written out: this approach's go, so it gets the ones its new arrows give)
+          if (node?.connectors) next = resetApproach(next, node.id, a.e.key);
+          else if (t && node?.laneMap) {
             for (const key of Object.keys(node.laneMap)) {
               if (!key.startsWith(`${a.e.key}>`)) continue;
               const m = list.find(x => `${a.e.key}>${x.out.key}` === key);

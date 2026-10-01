@@ -246,7 +246,7 @@ export abstract class SimMotion extends SimJunctions {
           this.ev(node, v, "request", `${node.ring ? this.mv(m, v.lane) : this.mv(pendConn)} · ${pendD.toFixed(0)} m from the line, ${(v.v * 3.6).toFixed(0)} km/h${stopFirst ? " · after stopping" : ""}`);
         }
         const arm = this.armOf(node, e);
-        if (arm >= 0) for (const p of this.lanePhases(node, arm, pendConn.inLane)) st.demand[p] = this.tick;
+        if (arm >= 0) this.noteDemand(pendConn);
         const cur = st.req.get(pendConn.entryKey);
         if (!cur || pendD < cur.d) st.req.set(pendConn.entryKey, { v, conn: pendConn, d: pendD, at: v.reqAt });
       }
@@ -293,7 +293,7 @@ export abstract class SimMotion extends SimJunctions {
       this.ev(node, v, "request", `${this.mv(c)} · ${d.toFixed(0)} m from the line, ${(v.v * 3.6).toFixed(0)} km/h · asked early: ${why}`);
     }
     const arm = this.armOf(node, c.inEdge);
-    if (arm >= 0) for (const p of this.lanePhases(node, arm, c.inLane)) st.demand[p] = this.tick;
+    if (arm >= 0) this.noteDemand(c);
     const cur = st.req.get(c.entryKey);
     if (!cur || d < cur.d) st.req.set(c.entryKey, { v, conn: c, d, at: v.early.at, early: true });
   }

@@ -9,6 +9,11 @@ export abstract class SimJunctions extends SimReversible {
   protected drivesThrough(p: Piece): boolean {
     return p.kind === "conn" && p.role === "turn" && throughConns(this.net, p.node).has(p);
   }
+  /** the reservations held at a junction: at its node, or over all the nodes it spans (see CNode.cluster) */
+  protected occOf(st: NodeState): Occ[] {
+    const cl = st.node.cluster;
+    return cl.length === 1 ? st.occ : cl.flatMap(k => this.ns[k.idx].occ);
+  }
   /** may go on into the junction ahead: let in, or driving through it */
   protected mayGo(u: Vehicle): boolean {
     if (u.granted && u.conn) return true;
@@ -56,7 +61,7 @@ export abstract class SimJunctions extends SimReversible {
         const allowed = lights ? red && (this.tick - p.redSince) * DT < this.P.pedWalk : this.tick >= p.until + this.P.pedYield / DT;
         p.claim = allowed;
         if (!allowed) return;
-        const busy = st.occ.some(o => arms.includes(o.conn.inEdge.inArm) || arms.includes(o.conn.outEdge.outArm));
+        const busy = st.occ.some(o => arms.includes(o.conn.inEdge.inArm) || (o.conn.outEdge.from === n && arms.includes(o.conn.outEdge.outArm)));
         if (busy) return;
         p.crossing = p.waiting; p.from = this.tick; p.until = this.tick + Math.ceil(this.pedTime(n, arms[0]) / DT);
         p.crossed += p.waiting; p.waitSum += p.waiting * (this.tick - p.since) * DT;
@@ -67,7 +72,7 @@ export abstract class SimJunctions extends SimReversible {
   /** pedestrians are on, or have claimed, a crossing this connector drives over */
   protected pedBlocks(n: CNode, c: Conn): boolean {
     if (!this.peds[n.idx].length) return false;
-    for (const k of [c.inEdge.inArm, c.outEdge.outArm]) {
+    for (const k of c.outEdge.from === n ? [c.inEdge.inArm, c.outEdge.outArm] : [c.inEdge.inArm]) {
       const p = this.pedCross(n, k);
       if (p && (p.crossing > 0 || p.claim)) return true;
     }
@@ -93,7 +98,7 @@ export abstract class SimJunctions extends SimReversible {
    */
   protected majorTraffic(node: CNode): Conn[] {
     const out: Conn[] = [];
-    for (const arm of node.arms) {
+    for (const arm of node.cluster.length === 1 ? node.arms : node.cluster.flatMap(k => k.arms)) {
       const e = arm.inEdge;
       if (!e || e.sign) continue;
       for (const lp of e.lanes) {
@@ -168,13 +173,12 @@ export abstract class SimJunctions extends SimReversible {
     const takeBack = (o: Occ) => { if (o.v.early?.conn === o.conn) o.v.early.granted = false; else { o.v.granted = false; o.v.conn = null; } };
     // at traffic lights a green-light grant is only a promise: if the light changes before the
     // vehicle reaches the stop line, it must stop unless it is too close to do so safely
-    if (st.node.def.control === "lights" && st.node.phases.length >= 2) {
+    if (this.lit(st.node)) {
       st.occ = st.occ.filter(o => {
         if (o.entered || o.sneak) return true;
         const v = o.v, d = toLine(o);
         if (d === null) return true;
-        const arm = this.armOf(st.node, o.conn.inEdge);
-        const sig = this.signalFor(st.node.idx, arm, o.conn.inLane);
+        const sig = this.connSignal(o.conn);
         if (sig === "green" || sig === null) return true;
         if (!this.mustGoOnSignal(v, d, sig)) { this.ev(st.node, v, "revoke", `light turned ${sig} ${d.toFixed(0)} m before the line; stops`); takeBack(o); return false; }
         return true;
@@ -183,7 +187,7 @@ export abstract class SimJunctions extends SimReversible {
     // give way / stop: a minor-road grant is withdrawn if priority traffic turns up before the
     // vehicle has committed (it can still stop comfortably at the line)
     const n0 = st.node;
-    const signedNode = n0.def.control === "priority" && n0.arms.some(a => a.inEdge?.sign);
+    const signedNode = n0.def.control === "priority" && n0.cluster.some(k => k.arms.some(a => a.inEdge?.sign));
     const majorNow = signedNode ? this.majorTraffic(n0) : [];
     if (majorNow.length) {
       st.occ = st.occ.filter(o => {
@@ -198,7 +202,7 @@ export abstract class SimJunctions extends SimReversible {
     if (!st.req.size) return;
     const reqs = [...st.req.values()];
     st.req.clear();
-    const n = st.node, lights = n.def.control === "lights" && n.phases.length >= 2;
+    const n = st.node, lights = this.lit(n);
     // free: vehicles waiting at the line take turns in arrival order (every entering lane gets its
     // go, like a zip), then the rest by distance; one still on its way can't jump the waiting ones
     const free = n.def.control === "free";
@@ -218,30 +222,30 @@ export abstract class SimJunctions extends SimReversible {
       const code = why.startsWith("path") ? "conflict" : why.startsWith("crosses") ? "queue-conflict" : why.startsWith("gives") ? "give-way" : why.startsWith("no room") ? "exit-full" : why.includes("light") ? "signal" : "other";
       this.ev(n, v, "deny", why, { code });
     };
-    const who = (c: Conn) => { const o = st.occ.find(x => x.conn === c); return o ? `#${o.v.id} (${this.mv(c)})` : this.mv(c); };
+    const held = this.occOf(st);
+    const who = (c: Conn) => { const o = held.find(x => x.conn === c); return o ? `#${o.v.id} (${this.mv(c)})` : this.mv(c); };
     for (const r of reqs) {
       const c = r.conn;
       let sneak = false;
       if (lights) {
-        const arm = this.armOf(n, c.inEdge);
-        const sig = this.signalFor(n.idx, arm, c.inLane);
+        const sig = this.connSignal(c);
         // a permissive turn waiting at the line for oncoming traffic clears on the yellow / all-red
         // of its own phase, once oncoming traffic has stopped (the conflict checks below still apply)
-        sneak = sig !== "green" && this.lanePhases(n, arm, c.inLane).includes(st.phase) && (c.move.turn === "L" || c.move.turn === "U")
+        sneak = sig !== "green" && this.greenIn(c, st.phase) && (c.move.turn === "L" || c.move.turn === "U")
           && r.d < 4 && r.v.v < 1 && this.tick - r.at > 30;
         if (sig !== "green" && !sneak && !this.mustGoOnSignal(r.v, r.d, sig)) { deny(r.v, `${sig} light`); continue; }
       }
       // pedestrians on (or about to step onto) the crossing it would drive over
       if (this.pedBlocks(n, c)) { deny(r.v, "waits for pedestrians on the crossing"); continue; }
       let ok = true, why = "", yielded = false;
-      for (const o of st.occ) if (conflicts(c, o.conn) && !this.pastConflict(o, c, r)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : ""; break; }
+      for (const o of held) if (conflicts(c, o.conn) && !this.pastConflict(o, c, r)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : ""; break; }
       if (ok) for (const b of blockers) if (conflicts(c, b)) { ok = false; why = log ? `crosses the path of a vehicle ahead in the queue (${this.mv(b)})` : ""; break; }
       if (ok && signed && this.minor(n, c.inEdge)) {
         // giving way means not crossing *or* joining the lane in front of priority traffic
         // (traffic in another lane of the road it joins doesn't matter)
         const clash = (b: Conn) => conflicts(c, b) || (b.outEdge === c.outEdge && b.outLane === c.outLane);
         for (const b of major) if (clash(b)) { ok = false; yielded = true; why = log ? `gives way to priority traffic (${this.mv(b)})` : ""; break; }
-        if (ok) for (const o of st.occ) if (!o.conn.inEdge.sign && clash(o.conn)) { ok = false; yielded = true; why = log ? `gives way to #${o.v.id} (${this.mv(o.conn)})` : ""; break; }
+        if (ok) for (const o of held) if (!o.conn.inEdge.sign && clash(o.conn)) { ok = false; yielded = true; why = log ? `gives way to #${o.v.id} (${this.mv(o.conn)})` : ""; break; }
       }
       // a vehicle that can't go because its exit is full, or because it gives way, does not hold up
       // the others behind it in arrival order (keep the junction moving: "don't block the box")
@@ -249,7 +253,8 @@ export abstract class SimJunctions extends SimReversible {
       if (ok && !this.exitRoom(st, c, r.v)) { ok = false; holdsQueue = false; why = log ? `no room on the exit (${c.outEdge.link.name || c.outEdge.link.id} lane ${c.outLane + 1})` : ""; }
       if (ok) {
         if (r.early) { if (r.v.early?.conn !== c) continue; r.v.early.granted = true; } else { r.v.conn = c; r.v.granted = true; }
-        st.occ.push({ v: r.v, conn: c, entered: false, sneak });
+        const occ: Occ = { v: r.v, conn: c, entered: false, sneak };
+        st.occ.push(occ); if (held !== st.occ) held.push(occ);
         if (log || this.vehLogged(r.v)) { this.lastDeny.delete(r.v.id); this.ev(n, r.v, "grant", `${this.mv(c)} · ${r.d.toFixed(0)} m from the line, waited ${((this.tick - r.at) / 10).toFixed(1)} s${sneak ? " · clears on the change (oncoming stopped)" : ""}`, this.md(c.move, c.inLane, c.outLane)); }
       } else { if ((!free || atLine(r)) && holdsQueue) blockers.push(c); deny(r.v, why); }
     }

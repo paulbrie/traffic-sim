@@ -275,7 +275,7 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
       const node = e.to;
       if (node.controlled && !node.deadEnd) {
         const end = ec.at(ec.len), t = ec.tangent(ec.len), r = { x: -t.y, y: t.x };
-        const ctl = node.def.control;
+        const ctl = node.signals.def.control;
         const kind = node.ringR > 0 ? "yield"
           : ctl === "stop" && node.degree >= 2 ? "stop"
             : ctl === "lights" && node.degree >= 2 ? "signal"

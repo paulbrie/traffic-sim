@@ -44,7 +44,7 @@ export function JunctionShapeSection({ net, node }: { net: Network; node: NodeDe
         <>
           <label className="flex items-center justify-between gap-2 text-sm">
             <span>Line up lanes</span>
-            <Switch checked={!!node.align} onCheckedChange={v => commit(ops.updateNode(net, node.id, v ? { align: true, connShape: undefined } : { align: undefined }))} aria-label="Line up lanes" />
+            <Switch checked={!!node.align} onCheckedChange={v => commit(ops.updateNode(net, node.id, v ? { align: true, connShape: undefined, ...(node.connectors ? { connectors: node.connectors.map(x => ({ in: x.in, a: x.a, out: x.out, b: x.b })) } : {}) } : { align: undefined }))} aria-label="Line up lanes" />
           </label>
           <p className="text-xs text-muted-foreground">
             A one-way road carrying on one direction of a two-way road here (a road splitting into two carriageways) gets its

@@ -86,7 +86,13 @@ which lane of each exit, per turn. They are worked out automatically; change any
 a turn with –), and the arrow puts a turn back to automatic. Clicking a single lane connector on the map offers the
 same. The section also lists problems: a road that leads nowhere, a lane with no connection, an exit lane nothing
 feeds, and lanes of one approach whose paths cross. *Add a connector* links any lane coming in to any lane going out,
-even where there was no turn (it becomes one, whatever the lane arrows say). Stored per node (`laneMap`).
+even where there was no turn (it becomes one, whatever the lane arrows say). Lane connectors are automatic until one
+is changed (in the inspector or on the map); then the junction's whole set is written out (`NodeDef.connectors`: lane of
+a road arriving → lane of a road leaving, with its curve) and kept as it is: turns exist only where connectors say so.
+A road with no connectors of its own (one added since) still gets the automatic ones; one whose last connector is
+removed is `closed`. **Back to automatic** in Lane connections drops the written-out set; changing an approach's lane
+arrows hands that approach back to automatic. Splitting, reversing and merging roads keep the connectors at their
+junctions (`src/state/connections.ts`; the older per-turn `laneMap` / `connShape` are still read).
 **Driving through** a junction: at priority and free junctions without pedestrians, a turn whose paths cross and
 join no other path there (e.g. the far side of a two-way road when the side road only turns right in and out) is
 driven without stopping or asking; it is tagged *through* in Lane connections, and at 4-way junctions its lane lines
@@ -94,10 +100,17 @@ and centre line carry on across. Switch off the turns that cross a direction to 
 junction (`throughConns` in `compile.ts`). **Carriageways** (road inspector → Carriageways): splits a two-way road
 into two one-way roads with a gap between them — the selected roads (`Shift`+click), or the road and its
 continuation straight on through junctions, up to lights, roundabouts and entry points. Each junction on the way is
-split too, every side road joining the carriageway on its own side; with a gap of 15 m or more, *openings* add a
-crossing through the gap at each junction so side roads still reach the other direction. The road splits a little
-before the junction at each end (with *Line up lanes* on, no turning round there), so that junction keeps its shape
-(`src/state/carriageways.ts`).
+split too, every side road joining the carriageway on its own side; *openings* add lane connectors across the gap at
+each junction (left turns from the side road into the other direction, and from it into the side road), which makes
+the two halves one junction. The road splits a little before the junction at each end (with *Line up lanes* on, no
+turning round there), so that junction keeps its shape (`src/state/carriageways.ts`).
+**Junctions over several points**: a connector may run from a lane ending at one node to a lane starting at another
+nearby (up to 60 m, `CROSS_REACH`); nodes linked that way make one junction (`CNode.cluster`): each grants its
+crossings seeing the others' reservations and priority traffic, so paths crossing between them never go together, and
+its control is set for all of them (a plain road point in it becomes part of the junction). Such connectors are drawn
+like any other: from a lane in its inspector (*Connect from this lane*, then click a lane — lanes starting at nodes
+nearby are offered too), by dragging a selected connector's end onto a lane at another node, or with *Add a connector*
+in Lane connections (*Starting nearby*).
 **Free junctions** (no signs, no lights): vehicles waiting at the line go in the order they arrived, so every
 entering lane gets its turn and one still on its way can't jump them; crossings that end in the same lane zip in,
 each following the one ahead. **Slip lanes** (junction inspector → Slip lanes): a free right turn that leaves the approach before the junction, curves
@@ -117,7 +130,10 @@ The junction then runs your own phases, in order, each with its own green and mi
 an arriving road to give it green in a phase (e.g. a protected left-turn arrow: the left lane green in a phase of its
 own). Turns across oncoming traffic still give way when the oncoming lanes are green too, and a lane green in two
 phases in a row stays green through the change. Each lane then gets its own signal head. **Back to automatic**
-returns to the worked-out phases.
+returns to the worked-out phases. **Set lights per connector** (or *Per connector* there) gives green connector by
+connector instead (`SignalPhase.conns`): a lane going straight on and left can have the left on an arrow of its own.
+At a junction over several nodes (see above) the phases list the connectors of all of them, and the lights of all
+run from that node (`CNode.signals`): one timing, demand from all of them, lane heads worked out from the connectors.
 
 Route tracer (Traffic → Route tracer): pick an entry point, an exit and the lane to start in; the fastest route with
 no traffic is drawn on the map (length, junctions, free-flow time), and **Send a test vehicle** puts one car on it that

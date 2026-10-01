@@ -6,7 +6,7 @@
  * before the junction there, which keeps its shape.
  */
 import { newId } from "@/engine/sample";
-import { LANE_WIDTH, lanesAtLine, type LinkDef, type Network, type NodeDef, type Vec } from "@/engine/types";
+import { LANE_WIDTH, lanesAtLine, type ConnectorDef, type LinkDef, type Network, type NodeDef, type Vec } from "@/engine/types";
 import { linkById, linkLength, linkPoint, linksAt, nodeById, round, splitLink } from "./ops";
 
 /** the roads to split, in order along the road, and the nodes between them (one more than the roads) */
@@ -115,7 +115,10 @@ function tAt(l: LinkDef, A: Vec, B: Vec, d: number): number {
 export interface SplitOptions {
   /** width of the gap between the carriageways (m) */
   gap: number;
-  /** a crossing through the gap at each junction, so traffic from a side road can reach the other direction */
+  /**
+   * Openings at the junctions: lane connectors from each side road across the gap into the other direction's
+   * inner lane, and from that lane into the side road (left turns), so both carriageways make one junction there
+   */
   openings: boolean;
 }
 
@@ -171,11 +174,12 @@ export function splitCarriageways(net0: Network, run0: Run, opts: SplitOptions):
   const runIds = new Set(links.map(x => x.id));
   const moved = new Map<string, Partial<LinkDef>>();
   let junctions = 0;
-  const crossings: LinkDef[] = [];
+  /** per divided node: its two halves and the side roads on each */
+  const halves: { i: number; F: NodeDef; B: NodeDef; onF: LinkDef[]; onB: LinkDef[] }[] = [];
   nodes.forEach((id, i) => {
     if (i === 0 || i === k) { fwdNode.push(id); bwdNode.push(id); return; }
     const def = nodeById(net, id)!, fr = frame[i];
-    const copy = (o: Vec): NodeDef => ({ ...def, id: newId("n"), x: round(def.x + o.x), y: round(def.y + o.y), laneMap: undefined, connShape: undefined, outline: undefined, paint: undefined, align: undefined });
+    const copy = (o: Vec): NodeDef => ({ ...def, id: newId("n"), x: round(def.x + o.x), y: round(def.y + o.y), laneMap: undefined, connShape: undefined, connectors: undefined, closed: undefined, outline: undefined, paint: undefined, align: undefined });
     const F = copy(fr.f), B = copy(fr.b);
     fwdNode.push(F.id); bwdNode.push(B.id); added.push(F, B); dropped.add(id);
     const side = linksAt(net, id).filter(l => !runIds.has(l.id));
@@ -189,10 +193,7 @@ export function splitCarriageways(net0: Network, run0: Run, opts: SplitOptions):
       if (l.slip === id) patch.slip = null;
       moved.set(l.id, patch);
     }
-    if (opts.openings && side.length) {
-      const L = defs[i - 1];
-      crossings.push({ id: newId("l"), name: "", from: F.id, to: B.id, c1: null, c2: null, lanesF: 1, lanesB: 1, busF: false, busB: false, speed: Math.min(30, L.speed), laneWidth: L.laneWidth, level: L.level });
-    }
+    halves.push({ i, F, B, onF: side.filter(l => moved.get(l.id)?.from === F.id || moved.get(l.id)?.to === F.id), onB: side.filter(l => moved.get(l.id)?.from === B.id || moved.get(l.id)?.to === B.id) });
   });
 
   // 4. the carriageways: per road, one one-way road each way (the backward one drawn in its own direction)
@@ -228,7 +229,7 @@ export function splitCarriageways(net0: Network, run0: Run, opts: SplitOptions):
 
   let links2 = [
     ...net.links.filter(l => !runIds.has(l.id)).map(l => (moved.has(l.id) ? { ...l, ...moved.get(l.id) } : l)),
-    ...fwd, ...bwd, ...crossings,
+    ...fwd, ...bwd,
   ];
   // turning shares name the road taken at the junction ahead: an old road becomes the carriageway
   // leaving that junction (or the share goes, when that direction isn't reachable from there any more)
@@ -251,6 +252,22 @@ export function splitCarriageways(net0: Network, run0: Run, opts: SplitOptions):
   const noU = new Map<string, NodeDef["laneMap"]>();
   for (const [S, into, out] of [[nodes[0], bwd[0], fwd[0]], [nodes[k], fwd[k - 1], bwd[k - 1]]] as const)
     noU.set(S, { ...(noU.get(S) ?? {}), [`${into.id}:1>${out.id}:1`]: Array(lanesAtLine(into, 1)).fill(null) });
+  // openings: left turns across the gap as lane connectors (side road ↔ the other carriageway's inner lane)
+  if (opts.openings) for (const { i, F, B, onF, onB } of halves) {
+    const at = new Map<NodeDef, ConnectorDef[]>([[F, []], [B, []]]);
+    /** the side road's edge arriving at / leaving node `x` (null where it carries no traffic that way) */
+    const arrive = (l: LinkDef, x: NodeDef) => { const toX = (moved.get(l.id)?.to ?? l.to) === x.id; return (toX ? l.lanesF : l.lanesB) > 0 ? `${l.id}:${toX ? 1 : -1}` : null; };
+    const leave = (l: LinkDef, x: NodeDef) => { const fromX = (moved.get(l.id)?.from ?? l.from) === x.id; return (fromX ? l.lanesF : l.lanesB) > 0 ? `${l.id}:${fromX ? 1 : -1}` : null; };
+    // side roads on the forward carriageway reach the backward one (leaving B_i toward B_{i-1}), and are reached from it
+    for (const [x, other, sides, into, from] of [[F, B, onF, bwd[i - 1], bwd[i]], [B, F, onB, fwd[i], fwd[i - 1]]] as const) {
+      for (const l of sides) {
+        const a = arrive(l, x), d = leave(l, x);
+        if (a) at.get(x)!.push({ in: a, a: 0, out: `${into.id}:1`, b: 0 });
+        if (d) at.get(other)!.push({ in: `${from.id}:1`, a: 0, out: d, b: 0 });
+      }
+    }
+    for (const [x, list] of at) if (list.length) x.connectors = list;
+  }
   return {
     net: { ...net, nodes: [...net.nodes.filter(n => !dropped.has(n.id)).map(n => (noU.has(n.id) ? { ...n, laneMap: noU.get(n.id) } : n)), ...added], links: links2, stops: stopsOut },
     forward: fwd.map(l => l.id), backward: bwd.map(l => l.id), junctions,

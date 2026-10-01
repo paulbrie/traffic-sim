@@ -1,6 +1,6 @@
-import { Sim, sampleTown, compile, connectorPreview, throughConns, exitLane, connectionIssues, alignableNodes, measureRun, optimizeSignals } from "../src/engine";
+import { Sim, sampleTown, compile, connectorPreview, throughConns, connShapeKey, currentTargets, laneAllowed, exitLanesOf, exitLane, connectionIssues, alignableNodes, measureRun, optimizeSignals } from "../src/engine";
 import { Poly } from "../src/engine/geom";
-import { changeConnection, connectLanes } from "../src/state/connections";
+import { changeConnection, connectLanes, lanesLeavingNear, writeOut } from "../src/state/connections";
 import { carriagewayRun, splitCarriageways, type Run } from "../src/state/carriageways";
 import { Recorder } from "../src/engine/sim/recorder";
 import { makeLink, makeNode } from "../src/engine/sample";
@@ -11,7 +11,7 @@ import { sanitizeNetwork, sanitizeSettings } from "../src/engine/validate";
 import { DEFAULT_PARAMS } from "../src/engine/params";
 import { polyCentroid } from "../src/engine/buildings";
 import type { Network } from "../src/engine/types";
-import { customizePhases, addPhase, approachesTo, setLaneGreen, reverseLink, splitLink, linkPoint, nodeById, addSlipLane, mergeLinks, smoothBetween } from "../src/state/ops";
+import { customizePhases, addPhase, approachesTo, toConnectorPhases, setConnGreen, setLaneGreen, reverseLink, splitLink, linkPoint, nodeById, addSlipLane, mergeLinks, smoothBetween } from "../src/state/ops";
 import { buildRoadGeo } from "../src/render/geometry";
 import { routeBetween, routeShape } from "../src/engine/route";
 const net = sampleTown();
@@ -762,9 +762,10 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const r1 = connectLanes(base, compile(base), inKey, 0, outKey, 1)!;   // lane 1 → exit lane 2 (adds to → 1)
   const r2 = connectLanes(r1.net, compile(sanitizeNetwork(r1.net)), inKey, 0, outKey, 2)!; // and → 3
   const net = sanitizeNetwork(r2.net), c = compile(net);
-  const targets = net.nodes.find(n => n.id === J.id)!.laneMap![`${inKey}>${outKey}`][0];
+  const lane0 = (nw: Network) => nw.nodes.find(n => n.id === J.id)!.connectors!.filter(x => x.in === inKey && x.out === outKey && x.a === 0).map(x => x.b);
+  const targets = lane0(net);
   const views = connectorPreview(c).filter(v => v.move.in.key === inKey && v.move.out.key === outKey).map(v => v.outLane).sort();
-  const removed = sanitizeNetwork(changeConnection(net, c, inKey, 0, outKey, 1, null)).nodes.find(n => n.id === J.id)!.laneMap![`${inKey}>${outKey}`][0];
+  const removed = lane0(sanitizeNetwork(changeConnection(net, c, inKey, 0, outKey, 1, null)));
   const sim = new Sim(c, { cars: 120, trucks: 0, seed: 5 }); let overlap = 0;
   for (let t = 0; t < 3000; t++) { sim.step(); const on = sim.vehicles.filter(v => !v.dead && v.piece.kind === "conn");
     for (let i = 0; i < on.length; i++) for (let k = i + 1; k < on.length; k++) { const p = on[i].piece.poly.at(on[i].s), q = on[k].piece.poly.at(on[k].s); if (Math.hypot(p.x - q.x, p.y - q.y) < 2) overlap++; } }
@@ -857,11 +858,130 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
       for (let i = 0; i < on.length; i++) for (let k = i + 1; k < on.length; k++) { const p = on[i].piece.poly.at(on[i].s), q = on[k].piece.poly.at(on[k].s); if (Math.hypot(p.x - q.x, p.y - q.y) < 2) overlap++; }
     }
     const f = sim.flowStats(0)!;
-    return { r, c, sides, uTurns, overlap, trips: sim.stats.trips, towed: sim.stats.towed, crossed: f.arrived, warnings: c.warnings.length };
+    const clusters = c.nodes.filter(n => n.cluster.length === 2 && n.cluster[0] === n).length;
+    return { r, c, sides, uTurns, overlap, clusters, trips: sim.stats.trips, towed: sim.stats.towed, crossed: f.arrived, warnings: c.warnings.length };
   };
-  const plain = res(2, false, 120), open = res(16, true, 50);
-  const ok = runOk && plain.r.junctions === 2 && plain.sides && plain.uTurns === 0 && plain.overlap === 0 && plain.towed === 0 && plain.trips > 200 && plain.warnings === 0 && plain.crossed === 0
-    && open.sides && open.overlap === 0 && open.towed <= 1 && open.crossed > 5 && open.r.net.links.length === plain.r.net.links.length + 2;
-  console.log(`carriageways: run of ${"error" in run ? 0 : run.links.length} roads, ${plain.r.junctions} junctions split, side roads on their own side ${plain.sides}, U-turns at the splits ${plain.uTurns}; ${plain.trips} trips, ${plain.overlap} overlaps, ${plain.towed} towed; S→W left: ${plain.crossed} without openings, ${open.crossed} with (${open.trips} trips, ${open.towed} towed) | ok ${ok}`);
+  const bwdSet = (r: { backward: string[] }) => new Set(r.backward);
+  const plain = res(2, false, 120), open = res(2, true, 30);
+  // the connectors across the gap removed again (as from the map): the two halves are separate junctions again
+  let shut = sanitizeNetwork(open.r.net);
+  for (const n of open.c.nodes) for (const ms of n.moves.values()) for (const m of ms) if (m.out.from !== n) for (let a = 0; a < m.in.n; a++) if (laneAllowed(m, a)) for (const b of exitLanesOf(m, a)) shut = sanitizeNetwork(changeConnection(shut, compile(shut), m.in.key, a, m.out.key, b, null));
+  const shutOk = compile(shut).nodes.every(n => n.cluster.length === 1);
+  // …and drawn by hand (as from the map): from the side road's lane to a lane of the other carriageway, offered as nearby
+  const pc = compile(plain.r.net), sIn = pc.edgeByKey.get(`${sj.id}:1`)!;
+  const far = lanesLeavingNear(pc, sIn, 0).find(x => x.e.from !== sIn.to && bwdSet(plain.r).has(x.e.link.id));
+  const drawn = far ? connectLanes(plain.r.net, pc, sIn.key, 0, far.e.key, far.lp.lane) : null;
+  const drawnOk = !!drawn && compile(sanitizeNetwork(drawn.net)).nodes.some(n => n.cluster.length === 2);
+  const ok = drawnOk && shutOk && runOk && plain.r.junctions === 2 && plain.sides && plain.uTurns === 0 && plain.overlap === 0 && plain.towed === 0 && plain.trips > 200 && plain.warnings === 0 && plain.crossed === 0
+    && open.sides && open.overlap === 0 && open.towed <= 1 && open.crossed > 5 && open.r.net.links.length === plain.r.net.links.length && open.clusters === 2 && plain.clusters === 0;
+  console.log(`carriageways: run of ${"error" in run ? 0 : run.links.length} roads, ${plain.r.junctions} junctions split, side roads on their own side ${plain.sides}, U-turns at the splits ${plain.uTurns}; ${plain.trips} trips, ${plain.overlap} overlaps, ${plain.towed} towed; S→W left: ${plain.crossed} without openings, ${open.crossed} with (connectors across the gap: ${open.clusters} junctions over both carriageways; ${open.trips} trips, ${open.overlap} overlaps, ${open.towed} towed); removed again ${shutOk}, drawn by hand across the gap ${drawnOk} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// connectors written out: a plan whose junctions are all written out as they are compiles to the same turns
+// and drives the same; a road added later gets automatic connectors, one left with none is closed; splitting,
+// reversing and merging the roads at a written-out junction keeps its connectors
+{
+  const turns = (c: ReturnType<typeof compile>) => c.nodes.map(n => [...n.moves.values()].flat().map(m => `${m.in.key}>${m.out.key}:${m.turn}:${JSON.stringify(currentTargets(m))}`).sort().join(";")).join("\n");
+  const drive = (c: ReturnType<typeof compile>) => { const s = new Sim(c, { cars: 250, trucks: 10, seed: 3 }); for (let t = 0; t < 1200; t++) s.step(); return s.vehicles.filter(v => !v.dead).map(v => `${v.id}:${v.s.toFixed(3)}`).join(",") + `|${s.stats.trips}`; };
+  const same: string[] = [];
+  for (const [name, raw] of [["claude-tests", JSON.parse(readFileSync("scripts/fixtures/claude-tests.json", "utf8")).network], ["osm-cluj", JSON.parse(readFileSync("scripts/fixtures/osm-cluj.json", "utf8"))]] as const) {
+    const net = sanitizeNetwork(raw), c = compile(net, { outlines: false });
+    let out: Network = net;
+    for (const n of net.nodes) out = writeOut(out, c, n.id);
+    const c2 = compile(sanitizeNetwork(out), { outlines: false }), written = out.nodes.filter(n => n.connectors).length;
+    same.push(`${name}: ${written} written out, turns ${turns(c) === turns(c2)}, drives ${drive(c) === drive(c2)}`);
+  }
+  const conversionOk = same.every(x => !x.includes("false"));
+
+  // a T junction written out, then a road added to it
+  const J = makeNode(0, 0, "priority", false), W = makeNode(-200, 0), E = makeNode(200, 0), N = makeNode(0, -200);
+  const wj = makeLink(W, J, 2, 2), je = makeLink(J, E, 2, 2);
+  let net = sanitizeNetwork({ version: 1, nodes: [J, W, E, N], stops: [], lines: [], links: [wj, je] });
+  net = writeOut(net, compile(net), J.id);
+  const before = net.nodes.find(n => n.id === J.id)!.connectors!.length;
+  const jn = makeLink(J, N, 1, 1);
+  net = sanitizeNetwork({ ...net, links: [...net.links, jn] });
+  let c = compile(net);
+  const cn = c.nodeById.get(J.id)!;
+  const fromN = (cc: typeof c) => (cc.nodeById.get(J.id)!.moves.get(cc.edgeByKey.get(`${jn.id}:-1`)!.idx) ?? []).length;
+  const intoN = [...cn.moves.values()].flat().filter(m => m.out.link.id === jn.id).length;
+  const added = fromN(c) === 2 && intoN === 2;
+  // its connectors removed one by one: closed, nothing from it any more (and not automatic again)
+  for (const m of cn.moves.get(c.edgeByKey.get(`${jn.id}:-1`)!.idx) ?? []) for (let a = 0; a < m.in.n; a++) if (laneAllowed(m, a)) for (const b of exitLanesOf(m, a)) { net = sanitizeNetwork(changeConnection(net, c, m.in.key, a, m.out.key, b, null)); c = compile(net); }
+  const closedOk = fromN(c) === 0 && !!net.nodes.find(n => n.id === J.id)!.closed?.includes(`${jn.id}:-1`);
+  // the roads around it changed: its connectors follow them
+  const valid = (nw: Network) => { const cc = compile(nw), n = cc.nodeById.get(J.id)!; return n.def.connectors!.filter(x => cc.edgeByKey.get(x.in)?.to === n && cc.edgeByKey.get(x.out)?.from === n).length; };
+  const sig = (nw: Network) => { const cc = compile(nw), n = cc.nodeById.get(J.id)!; return [...n.moves.values()].flat().map(m => `${m.turn}:${JSON.stringify(currentTargets(m))}`).sort().join(";"); };
+  const ref = sig(net), all = net.nodes.find(n => n.id === J.id)!.connectors!.length;
+  const [split, S] = splitLink(net, wj.id, 0.5, { x: W.x / 2, y: 0 });
+  const rev = reverseLink(split, je.id);
+  const pieces = rev.links.filter(l => l.from === S.id || l.to === S.id).map(l => l.id);
+  const merged = mergeLinks(rev, pieces);
+  const remapOk = valid(split) === all && sig(split) === ref && valid(rev) === all && sig(rev) === ref && !("error" in merged) && valid(merged.net) === all && sig(merged.net) === ref;
+  const ok = conversionOk && before > 0 && added && closedOk && remapOk;
+  console.log(`connectors written out: ${same.join("; ")} | road added later connected ${added}, emptied road closed ${closedOk}, kept through split / reverse / merge ${remapOk} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// lights per connector: a junction's lights turned into connector phases as they are drive the same; a lane
+// that goes straight on and left can have the left on its own arrow (it never goes in the straight phase, and
+// the straight never in the arrow's); over a junction of two nodes (a divided road with openings) one node runs
+// the lights of both
+{
+  const drive = (c: ReturnType<typeof compile>, steps = 1500) => { const s = new Sim(c, { cars: 160, trucks: 8, seed: 5 }); for (let t = 0; t < steps; t++) s.step(); return s.vehicles.filter(v => !v.dead).map(v => `${v.id}:${v.s.toFixed(3)}`).join(",") + `|${s.stats.trips}`; };
+  const town = sampleTown(), tc = compile(town);
+  const lightsNode = tc.nodes.find(n => n.def.control === "lights" && n.controlled && n.degree >= 4)!;
+  const conv = sanitizeNetwork(toConnectorPhases(town, tc, lightsNode.def.id));
+  const sameDrive = drive(tc) === drive(compile(conv));
+
+  // a crossroads with one-lane approaches: W's lane goes left and straight on
+  const J = makeNode(0, 0, "lights", false), W = makeNode(-250, 0), E = makeNode(250, 0), N = makeNode(0, -250), S = makeNode(0, 250);
+  const links = [makeLink(W, J, 1, 1), makeLink(J, E, 1, 1), makeLink(N, J, 1, 1), makeLink(J, S, 1, 1)];
+  let net = sanitizeNetwork({ version: 1, nodes: [J, W, E, N, S], stops: [], lines: [], links });
+  let c = compile(net);
+  net = sanitizeNetwork(toConnectorPhases(net, c, J.id));
+  c = compile(net);
+  const cn = c.nodeById.get(J.id)!, wIn = c.edgeByKey.get(`${links[0].id}:1`)!;
+  const wMoves = cn.moves.get(wIn.idx)!, left = wMoves.find(m => m.turn === "L")!, straight = wMoves.find(m => m.turn === "S")!;
+  const leftKey = connShapeKey(left, 0, exitLanesOf(left, 0)[0]);
+  // the left out of every phase, into a third of its own
+  for (let p = 0; p < net.nodes.find(n => n.id === J.id)!.phases!.length; p++) net = setConnGreen(net, J.id, p, leftKey, false);
+  net = addPhase(net, J.id);
+  net = sanitizeNetwork(setConnGreen(net, J.id, 2, leftKey, true));
+  c = compile(net);
+  const sim = new Sim(c, { cars: 120, trucks: 0, seed: 7 }), idx = c.nodeById.get(J.id)!.idx;
+  const seen = new Set<number>(), phaseOf = { L: new Set<number>(), S: new Set<number>() };
+  for (let t = 0; t < 6000; t++) {
+    sim.step();
+    for (const v of sim.vehicles) if (!v.dead && v.piece.kind === "conn" && v.piece.inEdge === c.edgeByKey.get(`${links[0].id}:1`) && !seen.has(v.id)) {
+      seen.add(v.id);
+      const st = sim.nodeState(idx), turn = (v.piece as { move: { turn: string } }).move.turn;
+      if (turn === "L" || turn === "S") phaseOf[turn].add(st.phase);
+    }
+  }
+  const arrowOk = phaseOf.L.size > 0 && phaseOf.S.size > 0 && [...phaseOf.L].every(p => p === 2) && !phaseOf.S.has(2) && straight !== undefined;
+
+  // two nodes, one junction: a divided road with openings, its lights run from one of them
+  const A = makeNode(0, 0, "priority", false), WW = makeNode(-300, 0), EE = makeNode(300, 0), SS = makeNode(0, 250);
+  const wa = makeLink(WW, A, 2, 2), ae = makeLink(A, EE, 2, 2), sa = makeLink(SS, A, 1, 1);
+  const base = sanitizeNetwork({ version: 1, nodes: [A, WW, EE, SS], stops: [], lines: [], links: [wa, ae, sa] });
+  const run2 = carriagewayRun(base, wa.id) as Run, split = splitCarriageways(base, run2, { gap: 2, openings: true }) as { net: Network };
+  let dn = sanitizeNetwork(split.net), dc = compile(dn);
+  const half = dc.nodes.find(n => n.cluster.length === 2)!;
+  dn = sanitizeNetwork(toConnectorPhases(dn, dc, half.def.id)); dc = compile(dn);
+  const ctl = dc.nodeById.get(half.def.id)!, other = ctl.cluster.find(k => k !== ctl)!;
+  const sim2 = new Sim(dc, { cars: 80, trucks: 0, seed: 3 });
+  let overlap = 0, follows = true;
+  for (let t = 0; t < 4000; t++) {
+    sim2.step();
+    const a = sim2.nodeState(ctl.idx), b = sim2.nodeState(other.idx);
+    if (a.phase !== b.phase || a.stage !== b.stage) follows = false;
+    const on = sim2.vehicles.filter(v => !v.dead && v.piece.kind === "conn");
+    for (let i = 0; i < on.length; i++) for (let k = i + 1; k < on.length; k++) { const p = on[i].piece.poly.at(on[i].s), q = on[k].piece.poly.at(on[k].s); if (Math.hypot(p.x - q.x, p.y - q.y) < 2) overlap++; }
+  }
+  const sharedOk = other.signals === ctl && follows && overlap === 0 && sim2.stats.towed <= 1 && sim2.stats.trips > 50;
+  const ok = sameDrive && arrowOk && sharedOk;
+  console.log(`lights per connector: converted as they are drive the same ${sameDrive}; protected left from a shared lane: left in phases ${[...phaseOf.L].map(p => p + 1)}, straight in ${[...phaseOf.S].map(p => p + 1)}; two nodes one junction: lights follow ${follows}, ${sim2.stats.trips} trips, ${overlap} overlaps, ${sim2.stats.towed} towed | ok ${ok}`);
   if (!ok) process.exit(1);
 }

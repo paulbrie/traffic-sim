@@ -6,7 +6,7 @@
  */
 import polygonClipping from "polygon-clipping";
 import { Poly, connectorPoints, connectorReach, cubicPoints, signedAngle, normAngle, hull, dist } from "./geom";
-import { MAX_LANES, type FlowDef, type LaneTargets, type LinkDef, type ReversibleDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
+import { MAX_LANES, type ConnShape, type ConnectorDef, type FlowDef, type LaneTargets, type LinkDef, type ReversibleDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
 import { attachBuildings, type Place } from "./buildings";
 
 export const LW = 3.2;          // lane width (m)
@@ -132,6 +132,20 @@ export interface CNode {
   ring2: RingArm[] | null; ringR2: number;
   /** crossings that drive straight through, nothing else at the junction crossing or joining them (see throughConns; worked out when first needed) */
   through?: Set<Conn>;
+  /** connector curves set by hand, by connShapeKey (from the written-out connectors, or NodeDef.connShape) */
+  shapes: Map<string, ConnShape>;
+  /** the junction's connectors are written out (NodeDef.connectors): roads that have some get exactly those */
+  manual: boolean;
+  /**
+   * The nodes making one junction with this one (itself included): linked by connectors from a road ending
+   * at one to a road starting at another nearby. They grant their crossings as one (each sees the others'),
+   * so paths crossing between them never go together.
+   */
+  cluster: CNode[];
+  /** the node whose lights run this one's (itself, or with lights per connector the junction's controller) */
+  signals: CNode;
+  /** lights per connector (on the controller): per phase the keys (connShapeKey) of the connectors green in it */
+  connPhases?: Set<string>[];
 }
 
 export interface CFlow { idx: number; def: FlowDef; from: CNode; to: CNode }
@@ -343,7 +357,11 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       idx: nodes.length, def, pos: { x: def.x, y: def.y }, arms: [], degree: 0,
       controlled: false, gateway: false, deadEnd: false, ringR: 0, polygon: [], surface: [], rounded: false, level: 0, peds: 0, phases: [], lanePhases: [], phaseGreen: [], phaseMinGreen: [], customPhases: false, coord: null,
       moves: new Map(), conns: new Map(), ring: null, ring2: null, ringR2: 0,
-    };
+      shapes: new Map(def.connectors ? def.connectors.flatMap(c => (c.shape ? [[`${c.in}|${c.a}>${c.out}|${c.b}`, c.shape] as const] : [])) : Object.entries(def.connShape ?? {})),
+      manual: !!def.connectors,
+      cluster: [],
+    } as unknown as CNode;
+    n.cluster.push(n); n.signals = n;
     nodes.push(n); nodeById.set(def.id, n);
   }
 
@@ -638,18 +656,7 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
 
     // merges: roads going (nearly) straight on into the same road join it side by side, the one on
     // the right into its right-hand lanes
-    if (n.degree >= 3 && !n.ringR) {
-      const into = new Map<Edge, Movement[]>();
-      for (const list of n.moves.values()) for (const m of list) if (Math.abs(m.delta) < 0.8 && m.turn !== "U") (into.get(m.out) ?? into.set(m.out, []).get(m.out)!).push(m);
-      for (const [out, ms] of into) {
-        if (ms.length < 2) continue;
-        const u = n.arms[out.outArm].u, r = { x: -u.y, y: u.x };
-        // how far to the right of the road ahead each incoming road lies
-        const side = (m: Movement) => { const a = n.arms[m.in.inArm]; return a.u.x * r.x + a.u.y * r.y; };
-        const sorted = ms.slice().sort((a, b) => side(a) - side(b));
-        sorted[0].merge = "left"; sorted[sorted.length - 1].merge = "right";
-      }
-    }
+    markMerges(n);
     // a plain road point where the number of lanes changes: lanes carry on into the ones they are
     // lined up with (not always the left ones); the others end there, or open there
     if (!n.controlled && n.degree === 2) for (const list of n.moves.values()) for (const m of list) {
@@ -669,9 +676,12 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       }
       if (best) { if (ein.thru > eout.thru) m.skip = best; else m.shift = best; }
     }
+    // connectors written out: the roads that have some (or are closed) get exactly those; the others keep
+    // the automatic ones (a road added since is connected)
+    if (n.def.connectors && !n.ringR) { applyConnectors(n, n.def.connectors, n.def.closed ?? [], edgeByKey); markMerges(n); }
     // a lane connection set by hand between two roads with no turn between them adds that turn
     // (classed by its angle, like the automatic ones)
-    if (n.def.laneMap && !n.ringR) for (const key of Object.keys(n.def.laneMap)) {
+    if (n.def.laneMap && !n.def.connectors && !n.ringR) for (const key of Object.keys(n.def.laneMap)) {
       const [ik, ok] = key.split(">"), ein = edgeByKey.get(ik), eout = edgeByKey.get(ok);
       if (!ein || !eout || ein.to !== n || eout.from !== n || !ein.lanes.length || !eout.lanes.length) continue;
       let list = n.moves.get(ein.idx);
@@ -683,7 +693,7 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       list.push({ node: n, in: ein, out: eout, turn, delta, lo: 0, hi: ein.n - 1, rank: list.length });
     }
     // lane connections set by hand win over the automatic ones (a turn with no lane left is dropped)
-    if (n.def.laneMap && !n.ringR) for (const [k, list] of n.moves) {
+    if (n.def.laneMap && !n.def.connectors && !n.ringR) for (const [k, list] of n.moves) {
       const next = list.filter(m => {
         const arr = n.def.laneMap![`${m.in.key}>${m.out.key}`];
         if (!arr) return true;
@@ -775,6 +785,50 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       n.phaseGreen = n.phases.map(() => sig.green);
       n.phaseMinGreen = n.phases.map(() => sig.minGreen);
     }
+  }
+
+  // ---- junctions over several nodes: nodes linked by connectors grant their crossings as one ----
+  {
+    const up = nodes.map((_, i) => i), find = (i: number): number => (up[i] === i ? i : (up[i] = find(up[i])));
+    let any = false;
+    for (const n of nodes) for (const ms of n.moves.values()) for (const m of ms) if (m.out.from !== n) { up[find(m.out.from.idx)] = find(n.idx); any = true; }
+    if (any) {
+      const groups = new Map<number, CNode[]>();
+      for (const n of nodes) { const r = find(n.idx); groups.set(r, [...(groups.get(r) ?? []), n]); }
+      for (const g of groups.values()) if (g.length > 1) for (const n of g) {
+        n.cluster = g;
+        // (a plain road point in it is a junction now: traffic through it has paths joining or crossing it)
+        if (n.degree >= 2 && !n.gateway) n.controlled = true;
+      }
+    }
+  }
+
+  // ---- lights per connector: green given connector by connector, for every node of the junction ----
+  for (const n of nodes) {
+    const defs = n.def.phases;
+    if (!n.controlled || n.def.control !== "lights" || !defs || defs.length < 2 || !defs.some(p => p.conns) || n.signals !== n) continue;
+    // (one controller per junction: the first such node)
+    if (n.cluster.some(k => k !== n && k.signals !== k)) continue;
+    const sets = defs.map(p => new Set(p.conns ?? []));
+    n.connPhases = sets;
+    const dark: string[] = [];
+    for (const k of n.cluster) {
+      k.signals = n; k.customPhases = true; k.controlled = true;
+      k.lanePhases = k.arms.map(a => {
+        const e = a.inEdge;
+        if (!e) return [];
+        const ms = k.moves.get(e.idx) ?? [];
+        return Array.from({ length: e.n }, (_, lane) => {
+          const keys = ms.flatMap(m => (laneAllowed(m, lane) ? exitLanesOf(m, lane).map(b => connShapeKey(m, lane, b)) : []));
+          for (const key of keys) if (!sets.some(x => x.has(key))) dark.push(key);
+          return sets.map((x, p) => (keys.some(key => x.has(key)) ? p : -1)).filter(p => p >= 0);
+        });
+      });
+      k.phases = defs.map((_, p) => k.arms.map((_, i) => i).filter(i => k.lanePhases[i].some(ps => ps.includes(p))));
+      k.phaseGreen = defs.map(d => d.green);
+      k.phaseMinGreen = defs.map(d => d.minGreen ?? n.def.signal.minGreen);
+    }
+    if (dark.length) warnings.push(`Traffic lights at ${n.def.id}: ${dark.length} lane connector${dark.length > 1 ? "s" : ""} never get${dark.length > 1 ? "" : "s"} green; set ${dark.length > 1 ? "them" : "it"} in the junction's phases.`);
   }
 
   // ---- stops & lines ----
@@ -955,6 +1009,75 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
   return compiled;
 }
 
+/** roads going (nearly) straight on into the same road join it side by side, the one on the right into its right-hand lanes */
+function markMerges(n: CNode) {
+  if (n.degree < 3 || n.ringR) return;
+  const into = new Map<Edge, Movement[]>();
+  for (const list of n.moves.values()) for (const m of list) { m.merge = undefined; if (Math.abs(m.delta) < 0.8 && m.turn !== "U" && m.out.from === n) (into.get(m.out) ?? into.set(m.out, []).get(m.out)!).push(m); }
+  for (const [out, ms] of into) {
+    if (ms.length < 2) continue;
+    const u = n.arms[out.outArm].u, r = { x: -u.y, y: u.x };
+    // how far to the right of the road ahead each incoming road lies
+    const side = (m: Movement) => { const a = n.arms[m.in.inArm]; return a.u.x * r.x + a.u.y * r.y; };
+    const sorted = ms.slice().sort((a, b) => side(a) - side(b));
+    sorted[0].merge = "left"; sorted[sorted.length - 1].merge = "right";
+  }
+}
+
+/** how far a connector may reach from the end of its lane to the start of a lane at another node (m) */
+export const CROSS_REACH = 60;
+
+/** the turns of a junction whose connectors are written out (see NodeDef.connectors) */
+function applyConnectors(n: CNode, list: ConnectorDef[], closed: string[], edgeByKey: Map<string, Edge>) {
+  // the valid ones, per turn: per incoming lane its outgoing lanes in order
+  const turns = new Map<string, { ein: Edge; eout: Edge; outs: number[][] }>();
+  const set = new Set<Edge>();
+  for (const c of list) {
+    const ein = edgeByKey.get(c.in), eout = edgeByKey.get(c.out);
+    if (!ein || !eout || ein.to !== n || c.a >= ein.n || c.b >= eout.n || !ein.lanes.length || !eout.lanes.length) continue;
+    // (into a road starting at another node: only one nearby, and not round a roundabout)
+    if (eout.from !== n && (eout.from.ringR > 0 || n.ringR > 0 || dist(ein.lanes[c.a].poly.at(ein.lanes[c.a].len), eout.lanes[c.b].poly.at(0)) > CROSS_REACH)) continue;
+    const k = `${c.in}>${c.out}`;
+    const t = turns.get(k) ?? turns.set(k, { ein, eout, outs: Array.from({ length: ein.n }, () => []) }).get(k)!;
+    if (!t.outs[c.a].includes(c.b)) t.outs[c.a].push(c.b);
+    set.add(ein); set.add(eout);
+  }
+  for (const k of closed) { const e = edgeByKey.get(k); if (e && (e.to === n || e.from === n)) set.add(e); }
+  // automatic turns stay only for roads with no connectors of their own…
+  const auto = new Map<string, Movement>(), order = [...n.moves.values()].flat();
+  for (const [k, ms] of n.moves) {
+    const keep = ms.filter(m => !(set.has(m.in) && set.has(m.out)) || (auto.set(`${m.in.key}>${m.out.key}`, m), false));
+    if (keep.length !== ms.length) n.moves.set(k, keep);
+  }
+  for (const [key, { ein, eout, outs }] of turns) {
+    const ms = n.moves.get(ein.idx) ?? n.moves.set(ein.idx, []).get(ein.idx)!;
+    // …or where the connectors are just what they would be (so a junction written out as it was drives the same)
+    const was = auto.get(key);
+    if (was && outs.every((l, a) => { const w = laneAllowed(was, a) ? exitLanesOf(was, a) : []; return w.length === l.length && w.every((b, i) => b === l[i]); })) { ms.push(was); continue; }
+    {
+      const tin = ein.lanes[0].poly.tangent(ein.lanes[0].len), tout = eout.lanes[0].poly.tangent(0);
+      const uturn = ein.link === eout.link, delta = uturn ? Math.PI : signedAngle(tin, tout);
+      const turn: Turn = uturn || Math.abs(delta) > 2.7 ? "U" : delta > 0.52 ? "R" : delta < -0.52 ? "L" : "S";
+      const m: Movement = { node: n, in: ein, out: eout, turn, delta, lo: 0, hi: 0, rank: was?.rank ?? ms.length };
+      ms.push(m);
+      if (was) order[order.indexOf(was)] = m;
+      m.map = outs.map(l => (l.length ? l[0] : -1));
+      m.multi = outs.some(l => l.length > 1) ? outs : undefined;
+      const used = m.map.map((b, a) => (b >= 0 ? a : -1)).filter(a => a >= 0);
+      m.lo = Math.min(...used); m.hi = Math.max(...used);
+    }
+  }
+  // (turns again in order from left to right, as the automatic ones are)
+  for (const ms of n.moves.values()) {
+    // (the turns kept in the order they had, the new ones after them, left to right)
+    const at = (m: Movement) => { const i = order.indexOf(m); return i < 0 ? order.length + 4 + m.delta : i; };
+    ms.sort((a, b) => at(a) - at(b));
+    // only one "straight" per approach: the one closest to 0°, others become slight turns
+    const straights = ms.filter(m => m.turn === "S").sort((a, b) => Math.abs(a.delta) - Math.abs(b.delta));
+    for (const m of straights.slice(1)) m.turn = m.delta > 0 ? "R" : "L";
+  }
+}
+
 function buildConn(n: CNode, move: Movement, a: number, b: number, id: number): Conn {
   const lin = move.in.lanes[Math.min(a, move.in.lanes.length - 1)], lout = move.out.lanes[Math.min(b, move.out.lanes.length - 1)];
   const P = lin.poly.at(lin.len), tp = lin.poly.tangent(lin.len);
@@ -990,7 +1113,7 @@ function buildConn(n: CNode, move: Movement, a: number, b: number, id: number): 
       pts.push(u * u * u * P.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * Q.x, u * u * u * P.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * Q.y);
     }
   } else {
-    const shape = n.def.connShape?.[connShapeKey(move, a, b)];
+    const shape = n.shapes.get(connShapeKey(move, a, b));
     pts = shape && !Array.isArray(shape)
       ? cubicPoints(P, { x: n.pos.x + shape.c1.x, y: n.pos.y + shape.c1.y }, { x: n.pos.x + shape.c2.x, y: n.pos.y + shape.c2.y }, Q, 14)
       : connectorPoints(P, tp, Q, tq, 14, shape);
@@ -1063,9 +1186,10 @@ export function connectorPreview(c: Compiled, only?: (n: CNode, m: Movement) => 
 export function throughConns(c: Compiled, n: CNode): Set<Conn> {
   if (n.through) return n.through;
   const out = (n.through = new Set<Conn>()), ctl = n.def.control;
-  if (!n.controlled || n.degree < 3 || n.ringR > 0 || n.peds > 0 || (ctl !== "priority" && ctl !== "free")) return out;
+  if (!n.controlled || n.degree < (n.cluster.length > 1 ? 2 : 3) || n.ringR > 0 || n.peds > 0 || (ctl !== "priority" && ctl !== "free")) return out;
+  // (checked against every path of the junction, over all its nodes)
   const all: { m: Movement; cs: Conn[] }[] = [];
-  for (const list of n.moves.values()) for (const m of list) {
+  for (const k of n.cluster) for (const list of k.moves.values()) for (const m of list) {
     const cs: Conn[] = [];
     for (let a = 0; a < m.in.n; a++) {
       if (!laneAllowed(m, a)) continue;
@@ -1074,7 +1198,7 @@ export function throughConns(c: Compiled, n: CNode): Set<Conn> {
     all.push({ m, cs });
   }
   for (const x of all) {
-    if (!x.cs.length || x.m.turn === "U" || (ctl === "priority" && x.m.in.sign === "stop")) continue;
+    if (x.m.node !== n || !x.cs.length || x.m.turn === "U" || (ctl === "priority" && x.m.in.sign === "stop")) continue;
     if (all.some(y => y.cs.some(b => x.cs.some(a => a !== b && conflicts(a, b))))) continue;
     for (const a of x.cs) out.add(a);
   }
@@ -1158,7 +1282,7 @@ export const connShapeKey = (move: Movement, a: number, b: number) => `${move.in
 export function connectorHandles(n: CNode, move: Movement, a: number, b: number) {
   const lin = move.in.lanes[Math.min(a, move.in.lanes.length - 1)], lout = move.out.lanes[Math.min(b, move.out.lanes.length - 1)];
   const P = lin.poly.at(lin.len), tp = lin.poly.tangent(lin.len), Q = lout.poly.at(0), tq = lout.poly.tangent(0);
-  const custom = n.def.connShape?.[connShapeKey(move, a, b)];
+  const custom = n.shapes.get(connShapeKey(move, a, b));
   if (custom && !Array.isArray(custom)) {
     // free handles: report their reach along the lanes too (for the inspector)
     const h1 = { x: n.pos.x + custom.c1.x, y: n.pos.y + custom.c1.y }, h2 = { x: n.pos.x + custom.c2.x, y: n.pos.y + custom.c2.y };

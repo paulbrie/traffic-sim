@@ -70,11 +70,24 @@ export type Aspect = "green" | "yellow" | "red";
  * phase stays green through the change.
  */
 export function signalAspect(n: CNode, phase: number, stage: number, armIdx: number, lane?: number): Aspect | null {
-  if (!n.controlled || n.def.control !== "lights" || n.phases.length < 2) return null;
+  if (!n.controlled || n.signals.def.control !== "lights" || n.phases.length < 2) return null;
   const lanes = n.lanePhases[armIdx] ?? [];
   const greenIn = (p: number) => (lane === undefined ? lanes.some(ps => ps.includes(p)) : !!lanes[lane]?.includes(p));
   if (!greenIn(phase)) return "red";
   if (stage === 0) return "green";
   if (greenIn((phase + 1) % n.phases.length)) return "green";
+  return stage === 1 ? "yellow" : "red";
+}
+
+/**
+ * Light shown to traffic on one connector (key `key`, see connShapeKey) of a junction with lights per
+ * connector (`ctl.connPhases`), in `phase` / `stage`; a connector green in the next phase too stays green
+ * through the change. Null when the controller has no such connector in any phase.
+ */
+export function connectorAspect(ctl: CNode, key: string, phase: number, stage: number): Aspect | null {
+  const sets = ctl.connPhases;
+  if (!sets || !sets.some(x => x.has(key))) return null;
+  if (!sets[phase]?.has(key)) return "red";
+  if (stage === 0 || sets[(phase + 1) % sets.length].has(key)) return "green";
   return stage === 1 ? "yellow" : "red";
 }

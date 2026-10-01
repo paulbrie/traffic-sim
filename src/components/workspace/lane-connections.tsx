@@ -5,7 +5,7 @@ import { AlertTriangle, CircleAlert, Plus, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { connectionIssues, currentTargets, throughConns, type CNode, type Edge, type Movement } from "@/engine/compile";
 import type { LaneTargets, Network, NodeDef } from "@/engine/types";
-import { connectLanes } from "@/state/connections";
+import { connectLanes, isManual, lanesLeavingNear, resetConnectors, setTurnTargets } from "@/state/connections";
 import { commit, select } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import * as ops from "@/state/ops";
@@ -37,19 +37,35 @@ export function ConnectionIssues({ cn }: { cn: CNode }) {
 export function LaneConnectionsSection({ net, node }: { net: Network; node: NodeDef }) {
   const c = simController.compiled, cn = c.nodeById.get(node.id);
   if (!cn || cn.ringR > 0 || cn.degree < 2) return null;
-  const set = (key: string, lanes: LaneTargets[] | null) => commit(ops.setLaneMap(net, node.id, key, lanes));
+  const set = (key: string, lanes: LaneTargets[]) => commit(setTurnTargets(net, c, key, lanes));
+  const manual = isManual(node), count = node.connectors?.length ?? 0;
+  /** an approach with no connectors of its own (it gets the automatic ones) */
+  const auto = (key: string) => !!node.connectors && !node.connectors.some(x => x.in === key) && !node.closed?.includes(key);
   const shown = new Set<string>();
   const through = new Set([...throughConns(c, cn)].map(x => x.move));
   const approaches = cn.arms.filter(a => a.inEdge).map(a => ({ arm: a, e: a.inEdge!, moves: cn.moves.get(a.inEdge!.idx) ?? [] }));
   const name = (l: { name: string; id: string }) => l.name || l.id;
   return (
     <Section title="Lane connections">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className={manual ? "font-medium" : "text-muted-foreground"}>
+          {node.connectors ? `Set by hand: ${count} connector${count === 1 ? "" : "s"}` : manual ? "Partly set by hand" : "Automatic, from the roads and their lane arrows"}
+        </span>
+        {manual && <Button variant="outline" size="sm" className="h-6" onClick={() => commit(resetConnectors(net, node.id))}><RotateCcw className="size-3" /> Back to automatic</Button>}
+      </div>
+      {cn.cluster.length > 1 && (
+        <p className="text-xs">
+          One junction with {cn.cluster.filter(k => k !== cn).map((k, i) => (
+            <span key={k.def.id}>{i ? ", " : ""}<button type="button" className="font-mono hover:underline" onClick={() => select({ kind: "node", id: k.def.id })}>{k.def.id}</button></span>
+          ))}: connectors link their roads, so they give way to each other&apos;s traffic as one junction (and share its control).
+        </p>
+      )}
       <ConnectionIssues cn={cn} />
       {approaches.map(({ arm, e, moves }) => (
         <div key={e.key} className="grid gap-1.5">
-          <div className="text-xs font-medium">From {name(e.link)} <span className="text-muted-foreground">({compass(arm.u.x, arm.u.y).name}, {e.n} lane{e.n === 1 ? "" : "s"})</span></div>
+          <div className="text-xs font-medium">From {name(e.link)} <span className="text-muted-foreground">({compass(arm.u.x, arm.u.y).name}, {e.n} lane{e.n === 1 ? "" : "s"}{auto(e.key) ? ", automatic" : node.closed?.includes(e.key) ? ", no connectors" : ""})</span></div>
           {moves.map(m => {
-            const key = keyOf(m), lanes = current(m), manual = !!node.laneMap?.[key];
+            const key = keyOf(m), lanes = current(m), byTurn = !node.connectors && !!node.laneMap?.[key];
             shown.add(key);
             return (
               <div key={key} className="grid grid-cols-[6.5rem_1fr_auto] items-center gap-1.5 text-xs">
@@ -71,8 +87,8 @@ export function LaneConnectionsSection({ net, node }: { net: Network; node: Node
                     </label>
                   ); })}
                 </span>
-                {manual
-                  ? <Button variant="ghost" size="icon" className="size-6" title="Back to automatic" aria-label="Back to automatic" onClick={() => set(key, null)}><RotateCcw className="size-3" /></Button>
+                {byTurn
+                  ? <Button variant="ghost" size="icon" className="size-6" title="Back to automatic" aria-label="Back to automatic" onClick={() => commit(ops.setLaneMap(net, node.id, key, null))}><RotateCcw className="size-3" /></Button>
                   : <span className="size-6" />}
               </div>
             );
@@ -80,19 +96,20 @@ export function LaneConnectionsSection({ net, node }: { net: Network; node: Node
         </div>
       ))}
       <AddConnector net={net} cn={cn} />
-      {Object.keys(node.laneMap ?? {}).filter(k => !shown.has(k)).map(k => {
+      {Object.keys((!node.connectors && node.laneMap) || {}).filter(k => !shown.has(k)).map(k => {
         const [from, to] = k.split(">").map(x => net.links.find(l => l.id === x.split(":")[0]));
         if (!from || !to) return null;
         return (
           <div key={k} className="flex items-center justify-between gap-2 text-xs">
             <span className="text-muted-foreground">{name(from)} → {name(to)}: switched off by hand</span>
-            <Button variant="outline" size="sm" className="h-6" onClick={() => set(k, null)}><RotateCcw className="size-3" /> Restore</Button>
+            <Button variant="outline" size="sm" className="h-6" onClick={() => commit(ops.setLaneMap(net, node.id, k, null))}><RotateCcw className="size-3" /> Restore</Button>
           </div>
         );
       })}
       <p className="text-[11px] text-muted-foreground">
         Each box is a lane of the approach (1 = leftmost) and the lane it drives into; – means that lane doesn&apos;t take this turn.
-        Changes here win over the automatic connections; the arrow puts a turn back to automatic. Lane arrows on the road decide which turns exist.
+        The connectors are worked out from the roads and their lane arrows until you change one: then the junction&apos;s whole set is
+        kept as it is, and only a road with none of its own (one added since) gets automatic ones.
       </p>
       <p className="text-[11px] text-muted-foreground">
         A turn marked <span className="text-emerald-700 dark:text-emerald-400">through</span> crosses and joins no other path here, so its
@@ -110,10 +127,13 @@ function AddConnector({ net, cn }: { net: Network; cn: CNode }) {
   if (!ins.length || !outs.length) return null;
   const label = (x: { a: CNode["arms"][number]; e: Edge }) => `${x.e.link.name || x.e.link.id} (${compass(x.a.u.x, x.a.u.y).name})`;
   const opts = (list: typeof ins) => list.flatMap(x => Array.from({ length: x.e.n }, (_, k) => ({ value: `${x.e.key}|${k}`, text: `${label(x)} · lane ${k + 1}` })));
+  // from a lane picked: the lanes leaving here, and those starting at other nodes nearby (one junction with them then)
+  const [fk, fa] = from ? from.split("|") : ["", ""], fe = cn.arms.find(x => x.inEdge?.key === fk)?.inEdge;
+  const farOuts = fe ? lanesLeavingNear(simController.compiled, fe, Number(fa)).filter(x => x.e.from !== cn) : [];
   const add = () => {
     const [ik, a] = from.split("|"), [ok, b] = to.split("|");
-    const ein = cn.arms.find(x => x.inEdge?.key === ik)?.inEdge, eout = cn.arms.find(x => x.outEdge?.key === ok)?.outEdge;
-    if (!ein || !eout) return;
+    const ein = cn.arms.find(x => x.inEdge?.key === ik)?.inEdge;
+    if (!ein) return;
     // (adds to what the lane feeds now: one lane can feed several)
     const r = connectLanes(net, simController.compiled, ik, Number(a), ok, Number(b));
     if (r) commit(r.net);
@@ -123,16 +143,21 @@ function AddConnector({ net, cn }: { net: Network; cn: CNode }) {
   return (
     <div className="grid gap-1.5 rounded-md border border-dashed p-2">
       <div className="text-xs font-medium">Add a connector</div>
-      <select className={sel} value={from} onChange={e => setFrom(e.target.value)} aria-label="From lane">
+      <select className={sel} value={from} onChange={e => { setFrom(e.target.value); setTo(""); }} aria-label="From lane">
         <option value="">From… (a lane coming in)</option>
         {opts(ins).map(o => <option key={o.value} value={o.value}>{o.text}</option>)}
       </select>
       <select className={sel} value={to} onChange={e => setTo(e.target.value)} aria-label="To lane">
         <option value="">To… (a lane going out)</option>
         {opts(outs).map(o => <option key={o.value} value={o.value}>{o.text}</option>)}
+        {farOuts.length > 0 && (
+          <optgroup label="Starting nearby (makes one junction with it)">
+            {farOuts.map(x => <option key={`${x.e.key}|${x.lp.lane}`} value={`${x.e.key}|${x.lp.lane}`}>{x.e.link.name || x.e.link.id} at {x.e.from.def.id} · lane {x.lp.lane + 1}</option>)}
+          </optgroup>
+        )}
       </select>
       <Button size="sm" variant="outline" className="justify-self-start" disabled={!from || !to} onClick={add}><Plus /> Add connector</Button>
-      <p className="text-[11px] text-muted-foreground">Connects those two lanes through the junction, even where no turn existed (it becomes a turn here, allowed whatever the lane arrows say).</p>
+      <p className="text-[11px] text-muted-foreground">Connects those two lanes through the junction, even where no turn existed (it becomes a turn here, allowed whatever the lane arrows say). A lane starting at another node nearby (up to 60 m, e.g. the other carriageway) can be joined too: both then make one junction.</p>
     </div>
   );
 }

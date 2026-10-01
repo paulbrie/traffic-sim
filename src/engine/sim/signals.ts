@@ -1,7 +1,7 @@
-import type { CNode } from "../compile";
+import { connShapeKey, type CNode, type Conn } from "../compile";
 import { DT, type Vehicle, type NodeState } from "./base";
 import { SimRouting } from "./routing";
-import { signalAspect } from "../signals";
+import { connectorAspect, signalAspect } from "../signals";
 
 /** Traffic lights: phase timing (actuated or coordinated), the aspect for each lane, statistics per green. */
 export abstract class SimSignals extends SimRouting {
@@ -41,7 +41,8 @@ export abstract class SimSignals extends SimRouting {
   protected updateSignals() {
     for (const st of this.ns) {
       const n = st.node;
-      if (!n.controlled || n.def.control !== "lights" || n.phases.length < 2) continue;
+      // (a node whose lights a junction's controller runs follows it, below)
+      if (!n.controlled || n.def.control !== "lights" || n.phases.length < 2 || n.signals !== n) continue;
       if (n.coord) {
         const s = this.planState(n);
         if (s.phase !== st.phase || s.stage !== st.stage) this.enterStage(st, s.phase, s.stage);
@@ -60,6 +61,34 @@ export abstract class SimSignals extends SimRouting {
         this.enterStage(st, (st.phase + 1) % n.phases.length, 0); st.t = 0;
       }
     }
+    for (const st of this.ns) {
+      const ctl = st.node.signals;
+      if (ctl === st.node) continue;
+      const s = this.ns[ctl.idx];
+      st.phase = s.phase; st.stage = s.stage; st.t = s.t;
+    }
+  }
+  /** lights at this node (its own, or run by its junction's controller) */
+  protected lit(n: CNode) { return n.controlled && n.signals.def.control === "lights" && n.phases.length >= 2; }
+  /** the light for one crossing: its connector's (lights per connector), else its lane's */
+  protected connSignal(c: Conn): "green" | "yellow" | "red" | null {
+    const n = c.node, ctl = n.signals;
+    if (ctl.connPhases) {
+      const st = this.ns[ctl.idx], a = connectorAspect(ctl, connShapeKey(c.move, c.inLane, c.outLane), st.phase, st.stage);
+      if (a) return a;
+    }
+    return this.signalFor(n.idx, c.inEdge.inArm, c.inLane);
+  }
+  /** traffic waiting for this crossing: its phases (at the junction's controller) are in demand */
+  protected noteDemand(c: Conn) {
+    const st = this.ns[c.node.signals.idx];
+    for (let p = 0; p < st.demand.length; p++) if (this.greenIn(c, p)) st.demand[p] = this.tick;
+  }
+  /** is this crossing green in phase `p` (lights per connector: its connector; else its lane) */
+  protected greenIn(c: Conn, p: number): boolean {
+    const ctl = c.node.signals, key = connShapeKey(c.move, c.inLane, c.outLane);
+    if (ctl.connPhases?.some(x => x.has(key))) return ctl.connPhases[p].has(key);
+    return this.lanePhases(c.node, c.inEdge.inArm, c.inLane).includes(p);
   }
   /**
    * Signal aspect for traffic arriving in `lane` of arm `armIdx` of node `nodeIdx` (null = no

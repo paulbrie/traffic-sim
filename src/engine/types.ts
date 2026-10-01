@@ -72,6 +72,14 @@ export interface NodeDef {
    * freely) the two handle points relative to the node.
    */
   connShape?: Record<string, ConnShape>;
+  /**
+   * The junction's lane connectors, written out (set by hand once any of them is edited): every way a lane
+   * arriving here continues into a lane leaving. Approaches and exits that have none (and aren't `closed`)
+   * get the automatic ones, so a road added later is connected. When set, `laneMap` and `connShape` are not.
+   */
+  connectors?: ConnectorDef[];
+  /** approaches and exits (edge keys "link:dir") left unconnected on purpose */
+  closed?: string[];
   /** junction outline drawn by hand (outer kerb edge), points relative to the node; replaces the automatic one */
   outline?: Vec[];
   /** painted areas on the junction: hatched (no driving) or kerbed islands; points relative to the node */
@@ -91,6 +99,13 @@ export type LaneTargets = number | number[] | null;
 /** a lane connector's hand-set curve: handle lengths along the lanes, or free handle points (relative to its node) */
 export type ConnShape = [number, number] | { c1: Vec; c2: Vec };
 
+/**
+ * A lane connector: lane `a` (0 = leftmost at the line) of the road arriving (edge key "link:dir", the
+ * direction of travel on that road) continues into lane `b` of a road leaving. Of several connectors from
+ * one lane, the first is its usual one. `shape`: the curve, when set by hand.
+ */
+export interface ConnectorDef { in: string; a: number; out: string; b: number; shape?: ConnShape }
+
 /** One green phase of a junction with custom lights. */
 export interface SignalPhase {
   name?: string;
@@ -98,6 +113,12 @@ export interface SignalPhase {
   green: number;
   /** minimum green before an idle phase may be cut short (s); default: the junction's */
   minGreen?: number | null;
+  /**
+   * Lights per connector: the lane connectors green in this phase, by key "inLink:dir|inLane>outLink:dir|outLane".
+   * When the phases have them, they decide (not the roads' `greenF` / `greenB`), and they may list connectors
+   * of every node the junction spans (CNode.cluster): its lights all run from this node.
+   */
+  conns?: string[];
 }
 
 /** most phases a junction may have */

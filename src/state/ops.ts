@@ -1,7 +1,7 @@
 /** Pure network edit operations. Each returns a new Network (never mutates). */
 import { newId, makeNode } from "@/engine/sample";
 import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type ReversibleDef, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape, type LaneTargets } from "@/engine/types";
-import { linkExtent, type Compiled } from "@/engine/compile";
+import { connShapeKey, exitLanesOf, laneAllowed, linkExtent, type Compiled } from "@/engine/compile";
 import { greenWaveOffsets, withCustomPhases } from "@/engine/signals";
 
 export const nodeById = (net: Network, id: string) => net.nodes.find(n => n.id === id);
@@ -26,6 +26,46 @@ export function setLaneMap(net: Network, nodeId: string, key: string, lanes: Lan
   const next = { ...(n.laneMap ?? {}) };
   if (lanes) next[key] = lanes; else delete next[key];
   return updateNode(net, nodeId, { laneMap: Object.keys(next).length ? next : undefined });
+}
+
+/**
+ * At node `nodeId`, rewrite what refers to roads by edge key ("link:dir"): its connectors, closed roads, and
+ * lane connections and curves set by hand. `f` gives the new key, or null to drop what refers to it.
+ */
+export function remapEdgeKeys(net: Network, nodeId: string, f: (key: string) => string | null): Network {
+  const n = nodeById(net, nodeId);
+  if (!n || !(n.connectors || n.closed || n.laneMap || n.connShape)) return net;
+  const g = (k: string) => f(k);
+  const patch: Partial<NodeDef> = {};
+  if (n.connectors) patch.connectors = n.connectors.flatMap(c => { const i = g(c.in), o = g(c.out); return i && o ? [{ ...c, in: i, out: o }] : []; });
+  if (n.closed) { const cl = n.closed.map(g).filter((k): k is string => !!k); patch.closed = cl.length ? cl : undefined; }
+  if (n.laneMap) {
+    const m: NonNullable<NodeDef["laneMap"]> = {};
+    for (const [k, v] of Object.entries(n.laneMap)) { const [a, b] = k.split(">").map(g); if (a && b) m[`${a}>${b}`] = v; }
+    patch.laneMap = Object.keys(m).length ? m : undefined;
+  }
+  if (n.connShape) {
+    const m: NonNullable<NodeDef["connShape"]> = {};
+    for (const [k, v] of Object.entries(n.connShape)) {
+      const [x, y] = k.split(">"), [ka, la] = x.split("|"), [kb, lb] = y.split("|"), a = g(ka), b = g(kb);
+      if (a && b) m[`${a}|${la}>${b}|${lb}`] = v;
+    }
+    patch.connShape = Object.keys(m).length ? m : undefined;
+  }
+  return updateNode(net, nodeId, patch);
+}
+/** the same at both ends of link `id`, for keys of that link (`f` gets the node and the direction) */
+function remapLink(net: Network, id: string, f: (node: string, dir: 1 | -1) => string | null, ends?: [string, string]): Network {
+  const l = linkById(net, id);
+  const [A, B] = ends ?? (l ? [l.from, l.to] : ["", ""]);
+  for (const node of new Set([A, B])) {
+    if (!node) continue;
+    net = remapEdgeKeys(net, node, k => {
+      const [lid, d] = k.split(":");
+      return lid === id ? f(node, Number(d) as 1 | -1) : k;
+    });
+  }
+  return net;
 }
 
 /** Set (or with null, clear) the hand-made shape of one lane connector at a node: its two handle lengths. */
@@ -91,11 +131,14 @@ export function updateLink(net: Network, id: string, patch: Partial<LinkDef>): N
 }
 
 export function deleteLink(net: Network, id: string): Network {
+  net = remapLink(net, id, () => null);
   return pruneRefs({ ...net, links: net.links.filter(l => l.id !== id) });
 }
 
 /** Swap the drawing direction of a link (keeps traffic as it is on the ground). */
 export function reverseLink(net: Network, id: string): Network {
+  // (its directions swap names: "id:1" is now the other way)
+  net = remapLink(net, id, (_, d) => `${id}:${-d}`);
   return updateLinkWith(net, id, l => ({ ...l, from: l.to, to: l.from, c1: l.c2, c2: l.c1, lanesF: l.lanesB, lanesB: l.lanesF, busF: l.busB, busB: l.busF, turnsF: l.turnsB ?? null, turnsB: l.turnsF ?? null, signF: l.signB ?? null, signB: l.signF ?? null, splitF: l.splitB ?? null, splitB: l.splitF ?? null, greenF: l.greenB ?? null, greenB: l.greenF ?? null, baysF: l.baysB ?? null, baysB: l.baysF ?? null, dropF: l.dropB ?? null, dropB: l.dropF ?? null }), true);
 }
 
@@ -130,6 +173,8 @@ export function splitLink(net: Network, id: string, t: number, at: Vec): [Networ
     if (s.link !== id) return s;
     return s.pos <= t ? { ...s, link: first.id, pos: s.pos / Math.max(1e-6, t) } : { ...s, link: second.id, pos: (s.pos - t) / Math.max(1e-6, 1 - t) };
   });
+  // the junctions at its ends now meet the piece on their side
+  net = remapLink(net, id, (end, d) => `${end === l.from ? first.id : second.id}:${d}`, [l.from, l.to]);
   return [{ ...net, nodes: [...net.nodes, node], links: [...net.links.filter(x => x.id !== id), first, second], stops }, node];
 }
 
@@ -356,6 +401,8 @@ function fixStops(net: Network, linkId: string, flip: boolean): Network {
 export function flipTraffic(net: Network, id: string): Network {
   const l = linkById(net, id);
   if (!l) return net;
+  // (traffic runs the other way: its connectors at both ends no longer fit)
+  net = remapLink(net, id, () => null);
   const n2 = updateLink(net, id, { lanesF: l.lanesB, lanesB: l.lanesF, busF: l.busB, busB: l.busF, turnsF: null, turnsB: null, signF: l.signB ?? null, signB: l.signF ?? null, splitF: l.splitB ?? null, splitB: l.splitF ?? null, greenF: null, greenB: null, baysF: l.baysB ?? null, baysB: l.baysF ?? null, dropF: l.dropB ?? null, dropB: l.dropF ?? null });
   return fixStops(n2, id, true);
 }
@@ -678,7 +725,7 @@ const withPhases = (net: Network, nodeId: string, phases: SignalPhase[]): Networ
 export function addPhase(net: Network, nodeId: string): Network {
   const ps = phasesOf(net, nodeId), n = nodeById(net, nodeId);
   if (!n || ps.length >= MAX_PHASES) return net;
-  return withPhases(net, nodeId, [...ps, { green: n.signal.green }]);
+  return withPhases(net, nodeId, [...ps, { green: n.signal.green, ...(ps.some(p => p.conns) ? { conns: [] } : {}) }]);
 }
 
 export function updatePhase(net: Network, nodeId: string, p: number, patch: Partial<SignalPhase>): Network {
@@ -708,6 +755,43 @@ export function movePhase(net: Network, nodeId: string, p: number, d: -1 | 1): N
     links: mapGreens(net, nodeId, list => list.map(swap).sort((a, b) => a - b)),
     signalGroups: mapGroupPhase(net, nodeId, swap),
   };
+}
+
+/**
+ * Lights per connector: the junction's phases as they run now, each listing the connectors green in it (a
+ * connector green when its lane is). Connectors of the junction's other nodes without lights of their own are
+ * green throughout to start with. The lights of all its nodes then run from `nodeId`.
+ */
+export function toConnectorPhases(net: Network, compiled: Compiled, nodeId: string): Network {
+  const cn = compiled.nodeById.get(nodeId);
+  if (!cn || cn.signals.connPhases) return net;
+  const k = Math.max(2, cn.phases.length);
+  const phases: SignalPhase[] = Array.from({ length: k }, (_, p) => ({
+    green: cn.phaseGreen[p] ?? cn.def.signal.green,
+    ...(cn.def.phases?.[p]?.minGreen != null ? { minGreen: cn.def.phases[p].minGreen } : {}),
+    conns: [],
+  }));
+  for (const m of cn.cluster) m.arms.forEach((a, arm) => {
+    const e = a.inEdge;
+    if (!e) return;
+    for (const mv of m.moves.get(e.idx) ?? []) for (let lane = 0; lane < e.n; lane++) {
+      if (!laneAllowed(mv, lane)) continue;
+      const own = m === cn ? m.lanePhases[arm]?.[lane] : null;
+      const ps = own && own.length ? own : phases.map((_, p) => p);
+      for (const b of exitLanesOf(mv, lane)) for (const p of ps) if (p < k) phases[p].conns!.push(connShapeKey(mv, lane, b));
+    }
+  });
+  const others = new Set(cn.cluster.filter(x => x !== cn).map(x => x.def.id));
+  return { ...net, nodes: net.nodes.map(n => (n.id === nodeId ? { ...n, control: "lights" as const, phases } : others.has(n.id) ? { ...n, control: "lights" as const, phases: null } : n)) };
+}
+
+/** Lights per connector: give (or take away) green for one connector (key, see connShapeKey) in one phase. */
+export function setConnGreen(net: Network, nodeId: string, phase: number, key: string, on: boolean): Network {
+  return withPhases(net, nodeId, phasesOf(net, nodeId).map((x, i) => {
+    if (i !== phase) return x;
+    const cur = x.conns ?? [];
+    return { ...x, conns: on ? [...new Set([...cur, key])] : cur.filter(k => k !== key) };
+  }));
 }
 
 /** Give (or take away) green for one lane of an arriving road in one phase. */
@@ -963,6 +1047,9 @@ export function mergeLinks(net: Network, ids: string[]): { net: Network; id: str
     const pos = (w.off + (w.rev ? 1 - s.pos : s.pos) * w.len) / total;
     return { ...s, link: merged.id, pos: round(pos * 1000) / 1000, dir: (w.rev ? -s.dir : s.dir) as 1 | -1 };
   });
+  // the junctions at its two ends now meet the merged road (a piece drawn the other way had its directions swapped)
+  const tips = [{ x: chain[0], node: head.from }, { x: chain[chain.length - 1], node: tail.to }];
+  for (const { x, node } of tips) net = remapEdgeKeys(net, node, k => { const [lid, d] = k.split(":"); return lid === x.l.id ? `${merged.id}:${x.rev ? -Number(d) : Number(d)}` : k; });
   return { net: pruneRefs({ ...net, links: [...net.links.filter(l => !set.has(l.id)), merged], stops }), id: merged.id, err: fit.err };
 }
 

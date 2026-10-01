@@ -455,7 +455,7 @@ export abstract class SimBase {
     // (only when it has free road ahead of it: one about to stop at a queue frees nothing)
     if (list) for (const u of list) rear = Math.min(rear, u.s - u.len + (u.v > 1.5 ? u.v * 2 : 0));
     let need = v.len + 1.5;
-    for (const o of st.occ) if (!o.entered && o.conn.outEdge === c.outEdge && o.conn.outLane === c.outLane) need += o.v.len + 2;
+    for (const k of st.node.cluster) for (const o of this.ns[k.idx].occ) if (!o.entered && o.conn.outEdge === c.outEdge && o.conn.outLane === c.outLane) need += o.v.len + 2;
     return rear >= need || out.len < need;
   }
 }
