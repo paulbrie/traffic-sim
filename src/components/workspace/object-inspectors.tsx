@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment } from "react";
+import { Trash2 } from "lucide-react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import { Button } from "@/components/ui/button";
 import { connShapeKey, connectorHandles, connectorId } from "@/engine/compile";
@@ -79,19 +80,43 @@ function ConnectFromLane({ id }: { id: string }) {
     select({ kind: "connector", id: r.id });
   };
   const outs = e.to.arms.flatMap(a => (a.outEdge ? [{ a, o: a.outEdge }] : []));
+  // the connectors starting from this lane now
+  const mine = connectorsOf(c).filter(v => v.move.in === e && v.inLane === lane);
+  const dirOf = (o: typeof e) => { const a = e.to.arms.find(x => x.outEdge === o); return a ? compass(a.u.x, a.u.y).name : ""; };
   return (
-    <Section title="Connect to another lane">
+    <Section title="Lane connectors">
+      {mine.length ? (
+        <ul className="grid gap-1">
+          {mine.map(v => {
+            const vid = connectorId(v);
+            return (
+              <li key={vid} className="flex items-center gap-1.5 text-xs">
+                <span className="w-4 text-center font-mono">{GLYPH[v.move.turn]}</span>
+                <button type="button" className="min-w-0 flex-1 truncate text-left hover:underline" title={vid} onClick={() => select({ kind: "connector", id: vid })}>
+                  {v.move.out.link.name || v.move.out.link.id} ({dirOf(v.move.out)}) · lane {v.outLane + 1}
+                </button>
+                <Button variant="ghost" size="icon" className="size-6" aria-label="Remove this connector" title="Remove this connector"
+                  onClick={() => commit(changeConnection(network$.getValue(), c, e.key, lane, v.move.out.key, v.outLane, null))}><Trash2 className="size-3" /></Button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : <p className="text-xs text-muted-foreground">No connector starts from this lane: traffic in it can&apos;t get through {ref}.</p>}
+      <div className="text-xs font-medium">Add a connector</div>
       <Button size="sm" variant={picking ? "secondary" : "outline"} className="justify-self-start" onClick={() => { ui.getValue().connectFrom = picking ? null : id; }}>
         {picking ? "Done (Esc)" : "Pick lanes on the map"}
       </Button>
       <p className="text-xs text-muted-foreground">
-        {picking ? `Click lanes leaving ${ref} (highlighted) to connect lane ${lane + 1} to them, as many as you like.` : `Connectors from the end of this lane through ${ref} to lanes leaving it (as many as you like), even where there was no turn. Or pick them here:`}
+        {picking ? `Click lanes leaving ${ref} (highlighted) to connect lane ${lane + 1} to them, as many as you like.` : `To lanes leaving ${ref} (as many as you like), even where there was no turn. Or pick them here:`}
       </p>
       <div className="grid gap-1.5">
         {outs.map(({ a, o }) => (
           <div key={o.key} className="flex flex-wrap items-center gap-1 text-xs">
             <span className="mr-1 truncate text-muted-foreground">{o.link.name || o.link.id} ({compass(a.u.x, a.u.y).name})</span>
-            {Array.from({ length: o.n }, (_, b) => <Button key={b} size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => add(o.key, b)}>lane {b + 1}</Button>)}
+            {Array.from({ length: o.n }, (_, b) => {
+              const has = mine.some(v => v.move.out === o && v.outLane === b);
+              return <Button key={b} size="sm" variant={has ? "secondary" : "outline"} className="h-6 px-2 text-xs" disabled={has} title={has ? "Already connected" : undefined} onClick={() => add(o.key, b)}>lane {b + 1}</Button>;
+            })}
           </div>
         ))}
       </div>
