@@ -6,7 +6,7 @@
  */
 import polygonClipping from "polygon-clipping";
 import { Poly, connectorPoints, connectorReach, cubicPoints, signedAngle, normAngle, hull, dist } from "./geom";
-import { MAX_LANES, type FlowDef, type LinkDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
+import { MAX_LANES, type FlowDef, type LaneTargets, type LinkDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
 import { attachBuildings, type Place } from "./buildings";
 
 export const LW = 3.2;          // lane width (m)
@@ -89,8 +89,10 @@ export interface Movement {
   /** lanes added at a plain road point: how many of the exit's left through lanes are new (the
    *  approach's lanes feed the ones they are lined up with) */
   shift?: number;
-  /** lane connections set by hand (NodeDef.laneMap): per incoming lane the outgoing lane, -1 = none */
+  /** lane connections set by hand (NodeDef.laneMap): per incoming lane the (usual) outgoing lane, -1 = none */
   map?: number[];
+  /** ...and every outgoing lane it may take, when some lane has several */
+  multi?: number[][];
   /** connectors and crossings built for this movement, by inLane * 8 + outLane (filled lazily) */
   conns?: (Conn | undefined)[];
   crossings?: (readonly Piece[] | undefined)[];
@@ -656,7 +658,9 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       const next = list.filter(m => {
         const arr = n.def.laneMap![`${m.in.key}>${m.out.key}`];
         if (!arr) return true;
-        m.map = Array.from({ length: m.in.n }, (_, a) => { const b = arr[a]; return b != null && b < m.out.n ? b : -1; });
+        const outs = Array.from({ length: m.in.n }, (_, a) => { const t = arr[a]; return (t == null ? [] : Array.isArray(t) ? t : [t]).filter(b => b < m.out.n); });
+        m.map = outs.map(l => (l.length ? l[0] : -1));
+        if (outs.some(l => l.length > 1)) m.multi = outs;
         const used = m.map.map((b, a) => (b >= 0 ? a : -1)).filter(a => a >= 0);
         if (!used.length) return false;
         m.lo = Math.min(...used); m.hi = Math.max(...used);
@@ -964,6 +968,19 @@ export function arrowLetters(list: readonly Movement[], m: Movement): Set<string
   return out;
 }
 
+/** a turn's lane connections as set or worked out now, one entry per incoming lane (as NodeDef.laneMap holds them) */
+export function currentTargets(m: Movement): LaneTargets[] {
+  return Array.from({ length: m.in.n }, (_, a) => {
+    if (!laneAllowed(m, a)) return null;
+    const l = exitLanesOf(m, a);
+    return l.length > 1 ? [...l] : l[0];
+  });
+}
+/** every outgoing lane lane `a` may take on movement `m` (several only when set so by hand), the usual one first */
+export function exitLanesOf(m: Movement, a: number): number[] {
+  return m.multi?.[a]?.length ? m.multi[a] : [exitLane(m, a, false)];
+}
+
 /** may vehicles in lane `a` of its approach take movement `m` */
 export const laneAllowed = (m: Movement, a: number) => a >= m.lo && a <= m.hi && (!m.map || m.map[a] >= 0);
 
@@ -973,8 +990,7 @@ export function connectorPreview(c: Compiled, only?: (n: CNode, m: Movement) => 
     if (!n.controlled || n.ringR > 0) continue;
     for (const list of n.moves.values()) for (const m of list) if (!only || only(n, m)) for (let a = m.lo; a <= m.hi; a++) {
       if (!laneAllowed(m, a)) continue;
-      const b = exitLane(m, a, false);
-      out.push({ node: n, move: m, inLane: a, outLane: b, pts: Float32Array.from(buildConn(n, m, a, b, -1).poly.pts) });
+      for (const b of exitLanesOf(m, a)) out.push({ node: n, move: m, inLane: a, outLane: b, pts: Float32Array.from(buildConn(n, m, a, b, -1).poly.pts) });
     }
   }
   return out;
@@ -1023,8 +1039,7 @@ export function connectionIssues(c: Compiled, only?: CNode): ConnectionIssue[] {
         if (a === e.dropLane || (e.bus && a === e.kerb)) continue;
         const ms = moves.filter(m => laneAllowed(m, a));
         if (!ms.length) { out.push({ node: n, level: "warn", message: `Lane ${a + 1} of ${name(e)} has no connection here`, link: e.link.id }); continue; }
-        for (const m of ms) {
-          const b = exitLane(m, a, false);
+        for (const m of ms) for (const b of exitLanesOf(m, a)) {
           (fed.get(m.out) ?? fed.set(m.out, new Set()).get(m.out)!).add(b);
           if (!plainJoint) views.push({ a, b, m, pts: buildConn(n, m, a, b, -1).poly.pts });
         }
@@ -1185,21 +1200,23 @@ function outlineInputs(n: CNode, inset: number): OutlineInputs {
   }
   for (const list of n.moves.values()) for (const mv of list) for (let q = mv.lo; q <= mv.hi; q++) {
     if (!laneAllowed(mv, q)) continue;
-    const P = buildConn(n, mv, q, exitLane(mv, q, false), -1).poly.pts, cnt = P.length / 2;
-    if (cnt < 2) continue;
-    const half = Math.max(mv.in.lw, mv.out.lw) / 2 + extra, left: Pair[] = [], right: Pair[] = [];
-    for (let i = 0; i < cnt; i++) {
-      const i0 = Math.max(0, i - 1), i1 = Math.min(cnt - 1, i + 1);
-      const dx = P[i1 * 2] - P[i0 * 2], dy = P[i1 * 2 + 1] - P[i0 * 2 + 1], len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len, ny = dx / len;
-      left.push([P[i * 2] + nx * half, P[i * 2 + 1] + ny * half]);
-      right.push([P[i * 2] - nx * half, P[i * 2 + 1] - ny * half]);
-    }
-    polys.push([[...left, ...right.reverse(), left[0]]]);
-    // (the same path as small convex pieces, for when a tight turn folds its edges over each other)
-    for (let i = 0; i + 1 < cnt; i++) {
-      const h = hull([left[i], left[i + 1], right[cnt - 2 - i], right[cnt - 1 - i]].map(([x, y]) => ({ x, y })));
-      if (h.length >= 3) pieces.push([[...h.map(v => [v.x, v.y] as Pair), [h[0].x, h[0].y]]]);
+    for (const b of exitLanesOf(mv, q)) {
+      const P = buildConn(n, mv, q, b, -1).poly.pts, cnt = P.length / 2;
+      if (cnt < 2) continue;
+      const half = Math.max(mv.in.lw, mv.out.lw) / 2 + extra, left: Pair[] = [], right: Pair[] = [];
+      for (let i = 0; i < cnt; i++) {
+        const i0 = Math.max(0, i - 1), i1 = Math.min(cnt - 1, i + 1);
+        const dx = P[i1 * 2] - P[i0 * 2], dy = P[i1 * 2 + 1] - P[i0 * 2 + 1], len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len, ny = dx / len;
+        left.push([P[i * 2] + nx * half, P[i * 2 + 1] + ny * half]);
+        right.push([P[i * 2] - nx * half, P[i * 2 + 1] - ny * half]);
+      }
+      polys.push([[...left, ...right.reverse(), left[0]]]);
+      // (the same path as small convex pieces, for when a tight turn folds its edges over each other)
+      for (let i = 0; i + 1 < cnt; i++) {
+        const h = hull([left[i], left[i + 1], right[cnt - 2 - i], right[cnt - 1 - i]].map(([x, y]) => ({ x, y })));
+        if (h.length >= 3) pieces.push([[...h.map(v => [v.x, v.y] as Pair), [h[0].x, h[0].y]]]);
+      }
     }
   }
   const key = `${inset}|` + polys.map(p => p[0].map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")).join("|");

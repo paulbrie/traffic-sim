@@ -1,4 +1,4 @@
-import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type PlanSettings, type Vec, type ConnShape } from "./types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type PlanSettings, type Vec, type ConnShape, type LaneTargets } from "./types";
 import { sanitizeParams } from "./params";
 
 const num = (v: unknown, lo: number, hi: number, def: number) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
@@ -186,12 +186,18 @@ function sanitizeGeo(v: unknown): Network["geo"] {
 }
 
 /** hand-set lane connections: well-formed keys, lane numbers in range, at most 64 turns */
-function laneMapOf(v: unknown): { laneMap: Record<string, (number | null)[]> } | null {
+function laneMapOf(v: unknown): { laneMap: Record<string, LaneTargets[]> } | null {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
-  const out: Record<string, (number | null)[]> = {};
+  const out: Record<string, LaneTargets[]> = {};
+  const lane = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x >= 0 && x < MAX_LANES_AT_LINE;
   for (const [k, arr] of Object.entries(v as Record<string, unknown>).slice(0, 64)) {
     if (!/^[\w-]{1,64}:-?1>[\w-]{1,64}:-?1$/.test(k) || !Array.isArray(arr) || !arr.length || arr.length > MAX_LANES_AT_LINE) continue;
-    out[k] = arr.map(x => (typeof x === "number" && Number.isInteger(x) && x >= 0 && x < MAX_LANES_AT_LINE ? x : null));
+    // one lane, several (distinct, the first kept first), or none
+    out[k] = arr.map(x => {
+      if (lane(x)) return x as number;
+      if (Array.isArray(x)) { const l = [...new Set(x.filter(lane) as number[])]; return l.length > 1 ? l : l.length ? l[0] : null; }
+      return null;
+    });
   }
   return Object.keys(out).length ? { laneMap: out } : null;
 }

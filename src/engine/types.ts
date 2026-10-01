@@ -61,10 +61,11 @@ export interface NodeDef {
   ringLanes?: 1 | 2;
   /**
    * Lane connections set by hand, per turn: key "inLink:dir>outLink:dir" (the directed roads in and
-   * out), value per incoming lane (0 = leftmost) the outgoing lane it feeds, or null for none. Turns
-   * without an entry use the automatic connections. Ignored at roundabouts.
+   * out), value per incoming lane (0 = leftmost) the outgoing lane it feeds, several (the first is the
+   * usual one; vehicles pick the one that suits their next turn), or null for none. Turns without an
+   * entry use the automatic connections. Ignored at roundabouts.
    */
-  laneMap?: Record<string, (number | null)[]>;
+  laneMap?: Record<string, LaneTargets[]>;
   /**
    * Lane connector shapes set by hand: key "inLink:dir|inLane>outLink:dir|outLane", value how far the
    * curve's handles reach (m) along the lane it leaves and back along the lane it joins, or (moved
@@ -83,6 +84,9 @@ export interface NodeDef {
    */
   align?: boolean;
 }
+
+/** where one incoming lane goes on a turn set by hand: an outgoing lane, several, or none */
+export type LaneTargets = number | number[] | null;
 
 /** a lane connector's hand-set curve: handle lengths along the lanes, or free handle points (relative to its node) */
 export type ConnShape = [number, number] | { c1: Vec; c2: Vec };

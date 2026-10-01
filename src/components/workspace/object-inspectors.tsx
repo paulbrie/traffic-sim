@@ -3,11 +3,11 @@
 import { Fragment } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import { Button } from "@/components/ui/button";
-import { connShapeKey, connectorHandles, connectorId, exitLane, laneAllowed } from "@/engine/compile";
+import { connShapeKey, connectorHandles, connectorId } from "@/engine/compile";
 import { junctionRefs } from "@/engine/refs";
 import { connectorsOf } from "@/render/draw2d";
 import { commit, network$, select, stats$, ui } from "@/state/store";
-import { connectLanes } from "@/state/connections";
+import { changeConnection, connectLanes } from "@/state/connections";
 import * as ops from "@/state/ops";
 import { simController } from "@/state/sim-controller";
 import { IdChip, NumberField, Section, compass } from "./fields";
@@ -102,11 +102,10 @@ function ConnectFromLane({ id }: { id: string }) {
 /** change where this lane goes on this turn, or take it off the turn (sets the junction's lane connections) */
 function ConnectorEdit({ v }: { v: ReturnType<typeof connectorsOf>[number] }) {
   const m = v.move, key = `${m.in.key}>${m.out.key}`, nodeId = v.node.def.id;
-  const lanes = Array.from({ length: m.in.n }, (_, a) => (laneAllowed(m, a) ? exitLane(m, a, false) : null));
   const manual = !!v.node.def.laneMap?.[key];
+  // (only this connector: the lane's other connectors stay)
   const apply = (b: number | null) => {
-    const next = [...lanes]; next[v.inLane] = b;
-    commit(ops.setLaneMap(network$.getValue(), nodeId, key, next));
+    commit(changeConnection(network$.getValue(), simController.compiled, m.in.key, v.inLane, m.out.key, v.outLane, b));
     select(b === null ? { kind: "node", id: nodeId } : { kind: "connector", id: connectorId({ ...v, outLane: b }) });
   };
   return (

@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { AlertTriangle, CircleAlert, Plus, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { connectionIssues, exitLane, laneAllowed, type CNode, type Edge, type Movement } from "@/engine/compile";
-import type { Network, NodeDef } from "@/engine/types";
+import { connectionIssues, currentTargets, type CNode, type Edge, type Movement } from "@/engine/compile";
+import type { LaneTargets, Network, NodeDef } from "@/engine/types";
+import { connectLanes } from "@/state/connections";
 import { commit, select } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import * as ops from "@/state/ops";
@@ -12,8 +13,9 @@ import { Section, compass } from "./fields";
 
 const TURN_NAME: Record<Movement["turn"], string> = { L: "Left", R: "Right", S: "Straight", U: "U-turn" };
 const keyOf = (m: Movement) => `${m.in.key}>${m.out.key}`;
-/** the outgoing lane each incoming lane feeds for a turn (null = none), as the engine uses it now */
-const current = (m: Movement) => Array.from({ length: m.in.n }, (_, a) => (laneAllowed(m, a) ? exitLane(m, a, false) : null));
+/** the outgoing lane(s) each incoming lane feeds for a turn (null = none), as the engine uses it now */
+const current = (m: Movement) => currentTargets(m);
+const first = (t: LaneTargets) => (t == null ? null : Array.isArray(t) ? t[0] : t);
 
 /** problems with the lane connections at one node (roads leading nowhere, lanes not fed, crossing paths) */
 export function ConnectionIssues({ cn }: { cn: CNode }) {
@@ -35,7 +37,7 @@ export function ConnectionIssues({ cn }: { cn: CNode }) {
 export function LaneConnectionsSection({ net, node }: { net: Network; node: NodeDef }) {
   const c = simController.compiled, cn = c.nodeById.get(node.id);
   if (!cn || cn.ringR > 0 || cn.degree < 2) return null;
-  const set = (key: string, lanes: (number | null)[] | null) => commit(ops.setLaneMap(net, node.id, key, lanes));
+  const set = (key: string, lanes: LaneTargets[] | null) => commit(ops.setLaneMap(net, node.id, key, lanes));
   const shown = new Set<string>();
   const approaches = cn.arms.filter(a => a.inEdge).map(a => ({ arm: a, e: a.inEdge!, moves: cn.moves.get(a.inEdge!.idx) ?? [] }));
   const name = (l: { name: string; id: string }) => l.name || l.id;
@@ -52,8 +54,8 @@ export function LaneConnectionsSection({ net, node }: { net: Network; node: Node
               <div key={key} className="grid grid-cols-[6.5rem_1fr_auto] items-center gap-1.5 text-xs">
                 <span className="truncate" title={`${TURN_NAME[m.turn]} to ${name(m.out.link)}`}>{TURN_NAME[m.turn]} → {name(m.out.link)}</span>
                 <span className="flex flex-wrap gap-1">
-                  {lanes.map((b, a) => a === e.dropLane ? null : (
-                    <label key={a} className="flex items-center gap-0.5 rounded border px-1" title={`Lane ${a + 1} of ${name(e.link)}`}>
+                  {lanes.map((t, a) => { const b = first(t), extra = Array.isArray(t) ? t.slice(1) : []; return a === e.dropLane ? null : (
+                    <label key={a} className="flex items-center gap-0.5 rounded border px-1" title={`Lane ${a + 1} of ${name(e.link)}${extra.length ? ` (also into lane ${extra.map(x => x + 1).join(", ")}; picking here keeps just one)` : ""}`}>
                       <span className="text-muted-foreground">{a + 1}→</span>
                       <select
                         className="h-5 bg-transparent font-mono outline-none" value={b === null ? "" : String(b)} aria-label={`${TURN_NAME[m.turn]} to ${name(m.out.link)}: lane ${a + 1} into`}
@@ -62,8 +64,9 @@ export function LaneConnectionsSection({ net, node }: { net: Network; node: Node
                         <option value="">–</option>
                         {Array.from({ length: m.out.n }, (_, q) => <option key={q} value={q}>{q + 1}</option>)}
                       </select>
+                      {extra.length > 0 && <span className="font-mono text-muted-foreground">+{extra.map(x => x + 1).join("+")}</span>}
                     </label>
-                  ))}
+                  ); })}
                 </span>
                 {manual
                   ? <Button variant="ghost" size="icon" className="size-6" title="Back to automatic" aria-label="Back to automatic" onClick={() => set(key, null)}><RotateCcw className="size-3" /></Button>
@@ -73,7 +76,7 @@ export function LaneConnectionsSection({ net, node }: { net: Network; node: Node
           })}
         </div>
       ))}
-      <AddConnector net={net} node={node} cn={cn} />
+      <AddConnector net={net} cn={cn} />
       {Object.keys(node.laneMap ?? {}).filter(k => !shown.has(k)).map(k => {
         const [from, to] = k.split(">").map(x => net.links.find(l => l.id === x.split(":")[0]));
         if (!from || !to) return null;
@@ -93,7 +96,7 @@ export function LaneConnectionsSection({ net, node }: { net: Network; node: Node
 }
 
 /** add a lane connector: from a lane of a road coming in to a lane of a road going out (a new turn if need be) */
-function AddConnector({ net, node, cn }: { net: Network; node: NodeDef; cn: CNode }) {
+function AddConnector({ net, cn }: { net: Network; cn: CNode }) {
   const ins = cn.arms.flatMap(a => (a.inEdge ? [{ a, e: a.inEdge }] : [])), outs = cn.arms.flatMap(a => (a.outEdge ? [{ a, e: a.outEdge }] : []));
   const [from, setFrom] = useState(""), [to, setTo] = useState("");
   if (!ins.length || !outs.length) return null;
@@ -103,11 +106,9 @@ function AddConnector({ net, node, cn }: { net: Network; node: NodeDef; cn: CNod
     const [ik, a] = from.split("|"), [ok, b] = to.split("|");
     const ein = cn.arms.find(x => x.inEdge?.key === ik)?.inEdge, eout = cn.arms.find(x => x.outEdge?.key === ok)?.outEdge;
     if (!ein || !eout) return;
-    const key = `${ik}>${ok}`, m = cn.moves.get(ein.idx)?.find(x => x.out === eout);
-    // keep the turn's other lanes as they are now; a new turn starts with just this lane
-    const lanes = node.laneMap?.[key] ? [...node.laneMap[key]] : m ? current(m) : Array.from({ length: ein.n }, () => null as number | null);
-    lanes[Number(a)] = Number(b);
-    commit(ops.setLaneMap(net, node.id, key, lanes));
+    // (adds to what the lane feeds now: one lane can feed several)
+    const r = connectLanes(net, simController.compiled, ik, Number(a), ok, Number(b));
+    if (r) commit(r.net);
     setFrom(""); setTo("");
   };
   const sel = "h-7 w-full rounded border bg-transparent px-1 text-xs";

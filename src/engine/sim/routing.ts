@@ -118,6 +118,13 @@ export abstract class SimRouting extends SimBase {
   /** the exit lanes for chooseExitLane without its live check: the usual one, and the one it would prefer */
   protected exitLanes(v: Vehicle, m: Movement, a: number, outIdx: number): [number, number] {
     const isBus = v.kind === "bus";
+    // a lane connected by hand to several lanes of the exit: the one that suits the next turn
+    const several = m.multi?.[a];
+    if (several && several.length > 1) {
+      const want = this.laneTarget(v, outIdx);
+      const fit = want ? several.find(b => b >= want.lo && b <= want.hi) : undefined;
+      return [several[0], fit ?? several[0]];
+    }
     const b0 = exitLane(m, a, isBus);
     if (m.turn === "U" || (isBus && m.out.bus)) return [b0, b0];
     const out = m.out;

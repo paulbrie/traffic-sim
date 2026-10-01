@@ -1,6 +1,6 @@
 import { Sim, sampleTown, compile, connectorPreview, exitLane, connectionIssues, alignableNodes, measureRun, optimizeSignals } from "../src/engine";
 import { Poly } from "../src/engine/geom";
-import { connectLanes } from "../src/state/connections";
+import { changeConnection, connectLanes } from "../src/state/connections";
 import { makeLink, makeNode } from "../src/engine/sample";
 import { isJunction } from "../src/engine/refs";
 import * as mirrorModule from "../src/engine/sim/mirror";
@@ -701,5 +701,26 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const c = r && compile(sanitizeNetwork(r.net)), m = c ? (c.nodeById.get(J.id)!.moves.get(c.edgeByKey.get(`${wj.id}:1`)!.idx) ?? []).find(x => x.out.link.id === js.id) : undefined;
   const ok = !!r && !!m && m.lo === 1 && m.hi === 1 && r.id === `${J.id}|${wj.id}:1|1|${js.id}:1|0`;
   console.log(`connector drawn from a lane: ${m ? `${m.turn} from lane ${m.lo + 1}` : "none"}, selects ${r?.id} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// one lane feeding several lanes of the exit (connectors drawn by hand): each is a connector, adding one
+// keeps the others, removing one keeps the rest, and traffic uses them
+{
+  const J = makeNode(0, 0, "priority", false), W = makeNode(-200, 0), E = makeNode(200, 0), N = makeNode(0, -200);
+  const wj = makeLink(W, J, 1, 1), je = makeLink(J, E, 3, 3), jn = makeLink(J, N, 1, 1);
+  const base = sanitizeNetwork({ version: 1, nodes: [J, W, E, N], stops: [], lines: [], links: [wj, je, jn] });
+  const inKey = `${wj.id}:1`, outKey = `${je.id}:1`;
+  const r1 = connectLanes(base, compile(base), inKey, 0, outKey, 1)!;   // lane 1 → exit lane 2 (adds to → 1)
+  const r2 = connectLanes(r1.net, compile(sanitizeNetwork(r1.net)), inKey, 0, outKey, 2)!; // and → 3
+  const net = sanitizeNetwork(r2.net), c = compile(net);
+  const targets = net.nodes.find(n => n.id === J.id)!.laneMap![`${inKey}>${outKey}`][0];
+  const views = connectorPreview(c).filter(v => v.move.in.key === inKey && v.move.out.key === outKey).map(v => v.outLane).sort();
+  const removed = sanitizeNetwork(changeConnection(net, c, inKey, 0, outKey, 1, null)).nodes.find(n => n.id === J.id)!.laneMap![`${inKey}>${outKey}`][0];
+  const sim = new Sim(c, { cars: 120, trucks: 0, seed: 5 }); let overlap = 0;
+  for (let t = 0; t < 3000; t++) { sim.step(); const on = sim.vehicles.filter(v => !v.dead && v.piece.kind === "conn");
+    for (let i = 0; i < on.length; i++) for (let k = i + 1; k < on.length; k++) { const p = on[i].piece.poly.at(on[i].s), q = on[k].piece.poly.at(on[k].s); if (Math.hypot(p.x - q.x, p.y - q.y) < 2) overlap++; } }
+  const ok = JSON.stringify(targets) === "[0,1,2]" && views.join() === "0,1,2" && JSON.stringify(removed) === "[0,2]" && sim.stats.trips > 10 && overlap === 0;
+  console.log(`one lane to several: targets ${JSON.stringify(targets)}, connectors to ${views.join(",")}, after removing one ${JSON.stringify(removed)}; ${sim.stats.trips} trips, ${overlap} overlaps | ok ${ok}`);
   if (!ok) process.exit(1);
 }

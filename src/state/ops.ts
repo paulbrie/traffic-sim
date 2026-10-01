@@ -1,6 +1,6 @@
 /** Pure network edit operations. Each returns a new Network (never mutates). */
 import { newId, makeNode } from "@/engine/sample";
-import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape } from "@/engine/types";
+import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape, type LaneTargets } from "@/engine/types";
 import { linkExtent, type Compiled } from "@/engine/compile";
 import { greenWaveOffsets, withCustomPhases } from "@/engine/signals";
 
@@ -20,7 +20,7 @@ export function updateNode(net: Network, id: string, patch: Partial<NodeDef>): N
  * Set the hand-made lane connections of one turn at a node ("inLink:dir>outLink:dir"): per incoming
  * lane the outgoing lane it feeds, or null for none. `null` for the whole turn goes back to automatic.
  */
-export function setLaneMap(net: Network, nodeId: string, key: string, lanes: (number | null)[] | null): Network {
+export function setLaneMap(net: Network, nodeId: string, key: string, lanes: LaneTargets[] | null): Network {
   const n = nodeById(net, nodeId);
   if (!n) return net;
   const next = { ...(n.laneMap ?? {}) };
