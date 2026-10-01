@@ -121,9 +121,9 @@ export abstract class SimDemand extends SimMotion {
 
   /** road event logs: a vehicle appearing on a logged road (entering the plan, from a building, a test vehicle, a bus) */
   protected logAppear(v: Vehicle) {
-    if (v.piece.kind !== "lane" || !this.logLinks.size) return;
+    if (v.piece.kind !== "lane" || (!this.logLinks.size && !this.vehLogged(v))) return;
     const e = v.piece.edge;
-    this.evRoad(e, v, "appear", `${v.s < 1 && e.from.gateway ? "enters the plan" : `starts ${v.s.toFixed(0)} m along`}${v.test !== undefined ? " (test vehicle)" : ""}, heading for ${v.dest.kind === "gateway" ? v.dest.node.def.id : v.dest.kind === "stop" ? "a bus stop" : v.dest.edge.link.id}`);
+    this.evRoad(e, v, "appear", `${v.s < 1 && e.from.gateway ? "enters the plan" : `starts ${v.s.toFixed(0)} m along`}${v.test !== undefined ? " (test vehicle)" : ""}, heading for ${v.dest.kind === "gateway" ? this.nodeName(v.dest.node) : v.dest.kind === "stop" ? "a bus stop" : v.dest.edge.link.name || v.dest.edge.link.id}`);
   }
 
   /** a vehicle entering the plan; with `flow`, at that transit flow's entry point, bound for its exit */

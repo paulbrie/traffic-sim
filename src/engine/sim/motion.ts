@@ -13,6 +13,9 @@ export abstract class SimMotion extends SimJunctions {
     let acc = -v.s, gap = Infinity, lv = 0, leader: Vehicle | null = null;
     let stopD = Infinity, stopKind: "junction" | "stop" | null = null, brake = Infinity;
     let pendConn: Conn | null = null, pendD = 0;
+    // the next junction, when it is not the end of the road the vehicle is on (a short road after the
+    // junction it is crossing or let into, or a joint between road segments): it may ask early
+    let aheadConn: Conn | null = null, aheadD = 0;
     const curLim = this.lim(v, v.piece);
 
     // walk pieces ahead
@@ -104,9 +107,15 @@ export abstract class SimMotion extends SimJunctions {
         if (!cross) break; // route ends on this edge (exit or destination)
         const node = e.to, c0 = cross[0] as Conn;
         if (node.controlled && !(first && v.granted && v.conn === c0)) {
+          let mayGo = false;
           if (first) { pendConn = c0; pendD = endD; }
-          if (endD < stopD) { stopD = endD; stopKind = "junction"; }
-          break;
+          else if (!aheadConn && (v.early?.conn === c0 || (endD < this.P.requestDist && !node.ring && !this.mustStop(node, e)))) {
+            aheadConn = c0; aheadD = endD; mayGo = !!v.early?.granted && v.early.conn === c0;
+          }
+          if (!mayGo) {
+            if (endD < stopD) { stopD = endD; stopKind = "junction"; }
+            break;
+          }
         }
         p = cross[0]; q = cross; qi = 1;
       } else if (qi < q.length) {
@@ -117,6 +126,8 @@ export abstract class SimMotion extends SimJunctions {
       } else break;
       acc = endD; first = false;
     }
+    if (v.early && v.early.conn !== aheadConn) v.early = null; // its plan changed (or the junction before took back its go)
+    if (aheadConn) this.askEarly(v, aheadConn, aheadD);
 
     v.v0 = curLim;
     const sq = 2 * Math.sqrt(v.a * v.b);
@@ -261,6 +272,26 @@ export abstract class SimMotion extends SimJunctions {
       }
     }
   }
+  /**
+   * Ask the next junction early, while still crossing (or let into) the one before, or before a joint
+   * between road segments: otherwise a road too short to stop on would have the vehicle slow down
+   * for that junction's line before it may even ask. Not past a vehicle waiting on the road into it.
+   */
+  protected askEarly(v: Vehicle, c: Conn, d: number) {
+    if (v.early) { v.early.d = d; if (v.early.granted) return; }
+    const node = c.node, st = this.ns[node.idx], lp = c.inEdge.lanes[c.inLane];
+    if ((this.index.get(lp.id) ?? []).some(u => u !== v && !(u.granted && u.conn))) return;
+    if (!v.early) {
+      v.early = { conn: c, at: this.tick, d, granted: false };
+      const from = c.inEdge.from;
+      const why = from.controlled ? `${this.nodeName(from)} is only ${c.inEdge.length.toFixed(0)} m before it` : `the road is split at ${this.nodeName(from)}`;
+      this.ev(node, v, "request", `${this.mv(c)} · ${d.toFixed(0)} m from the line, ${(v.v * 3.6).toFixed(0)} km/h · asked early: ${why}`);
+    }
+    const arm = this.armOf(node, c.inEdge);
+    if (arm >= 0) for (const p of this.lanePhases(node, arm, c.inLane)) st.demand[p] = this.tick;
+    const cur = st.req.get(c.entryKey);
+    if (!cur || d < cur.d) st.req.set(c.entryKey, { v, conn: c, d, at: v.early.at, early: true });
+  }
   // ------------------------------------------------------------ lane changes
   protected neededLanes(v: Vehicle): { lo: number; hi: number; urgent: number } {
     const p = v.piece as LanePiece, e = p.edge;
@@ -377,7 +408,8 @@ export abstract class SimMotion extends SimJunctions {
     // on a road with turn bays, the steps across to a bay come quickly one after the other
     v.lcT = 1; v.lcCool = bestMandatory && (e.left || e.right || e.dropLane >= 0) ? 1.5 : this.P.laneChangeCooldown; v.laneChanges++; this.stats.laneChanges++;
     this.evRoad(e, v, "lane", `→ lane ${best + 1} ${(p.len - v.s).toFixed(0)} m before the end${bestMandatory ? ` (must: needs lanes ${this.neededLanes(v).lo + 1}-${this.neededLanes(v).hi + 1})` : " (faster)"} at ${(v.v * 3.6).toFixed(0)} km/h`);
-    if (e.to.controlled && p.len - v.s < 150) this.ev(e.to, v, "lane", `lane ${v.lane + 1} → ${best + 1} ${(p.len - v.s).toFixed(0)} m before the junction${this.neededLanes(v).lo !== 0 || this.neededLanes(v).hi !== e.n - 1 ? ` (needs lanes ${this.neededLanes(v).lo + 1}-${this.neededLanes(v).hi + 1})` : ""}`);
+    // (the road event above already records it for a logged vehicle)
+    if (e.to.controlled && p.len - v.s < 150 && this.logging(e.to)) this.ev(e.to, v, "lane", `lane ${v.lane + 1} → ${best + 1} ${(p.len - v.s).toFixed(0)} m before the junction${this.neededLanes(v).lo !== 0 || this.neededLanes(v).hi !== e.n - 1 ? ` (needs lanes ${this.neededLanes(v).lo + 1}-${this.neededLanes(v).hi + 1})` : ""}`);
     v.piece = np; v.lane = best;
     if (v.reqFor && v.reqFor.inEdge === e) { v.reqFor = null; }
   }
@@ -405,7 +437,7 @@ export abstract class SimMotion extends SimJunctions {
         if (!cross) { this.kill(v, "removed"); return; }
         if (e.to.controlled && (!v.granted || v.conn !== cross[0])) { v.s = p.len - 0.01; v.v = 0; return; }
         this.recordEma(v, e);
-        this.evRoad(e, v, "leave-road", `into ${e.to.def.id}: ${cross[0].kind === "conn" ? this.mv(cross[0]) : "the junction"} at ${(v.v * 3.6).toFixed(0)} km/h, ${((this.tick - v.enterT) * DT).toFixed(0)} s on this road`);
+        this.evRoad(e, v, "leave-road", `into ${this.nodeName(e.to)}: ${cross[0].kind === "conn" ? this.mv(cross[0]) : "the junction"} at ${(v.v * 3.6).toFixed(0)} km/h, ${((this.tick - v.enterT) * DT).toFixed(0)} s on this road`);
         v.s -= p.len; v.trail = [p, ...v.trail].slice(0, 2);
         v.piece = cross[0]; v.queue = cross.slice(1);
         if (cross[0].kind === "conn") {
@@ -427,10 +459,15 @@ export abstract class SimMotion extends SimJunctions {
         this.ev(p.node, v, "leave", `onto ${p.outEdge.link.name || p.outEdge.link.id} lane ${p.outLane + 1}`, { to: p.outEdge.link.id, outLane: p.outLane + 1 });
         v.ri++; v.lane = p.outLane; v.conn = null; v.granted = false; v.enterT = this.tick;
         v.stoppedAt = null; v.fixedAt = null;
+        // the next junction, asked early: its go (or its place in the queue) carries over
+        const early = v.early; v.early = null;
+        if (early && early.conn.inEdge === np.edge && early.conn.inLane === v.lane) {
+          if (early.granted) { v.conn = early.conn; v.granted = true; } else { v.reqFor = early.conn; v.reqAt = early.at; }
+        }
         this.replan(v);
-        if (this.roadLogged(np.edge)) {
+        if (this.roadLogged(np.edge) || this.vehLogged(v)) {
           const nt = this.nextTurn(v);
-          this.evRoad(np.edge, v, "enter-road", `from ${p.node.def.id} at ${(v.v * 3.6).toFixed(0)} km/h${nt ? `; next: ${this.mv(nt.move)} at ${nt.node.def.id} (lanes ${nt.move.lo + 1}-${nt.move.hi + 1})` : "; ends on this road"}`);
+          this.evRoad(np.edge, v, "enter-road", `from ${this.nodeName(p.node)} at ${(v.v * 3.6).toFixed(0)} km/h${nt ? `; next: ${this.mv(nt.move)} at ${this.nodeName(nt.node)} (lanes ${nt.move.lo + 1}-${nt.move.hi + 1})` : "; ends on this road"}`);
         }
       } else { this.kill(v, "removed"); return; }
     }

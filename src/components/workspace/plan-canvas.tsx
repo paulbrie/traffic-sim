@@ -9,8 +9,9 @@ import { readPalette, type Palette } from "@/render/palette";
 import { connShapeKey, connectorHandles, connectorId, linkExtent, LW, type CNode } from "@/engine/compile";
 import { pointInPoly } from "@/engine/buildings";
 import type { Network, Vec } from "@/engine/types";
-import { commit, endGesture, network$, select, toggleRoad, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
+import { commit, endGesture, highlightedLayers, network$, select, toggleRoad, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
 import { simController } from "@/state/sim-controller";
+import { noteDraw } from "@/state/perf";
 import { viewCmd$, viewport } from "@/state/commands";
 import { underlayImg$ } from "@/state/underlay-image";
 import { worldToImage, type Underlay } from "@/lib/underlay";
@@ -197,23 +198,26 @@ export function PlanCanvas() {
       }
       return best;
     }
-    function pickInLayer(layer: LayerId, sx: number, sy: number, w: Vec): Selection | null {
-      const c = simController.compiled;
-      const node = (only: (n: CNode) => boolean) => { const id = hitNode(sx, sy, undefined, id => { const n = c.nodeById.get(id); return !!n && only(n); }); return id ? { kind: "node" as const, id } : null; };
-      switch (layer) {
-        case "roads": { const l = hitLink(w); return l ? { kind: "link", id: l.id } : null; }
-        case "counters": { const l = hitLink(w); return l && ops.linkById(net, l.id)?.counter ? { kind: "link", id: l.id } : null; }
-        case "lanes": { const id = hitLane(w); return id ? { kind: "lane", id } : null; }
-        case "connectors": { const id = hitConnector(w); return id ? { kind: "connector", id } : null; }
-        case "junctions": return node(n => n.controlled && n.degree >= 2);
-        case "signals": return node(n => n.controlled && n.def.control === "lights");
-        case "entries": return node(n => n.gateway);
-        case "stops": { const id = hitStop(w); return id ? { kind: "stop", id } : null; }
-        case "buildings": { const id = hitBuilding(w); return id ? { kind: "building", id } : null; }
-        case "zones": { const n = node(x => x.gateway); if (n) return n; const id = hitBuilding(w); return id ? { kind: "building", id } : null; }
-        case "vehicles": { const v = simController.sim?.vehicleNear(w.x, w.y, Math.max(3, pxToM(10))); return v ? { kind: "vehicle", id: String(v.id) } : null; }
-        default: return null;
-      }
+    /**
+     * What a click selects among the layers that are on, smallest objects first (the order of the
+     * "all layers" default): points and junctions, bus stops, vehicles, lane connectors (where drawn),
+     * roads, lanes (where roads are off), buildings. Zones pick entry points and buildings.
+     */
+    function pickInLayers(layers: readonly LayerId[], sx: number, sy: number, w: Vec): Selection | null {
+      const c = simController.compiled, on = (l: LayerId) => layers.includes(l);
+      // (with roads on, every point of the drawing: road ends and joints too)
+      const nodeOk = (n: CNode) => (on("junctions") && n.controlled && n.degree >= 2)
+        || (on("signals") && n.controlled && n.def.control === "lights") || ((on("entries") || on("zones")) && n.gateway);
+      const nodeId = hitNode(sx, sy, undefined, id => { if (on("roads")) return true; const n = c.nodeById.get(id); return !!n && nodeOk(n); });
+      if (nodeId) return { kind: "node", id: nodeId };
+      if (on("stops")) { const id = hitStop(w); if (id) return { kind: "stop", id }; }
+      if (on("vehicles")) { const v = simController.sim?.vehicleNear(w.x, w.y, Math.max(3, pxToM(10))); if (v) return { kind: "vehicle", id: String(v.id) }; }
+      // (connectors are only drawn when highlighted or switched on in the display options)
+      if (on("connectors") && (u.display.connectors || highlightedLayers(layers).includes("connectors"))) { const id = hitConnector(w); if (id) return { kind: "connector", id }; }
+      if (on("roads") || on("counters")) { const l = hitLink(w); if (l && (on("roads") || ops.linkById(net, l.id)?.counter)) return { kind: "link", id: l.id }; }
+      if (on("lanes")) { const id = hitLane(w); if (id) return { kind: "lane", id }; }
+      if (on("buildings") || on("zones")) { const id = hitBuilding(w); if (id) return { kind: "building", id }; }
+      return null;
     }
     function hitStop(p: Vec): string | null {
       if (!geo) return null;
@@ -382,33 +386,18 @@ export function PlanCanvas() {
       // the selected lane connector's curve handles (any layer)
       const ch = hitConnHandle(sx, sy);
       if (ch) { drag = { mode: "conn", id: ch.id, which: ch.which }; return; }
-      // select tool, limited to one kind of object when a layer is chosen
-      if (u.layer !== "all") {
-        const pick = pickInLayer(u.layer, sx, sy, w);
-        if (pick) {
-          if (pick.kind === "link" && e.shiftKey && u.selection?.kind === "link") toggleRoad(pick.id); else select(pick);
-          drag = pick.kind === "node" ? { mode: "node", id: pick.id, moved: false, sx, sy } : { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: false };
-          return;
-        }
-        drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: true };
+      // select tool: the curve handles of the selected road, then whatever the layers that are on pick
+      const h = u.layers.includes("roads") ? hitHandle(sx, sy) : null;
+      if (h && u.selection?.kind === "link") { drag = { mode: "handle", linkId: u.selection.id, handle: h, moved: false }; return; }
+      const pick = pickInLayers(u.layers, sx, sy, w);
+      if (pick) {
+        // Shift+click: add the road to the selected roads (or take it out)
+        if (pick.kind === "link" && e.shiftKey && u.selection?.kind === "link") toggleRoad(pick.id); else select(pick);
+        // junctions and points can be dragged; buildings, lanes and connectors cover so much of the map that a drag from them pans
+        if (pick.kind === "node") drag = { mode: "node", id: pick.id, moved: false, sx, sy };
+        else if (pick.kind === "building" || pick.kind === "lane" || pick.kind === "connector") drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: false };
         return;
       }
-      const h = hitHandle(sx, sy);
-      if (h && u.selection?.kind === "link") { drag = { mode: "handle", linkId: u.selection.id, handle: h, moved: false }; return; }
-      const nodeId = hitNode(sx, sy);
-      if (nodeId) { select({ kind: "node", id: nodeId }); drag = { mode: "node", id: nodeId, moved: false, sx, sy }; return; }
-      const stopId = hitStop(w);
-      if (stopId) { select({ kind: "stop", id: stopId }); return; }
-      const sim = simController.sim;
-      if (sim) {
-        const v = sim.vehicleNear(w.x, w.y, Math.max(3, pxToM(10)));
-        if (v) { select({ kind: "vehicle", id: String(v.id) }); return; }
-      }
-      const l = hitLink(w);
-      // Shift+click: add the road to the selected roads (or take it out)
-      if (l) { if (e.shiftKey && u.selection?.kind === "link") toggleRoad(l.id); else select({ kind: "link", id: l.id }); return; }
-      const b = hitBuilding(w);
-      if (b) { select({ kind: "building", id: b }); drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: false }; return; }
       drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: true };
     }
 
@@ -634,6 +623,7 @@ export function PlanCanvas() {
             }
           }
         }
+        const drawT0 = performance.now();
         drawScene(ctx, cam, pal, geo!, paths!, net, simController.compiled, simController.sim, {
           selection: u.selection, hover, showNodes: u.tool !== "pan", draft: draftOv,
           pendingPoint: u.tool === "road" && pending ? pending.p : null,
@@ -642,13 +632,14 @@ export function PlanCanvas() {
           underlay: ul ? { u: ul, img: ulImg, editing: u.tool === "image" && !u.calib.active, hover: ulHover } : null,
           calib: u.calib.active ? { a: u.calib.a, b: u.calib.b, cursor: cursorWorld } : null,
           buildings: u.display.buildings,
-          satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, layer: u.layer, maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
+          satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, highlight: highlightedLayers(u.layers), maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
           shape: (() => {
             const sh = u.shape, on = sh.edit ? ops.nodeById(net, sh.edit) : null;
             return { outline: on?.outline ? on.outline.map(p => ({ x: on.x + p.x, y: on.y + p.y })) : null, paint: sh.paint?.pts ?? null, cursor: cursorWorld };
           })(),
           alsoSelected: u.selection?.kind !== "link" ? [] : u.multi.length ? u.multi : u.tool === "segment" && u.segScope === "road" ? ops.chainLinks(net, u.selection.id).map(c => c.id).slice(1) : [],
         });
+        noteDraw(performance.now() - drawT0);
         viewport.cx = cam.cx; viewport.cy = cam.cy; viewport.wm = cam.w / cam.scale; viewport.hm = cam.h / cam.scale;
         scaleBar(cam);
         dirty = false;

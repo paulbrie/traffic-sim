@@ -33,7 +33,7 @@ export class Sim extends SimDemand {
     this.spawnLoop();
     this.buildIndex();
     for (const v of this.vehicles) if (!v.dead) this.think(v);
-    if (this.logLinks.size) this.logStates();
+    if (this.logLinks.size || this.logVehicles.size) this.logStates();
     for (const v of this.vehicles) if (!v.dead && (v.id + this.tick) % 5 === 0) this.considerLaneChange(v);
     this.updatePeds();
     for (const st of this.ns) if (st.node.controlled && !st.node.ring) this.arbitrate(st);
@@ -42,10 +42,10 @@ export class Sim extends SimDemand {
     if (this.tick % 50 === 0) this.housekeeping();
   }
   run(n: number) { for (let k = 0; k < n; k++) this.step(); }
-  /** road event logs: what each vehicle on a logged road is doing, when that changes */
+  /** road and vehicle event logs: what each vehicle on a logged road (or being logged) is doing, when that changes */
   protected logStates() {
     for (const v of this.vehicles) {
-      if (v.dead || v.piece.kind !== "lane" || !this.roadLogged(v.piece.edge)) continue;
+      if (v.dead || v.piece.kind !== "lane" || (!this.roadLogged(v.piece.edge) && !this.vehLogged(v))) continue;
       if (v.logState !== undefined && v.logState !== v.state) {
         const lead = v.leader && v.gap < 60 ? `, ${v.gap.toFixed(1)} m behind #${v.leader.id}` : "";
         this.evRoad(v.piece.edge, v, "state", `${v.logState} → ${v.state} at ${(v.v * 3.6).toFixed(0)} km/h, ${(v.piece.len - v.s).toFixed(0)} m before the end${lead}`);

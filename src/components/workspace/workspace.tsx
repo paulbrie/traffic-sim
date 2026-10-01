@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, Eye, Bus, Hand, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, ChevronDown, Eye, Bus, Hand, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -15,11 +15,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { savePlan } from "@/server/actions";
 import { MAX_LANES, type Network, type PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
-import { commit, LAYERS, loadPlan, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool } from "@/state/store";
+import { allLayersOn, commit, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { sendView, viewport } from "@/state/commands";
 import { OsmImportDialog, describeStats, type OsmImportMode } from "@/components/osm/osm-import-dialog";
@@ -31,6 +32,7 @@ import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
 import * as ops from "@/state/ops";
 import { cn } from "@/lib/utils";
 import { PlanCanvas } from "./plan-canvas";
+import { PerfPanel } from "./perf-panel";
 import { Inspector } from "./inspector";
 import { TrafficPanel } from "./traffic-panel";
 import { LinesPanel } from "./lines-panel";
@@ -74,6 +76,7 @@ export function Workspace({ plan, user }: { plan: WorkspacePlan; user: MenuUser 
               <Compass />
               <SatelliteCredit />
               <SpeedLegend />
+              <PerfPanel />
               <StatusBar />
             </div>
             {dataview && <Dataview />}
@@ -169,17 +172,55 @@ function SaveIndicator({ planId }: { planId: string }) {
   );
 }
 
-/** which kind of object the map selects and highlights, and the data table of that layer */
+/** switch a layer on or off (Shift + its letter); `only`: just this one */
+export function toggleLayer(id: LayerId, only = false) {
+  const u = ui.getValue(), cur = u.layers;
+  u.layers = only ? [id] : cur.includes(id) ? cur.filter(l => l !== id) : LAYERS.map(l => l.id).filter(l => l === id || cur.includes(l));
+}
+/** all layers on, or (when they all are) all off (Shift+A) */
+export function toggleAllLayers() {
+  const u = ui.getValue();
+  u.layers = allLayersOn(u.layers) ? [] : LAYERS.map(l => l.id);
+}
+
+/** which kinds of object the map selects (any combination; highlighted once narrowed to a few), and the data table */
 function LayerPicker() {
-  const [layer, setLayer] = useDeepSubject(ui, "layer");
+  const [layers] = useDeepSubject(ui, "layers");
   const [dataview, setDataview] = useDeepSubject(ui, "dataview");
+  const all = allLayersOn(layers);
+  const label = all ? "All layers" : layers.length === 0 ? "No layers" : layers.length === 1 ? LAYERS.find(l => l.id === layers[0])!.label : `${layers.length} layers`;
+  // (the menu stays open while switching layers on and off)
+  const keep = (e: Event) => e.preventDefault();
   return (
     <div className="flex items-center gap-1.5">
-      <Select value={layer} onValueChange={v => setLayer(v as LayerId)}>
-        <SelectTrigger size="sm" className="h-8 w-44" aria-label="Layer: what the map selects"><Layers className="size-3.5 text-muted-foreground" /><SelectValue /></SelectTrigger>
-        <SelectContent>{LAYERS.map(l => <SelectItem key={l.id} value={l.id}>{l.label}</SelectItem>)}</SelectContent>
-      </Select>
-      <Tip label={dataview ? "Hide the data table" : "Data table of this layer"}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="sm" className="h-8 w-44 justify-start font-normal" aria-label={`Layers: what the map selects (${label})`}>
+            <Layers className="size-3.5 text-muted-foreground" />
+            <span className="flex-1 text-left">{label}</span>
+            <ChevronDown className="size-4 opacity-50" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-64">
+          <DropdownMenuCheckboxItem checked={all} onCheckedChange={toggleAllLayers} onSelect={keep}>
+            All layers<Kbd className="ml-auto">⇧A</Kbd>
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuSeparator />
+          {LAYERS.map(l => (
+            <DropdownMenuCheckboxItem key={l.id} className="group" checked={layers.includes(l.id)} onCheckedChange={() => toggleLayer(l.id)} onSelect={keep}>
+              {l.label}
+              <button type="button" className="ml-auto rounded px-1 text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 group-focus:opacity-100 hover:bg-background hover:text-foreground"
+                onClick={e => { e.stopPropagation(); e.preventDefault(); toggleLayer(l.id, true); }} aria-label={`Only ${l.label}`}>only</button>
+              <Kbd>⇧{l.key}</Kbd>
+            </DropdownMenuCheckboxItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+            Clicks on the map select objects of the layers that are on. With {LAYER_HIGHLIGHT_MAX} or fewer on, their objects are highlighted too.
+          </DropdownMenuLabel>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Tip label={dataview ? "Hide the data table" : "Data table"}>
         <Button size="icon-sm" variant={dataview ? "secondary" : "ghost"} aria-pressed={dataview} aria-label="Data table" onClick={() => setDataview(!dataview)}><Table2 /></Button>
       </Tip>
     </div>
@@ -486,6 +527,12 @@ function useShortcuts() {
       if (mod && k === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
       if (mod && k === "y") { e.preventDefault(); redo(); return; }
       if (mod) return;
+      // Shift + letter: a layer on or off (see LAYERS); Shift+A: all of them
+      if (e.shiftKey && !e.altKey) {
+        if (k === "a") { e.preventDefault(); toggleAllLayers(); return; }
+        const layer = LAYERS.find(l => l.key.toLowerCase() === k);
+        if (layer) { e.preventDefault(); toggleLayer(layer.id); return; }
+      }
       if (k === "v") setTool("select");
       else if (k === "r" && u.view === "2d" && !u.readOnly) setTool("road");
       else if (k === "b" && u.view === "2d" && !u.readOnly) setTool("stop");

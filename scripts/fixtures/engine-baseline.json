@@ -310,88 +310,88 @@
  "osm-cluj": [
   {
    "tick": 500,
-   "hash": "3d335551",
-   "vehicles": 178,
-   "trips": 10,
+   "hash": "eb8df3a0",
+   "vehicles": 171,
+   "trips": 13,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "7911679e",
-   "vehicles": 233,
-   "trips": 33,
+   "hash": "9a5d7846",
+   "vehicles": 231,
+   "trips": 41,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "02ad1c69",
-   "vehicles": 282,
-   "trips": 63,
+   "hash": "593935c4",
+   "vehicles": 288,
+   "trips": 71,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "5224b868",
-   "vehicles": 316,
-   "trips": 102,
+   "hash": "8a6386d0",
+   "vehicles": 317,
+   "trips": 111,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "a9896491",
+   "hash": "630e8bb7",
    "vehicles": 318,
-   "trips": 144,
-   "towed": 0
+   "trips": 151,
+   "towed": 1
   },
   {
    "tick": 3000,
-   "hash": "1714ca52",
+   "hash": "781d12d8",
    "vehicles": 316,
-   "trips": 187,
-   "towed": 0
+   "trips": 204,
+   "towed": 1
   }
  ],
  "osm-milton-keynes": [
   {
    "tick": 500,
-   "hash": "0ea49725",
-   "vehicles": 198,
-   "trips": 2,
+   "hash": "aabe3db4",
+   "vehicles": 211,
+   "trips": 3,
    "towed": 0
   },
   {
    "tick": 1000,
-   "hash": "cef7d894",
-   "vehicles": 303,
-   "trips": 21,
+   "hash": "885a671f",
+   "vehicles": 307,
+   "trips": 22,
    "towed": 0
   },
   {
    "tick": 1500,
-   "hash": "e6accfbf",
+   "hash": "7263e32e",
    "vehicles": 341,
-   "trips": 59,
+   "trips": 62,
    "towed": 0
   },
   {
    "tick": 2000,
-   "hash": "30c88907",
-   "vehicles": 375,
-   "trips": 104,
+   "hash": "acdef492",
+   "vehicles": 372,
+   "trips": 109,
    "towed": 0
   },
   {
    "tick": 2500,
-   "hash": "5d8c8f20",
-   "vehicles": 407,
-   "trips": 149,
+   "hash": "e87337ab",
+   "vehicles": 387,
+   "trips": 157,
    "towed": 0
   },
   {
    "tick": 3000,
-   "hash": "cec79c2e",
-   "vehicles": 424,
-   "trips": 196,
+   "hash": "cb79af54",
+   "vehicles": 420,
+   "trips": 206,
    "towed": 0
   }
  ]

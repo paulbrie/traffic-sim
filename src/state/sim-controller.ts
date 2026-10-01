@@ -13,6 +13,9 @@ import type { ToWorker } from "./sim.worker";
 
 export type TestResult = { id: number } | { error: string };
 
+/** a worker's load over the last second: share of time working, time per step, heap in MB (Chrome only) */
+export interface WorkerLoad { busy: number; stepMs: number; heapMB: number | null }
+
 class SimController {
   compiled: Compiled = compile({ version: 1, nodes: [], links: [], stops: [], lines: [] });
   sim: SimMirror | null = null;
@@ -25,6 +28,10 @@ class SimController {
   private lastStatsAt = 0;
   /** the simulation speed actually reached (× real time; 0 while paused) */
   rate = 0;
+  /** the simulation worker's load (last second) */
+  simLoad: WorkerLoad = { busy: 0, stepMs: 0, heapMB: null };
+  /** the outline worker: working now, and its last job */
+  outlineLoad = { busy: false, lastMs: 0, heapMB: null as number | null };
   private started = false;
 
   private post(m: ToWorker) { this.worker?.postMessage(m); }
@@ -42,11 +49,12 @@ class SimController {
     if (this.started) return;
     this.started = true;
     this.worker = new Worker(new URL("./sim.worker.ts", import.meta.url), { type: "module" });
-    this.worker.onmessage = (e: MessageEvent<{ type: "snapshot"; gen: number; snap: Snapshot; rate?: number } | { type: "test"; req: number; result: TestResult }>) => {
+    this.worker.onmessage = (e: MessageEvent<{ type: "snapshot"; gen: number; snap: Snapshot; rate?: number; load?: WorkerLoad } | { type: "test"; req: number; result: TestResult }>) => {
       if (e.data.type === "test") { const cb = this.pending.get(e.data.req); this.pending.delete(e.data.req); cb?.(e.data.result); return; }
       if (e.data.gen !== this.gen || !this.sim) return;
       this.sim.apply(e.data.snap);
       this.rate = e.data.rate ?? 0;
+      if (e.data.load) this.simLoad = e.data.load;
       this.fresh = true;
       const now = performance.now();
       if (now - this.lastStatsAt > 250) { this.lastStatsAt = now; stats$.next(this.sim.stats); }
@@ -70,7 +78,8 @@ class SimController {
     if (!pending.length || typeof Worker === "undefined") return;
     if (!this.outlineWorker) {
       this.outlineWorker = new Worker(new URL("./outline.worker.ts", import.meta.url), { type: "module" });
-      this.outlineWorker.onmessage = (e: MessageEvent<{ req: number; shapes: [string, JunctionShape][] }>) => {
+      this.outlineWorker.onmessage = (e: MessageEvent<{ req: number; shapes: [string, JunctionShape][]; ms: number; heapMB: number | null }>) => {
+        this.outlineLoad = { busy: e.data.req !== this.shapeReq, lastMs: e.data.ms, heapMB: e.data.heapMB };
         putShapes(e.data.shapes);
         if (e.data.req !== this.shapeReq) return; // the plan has changed since: the next answer patches it
         let changed = false;
@@ -82,6 +91,7 @@ class SimController {
         if (changed) this.version++; // (the canvases redraw when the version changes)
       };
     }
+    this.outlineLoad = { ...this.outlineLoad, busy: true };
     this.outlineWorker.postMessage({ req: ++this.shapeReq, network: net, keys: pending.map(p => p.key) });
   }
 
@@ -92,6 +102,7 @@ class SimController {
     this.version++;
     this.gen++;
     this.post({ type: "load", network: net, settings: settings$.getValue(), gen: this.gen });
+    this.forgetLoggedVehicles();
     if (this.sim) this.sim = new SimMirror(this.compiled);
     stats$.next(null);
     this.applyWatch();
@@ -100,7 +111,13 @@ class SimController {
   /** push the event-log choice from the UI into the running simulation */
   applyLog() {
     const cfg = ui.getValue().eventLog;
-    this.post({ type: "log", all: cfg.all, nodes: [...cfg.nodes], links: [...(cfg.links ?? [])] });
+    this.post({ type: "log", all: cfg.all, nodes: [...cfg.nodes], links: [...(cfg.links ?? [])], vehicles: [...(cfg.vehicles ?? [])] });
+  }
+
+  /** vehicle numbers start again with new traffic: stop recording the old ones */
+  private forgetLoggedVehicles() {
+    const cfg = ui.getValue().eventLog;
+    if (cfg.vehicles?.length) cfg.vehicles = [];
   }
 
   /** tell the worker what the page shows in detail: the selected vehicle, the selected junction */
@@ -118,6 +135,7 @@ class SimController {
   reset() {
     this.sim = null;
     this.post({ type: "reset" });
+    this.forgetLoggedVehicles();
     stats$.next(null);
   }
 

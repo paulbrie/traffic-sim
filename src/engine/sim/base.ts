@@ -3,6 +3,7 @@ import { compile, type CLine, type CNode, type Compiled, type Conn, type CStop, 
 import { mulberry32 } from "../geom";
 import type { Network, PlanSettings } from "../types";
 import { resolveParams, type SimParams } from "../params";
+import { isJunction, junctionRefs } from "../refs";
 
 export const DT = 0.1;
 export const LOOK = 110;
@@ -34,6 +35,11 @@ export interface Vehicle {
   queue: Piece[];
   trail: Piece[];
   conn: Conn | null; granted: boolean;
+  /**
+   * the junction after the one it is crossing (or has been let into), asked for early because its
+   * line is near: the crossing it asked for, when, how far off it is now (m), and whether it may go
+   */
+  early?: { conn: Conn; at: number; d: number; granted: boolean } | null;
   dest: Dest; state: string; wait: number; enterT: number; bornT: number;
   gap: number; leader: Vehicle | null; v0: number;
   reroutes: number; laneChanges: number; lcCool: number; lcOff: number; lcT: number;
@@ -56,7 +62,7 @@ export interface Vehicle {
 }
 
 export interface Occ { v: Vehicle; conn: Conn; entered: boolean; /** permissive turn clearing on yellow/all-red */ sneak?: boolean }
-export interface Req { v: Vehicle; conn: Conn; d: number; at: number }
+export interface Req { v: Vehicle; conn: Conn; d: number; at: number; /** asked before reaching the road into the junction (see Vehicle.early) */ early?: boolean }
 export interface JunctionEvent {
   /** simulation time, seconds */
   t: number;
@@ -329,20 +335,30 @@ export abstract class SimBase {
   /** roads whose vehicle events are recorded (by link id) */
   logLinks = new Set<string>();
   protected roadLogged(e: Edge) { return this.logLinks.size > 0 && this.logLinks.has(e.link.id); }
-  /** an event on a road (recorded only for roads being logged) */
+  /** vehicles whose events are recorded wherever they go (by vehicle id) */
+  logVehicles = new Set<number>();
+  protected vehLogged(v: Vehicle | null) { return v !== null && this.logVehicles.size > 0 && this.logVehicles.has(v.id); }
+  /** an event on a road (recorded only for roads or vehicles being logged) */
   protected evRoad(e: Edge, v: Vehicle, kind: JunctionEvent["kind"], detail: string) {
-    if (!this.roadLogged(e)) return;
+    if (!this.roadLogged(e) && !this.vehLogged(v)) return;
     const dir = e.dir === 1 ? "→" : "←";
     this.events.push({ t: Math.round(this.tick) / 10, node: "", link: e.link.id, veh: v.id, vkind: v.kind, kind, detail: `${dir} lane ${v.lane + 1} · ${detail}`, data: { lane: v.lane + 1, from: e.link.id } });
     if (this.events.length > 60000) this.events.splice(0, 10000);
   }
+  /** a junction event (recorded at junctions being logged, and for vehicles being logged at real junctions, not joints between road segments) */
   protected ev(n: CNode, v: Vehicle | null, kind: JunctionEvent["kind"], detail = "", data?: JunctionEvent["data"]) {
-    if (!this.logging(n)) return;
+    if (!this.logging(n) && !(this.vehLogged(v) && isJunction(n))) return;
     this.events.push({ t: Math.round(this.tick) / 10, node: n.def.id, veh: v ? v.id : null, vkind: v ? v.kind : null, kind, detail, ...(data ? { data } : {}) });
     if (this.events.length > 60000) this.events.splice(0, 10000);
   }
   protected md(m: Movement, lane?: number, outLane?: number): JunctionEvent["data"] {
     return { turn: m.turn, from: m.in.link.id, to: m.out.link.id, lo: m.lo + 1, hi: m.hi + 1, ...(lane !== undefined ? { lane: lane + 1 } : {}), ...(outLane !== undefined ? { outLane: outLane + 1 } : {}) };
+  }
+  private refs: Map<string, string> | null = null;
+  /** a node as the log names it: the junction reference shown on the map ("J12"), else what it is and its id */
+  protected nodeName(n: CNode) {
+    this.refs ??= junctionRefs(this.net);
+    return this.refs.get(n.def.id) ?? `${n.gateway ? "entry/exit" : n.degree === 2 ? "joint" : "node"} ${n.def.id}`;
   }
   /** describe a movement for the log: "S lane 2→1 (road NE→SW)" */
   protected mv(c: Conn | Movement, lane?: number) {

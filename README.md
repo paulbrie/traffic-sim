@@ -155,6 +155,11 @@ lanes and lane connectors can be selected and inspected. The table button next t
 sortable, filterable table of the chosen layer under the map, with live columns while traffic runs; click a row to
 select and focus the object, double-click an underlined cell (or use its list / checkbox) to edit it (undoable).
 
+**Load panel** (Traffic panel → Display → Show CPU and memory load): frames per second, time spent drawing and time
+blocked on the page; how busy the simulation worker is (share of time working, ms per step, speed reached) and the
+outline worker; JavaScript memory where Chrome reports it. Browsers don't let a page see Chrome's own CPU use, so the
+load is measured inside each thread.
+
 **Simulation settings** (Traffic panel → Simulation settings): every tunable number of the simulation, grouped
 (drivers, trucks, lane changes, junctions, pedestrians, stuck vehicles), each with its default and a reset. They are
 saved with the plan (only the changed ones) and reach the running simulation at once; driver and truck values apply to

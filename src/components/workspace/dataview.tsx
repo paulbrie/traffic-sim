@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { connectorId, type CNode, type ConnectorView, type Edge, type LanePiece } from "@/engine/compile";
 import { junctionRefs, isJunction } from "@/engine/refs";
@@ -28,12 +29,11 @@ const kmh = (ms: number) => Math.round(ms * 3.6);
 
 /** A table of every object in the chosen layer (TransModeler's "dataview"), under the map. */
 export function Dataview() {
-  const [layerSel] = useDeepSubject(ui, "layer");
+  const [layer, setLayer] = useDeepSubject(ui, "tableLayer");
   const [selection] = useDeepSubject(ui, "selection");
   const [net] = useSubject(network$);
   useSubject(stats$); // live columns (~4×/s)
   const [filter, setFilter] = useState("");
-  const layer: LayerId = layerSel === "all" ? "roads" : layerSel;
   const c = simController.compiled, sim = simController.sim;
   const version = simController.version;
   const refs = useMemo(() => junctionRefs(c), [c]);
@@ -208,9 +208,11 @@ export function Dataview() {
   return (
     <div className="flex h-72 shrink-0 flex-col border-t bg-background">
       <div className="flex items-center gap-2 border-b px-3 py-1.5">
-        <span className="text-sm font-medium">{LAYERS.find(l => l.id === layer)?.label}</span>
+        <Select value={layer} onValueChange={v => setLayer(v as LayerId)}>
+          <SelectTrigger size="sm" className="h-7 w-44 text-sm font-medium" aria-label="Objects listed in the table"><SelectValue /></SelectTrigger>
+          <SelectContent>{LAYERS.map(l => <SelectItem key={l.id} value={l.id}>{l.label}</SelectItem>)}</SelectContent>
+        </Select>
         <span className="text-xs text-muted-foreground">{def.rows.length} {def.rows.length === 1 ? "row" : "rows"}</span>
-        {layerSel === "all" && <span className="text-xs text-muted-foreground">· choose a layer in the top bar to see other objects</span>}
         <Input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter…" aria-label="Filter rows" className="ml-auto h-7 w-48 text-xs" />
         <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Close the data table" onClick={() => { ui.getValue().dataview = false; }}><X /></Button>
       </div>

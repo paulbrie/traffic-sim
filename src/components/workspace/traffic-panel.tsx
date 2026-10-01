@@ -102,6 +102,7 @@ export function TrafficPanel() {
           ["junctions", "Show junction numbers and stats"],
           ["connectors", "Show lane connectors"],
           ["maskRoads", "Roads as outlines only (O)"],
+          ["perf", "Show CPU and memory load"],
           ...(net.buildings?.length ? [["buildings", "Show buildings"] as const] : []),
           ...(net.geo ? [["satellite", "Satellite background"] as const] : []),
         ] as const).map(([k, label]) => (

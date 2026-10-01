@@ -69,8 +69,32 @@ export function RoadEventLog({ linkId }: { linkId: string }) {
   );
 }
 
-function LogBox({ on, disabled, label, events, toggle, hint }: { on: boolean; disabled?: boolean; label: string; events: JunctionEvent[]; toggle: (v: boolean) => void; hint: string }) {
+/** Per-vehicle recorder: everything one vehicle does, at every junction and on every road, until it leaves. */
+export function VehicleEventLog({ vehId }: { vehId: number }) {
+  useSubject(stats$);
+  const [log] = useDeepSubject(ui, "eventLog");
+  const sim = simController.sim;
+  const c = simController.compiled, refs = junctionRefs(c);
+  const roadName = (id: string) => c.edges.find(x => x.link.id === id)?.link.name || id;
+  return (
+    <LogBox
+      on={(log.vehicles ?? []).includes(vehId)} label={`#${vehId}`} file={`vehicle-${vehId}`}
+      events={sim ? sim.events.filter(e => e.veh === vehId) : []}
+      where={e => (e.node ? refs.get(e.node) ?? e.node : e.link ? roadName(e.link) : "")}
+      toggle={v => { const cur = ui.getValue().eventLog; const l = cur.vehicles ?? []; cur.vehicles = v ? [...new Set([...l, vehId])] : l.filter(id => id !== vehId); }}
+      hint="Turn on to record everything this vehicle does from now on, wherever it goes: requests, grants and refusals at junctions (with the reason), lane changes, turn changes, changes of state (free, following, queued, at a red light, yielding…), roads entered and left, and how it leaves the plan. Restarting traffic stops the recording."
+    />
+  );
+}
+
+function LogBox({ on, disabled, label, file, events, where, toggle, hint }: {
+  on: boolean; disabled?: boolean; label: string; file?: string; events: JunctionEvent[];
+  /** second column: where it happened (vehicle logs) instead of which vehicle */
+  where?: (e: JunctionEvent) => string;
+  toggle: (v: boolean) => void; hint: string;
+}) {
   const latest = events.slice(-60).reverse();
+  const name = `${file ?? label}-events`;
   return (
     <div className="grid gap-2">
       <div className="flex items-center justify-between gap-2">
@@ -84,17 +108,17 @@ function LogBox({ on, disabled, label, events, toggle, hint }: { on: boolean; di
         <>
           <div className="max-h-64 overflow-y-auto rounded-md border bg-muted/30 p-1.5 font-mono text-[10.5px] leading-snug">
             {latest.length === 0 ? <p className="p-1 text-muted-foreground">Recording… run traffic to see events here.</p> : latest.map((e, i) => (
-              <div key={i} className="grid grid-cols-[3.2rem_2.6rem_1fr] gap-1.5 border-b border-border/40 py-0.5 last:border-0">
+              <div key={i} className={`grid ${where ? "grid-cols-[3.2rem_5.5rem_1fr]" : "grid-cols-[3.2rem_2.6rem_1fr]"} gap-1.5 border-b border-border/40 py-0.5 last:border-0`}>
                 <span className="text-muted-foreground tabular">{e.t.toFixed(1)}s</span>
-                <span className="tabular">{e.veh != null ? `#${e.veh}` : ""}</span>
+                {where ? <span className="truncate" title={e.link ?? e.node}>{where(e)}</span> : <span className="tabular">{e.veh != null ? `#${e.veh}` : ""}</span>}
                 <span><span className={KIND_STYLE[e.kind] ?? ""}>{e.kind}</span> {e.detail}</span>
               </div>
             ))}
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!events.length} onClick={() => downloadEvents(events, "csv", `${label}-events`)}><Download /> CSV</Button>
-            <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!events.length} onClick={() => downloadEvents(events, "jsonl", `${label}-events`)}><Download /> JSON</Button>
-            <span className="self-center text-[10px] text-muted-foreground">{events.length} events · newest first · vehicle numbers match the one shown when you click a car</span>
+            <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!events.length} onClick={() => downloadEvents(events, "csv", name)}><Download /> CSV</Button>
+            <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!events.length} onClick={() => downloadEvents(events, "jsonl", name)}><Download /> JSON</Button>
+            <span className="self-center text-[10px] text-muted-foreground">{events.length} events · newest first{where ? "" : " · vehicle numbers match the one shown when you click a car"}</span>
           </div>
         </>
       ) : (
@@ -119,6 +143,7 @@ export function EventLogPanel() {
       <p className="text-xs text-muted-foreground">
         {log.all ? "Recording all junctions." : log.nodes.length ? `Recording ${log.nodes.length} junction${log.nodes.length > 1 ? "s" : ""} (switch on in each junction's panel).` : "Or switch recording on for single junctions in their panel."}
         {log.links?.length ? ` Recording ${log.links.length} road${log.links.length > 1 ? "s" : ""} too (switch on in each road's panel).` : ""}
+        {log.vehicles?.length ? ` Recording ${log.vehicles.length} vehicle${log.vehicles.length > 1 ? "s" : ""} too (switch on in each vehicle's panel).` : ""}
         {" "}Keeps the latest 50,000 events; restarting traffic starts a new log.
       </p>
       <div className="flex flex-wrap items-center gap-2">

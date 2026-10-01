@@ -13,14 +13,20 @@ import type { Vec } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 
 export type Tool = "select" | "road" | "segment" | "stop" | "pan" | "image";
-/** which kind of object the map selects and highlights (TransModeler-style layers) */
-export type LayerId = "all" | "roads" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones";
-export const LAYERS: { id: LayerId; label: string }[] = [
-  { id: "all", label: "All objects" }, { id: "roads", label: "Roads" }, { id: "lanes", label: "Lanes" }, { id: "junctions", label: "Junctions" },
-  { id: "connectors", label: "Lane connectors" }, { id: "entries", label: "Entry / exit points" }, { id: "signals", label: "Signals" },
-  { id: "stops", label: "Bus stops" }, { id: "counters", label: "Traffic counters" }, { id: "buildings", label: "Buildings" },
-  { id: "vehicles", label: "Vehicles" }, { id: "zones", label: "Zones" },
+/** the kinds of object the map can select (TransModeler-style layers); any combination can be on */
+export type LayerId = "roads" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones";
+/** `key`: Shift + this letter switches the layer on or off (Shift+A: all of them) */
+export const LAYERS: { id: LayerId; label: string; key: string }[] = [
+  { id: "roads", label: "Roads", key: "R" }, { id: "lanes", label: "Lanes", key: "L" }, { id: "junctions", label: "Junctions", key: "J" },
+  { id: "connectors", label: "Lane connectors", key: "C" }, { id: "entries", label: "Entry / exit points", key: "E" }, { id: "signals", label: "Signals", key: "S" },
+  { id: "stops", label: "Bus stops", key: "B" }, { id: "counters", label: "Traffic counters", key: "T" }, { id: "buildings", label: "Buildings", key: "U" },
+  { id: "vehicles", label: "Vehicles", key: "V" }, { id: "zones", label: "Zones", key: "Z" },
 ];
+/** a layer's highlights (lane outlines, connectors, rings around junctions…) show when at most this many layers are on */
+export const LAYER_HIGHLIGHT_MAX = 3;
+export const allLayersOn = (layers: readonly LayerId[]) => LAYERS.every(l => layers.includes(l.id));
+/** the layers whose highlights the map draws */
+export const highlightedLayers = (layers: readonly LayerId[]): LayerId[] => (layers.length <= LAYER_HIGHLIGHT_MAX ? [...layers] : []);
 export type Selection =
   | { kind: "node"; id: string }
   | { kind: "link"; id: string }
@@ -46,20 +52,22 @@ export interface UiState {
   multi: string[];
   /** route tracer: from an entry point to an exit, starting in an entry lane (null = the kerb-side one) */
   trace: { from: string | null; to: string | null; lane: number | null };
-  display: { bySpeed: boolean; reservations: boolean; labels: boolean; buildings: boolean; junctions: boolean; satellite: boolean; connectors: boolean; maskRoads: boolean; /** satellite imagery brightness (0.3–1) */ satBrightness: number };
+  display: { bySpeed: boolean; reservations: boolean; labels: boolean; buildings: boolean; junctions: boolean; satellite: boolean; connectors: boolean; maskRoads: boolean; /** satellite imagery brightness (0.3–1) */ satBrightness: number; /** the CPU / memory load panel */ perf: boolean };
   sim: { running: boolean; speed: number; epoch: number };
   save: { status: SaveStatus; revision: number; savedAt: string | null; message: string };
   cursor: { x: number; y: number; inside: boolean };
   panel: "inspect" | "traffic" | "lines" | "image";
-  /** junction event log: record every junction, or just these node ids */
-  /** event logs: every junction, chosen junctions, chosen roads (by link id) */
-  eventLog: { all: boolean; nodes: string[]; links: string[] };
+  /** event logs: every junction, chosen junctions, chosen roads (by link id), chosen vehicles (by id; cleared when traffic restarts) */
+  eventLog: { all: boolean; nodes: string[]; links: string[]; vehicles: number[] };
   /** segment tool: edit just the clicked segment or the whole road through its joints */
   segScope: "segment" | "road";
   /** scale calibration: pick two points on the reference image, then type their real distance */
   calib: { active: boolean; a: Vec | null; b: Vec | null };
   history: { canUndo: boolean; canRedo: boolean };
-  layer: LayerId;
+  /** layers whose objects the map selects (all by default); their highlights show once narrowed to a few (see LAYER_HIGHLIGHT_MAX) */
+  layers: LayerId[];
+  /** the layer listed in the data table */
+  tableLayer: LayerId;
   /** the data table under the map */
   dataview: boolean;
   /** opened with view-only access: edits are blocked and nothing is saved */
@@ -78,16 +86,17 @@ export const ui = new DeepSubject<UiState>(
     draft: { lanesF: 1, lanesB: 1, busF: false, busB: false, speed: 50, curved: false },
     trace: { from: null, to: null, lane: null },
     multi: [],
-    display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85 },
+    display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85, perf: false },
     sim: { running: false, speed: 3, epoch: 0 },
     save: { status: "saved", revision: 1, savedAt: null, message: "" },
     cursor: { x: 0, y: 0, inside: false },
     panel: "inspect",
     segScope: "segment",
-    eventLog: { all: false, nodes: [], links: [] },
+    eventLog: { all: false, nodes: [], links: [], vehicles: [] },
     calib: { active: false, a: null, b: null },
     history: { canUndo: false, canRedo: false },
-    layer: "all",
+    layers: LAYERS.map(l => l.id),
+    tableLayer: "roads",
     dataview: false,
     readOnly: false,
     shape: { edit: null, paint: null },

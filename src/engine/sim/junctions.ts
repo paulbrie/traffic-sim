@@ -144,21 +144,28 @@ export abstract class SimJunctions extends SimSignals {
         if (ahead) { this.ev(st.node, v, "revoke", "a vehicle cut in ahead in the same lane"); v.granted = false; v.conn = null; return false; }
       }
       if (v.piece === o.conn) { o.entered = true; return true; }
-      if (!o.entered) return v.conn === o.conn && v.granted;
+      if (!o.entered) return (v.conn === o.conn && v.granted) || (v.early?.conn === o.conn && v.early.granted);
       return v.piece.kind === "lane" && v.piece.edge === o.conn.outEdge && v.trail[0] === o.conn && v.s <= v.len + 1;
     });
+    // a grant not yet used: how far the vehicle is from the line (on the road into the junction, or
+    // asked early from before it), and taking it back
+    const toLine = (o: Occ) => {
+      const v = o.v;
+      if (v.piece.kind === "lane" && v.piece.edge === o.conn.inEdge) return v.piece.len - v.s;
+      return v.early?.conn === o.conn ? v.early.d : null;
+    };
+    const takeBack = (o: Occ) => { if (o.v.early?.conn === o.conn) o.v.early.granted = false; else { o.v.granted = false; o.v.conn = null; } };
     // at traffic lights a green-light grant is only a promise: if the light changes before the
     // vehicle reaches the stop line, it must stop unless it is too close to do so safely
     if (st.node.def.control === "lights" && st.node.phases.length >= 2) {
       st.occ = st.occ.filter(o => {
         if (o.entered || o.sneak) return true;
-        const v = o.v;
-        if (v.piece.kind !== "lane" || v.piece.edge !== o.conn.inEdge) return true;
+        const v = o.v, d = toLine(o);
+        if (d === null) return true;
         const arm = this.armOf(st.node, o.conn.inEdge);
         const sig = this.signalFor(st.node.idx, arm, o.conn.inLane);
         if (sig === "green" || sig === null) return true;
-        const d = v.piece.len - v.s;
-        if (!this.mustGoOnSignal(v, d, sig)) { this.ev(st.node, v, "revoke", `light turned ${sig} ${d.toFixed(0)} m before the line; stops`); v.granted = false; v.conn = null; return false; }
+        if (!this.mustGoOnSignal(v, d, sig)) { this.ev(st.node, v, "revoke", `light turned ${sig} ${d.toFixed(0)} m before the line; stops`); takeBack(o); return false; }
         return true;
       });
     }
@@ -170,11 +177,11 @@ export abstract class SimJunctions extends SimSignals {
     if (majorNow.length) {
       st.occ = st.occ.filter(o => {
         if (o.entered || !this.minor(n0, o.conn.inEdge)) return true;
-        const v = o.v;
-        if (v.piece.kind !== "lane" || v.piece.edge !== o.conn.inEdge) return true;
+        const v = o.v, d = toLine(o);
+        if (d === null) return true;
         if (!majorNow.some(b => conflicts(o.conn, b) || (b.outEdge === o.conn.outEdge && b.outLane === o.conn.outLane))) return true;
-        if (this.mustGoOnSignal(v, v.piece.len - v.s, "yellow")) return true;
-        this.ev(n0, v, "revoke", "priority traffic arrived; waits again"); v.granted = false; v.conn = null; return false;
+        if (this.mustGoOnSignal(v, d, "yellow")) return true;
+        this.ev(n0, v, "revoke", "priority traffic arrived; waits again"); takeBack(o); return false;
       });
     }
     if (!st.req.size) return;
@@ -195,7 +202,7 @@ export abstract class SimJunctions extends SimSignals {
     const blockers: Conn[] = [];
     const log = this.logging(n);
     const deny = (v: Vehicle, why: string) => {
-      if (!log || this.lastDeny.get(v.id) === why) return;
+      if ((!log && !this.vehLogged(v)) || this.lastDeny.get(v.id) === why) return;
       this.lastDeny.set(v.id, why);
       const code = why.startsWith("path") ? "conflict" : why.startsWith("crosses") ? "queue-conflict" : why.startsWith("gives") ? "give-way" : why.startsWith("no room") ? "exit-full" : why.includes("light") ? "signal" : "other";
       this.ev(n, v, "deny", why, { code });
@@ -230,8 +237,9 @@ export abstract class SimJunctions extends SimSignals {
       let holdsQueue = !yielded;
       if (ok && !this.exitRoom(st, c, r.v)) { ok = false; holdsQueue = false; why = log ? `no room on the exit (${c.outEdge.link.name || c.outEdge.link.id} lane ${c.outLane + 1})` : ""; }
       if (ok) {
-        r.v.conn = c; r.v.granted = true; st.occ.push({ v: r.v, conn: c, entered: false, sneak });
-        if (log) { this.lastDeny.delete(r.v.id); this.ev(n, r.v, "grant", `${this.mv(c)} · ${r.d.toFixed(0)} m from the line, waited ${((this.tick - r.at) / 10).toFixed(1)} s${sneak ? " · clears on the change (oncoming stopped)" : ""}`, this.md(c.move, c.inLane, c.outLane)); }
+        if (r.early) { if (r.v.early?.conn !== c) continue; r.v.early.granted = true; } else { r.v.conn = c; r.v.granted = true; }
+        st.occ.push({ v: r.v, conn: c, entered: false, sneak });
+        if (log || this.vehLogged(r.v)) { this.lastDeny.delete(r.v.id); this.ev(n, r.v, "grant", `${this.mv(c)} · ${r.d.toFixed(0)} m from the line, waited ${((this.tick - r.at) / 10).toFixed(1)} s${sneak ? " · clears on the change (oncoming stopped)" : ""}`, this.md(c.move, c.inLane, c.outLane)); }
       } else { if ((!free || atLine(r)) && holdsQueue) blockers.push(c); deny(r.v, why); }
     }
   }

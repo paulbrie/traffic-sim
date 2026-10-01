@@ -1,5 +1,6 @@
 import { Sim, sampleTown, compile, connectorPreview, exitLane, connectionIssues, alignableNodes, measureRun, optimizeSignals } from "../src/engine";
 import { makeLink, makeNode } from "../src/engine/sample";
+import { isJunction } from "../src/engine/refs";
 import * as mirrorModule from "../src/engine/sim/mirror";
 import { readFileSync } from "fs";
 import { sanitizeNetwork, sanitizeSettings } from "../src/engine/validate";
@@ -407,6 +408,53 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const same = a.stats.trips === b.stats.trips && a.vehicles.filter(v => !v.dead).map(v => `${v.id}:${v.s.toFixed(3)}`).join() === b.vehicles.filter(v => !v.dead).map(v => `${v.id}:${v.s.toFixed(3)}`).join();
   const ok = same && ev.length > 20 && kinds.has("state") && (kinds.has("enter-road") || kinds.has("appear")) && (kinds.has("leave-road") || kinds.has("exit")) && a.events.every(e => !e.link);
   console.log(`road event log: ${ev.length} events on ${busy} (${[...kinds].join(", ")}); run unchanged ${same} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// vehicle event log: records one vehicle's events at junctions and on roads (nobody else's), and recording changes nothing
+{
+  const town = sampleTown();
+  const cb = compile(town), a = new Sim(compile(town), { cars: 120, trucks: 6, seed: 7 }), b = new Sim(cb, { cars: 120, trucks: 6, seed: 7 });
+  a.run(300); b.run(300);
+  const id = b.vehicles.filter(v => !v.dead).sort((x, y) => x.id - y.id)[0].id;
+  b.logVehicles = new Set([id]);
+  a.run(2000); b.run(2000);
+  const ev = b.events, kinds = new Set(ev.map(e => e.kind));
+  const same = a.stats.trips === b.stats.trips && a.vehicles.filter(v => !v.dead).map(v => `${v.id}:${v.s.toFixed(3)}`).join() === b.vehicles.filter(v => !v.dead).map(v => `${v.id}:${v.s.toFixed(3)}`).join();
+  const ok = same && ev.length > 3 && ev.every(e => e.veh === id) && ev.some(e => e.node) && ev.some(e => e.link) && a.events.length === 0
+    && ev.every(e => !e.node || isJunction(cb.nodeById.get(e.node)!)) && ev.every(e => !/\bn_\w+/.test(e.detail) || /(joint|entry\/exit|node) n_/.test(e.detail));
+  console.log(`vehicle event log: ${ev.length} events for #${id} (${[...kinds].join(", ")}); run unchanged ${same} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// two junctions close together (2 m apart on a main road, side roads giving way): vehicles ask the
+// second while still crossing the first, so they don't slow down for its line before they may even
+// ask. Before, they crossed at walking pace and the pair locked up, getting vehicles towed.
+{
+  const W = makeNode(-250, 0), E = makeNode(260, 0), N = makeNode(0, -200), S = makeNode(10, 200);
+  const J1 = makeNode(0, 0, "priority", false), J2 = makeNode(10, 0, "priority", false);
+  const net: Network = { version: 1, nodes: [W, J1, J2, E, N, S], stops: [], lines: [], links: [makeLink(W, J1, 1, 1), makeLink(J1, J2, 1, 1), makeLink(J2, E, 1, 1), makeLink(N, J1, 1, 1, { signF: "yield" }), makeLink(J2, S, 1, 1, { signB: "yield" })] };
+  const c = compile(sanitizeNetwork(net)), mid = c.edges.filter(e => e.from.controlled && e.to.controlled);
+  const sim = new Sim(c, { cars: 30, trucks: 0, seed: 5 });
+  sim.logAll = true;
+  const seen = new Set<number>(); let n = 0, sum = 0, overlap = 0;
+  for (let t = 0; t < 6000; t++) {
+    sim.step();
+    for (const v of sim.vehicles) {
+      if (v.dead || v.piece.kind !== "lane" || !mid.includes(v.piece.edge) || seen.has(v.id * 2 + v.piece.edge.dir)) continue;
+      seen.add(v.id * 2 + v.piece.edge.dir);
+      const from = v.trail[0];
+      if (from.kind === "conn" && from.move.turn === "S") { n++; sum += v.v * 3.6; }
+    }
+    const on = sim.vehicles.filter(v => !v.dead && v.piece.kind === "conn");
+    for (let i = 0; i < on.length; i++) for (let k = i + 1; k < on.length; k++) {
+      const p = on[i].piece.poly.at(on[i].s), q = on[k].piece.poly.at(on[k].s);
+      if (Math.hypot(p.x - q.x, p.y - q.y) < 1.5) overlap++;
+    }
+  }
+  const early = sim.events.filter(e => e.kind === "request" && e.detail.includes("asked early")).length, avg = sum / Math.max(1, n);
+  const ok = mid.length === 2 && mid[0].length < 10 && n > 40 && avg > 14 && early > 50 && overlap === 0 && sim.stats.towed === 0 && sim.stats.trips > 150;
+  console.log(`close junctions: ${mid.map(e => e.length.toFixed(1)).join("/")} m apart; ${n} vehicles straight on onto the road between at ${avg.toFixed(1)} km/h on average; ${early} early requests, ${sim.stats.trips} trips, ${sim.stats.towed} towed, overlaps ${overlap} | ok ${ok}`);
   if (!ok) process.exit(1);
 }
 

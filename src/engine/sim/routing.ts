@@ -99,6 +99,9 @@ export abstract class SimRouting extends SimBase {
     const a = x.a;
     // a granted crossing is kept, so the choice below can't change under the vehicle's wheels
     if (v.conn && !e.to.ring && v.conn.role === "turn" && v.conn.move === m && v.conn.inLane === a) return this.net.crossing(m, a, v.conn.outLane);
+    // …and so is one asked for early (granted or not), at the junction after
+    const ec = v.early?.conn;
+    if (ec && !e.to.ring && ec.role === "turn" && ec.move === m && ec.inLane === a) return this.net.crossing(m, a, ec.outLane);
     // a pending request keeps its exit lane too (no flip-flopping while waiting at a red light),
     // unless that lane has no room any more
     const rq = v.reqFor;

@@ -28,7 +28,7 @@ import { LaneArrowsEditor, SignPicker } from "./lane-arrows";
 import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
 import { junctionRefs } from "@/engine/refs";
 import { arrowLetters } from "@/engine/compile";
-import { JunctionEventLog, RoadEventLog } from "./event-log";
+import { JunctionEventLog, RoadEventLog, VehicleEventLog } from "./event-log";
 import { LaneConnectionsSection } from "./lane-connections";
 import { JunctionShapeSection } from "./junction-shape";
 
@@ -101,6 +101,7 @@ function PlanSummary({ net }: { net: Network }) {
           <li><Kbd>R</Kbd> Road tool: click to place points, click an existing road to join it, <Kbd>Esc</Kbd> to finish. Hold <Kbd>Shift</Kbd> for 15° angles.</li>
           <li><Kbd>V</Kbd> Select: drag junctions, drag the square handle to curve a road, then fine-tune the two curve handles.</li>
           <li><Kbd>B</Kbd> Bus stop: click the side of the road the bus drives on.</li>
+          <li>Layers (top bar) choose what clicks on the map select; all are on to start with. <Kbd>Shift</Kbd> + a letter switches one on or off: <Kbd>R</Kbd> roads, <Kbd>L</Kbd> lanes, <Kbd>J</Kbd> junctions… (<Kbd>A</Kbd> all). The letters are shown in the layer menu.</li>
           <li>Type exact coordinates, lengths and bearings in this panel. Arrow keys nudge by one step, <Kbd>Shift</Kbd> by ten.</li>
           <li>Dead ends where traffic enters and leaves the plan are shown as squares.</li>
         </ul>
@@ -812,10 +813,14 @@ function VehicleInspector({ id }: { id: string }) {
   const sim = simController.sim;
   // details come with the simulation's snapshots (the worker sends them for the selected vehicle)
   const v = sim?.vehicle && String(sim.vehicle.id) === id && sim.vehicles.some(x => x.id === sim.vehicle!.id) ? sim.vehicle : null;
+  const [log] = useDeepSubject(ui, "eventLog");
+  const recording = (log.vehicles ?? []).includes(Number(id));
   if (!v) return (
     <div>
       <Header kind="Vehicle" id={`#${id}`} title={`#${id}`} />
       <Section><p className="text-sm text-muted-foreground">{sim?.vehicles.some(x => String(x.id) === id) ? "Loading…" : "This vehicle has left the plan."}</p></Section>
+      {/* a recording stays readable (and downloadable) after the vehicle has gone */}
+      {recording && <Section><VehicleEventLog vehId={Number(id)} /></Section>}
     </div>
   );
   const rows: [string, string][] = [
@@ -849,7 +854,8 @@ function VehicleInspector({ id }: { id: string }) {
         </dl>
         <p className="text-[10px] text-muted-foreground">Lanes are counted from 1 = leftmost (next to the centre line).</p>
       </Section>
-      {myEvents.length > 0 && (
+      <Section><VehicleEventLog vehId={v.id} /></Section>
+      {!recording && myEvents.length > 0 && (
         <Section title="Junction events">
           <div className="grid gap-0.5 font-mono text-[10.5px] leading-snug">
             {myEvents.map((x, i) => (

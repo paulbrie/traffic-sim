@@ -141,7 +141,8 @@ export interface Overlay {
   /** draw every lane connector through the junctions */
   connectors: boolean;
   /** the layer whose objects are highlighted ("all" = none) */
-  layer: string;
+  /** layers whose objects are highlighted (lane outlines, connectors, rings around junctions…) */
+  highlight: readonly string[];
   /** roads as thin outlines only (no surface, markings or names), to see the map or image under them */
   maskRoads?: boolean;
   /** the route tracer's route, as x, y points */
@@ -354,7 +355,7 @@ export function drawScene(
     if (sim) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo, 1, view); }
   }
 
-  if (ov.connectors || ov.layer === "connectors") {
+  if (ov.connectors || ov.highlight.includes("connectors")) {
     const list = connectorsOf(compiled);
     ctx.strokeStyle = "#e8c547"; ctx.globalAlpha = 0.9; ctx.lineWidth = Math.max(0.18, px * 1.2); ctx.lineCap = "round";
     ctx.beginPath();
@@ -390,8 +391,8 @@ export function drawScene(
     if (b) drawBuildingSelection(ctx, pal, compiled, b, px);
   }
 
-  // the chosen layer's objects, and a selected lane or connector
-  if (ov.layer === "lanes") {
+  // the highlighted layers' objects, and a selected lane or connector
+  if (ov.highlight.includes("lanes")) {
     ctx.strokeStyle = "#38bdf8"; ctx.globalAlpha = 0.7; ctx.lineWidth = Math.max(0.2, px * 1.2);
     ctx.beginPath();
     for (const e of compiled.edges) for (const lp of e.lanes) { const q = lp.poly.pts; ctx.moveTo(q[0], q[1]); for (let k = 2; k < q.length; k += 2) ctx.lineTo(q[k], q[k + 1]); }
@@ -492,11 +493,12 @@ export function drawScene(
   drawCounters(ctx, cam, pal, net, compiled, sim);
   if (ov.selection) drawSelectionIds(ctx, cam, pal, geo, net, compiled, sim, ov.selection, ov.alsoSelected);
   if (ov.selection?.kind === "node") drawFlows(ctx, cam, pal, net, ov.selection.id);
-  if (ov.layer === "zones" || ov.selection?.kind === "zone") drawZones(ctx, cam, pal, net, ov.selection?.kind === "zone" ? ov.selection.id : null);
-  if (ov.layer === "junctions" || ov.layer === "signals" || ov.layer === "entries") {
+  if (ov.highlight.includes("zones") || ov.selection?.kind === "zone") drawZones(ctx, cam, pal, net, ov.selection?.kind === "zone" ? ov.selection.id : null);
+  const hl = (l: string) => ov.highlight.includes(l);
+  if (hl("junctions") || hl("signals") || hl("entries")) {
     ctx.strokeStyle = pal.primary; ctx.lineWidth = 2;
     for (const n of compiled.nodes) {
-      const on = ov.layer === "entries" ? n.gateway : ov.layer === "signals" ? n.controlled && n.def.control === "lights" : n.controlled && n.degree >= 2;
+      const on = (hl("entries") && n.gateway) || (hl("signals") && n.controlled && n.def.control === "lights") || (hl("junctions") && n.controlled && n.degree >= 2);
       if (!on) continue;
       const q = toScreen(cam, n.pos.x, n.pos.y);
       ctx.beginPath(); ctx.arc(q.x, q.y, 11, 0, Math.PI * 2); ctx.stroke();
