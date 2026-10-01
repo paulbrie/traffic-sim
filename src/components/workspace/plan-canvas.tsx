@@ -12,6 +12,7 @@ import type { Network, Vec } from "@/engine/types";
 import { commit, endGesture, highlightedLayers, network$, select, toggleRoad, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { noteDraw } from "@/state/perf";
+import { connectLanes } from "@/state/connections";
 import { viewCmd$, viewport } from "@/state/commands";
 import { underlayImg$ } from "@/state/underlay-image";
 import { worldToImage, type Underlay } from "@/lib/underlay";
@@ -140,6 +141,12 @@ export function PlanCanvas() {
       }
       return best;
     }
+    /** drawing a connector from lane `from` ("linkId|dir|lane"): the lanes it may end in (those leaving its junction) */
+    function connectTargets(from: string) {
+      const [lid, dir, ln] = from.split("|"), c = simController.compiled, e = c.edgeByKey.get(`${lid}:${dir}`);
+      if (!e || !e.lanes[Number(ln)]) return null;
+      return e.to.arms.flatMap(a => (a.outEdge ? a.outEdge.lanes.map(lp => ({ e: a.outEdge!, lp })) : []));
+    }
     /** index of the outline point (of the junction whose outline is being edited) under the pointer, or -1 */
     function hitOutlinePoint(sx: number, sy: number): number {
       const id = ui.getValue().shape.edit, nd = id ? ops.nodeById(net, id) : null;
@@ -214,7 +221,9 @@ export function PlanCanvas() {
       if (on("vehicles")) { const v = simController.sim?.vehicleNear(w.x, w.y, Math.max(3, pxToM(10))); if (v) return { kind: "vehicle", id: String(v.id) }; }
       // (connectors are only drawn when highlighted or switched on in the display options)
       if (on("connectors") && (u.display.connectors || highlightedLayers(layers).includes("connectors"))) { const id = hitConnector(w); if (id) return { kind: "connector", id }; }
-      if (on("roads") || on("counters")) { const l = hitLink(w); if (l && (on("roads") || ops.linkById(net, l.id)?.counter)) return { kind: "link", id: l.id }; }
+      // (with road surfaces hidden, roads can always be picked: their outline is all there is to click)
+      const roadsOn = on("roads") || u.display.maskRoads;
+      if (roadsOn || on("counters")) { const l = hitLink(w); if (l && (roadsOn || ops.linkById(net, l.id)?.counter)) return { kind: "link", id: l.id }; }
       if (on("lanes")) { const id = hitLane(w); if (id) return { kind: "lane", id }; }
       if (on("buildings") || on("zones")) { const id = hitBuilding(w); if (id) return { kind: "building", id }; }
       return null;
@@ -288,6 +297,18 @@ export function PlanCanvas() {
       if (e.button === 2 && tool === "road") { pending = null; markDirty(); return; }
       if (e.button !== 0) return;
 
+      // drawing a lane connector: a click on a lane leaving the junction ends it there
+      const cf = ui.getValue().connectFrom;
+      if (cf) {
+        const pick = connectTargets(cf)?.find(t => t.lp.poly.project(w.x, w.y).d < LW * 0.6);
+        if (pick) {
+          const [lid, dir, ln] = cf.split("|"), r = connectLanes(net, simController.compiled, `${lid}:${dir}`, Number(ln), pick.e.key, pick.lp.lane);
+          ui.getValue().connectFrom = null;
+          if (r) { commit(r.net); select({ kind: "connector", id: r.id }); }
+        }
+        markDirty();
+        return;
+      }
       // junction editor: clicks add points to the painted area being drawn, or pick outline points
       const sh = ui.getValue().shape;
       if (sh.paint) { const pp = sh.paint; sh.paint = { ...pp, pts: [...pp.pts, { x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
@@ -532,6 +553,7 @@ export function PlanCanvas() {
       if (e.type === "keyup" && e.code === "Space") { spaceHeld = false; canvas.style.cursor = "default"; }
       if (e.type === "keydown" && e.key === "Escape") setMenu(null);
       const sh = ui.getValue().shape;
+      if (e.type === "keydown" && !typing && e.key === "Escape" && ui.getValue().connectFrom) { ui.getValue().connectFrom = null; e.stopPropagation(); markDirty(); return; }
       if (e.type === "keydown" && !typing && sh.paint && (e.key === "Enter" || e.key === "Escape")) {
         if (e.key === "Enter") finishPaint(); else sh.paint = null;
         e.stopPropagation(); e.preventDefault(); markDirty(); return;
@@ -633,6 +655,12 @@ export function PlanCanvas() {
           calib: u.calib.active ? { a: u.calib.a, b: u.calib.b, cursor: cursorWorld } : null,
           buildings: u.display.buildings,
           satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, highlight: highlightedLayers(u.layers), maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
+          connectPick: (() => {
+            const cf = u.connectFrom, ts = cf ? connectTargets(cf) : null;
+            if (!cf || !ts) return null;
+            const [lid, dir, ln] = cf.split("|"), lp = simController.compiled.edgeByKey.get(`${lid}:${dir}`)!.lanes[Number(ln)];
+            return { from: lp.poly.at(lp.len), targets: ts.map(t => t.lp.poly.pts), cursor: cursorWorld };
+          })(),
           shape: (() => {
             const sh = u.shape, on = sh.edit ? ops.nodeById(net, sh.edit) : null;
             return { outline: on?.outline ? on.outline.map(p => ({ x: on.x + p.x, y: on.y + p.y })) : null, paint: sh.paint?.pts ?? null, cursor: cursorWorld };

@@ -1,5 +1,6 @@
 import { Sim, sampleTown, compile, connectorPreview, exitLane, connectionIssues, alignableNodes, measureRun, optimizeSignals } from "../src/engine";
 import { Poly } from "../src/engine/geom";
+import { connectLanes } from "../src/state/connections";
 import { makeLink, makeNode } from "../src/engine/sample";
 import { isJunction } from "../src/engine/refs";
 import * as mirrorModule from "../src/engine/sim/mirror";
@@ -688,5 +689,17 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   }
   const ok = worst > 0.99;
   console.log(`lane end direction after a cut near a vertex: worst alignment ${worst.toFixed(3)} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// a connector drawn from the end of a lane to a lane leaving the junction (lane inspector / map)
+{
+  const J = makeNode(0, 0, "priority", false), W = makeNode(-200, 0), E = makeNode(200, 0), S = makeNode(0, 200);
+  const wj = makeLink(W, J, 2, 2, { turnsF: ["S", "S"] }), je = makeLink(J, E, 2, 2), js = makeLink(J, S, 1, 1);
+  const net = sanitizeNetwork({ version: 1, nodes: [J, W, E, S], stops: [], lines: [], links: [wj, je, js] });
+  const r = connectLanes(net, compile(net), `${wj.id}:1`, 1, `${js.id}:1`, 0);
+  const c = r && compile(sanitizeNetwork(r.net)), m = c ? (c.nodeById.get(J.id)!.moves.get(c.edgeByKey.get(`${wj.id}:1`)!.idx) ?? []).find(x => x.out.link.id === js.id) : undefined;
+  const ok = !!r && !!m && m.lo === 1 && m.hi === 1 && r.id === `${J.id}|${wj.id}:1|1|${js.id}:1|0`;
+  console.log(`connector drawn from a lane: ${m ? `${m.turn} from lane ${m.lo + 1}` : "none"}, selects ${r?.id} | ok ${ok}`);
   if (!ok) process.exit(1);
 }

@@ -196,6 +196,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
       {degree >= 2 && node.control !== "roundabout" && <JunctionShapeSection net={net} node={node} />}
       {degree >= 2 && node.control !== "roundabout" && <LaneConnectionsSection net={net} node={node} />}
       {ref && cn && <JunctionLive net={net} nodeIdx={cn.idx} />}
+      {ref && cn && <Section title="Event log"><JunctionEventLog nodeId={node.id} refName={ref} /></Section>}
       {degree === 2 && !crossing && (
         <Section title="Road joint">
           <p className="text-xs text-muted-foreground">A bend point on a road. Drag it to reshape the road, or double-click a road to add more.</p>
@@ -291,7 +292,6 @@ function JunctionLive({ net, nodeIdx }: { net: Network; nodeIdx: number }) {
   if (!sim) return (
     <Section title="Live">
       <p className="text-xs text-muted-foreground">Run traffic to see what happens at this junction.</p>
-      <JunctionEventLog nodeId={simController.compiled.nodes[nodeIdx].def.id} refName={junctionRefs(simController.compiled).get(simController.compiled.nodes[nodeIdx].def.id) ?? "junction"} />
     </Section>
   );
   const st = sim.junctionStats(nodeIdx);
@@ -327,7 +327,6 @@ function JunctionLive({ net, nodeIdx }: { net: Network; nodeIdx: number }) {
         })}
       </div>
       {n.def.control === "lights" && n.phases.length >= 2 && <LightCycles net={net} nodeIdx={nodeIdx} name={name} />}
-      <JunctionEventLog nodeId={n.def.id} refName={junctionRefs(simController.compiled).get(n.def.id) ?? "junction"} />
     </Section>
   );
 }
@@ -546,7 +545,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
         </Section>
       )}
       <CounterSection link={link} towards={[dir.name, back.name]} onChange={on => set({ counter: on || undefined })} />
-      <Section><RoadEventLog linkId={link.id} /></Section>
+      <Section title="Event log"><RoadEventLog linkId={link.id} /></Section>
       <Section title="Elevation">
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm">Level</span>
@@ -820,7 +819,7 @@ function VehicleInspector({ id }: { id: string }) {
       <Header kind="Vehicle" id={`#${id}`} title={`#${id}`} />
       <Section><p className="text-sm text-muted-foreground">{sim?.vehicles.some(x => String(x.id) === id) ? "Loading…" : "This vehicle has left the plan."}</p></Section>
       {/* a recording stays readable (and downloadable) after the vehicle has gone */}
-      {recording && <Section><VehicleEventLog vehId={Number(id)} /></Section>}
+      {recording && <Section title="Event log"><VehicleEventLog vehId={Number(id)} /></Section>}
     </div>
   );
   const rows: [string, string][] = [

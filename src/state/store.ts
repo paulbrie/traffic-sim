@@ -74,6 +74,8 @@ export interface UiState {
   readOnly: boolean;
   /** junction editor: the junction whose outline is being edited, and a painted area being drawn */
   shape: { edit: string | null; paint: { node: string; kind: "hatch" | "island"; pts: Vec[] } | null };
+  /** drawing a lane connector: the lane it starts from ("linkId|dir|lane"); the next lane clicked on the map ends it */
+  connectFrom: string | null;
 }
 
 export const ui = new DeepSubject<UiState>(
@@ -100,6 +102,7 @@ export const ui = new DeepSubject<UiState>(
     dataview: false,
     readOnly: false,
     shape: { edit: null, paint: null },
+    connectFrom: null,
   },
   { name: "ui" },
 );
@@ -221,6 +224,8 @@ export function select(sel: Selection | null) {
     const keep = sel?.kind === "node" ? sel.id : null;
     if (u.shape.edit && u.shape.edit !== keep) u.shape.edit = null;
     if (u.shape.paint && u.shape.paint.node !== keep) u.shape.paint = null;
+    // (drawing a connector starts from the selected lane: selecting something else ends it)
+    if (u.connectFrom && !(sel?.kind === "lane" && sel.id === u.connectFrom)) u.connectFrom = null;
   });
 }
 

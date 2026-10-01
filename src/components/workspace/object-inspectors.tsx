@@ -1,12 +1,13 @@
 "use client";
 
 import { Fragment } from "react";
-import { useSubject } from "subjecto/react";
+import { useDeepSubject, useSubject } from "subjecto/react";
 import { Button } from "@/components/ui/button";
 import { connShapeKey, connectorHandles, connectorId, exitLane, laneAllowed } from "@/engine/compile";
 import { junctionRefs } from "@/engine/refs";
 import { connectorsOf } from "@/render/draw2d";
-import { commit, network$, select, stats$ } from "@/state/store";
+import { commit, network$, select, stats$, ui } from "@/state/store";
+import { connectLanes } from "@/state/connections";
 import * as ops from "@/state/ops";
 import { simController } from "@/state/sim-controller";
 import { IdChip, NumberField, Section, compass } from "./fields";
@@ -57,7 +58,44 @@ export function LaneInspector({ id }: { id: string }) {
     <div>
       <Head kind="Lane" id={id} title={`${e.link.name || "Unnamed road"} · lane ${lane + 1}`} />
       <Section><Rows rows={rows} /></Section>
+      <ConnectFromLane id={id} />
     </div>
+  );
+}
+
+/** draw a lane connector from the end of this lane to a lane leaving the junction there (on the map, or from the list) */
+function ConnectFromLane({ id }: { id: string }) {
+  const [from] = useDeepSubject(ui, "connectFrom");
+  const [linkId, dirS, laneS] = id.split("|"), lane = Number(laneS);
+  const c = simController.compiled, e = c.edgeByKey.get(`${linkId}:${dirS}`);
+  if (!e || !e.to.controlled || e.to.ringR > 0 || e.to.degree < 2) return null;
+  const ref = junctionRefs(c).get(e.to.def.id) ?? "the junction";
+  const picking = from === id;
+  const add = (outKey: string, b: number) => {
+    const r = connectLanes(network$.getValue(), c, e.key, lane, outKey, b);
+    if (!r) return;
+    ui.getValue().connectFrom = null;
+    commit(r.net);
+    select({ kind: "connector", id: r.id });
+  };
+  const outs = e.to.arms.flatMap(a => (a.outEdge ? [{ a, o: a.outEdge }] : []));
+  return (
+    <Section title="Connect to another lane">
+      <Button size="sm" variant={picking ? "secondary" : "outline"} className="justify-self-start" onClick={() => { ui.getValue().connectFrom = picking ? null : id; }}>
+        {picking ? "Cancel (Esc)" : "Pick the lane on the map"}
+      </Button>
+      <p className="text-xs text-muted-foreground">
+        {picking ? `Click a lane leaving ${ref} (highlighted) to connect lane ${lane + 1} to it.` : `A connector from the end of this lane through ${ref} to a lane leaving it, even where there was no turn. Or pick it here:`}
+      </p>
+      <div className="grid gap-1.5">
+        {outs.map(({ a, o }) => (
+          <div key={o.key} className="flex flex-wrap items-center gap-1 text-xs">
+            <span className="mr-1 truncate text-muted-foreground">{o.link.name || o.link.id} ({compass(a.u.x, a.u.y).name})</span>
+            {Array.from({ length: o.n }, (_, b) => <Button key={b} size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => add(o.key, b)}>lane {b + 1}</Button>)}
+          </div>
+        ))}
+      </div>
+    </Section>
   );
 }
 

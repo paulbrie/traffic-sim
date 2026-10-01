@@ -114,6 +114,8 @@ export function buildPaths(geo: RoadGeo): PathCache {
 }
 
 export interface Overlay {
+  /** drawing a lane connector: where it starts, the lanes it may end in, the pointer */
+  connectPick?: { from: Vec; targets: ArrayLike<number>[]; cursor: Vec | null } | null;
   /** junction editor: the outline being edited (its points), a painted area being drawn, the pointer */
   shape?: { outline: Vec[] | null; paint: Vec[] | null; cursor: Vec | null };
   selection: { kind: string; id: string } | null;
@@ -537,6 +539,16 @@ export function drawScene(
   if (sel?.kind === "link") {
     const l = net.links.find(x => x.id === sel.id);
     if (l) drawLinkHandles(ctx, cam, pal, net, l, ov.hover?.kind === "handle" ? ov.hover.id : null);
+  }
+  // drawing a lane connector: the lanes it may end in, and a line from its start to the pointer
+  if (ov.connectPick) {
+    const cp = ov.connectPick;
+    ctx.strokeStyle = pal.select; ctx.lineWidth = 3; ctx.globalAlpha = 0.55; ctx.lineCap = "round";
+    for (const pts of cp.targets) { ctx.beginPath(); for (let k = 0; k < pts.length; k += 2) { const q = toScreen(cam, pts[k], pts[k + 1]); if (k) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); } ctx.stroke(); }
+    ctx.globalAlpha = 1;
+    const a = toScreen(cam, cp.from.x, cp.from.y);
+    ctx.fillStyle = pal.select; ctx.beginPath(); ctx.arc(a.x, a.y, 5, 0, Math.PI * 2); ctx.fill();
+    if (cp.cursor) { const b = toScreen(cam, cp.cursor.x, cp.cursor.y); ctx.setLineDash([6, 4]); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]); }
   }
   // junction editor: the outline's points (drag; double-click an edge to add, Alt+click to remove),
   // and the painted area being drawn (click points, double-click or Enter to finish)
