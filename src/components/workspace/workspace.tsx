@@ -10,7 +10,6 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -188,6 +187,8 @@ export function toggleAllLayers() {
 function LayerPicker() {
   const [layers] = useDeepSubject(ui, "layers");
   const [dataview, setDataview] = useDeepSubject(ui, "dataview");
+  const [snap, setSnap] = useDeepSubject(ui, "snap");
+  const [display, setDisplay] = useDeepSubject(ui, "display");
   const all = allLayersOn(layers);
   const label = all ? "All layers" : layers.length === 0 ? "No layers" : layers.length === 1 ? LAYERS.find(l => l.id === layers[0])!.label : `${layers.length} layers`;
   // (the menu stays open while switching layers on and off)
@@ -215,6 +216,14 @@ function LayerPicker() {
               <Kbd>⇧{l.key}</Kbd>
             </DropdownMenuCheckboxItem>
           ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">Display</DropdownMenuLabel>
+          <DropdownMenuCheckboxItem checked={snap.grid} onCheckedChange={v => setSnap({ ...snap, grid: !!v })} onSelect={keep}>
+            Grid <span className="text-muted-foreground">(snap to grid)</span>
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem checked={!display.maskRoads} onCheckedChange={v => setDisplay({ ...display, maskRoads: !v })} onSelect={keep}>
+            Road surfaces<Kbd className="ml-auto">O</Kbd>
+          </DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
           <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
             Clicks on the map select objects of the layers that are on. With {LAYER_HIGHLIGHT_MAX} or fewer on, their objects are highlighted too.
@@ -324,7 +333,6 @@ function DraftBar() {
   const [view] = useDeepSubject(ui, "view");
   const [draft, setDraft] = useDeepSubject(ui, "draft");
   const [snap, setSnap] = useDeepSubject(ui, "snap");
-  const [display, setDisplay] = useDeepSubject(ui, "display");
   if (view !== "2d" || (tool !== "road" && tool !== "select")) return null;
   return (
     <div className="absolute top-3 left-1/2 z-10 flex w-max max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 overflow-x-auto rounded-lg border bg-background/95 px-3 py-1.5 text-sm whitespace-nowrap shadow-sm backdrop-blur">
@@ -344,14 +352,6 @@ function DraftBar() {
           <Separator orientation="vertical" className="!h-5" />
         </>
       )}
-      <label className="flex items-center gap-1.5 text-xs">
-        <Switch checked={snap.grid} onCheckedChange={v => setSnap({ ...snap, grid: v })} aria-label="Snap to grid" /> Grid
-      </label>
-      <Tip label="Off: roads as outlines only, to see the map under them" keys="O">
-        <label className="flex items-center gap-1.5 text-xs">
-          <Switch checked={!display.maskRoads} onCheckedChange={v => setDisplay({ ...display, maskRoads: !v })} aria-label="Show road surfaces" /> Roads
-        </label>
-      </Tip>
       <Select value={String(snap.step)} onValueChange={v => setSnap({ ...snap, step: Number(v) })}>
         <SelectTrigger size="sm" className="h-7 w-20" aria-label="Grid step"><SelectValue /></SelectTrigger>
         <SelectContent>{[0.5, 1, 2, 5, 10, 20].map(s => <SelectItem key={s} value={String(s)}>{s} m</SelectItem>)}</SelectContent>

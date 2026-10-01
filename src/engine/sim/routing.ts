@@ -141,8 +141,9 @@ export abstract class SimRouting extends SimBase {
       const mk = this.moveOf(ek, nk);
       if (!mk) return null;
       if (ek.to.controlled || ek.to.degree !== 2) {
-        const many = (ek.to.moves.get(ek.idx)?.length || 0) > 1;
-        return many ? { lo: mk.lo, hi: mk.hi } : null;
+        // several turns, or a single one that only some lanes may take (lane connections set by hand)
+        const many = (ek.to.moves.get(ek.idx)?.length || 0) > 1, some = mk.lo > 0 || mk.hi < ek.n - 1;
+        return many || some ? { lo: mk.lo, hi: mk.hi } : null;
       }
     }
     return null;

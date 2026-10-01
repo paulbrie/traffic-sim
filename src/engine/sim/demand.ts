@@ -61,6 +61,22 @@ export abstract class SimDemand extends SimMotion {
   }
 
   /** one trip of zone-to-zone demand */
+  /**
+   * The lane a new vehicle starts in: the one picked, unless that lane can't take its first turn and a
+   * lane that can (the nearest) has room at the same spot (no extra random draws, so runs stay as they were).
+   */
+  protected startLane(edge: Edge, route: Edge[], lane: number, lo: number, hi: number, s: number, room: number) {
+    let ln = lane, pc = edge.lanes[lane], sl = s * (pc.len / Math.max(1e-6, edge.length));
+    const m0 = route[1] ? this.moveOf(edge, route[1]) : undefined;
+    if (m0 && (ln < m0.lo || ln > m0.hi)) {
+      const want = Math.min(Math.max(ln, Math.max(lo, m0.lo)), Math.min(hi, m0.hi));
+      if (want !== ln && want >= lo && want <= hi) {
+        const wp = edge.lanes[want], ws = s * (wp.len / Math.max(1e-6, edge.length));
+        if (this.laneClear(wp, ws, room)) { ln = want; pc = wp; sl = ws; }
+      }
+    }
+    return { ln, pc, sl };
+  }
   protected spawnZoneTrip(f: CZoneFlow): boolean {
     const st = this.zoneFlowState[f.idx];
     const o = this.zoneEnd(f.from), d = this.zoneEnd(f.to);
@@ -82,8 +98,9 @@ export abstract class SimDemand extends SimMotion {
       if (!rest) { st.noRoute++; return false; }
       route = [edge, ...rest];
     }
+    const { ln, pc, sl } = this.startLane(edge, route, lane, lo, hi, s, "gate" in o ? 14 : 12);
     const v = this.makeVehicle(kind);
-    v.route = route; v.ri = 0; v.piece = piece; v.s = sOnLane; v.v = v0; v.lane = lane; v.dest = dest;
+    v.route = route; v.ri = 0; v.piece = pc; v.s = sl; v.v = v0; v.lane = ln; v.dest = dest;
     v.metered = true; v.zflow = f.idx; v.goal = dest; st.sent++;
     this.vehicles.push(v); this.addToIndex(v); this.logAppear(v);
     if ("gate" in o) this.countGate(edge.from.def.id, "in");
@@ -162,8 +179,9 @@ export abstract class SimDemand extends SimMotion {
       if (!rest) { if (flow) this.flowState[flow.idx].noRoute++; return false; }
       route = [edge, ...rest];
     }
+    const { ln, pc, sl } = this.startLane(edge, route, lane, lo, hi, s, fromGate ? 14 : 12);
     const v = this.makeVehicle(kind);
-    v.route = route; v.ri = 0; v.piece = piece; v.s = sOnLane; v.v = v0; v.lane = lane; v.dest = dest;
+    v.route = route; v.ri = 0; v.piece = pc; v.s = sl; v.v = v0; v.lane = ln; v.dest = dest;
     v.metered = !!gate;
     if (flow) { v.flow = flow.idx; this.flowState[flow.idx].sent++; }
     this.applySplit(v);
