@@ -1,6 +1,6 @@
 import type { CFlow, CLine, CNode, CZone, CZoneFlow, Edge } from "../compile";
 import { mulberry32 } from "../geom";
-import { DT, KIND_PARAMS, type Kind, type Dest, type Vehicle } from "./base";
+import { DT, KIND_PARAMS, emptyXMemo, type Kind, type Dest, type Vehicle } from "./base";
 import { SimMotion } from "./motion";
 
 /** Demand: vehicles entering the plan (at entry points, buildings or along roads) and buses on their lines. */
@@ -19,7 +19,7 @@ export abstract class SimDemand extends SimMotion {
       reroutes: 0, laneChanges: 0, lcCool: 0, lcOff: 0, lcT: 0,
       reqAt: 0, reqFor: null, stoppedAt: null, fixedAt: null, rerouteAt: null,
       line: null, stopIdx: 0, pax: 0, cap: 50, dwell: 0, dead: false, metered: false, flow: -1, zflow: -1, goal: null,
-      test: undefined, logState: undefined, splits: undefined,
+      test: undefined, logState: undefined, splits: undefined, xm: [emptyXMemo(), emptyXMemo()], xmNext: 0,
     };
   }
   protected randomEdge(): Edge | null {

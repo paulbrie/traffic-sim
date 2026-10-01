@@ -82,42 +82,51 @@ export abstract class SimRouting extends SimBase {
   protected crossingFor(v: Vehicle, ri: number, lane: number): readonly Piece[] | null {
     const e = v.route[ri], next = v.route[ri + 1];
     if (!e || !next) return null;
-    const m = this.moveOf(e, next);
+    // (the part that only depends on the route is remembered between ticks: routes are replaced, never edited)
+    const x0 = v.xm[0], x1 = v.xm[1];
+    let x = x0.route === v.route && x0.ri === ri && x0.lane === lane ? x0 : x1.route === v.route && x1.ri === ri && x1.lane === lane ? x1 : null;
+    if (!x) {
+      x = v.xm[v.xmNext]; v.xmNext ^= 1;
+      x.route = v.route; x.ri = ri; x.lane = lane; x.m = this.moveOf(e, next); x.c0 = x.cT = null;
+      if (x.m) {
+        x.a = Math.min(lane, e.n - 1);
+        const [b0, target] = this.exitLanes(v, x.m, x.a, ri + 1);
+        x.b0 = b0; x.target = target;
+      }
+    }
+    const m = x.m;
     if (!m) return null;
-    const a = Math.min(lane, e.n - 1);
+    const a = x.a;
     // a granted crossing is kept, so the choice below can't change under the vehicle's wheels
     if (v.conn && !e.to.ring && v.conn.role === "turn" && v.conn.move === m && v.conn.inLane === a) return this.net.crossing(m, a, v.conn.outLane);
     // a pending request keeps its exit lane too (no flip-flopping while waiting at a red light),
     // unless that lane has no room any more
     const rq = v.reqFor;
     if (rq && !e.to.ring && rq.role === "turn" && rq.move === m && rq.inLane === a && this.exitRoom(this.ns[e.to.idx], rq, v)) return this.net.crossing(m, a, rq.outLane);
-    return this.net.crossing(m, a, this.chooseExitLane(v, m, a, ri + 1));
+    // the lane that suits the next turn, unless it is backed up to the junction
+    if (x.target !== x.b0) {
+      const lp = m.out.lanes[x.target];
+      let rear = Infinity;
+      for (const u of this.index.get(lp.id) ?? []) rear = Math.min(rear, u.s - u.len);
+      if (rear > 10) return (x.cT ??= this.net.crossing(m, a, x.target));
+    }
+    return (x.c0 ??= this.net.crossing(m, a, x.b0));
   }
-  /**
-   * Exit lane for a vehicle crossing from lane `a`: when the road it joins has more lanes than
-   * the turn uses, pick the one that suits the vehicle's *next* turn (left lane before a left
-   * turn, and so on), staying within this lane's share of the exit so parallel turns don't cross.
-   */
-  protected chooseExitLane(v: Vehicle, m: Movement, a: number, outIdx: number): number {
+  /** the exit lanes for chooseExitLane without its live check: the usual one, and the one it would prefer */
+  protected exitLanes(v: Vehicle, m: Movement, a: number, outIdx: number): [number, number] {
     const isBus = v.kind === "bus";
     const b0 = exitLane(m, a, isBus);
-    if (m.turn === "U" || (isBus && m.out.bus)) return b0;
+    if (m.turn === "U" || (isBus && m.out.bus)) return [b0, b0];
     const out = m.out;
-    // only the exit's through lanes (its bays open further on)
     const usable = out.bus && !isBus ? out.thru - 1 : out.thru;
     const k = m.hi - m.lo + 1, j = Math.min(k - 1, Math.max(0, a - m.lo));
-    if (usable <= k) return b0;
+    if (usable <= k) return [b0, b0];
     const bLo = out.left + Math.floor((j * usable) / k), bHi = Math.max(bLo, out.left + Math.floor(((j + 1) * usable) / k) - 1);
     const want = this.laneTarget(v, outIdx);
     let target = b0;
     if (want) target = Math.min(Math.max(b0, want.lo), want.hi);
     target = Math.min(bHi, Math.max(bLo, target));
-    if (target === b0) return b0;
-    // only worth it if that lane isn't backed up to the junction; otherwise take the usual lane
-    const lp = out.lanes[target];
-    let rear = Infinity;
-    for (const u of this.index.get(lp.id) ?? []) rear = Math.min(rear, u.s - u.len);
-    return rear > 10 ? target : b0;
+    return [b0, target];
   }
   /** lanes the vehicle will need on route edge `idx` for the next junction it turns at */
   protected laneTarget(v: Vehicle, idx: number): { lo: number; hi: number } | null {

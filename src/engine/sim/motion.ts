@@ -34,7 +34,17 @@ export abstract class SimMotion extends SimJunctions {
         } else {
           // (the same choice as scanning the whole list: the smallest gap ahead, ties to the earlier
           // in the list; walking by position we can stop once nobody further on can be closer)
-          const sv = this.index.sorted(p.id);
+          const list = this.index.get(p.id);
+          if (list && list.length < 12) {
+            // (a short list: scanning it is cheaper than sorting it)
+            for (const u of list) {
+              if (u === v) continue;
+              if (first && !(u.s > v.s || (u.s === v.s && u.id > v.id))) continue;
+              const gg = acc + u.s - u.len;
+              if (gg < gap) { gap = gg; lv = u.v; leader = u; }
+            }
+          }
+          const sv = list && list.length >= 12 ? this.index.sorted(p.id) : undefined;
           if (sv) {
             const vs = sv.vs, ord = sv.ord;
             let k = 0;

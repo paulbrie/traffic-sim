@@ -16,8 +16,17 @@ export type Dest =
   | { kind: "edge"; edge: Edge; s: number }
   | { kind: "stop"; stop: CStop };
 
+/**
+ * What a vehicle crossing the junction at the end of route[ri] from `lane` will do, as far as it only
+ * depends on its route (see crossingFor): the movement, the entry lane, the usual exit lane `b0` and the
+ * one that suits its next turn `target`, with their crossings. `route` null = empty slot.
+ */
+export interface XMemo { route: Edge[] | null; ri: number; lane: number; m: Movement | undefined; a: number; b0: number; target: number; c0: readonly Piece[] | null; cT: readonly Piece[] | null }
+export const emptyXMemo = (): XMemo => ({ route: null, ri: 0, lane: 0, m: undefined, a: 0, b0: 0, target: 0, c0: null, cT: null });
 export interface Vehicle {
   id: number; kind: Kind;
+  /** two remembered crossings (this junction and the next), and which slot to reuse next */
+  xm: [XMemo, XMemo]; xmNext: number;
   len: number; width: number; a: number; b: number; bmax: number; T: number; s0: number; pref: number; politeness: number; tint: number;
   route: Edge[]; ri: number;
   piece: Piece; s: number; v: number; acc: number; lane: number;
@@ -156,10 +165,18 @@ export class PieceIndex {
     let sv = this.views[id];
     if (sv && sv.fresh) return sv;
     if (!sv) this.views[id] = sv = { vs: [], ord: [], maxLen: 0, fresh: false };
-    const idx = l.map((_, i) => i).sort((a, b) => l[a].s - l[b].s || a - b);
-    sv.vs.length = 0; sv.ord.length = 0; sv.maxLen = 0;
-    for (const i of idx) { sv.vs.push(l[i]); sv.ord.push(i); if (l[i].len > sv.maxLen) sv.maxLen = l[i].len; }
-    sv.fresh = true;
+    // insertion sort by (s, place in the list) into reused arrays: no allocation, and short lists are cheap
+    const vs = sv.vs, ord = sv.ord, n = l.length;
+    vs.length = n; ord.length = n;
+    let maxLen = 0;
+    for (let i = 0; i < n; i++) {
+      const u = l[i], s = u.s;
+      if (u.len > maxLen) maxLen = u.len;
+      let j = i - 1;
+      while (j >= 0 && vs[j].s > s) { vs[j + 1] = vs[j]; ord[j + 1] = ord[j]; j--; }
+      vs[j + 1] = u; ord[j + 1] = i;
+    }
+    sv.maxLen = maxLen; sv.fresh = true;
     return sv;
   }
 }
