@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Minus, Plus } from "lucide-react";
+import { createContext, useContext, useState } from "react";
+import { ChevronRight, Minus, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -74,11 +74,43 @@ export function Stepper({ value, min, max, onChange, label }: { value: number; m
   );
 }
 
+/** sections under this provider fold away under their title (the inspector), remembering which are open */
+export const CollapsibleSections = createContext(false);
+const OPEN_KEY = "trafficsim:open-sections";
+let openCache: Record<string, true> | null = null;
+function openSections(): Record<string, true> {
+  if (openCache) return openCache;
+  try { openCache = JSON.parse(localStorage.getItem(OPEN_KEY) ?? "{}") as Record<string, true>; } catch { openCache = {}; }
+  return openCache;
+}
+
 export function Section({ title, children, className }: { title?: string; children: React.ReactNode; className?: string }) {
+  const collapsible = useContext(CollapsibleSections) && !!title;
+  // collapsed unless it was left open last time (kept in this browser, by section title; read on every
+  // render, since the same component may show another section after the selection changes)
+  const [, redraw] = useState(0);
+  const open = !collapsible || (typeof window !== "undefined" && !!openSections()[title!]);
+  if (!collapsible) {
+    return (
+      <section className={cn("grid gap-3 border-b px-4 py-4 last:border-b-0", className)}>
+        {title && <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{title}</h3>}
+        {children}
+      </section>
+    );
+  }
+  const toggle = () => {
+    const next = !open, all = openSections();
+    if (next) all[title!] = true; else delete all[title!];
+    try { localStorage.setItem(OPEN_KEY, JSON.stringify(all)); } catch { /* private mode: just this session */ }
+    redraw(x => x + 1);
+  };
   return (
-    <section className={cn("grid gap-3 border-b px-4 py-4 last:border-b-0", className)}>
-      {title && <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{title}</h3>}
-      {children}
+    <section className={cn("grid border-b px-4 last:border-b-0", open ? "gap-3 pt-3 pb-4" : "py-1", className)}>
+      <button type="button" onClick={toggle} aria-expanded={open} className="-mx-1 flex items-center gap-1.5 rounded px-1 py-2 text-left hover:bg-muted/60">
+        <ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+        <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{title}</h3>
+      </button>
+      {open && children}
     </section>
   );
 }

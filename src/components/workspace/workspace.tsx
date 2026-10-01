@@ -33,6 +33,7 @@ import * as ops from "@/state/ops";
 import { cn } from "@/lib/utils";
 import { PlanCanvas } from "./plan-canvas";
 import { PerfPanel } from "./perf-panel";
+import { CollapsibleSections } from "./fields";
 import { Inspector } from "./inspector";
 import { TrafficPanel } from "./traffic-panel";
 import { LinesPanel } from "./lines-panel";
@@ -92,7 +93,7 @@ export function Workspace({ plan, user }: { plan: WorkspacePlan; user: MenuUser 
                 </TabsList>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
-                <TabsContent value="inspect"><Inspector /></TabsContent>
+                <TabsContent value="inspect"><CollapsibleSections.Provider value={true}><Inspector /></CollapsibleSections.Provider></TabsContent>
                 <TabsContent value="traffic"><TrafficPanel /></TabsContent>
                 <TabsContent value="lines"><LinesPanel /></TabsContent>
                 <TabsContent value="image"><UnderlayPanel /></TabsContent>
