@@ -8,13 +8,14 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { buildRoadGeo, heightFn, laneSign } from "@/render/geometry";
 import { buildBuildings, buildFurniture, buildMarkers, buildRoads, buildingShell, laneSignMaterials, type Furniture } from "@/render/scene3d";
 import { satelliteMosaic } from "@/render/satellite";
+import { HELI_LAYER, HELI_MODEL_CREDIT, loadHelicopter, type Helicopter } from "@/render/helicopter";
 import type { BuildingDef } from "@/engine/types";
 import { readPalette, speedColor, type Palette } from "@/render/palette";
 import { LEVEL_H, linkExtent } from "@/engine/compile";
 import { network$, select, ui, underlay$, type LayerId, type UiState } from "@/state/store";
 import { underlayImg$ } from "@/state/underlay-image";
 import { simController } from "@/state/sim-controller";
-import { viewCmd$ } from "@/state/commands";
+import { planViewKey, viewCmd$, viewport } from "@/state/commands";
 import * as ops from "@/state/ops";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Kbd } from "@/components/ui/kbd";
@@ -28,11 +29,41 @@ type CamMode = "orbit" | "heli" | "track";
 const HELI_MIN = 4, HELI_MAX = 1500;
 /** the helicopter's top speed over the ground: 200 km/h */
 const HELI_VMAX = 200 / 3.6;
+/** free flight takes off at this height; tracking never goes lower */
+const HELI_START = 100, TRACK_MIN = 100;
+
+/**
+ * Switching between the plan view and 3D keeps the place: leaving 3D writes the ground point in the middle
+ * of the view (and a matching zoom) as the plan view's centre, and remembers the 3D camera. Coming back with
+ * the plan view not moved since brings that camera back exactly (mode included); otherwise 3D opens over
+ * the plan view's centre at a matching distance, looking the way it last did.
+ */
+type Pose = { pos: number[]; target: number[]; mode: CamMode; yaw: number; pitch: number; chase: { angle: number; dist: number; height: number } };
+const left3d = new Map<string, { pose: Pose; wrote: { cx: number; cy: number; wm: number } }>();
+type Arrival = { exact: Pose } | { cx: number; cy: number; wm: number; dir: number[] | null } | null;
+function arrival(planId: string): Arrival {
+  let v: { cx: number; cy: number; wm: number } | null = null;
+  if (viewport.planId === planId) v = { cx: viewport.cx, cy: viewport.cy, wm: viewport.wm };
+  else {
+    try {
+      const s = JSON.parse(localStorage.getItem(planViewKey(planId)) ?? "null") as { cx: number; cy: number; scale: number } | null;
+      // (metres across: the plan view's width isn't known here, take the window's)
+      if (s && [s.cx, s.cy, s.scale].every(Number.isFinite) && s.scale > 0) v = { cx: s.cx, cy: s.cy, wm: window.innerWidth / s.scale };
+    } catch { /* no storage */ }
+  }
+  const was = left3d.get(planId);
+  if (was && (!v || (Math.hypot(v.cx - was.wrote.cx, v.cy - was.wrote.cy) < 1 && Math.abs(v.wm / was.wrote.wm - 1) < 0.03))) return { exact: was.pose };
+  if (!v) return null;
+  const p = was?.pose, d = p ? [p.pos[0] - p.target[0], p.pos[1] - p.target[1], p.pos[2] - p.target[2]] : null, n = d ? Math.hypot(d[0], d[1], d[2]) : 0;
+  return { ...v, dir: d && n > 1 && p!.mode === "orbit" ? d.map(c => c / n) : null };
+}
 
 export function View3D() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const hudRef = useRef<HTMLSpanElement>(null);
-  const [mode, setMode] = useState<CamMode>("orbit");
+  const [arrive] = useState(() => arrival(ui.getValue().planId));
+  const arriveRef = useRef(arrive);
+  const [mode, setMode] = useState<CamMode>(arrive && "exact" in arrive ? arrive.exact.mode : "orbit");
   const [note, setNote] = useState("");
   const [selection] = useDeepSubject(ui, "selection");
   const modeApi = useRef<(m: CamMode) => void>(null);
@@ -207,6 +238,48 @@ export function View3D() {
       camera.position.set(cx - span * 0.35, span * 0.75, cz + span * 0.85);
       controls.update();
     }
+    /** where the view opens: see `arrival` */
+    function place() {
+      const a = arriveRef.current;
+      arriveRef.current = null;
+      if (!a) return home();
+      if ("exact" in a) {
+        const p = a.exact;
+        camera.position.fromArray(p.pos); controls.target.fromArray(p.target);
+        camMode = p.mode; yaw = p.yaw; pitch = p.pitch; Object.assign(chase, p.chase);
+        controls.enabled = camMode === "orbit";
+        if (camMode === "orbit") controls.update(); else { camera.rotation.order = "YXZ"; camera.rotation.set(pitch, yaw, 0); }
+        renderer.domElement.style.cursor = camMode === "orbit" ? "" : "grab";
+        return;
+      }
+      // as far away as shows the plan view's width; by default from the south, looking north as the plan does
+      const half = Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
+      const d = Math.max(20, Math.min(8000, a.wm / 2 / Math.tan(half))), dir = a.dir ?? [0, Math.sin(0.9), Math.cos(0.9)];
+      controls.target.set(a.cx, 0, a.cy);
+      camera.position.set(a.cx + dir[0] * d, Math.max(5, dir[1] * d), a.cy + dir[2] * d);
+      controls.update();
+    }
+    /** on leaving 3D: the ground in the middle of the view becomes the plan view's centre */
+    function leave() {
+      const planId = u.planId;
+      if (!planId || homed !== planId) return;
+      let gx: number, gz: number, dist: number;
+      if (camMode === "orbit") { gx = controls.target.x; gz = controls.target.z; dist = camera.position.distanceTo(controls.target); }
+      else {
+        camera.getWorldDirection(dir);
+        if (dir.y < -0.02) { const t = Math.min(5000, camera.position.y / -dir.y); gx = camera.position.x + dir.x * t; gz = camera.position.z + dir.z * t; dist = t; }
+        else { gx = camera.position.x; gz = camera.position.z; dist = Math.max(100, camera.position.y); }
+      }
+      const half = Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
+      const wm = Math.max(20, 2 * dist * Math.tan(half)), w = Math.max(1, wrap.getBoundingClientRect().width);
+      try { localStorage.setItem(planViewKey(planId), JSON.stringify({ cx: Math.round(gx * 100) / 100, cy: Math.round(gz * 100) / 100, scale: Math.round((w / wm) * 10000) / 10000 })); } catch { /* not kept */ }
+      // what the plan view will show (its width is this view's)
+      viewport.cx = Math.round(gx * 100) / 100; viewport.cy = Math.round(gz * 100) / 100; viewport.wm = wm; viewport.planId = planId;
+      left3d.set(planId, {
+        pose: { pos: camera.position.toArray(), target: controls.target.toArray(), mode: camMode, yaw, pitch, chase: { angle: chase.angle, dist: chase.dist, height: chase.height } },
+        wrote: { cx: viewport.cx, cy: viewport.cy, wm },
+      });
+    }
 
     const resize = () => {
       const r = wrap.getBoundingClientRect();
@@ -253,8 +326,26 @@ export function View3D() {
     // E / Page Up climb, A / Page Down descend, the wheel too; Shift goes faster.
     // Tracking keeps the helicopter behind the selected vehicle; drag to circle it, arrows for distance and side.
     let camMode: CamMode = "orbit", yaw = 0, pitch = -0.35, hudText = "";
+    // the helicopter itself, loaded the first time it is flown with the cockpit on. Its cabin is drawn in a
+    // second pass, with a near plane close enough for the panel in front of the pilot's eye (the camera).
+    let heli: Helicopter | null = null, heliLoading = false, disposed = false;
+    const cabinCam = new THREE.PerspectiveCamera(60, 1, 0.03, 80);
+    cabinCam.layers.set(HELI_LAYER);
+    sun.shadow.camera.layers.enable(HELI_LAYER); // its shadow on the ground
+    /** the airframe: heading (as a camera yaw), nose up, roll (right side up) */
+    const air = { yaw: 0, pitch: 0, roll: 0 }, eyeOff = new THREE.Vector3();
+    const withCabin = () => camMode !== "orbit" && cockpitOn.current;
+    function ensureHeli() {
+      if (heli || heliLoading) return;
+      heliLoading = true;
+      loadHelicopter().then(h => {
+        if (disposed) { h.dispose(); return; }
+        heli = h; h.body.visible = false; scene.add(h.body);
+      }).catch(() => setNote("The helicopter couldn't be loaded: flying without it."));
+    }
+    const turnTo = (a: number, b: number, k: number) => { const d = Math.atan2(Math.sin(b - a), Math.cos(b - a)); return a + d * k; };
     const vel = new THREE.Vector3(), held = new Set<string>(), dir = new THREE.Vector3();
-    const chase = { angle: 0, dist: 45, height: 22, heading: NaN, id: "" };
+    const chase = { angle: 0, dist: 90, height: TRACK_MIN, heading: NaN, id: "" };
     // the simulation moves vehicles in 0.1 s steps (a few times a second on screen), so the tracked one is followed
     // through a smoothed point: it glides at the vehicle's speed and eases back onto each new position.
     // The tracked vehicle is drawn there too (ox, oz: smoothed minus actual), so it sits still in the windscreen.
@@ -286,8 +377,17 @@ export function View3D() {
         controls.enabled = true; controls.update();
       } else {
         controls.enabled = false;
-        if (was === "orbit") fromCamera();
+        if (was === "orbit") {
+          // take off 300 m short of what the orbit camera looked at, 100 m up, facing it
+          // (far enough to look at it over the instrument panel)
+          camera.getWorldDirection(dir);
+          const l = Math.hypot(dir.x, dir.z), hx = l > 1e-3 ? dir.x / l : 0, hz = l > 1e-3 ? dir.z / l : -1, t = controls.target;
+          camera.position.set(t.x - hx * 300, HELI_START, t.z - hz * 300);
+          yaw = Math.atan2(-hx, -hz); pitch = -Math.atan2(HELI_START, 300);
+          camera.rotation.order = "YXZ"; camera.rotation.set(pitch, yaw, 0);
+        }
         if (m === "track") { chase.heading = NaN; chase.id = ""; }
+        air.yaw = yaw; air.pitch = 0; air.roll = 0;
         follow.ok = false;
       }
       renderer.domElement.style.cursor = m === "orbit" ? "" : "grab";
@@ -319,7 +419,7 @@ export function View3D() {
       const dx = e.clientX - look.x, dy = e.clientY - look.y;
       look.x = e.clientX; look.y = e.clientY;
       if (camMode === "heli") { yaw -= dx * 0.004; pitch = Math.max(-1.5, Math.min(0.5, pitch - dy * 0.004)); }
-      else { chase.angle -= dx * 0.006; chase.height = Math.max(HELI_MIN, Math.min(400, chase.height + dy * 0.25)); }
+      else { chase.angle -= dx * 0.006; chase.height = Math.max(TRACK_MIN, Math.min(400, chase.height + dy * 0.25)); }
     };
     const onLookUp = (e: PointerEvent) => {
       if (!look || e.pointerId !== look.id) return;
@@ -333,7 +433,7 @@ export function View3D() {
       // like zooming: scroll up comes down closer, scroll down climbs
       const k = Math.exp(Math.max(-1, Math.min(1, e.deltaY * 0.0015)));
       if (camMode === "heli") camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, camera.position.y * k));
-      else { chase.dist = Math.max(8, Math.min(600, chase.dist * k)); chase.height = Math.max(HELI_MIN, Math.min(400, chase.height * k)); }
+      else { chase.dist = Math.max(8, Math.min(600, chase.dist * k)); chase.height = Math.max(TRACK_MIN, Math.min(400, chase.height * k)); }
     };
     renderer.domElement.addEventListener("pointerdown", onLookDown);
     renderer.domElement.addEventListener("pointermove", onLookMove);
@@ -356,9 +456,14 @@ export function View3D() {
         vel.lerp(want, 1 - Math.exp(-dt * 2.5));
         camera.position.addScaledVector(vel, dt);
         camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, camera.position.y));
-        camera.rotation.order = "YXZ"; camera.rotation.set(pitch, yaw, -0.05 * side * Math.min(1, vel.length() / 20));
+        // the airframe faces where the pilot looks, dips its nose to speed up and leans into sideways flight
+        const ease = 1 - Math.exp(-dt * 2), vf = -vel.x * sy - vel.z * cy, vside = vel.x * cy - vel.z * sy;
+        air.yaw = yaw;
+        air.pitch += (-0.13 * Math.max(-1, Math.min(1, vf / HELI_VMAX)) - air.pitch) * ease;
+        air.roll += (-0.2 * Math.max(-1, Math.min(1, vside / HELI_VMAX)) - air.roll) * ease;
+        camera.rotation.order = "YXZ"; camera.rotation.set(pitch + air.pitch, yaw, air.roll);
         speed = Math.hypot(vel.x, vel.z);
-        flight.roll = -camera.rotation.z; flight.range = NaN;
+        flight.roll = -air.roll; flight.range = NaN;
       } else if (camMode === "track") {
         const sel = u.selection, v = sel?.kind === "vehicle" && sim ? sim.vehicles.find(x => String(x.id) === sel.id && !x.dead) : undefined;
         if (!v) {
@@ -370,7 +475,7 @@ export function View3D() {
         if (chase.id !== sel!.id) { chase.id = sel!.id; chase.heading = NaN; follow.ok = false; setNote(""); }
         chase.angle += side * dt * 1.2 * fast;
         chase.dist = Math.max(8, Math.min(600, chase.dist * Math.exp(-fwd * dt * fast)));
-        chase.height = Math.max(HELI_MIN, Math.min(400, chase.height + climb * dt * Math.max(6, chase.height * 0.8) * fast));
+        chase.height = Math.max(TRACK_MIN, Math.min(400, chase.height + climb * dt * Math.max(6, chase.height * 0.8) * fast));
         const q = sim!.pose(v), rx = (q.fx + q.rx) / 2, rz = (q.fy + q.ry) / 2;
         const h = Math.atan2(q.fy - q.ry, q.fx - q.rx);
         // metres per real second along the vehicle (0 while paused)
@@ -408,14 +513,19 @@ export function View3D() {
         }
         lastSwing = swing;
         camera.rotateZ(-bank);
+        // police crews watch from the side: the nose stays some 75° left of the vehicle, seen through the middle
+        // of the pilot's door window (the instrument panel would hide it ahead and below)
+        const lookYaw = Math.atan2(-(lookAt.x - camera.position.x), -(lookAt.z - camera.position.z));
+        air.yaw = turnTo(air.yaw, lookYaw + 1.31, 1 - Math.exp(-dt * 1.5));
+        air.pitch += (-0.04 - air.pitch) * (1 - Math.exp(-dt * 2)); air.roll = -bank;
         flight.roll = bank; flight.range = camera.position.distanceTo(lookAt);
       }
       if (camMode !== "track") { lastSwing = NaN; bank = 0; }
       if (cockpitOn.current) {
         // the airframe's vibration
         const t = now / 1000;
-        camera.rotateX(0.0011 * Math.sin(t * 23) + 0.0006 * Math.sin(t * 61));
-        camera.rotateZ(0.0009 * Math.sin(t * 17 + 1));
+        camera.rotateX(0.00025 * Math.sin(t * 23) + 0.00012 * Math.sin(t * 61));
+        camera.rotateZ(0.0002 * Math.sin(t * 17 + 1));
       }
       const text = `${Math.round(camera.position.y)} m up · ${Math.round(speed * 3.6)} km/h`;
       if (text !== hudText && hudRef.current) { hudText = text; hudRef.current.textContent = text; }
@@ -441,10 +551,14 @@ export function View3D() {
       ray.setFromCamera(ndc, camera);
       if (!ray.ray.intersectPlane(plane, hit)) return;
       const p = { x: hit.x, y: hit.z }, net = network$.getValue();
-      const dist = camera.position.distanceTo(hit), tol = Math.max(3, dist * 0.012);
+      const dist = camera.position.distanceTo(hit), flying = camMode !== "orbit";
+      // (from the helicopter, high up, vehicles are small: a more forgiving click)
+      const tol = Math.max(3, dist * (flying ? 0.025 : 0.012));
       const sim = simController.sim;
       const v = sim?.vehicleNear(p.x, p.y, tol);
       if (v) return select({ kind: "vehicle", id: String(v.id) });
+      // flying, only vehicles can be picked; a miss keeps the selection (and what is being tracked)
+      if (flying) return;
       const node = net.nodes.find(n => Math.hypot(n.x - p.x, n.y - p.y) < tol * 1.5);
       if (node) return select({ kind: "node", id: node.id });
       if (houses?.mesh.visible) {
@@ -473,10 +587,23 @@ export function View3D() {
       if (u.view === "3d") {
         simController.advance();
         if (builtVersion !== simController.version || builtLayers !== u.layers.join("+")) { rebuild(); hlFor = ""; }
-        if (homed !== u.planId) { homed = u.planId; home(); }
+        if (homed !== u.planId) { homed = u.planId; place(); }
         const sim = simController.sim, vsim = shown("vehicles") ? sim : null;
+        // a wider view from the cabin, as a pilot's eyes take in
+        const fov = withCabin() ? 62 : 40;
+        if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
+        if (withCabin()) ensureHeli();
         // the helicopter moves first: drawing the tracked vehicle needs its smoothed position
         if (camMode !== "orbit") fly(dt, now, sim);
+        if (heli) {
+          heli.body.visible = withCabin();
+          if (heli.body.visible) {
+            // the airframe round the pilot's eye
+            heli.body.rotation.order = "YXZ"; heli.body.rotation.set(air.pitch, air.yaw, air.roll);
+            heli.body.position.copy(camera.position).sub(eyeOff.copy(heli.eye).applyEuler(heli.body.rotation));
+            heli.spin(dt);
+          }
+        }
         // vehicles
         let n = 0, ng = 0;
         if (vsim) for (const v of vsim.vehicles) {
@@ -576,6 +703,17 @@ export function View3D() {
         const heading = Math.round((Math.atan2(dir.x, -dir.z) * 180) / Math.PI * 10) / 10;
         if (heading !== lastHeading) { lastHeading = heading; compassEl()?.style.setProperty("--heading", `${-heading}deg`); }
         renderer.render(scene, camera);
+        if (heli?.body.visible) {
+          // the cabin over the view, its own depth (and no sky: the view is already there)
+          cabinCam.position.copy(camera.position); cabinCam.quaternion.copy(camera.quaternion);
+          if (cabinCam.fov !== camera.fov || cabinCam.aspect !== camera.aspect) { cabinCam.fov = camera.fov; cabinCam.aspect = camera.aspect; cabinCam.updateProjectionMatrix(); }
+          const bg = scene.background, fog = scene.fog;
+          scene.background = null; scene.fog = null;
+          renderer.autoClear = false; renderer.shadowMap.autoUpdate = false;
+          renderer.clearDepth(); renderer.render(scene, cabinCam);
+          renderer.autoClear = true; renderer.shadowMap.autoUpdate = true;
+          scene.background = bg; scene.fog = fog;
+        }
       }
       raf = requestAnimationFrame(frame);
     };
@@ -597,6 +735,9 @@ export function View3D() {
       window.removeEventListener("keyup", onKey, true);
       window.removeEventListener("blur", onBlur);
       modeApi.current = null;
+      leave();
+      disposed = true;
+      if (heli) { scene.remove(heli.body); heli.dispose(); }
       controls.dispose();
       if (houses) { houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); }
       ulMat.map?.dispose(); ulMat.dispose(); ulMesh.geometry.dispose();
@@ -650,6 +791,12 @@ export function View3D() {
           </div>
         )}
         {note && <div className="rounded-md bg-background/95 px-2 py-1 text-[11px] shadow-sm">{note}</div>}
+        {mode !== "orbit" && cockpit && (
+          // the model's licence asks for its author to be named
+          <a href={HELI_MODEL_CREDIT.url} target="_blank" rel="noreferrer" className="rounded bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground">
+            {HELI_MODEL_CREDIT.title} model by {HELI_MODEL_CREDIT.author} · {HELI_MODEL_CREDIT.license}
+          </a>
+        )}
       </div>
     </>
   );

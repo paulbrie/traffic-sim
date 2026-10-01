@@ -13,7 +13,7 @@ import { commit, endGesture, highlightedLayers, network$, select, selectMany, se
 import { simController } from "@/state/sim-controller";
 import { noteDraw } from "@/state/perf";
 import { changeConnection, connectLanes, lanesArrivingNear, lanesLeavingNear, setConnectorShape } from "@/state/connections";
-import { viewCmd$, viewport } from "@/state/commands";
+import { viewCmd$, viewport, planViewKey } from "@/state/commands";
 import { underlayImg$ } from "@/state/underlay-image";
 import { worldToImage, type Underlay } from "@/lib/underlay";
 import { unproject } from "@/lib/osm/area";
@@ -121,7 +121,7 @@ export function PlanCanvas() {
       markDirty();
     };
     // the view of each plan (centre and zoom) is kept in this browser, and comes back when it is opened again
-    const viewKey = () => `trafficsim:view:${u.planId}`;
+    const viewKey = () => planViewKey(u.planId);
     function restoreView(): boolean {
       try {
         const v = JSON.parse(localStorage.getItem(viewKey()) ?? "null") as { cx: number; cy: number; scale: number } | null;
@@ -901,7 +901,7 @@ export function PlanCanvas() {
           alsoSelected: u.selection?.kind !== "link" ? [] : u.multi.length ? u.multi : u.tool === "segment" && u.segScope === "road" ? ops.chainLinks(net, u.selection.id).map(c => c.id).slice(1) : [],
         });
         noteDraw(performance.now() - drawT0);
-        viewport.cx = cam.cx; viewport.cy = cam.cy; viewport.wm = cam.w / cam.scale; viewport.hm = cam.h / cam.scale;
+        viewport.cx = cam.cx; viewport.cy = cam.cy; viewport.wm = cam.w / cam.scale; viewport.hm = cam.h / cam.scale; viewport.planId = u.planId;
         if (fitted === u.planId) rememberView();
         scaleBar(cam);
         dirty = false;
