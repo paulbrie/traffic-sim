@@ -6,7 +6,7 @@ import { batch } from "subjecto";
 import { buildRoadGeo, type RoadGeo } from "@/render/geometry";
 import { buildPaths, connectorsOf, drawScene, toScreen, toWorld, underlayHandles, type Camera, type Overlay, type PathCache, type UnderlayHandle } from "@/render/draw2d";
 import { readPalette, type Palette } from "@/render/palette";
-import { connShapeKey, connectorHandles, connectorId, linkExtent, LW, type CNode } from "@/engine/compile";
+import { connShapeKey, connectorHandles, connectorId, linkExtent, LW, type CNode, type Edge, type LanePiece } from "@/engine/compile";
 import { pointInPoly } from "@/engine/buildings";
 import type { Network, Vec } from "@/engine/types";
 import { commit, endGesture, highlightedLayers, network$, select, toggleRoad, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
@@ -174,6 +174,15 @@ export function PlanCanvas() {
     /** lanes are wide enough on screen to aim at one end (about 12 px a lane) */
     const lanesAimable = () => cam.scale * 3.2 >= 12;
     /** the end of a lane arriving at a junction under the pointer ("linkId|dir|lane"), zoomed in enough */
+    /**
+     * Where a lane's end is grabbed to start a connector: its end, or a little way back along it where the
+     * end would sit on the road's own end point (a one-lane road ending without a junction area), so the two
+     * handles don't cover each other.
+     */
+    function laneEndGrip(e: Edge, lp: LanePiece): Vec {
+      const p = lp.poly.at(lp.len), q = toScreen(cam, p.x, p.y), n = toScreen(cam, e.to.pos.x, e.to.pos.y);
+      return Math.hypot(q.x - n.x, q.y - n.y) < 14 ? lp.poly.at(Math.max(0, lp.len - pxToM(18))) : p;
+    }
     function hitLaneEnd(sx: number, sy: number): string | null {
       if (!lanesAimable() || !(u.layers.includes("lanes") || u.layers.includes("connectors"))) return null;
       let best: string | null = null, bd = 11;
@@ -181,7 +190,7 @@ export function PlanCanvas() {
         // (a road's loose end too: an entry point or dead end can be linked to a road starting nearby)
         if (e.to.ringR > 0) continue;
         for (const lp of e.lanes) {
-          const p = lp.poly.at(lp.len), q = toScreen(cam, p.x, p.y), d = Math.hypot(q.x - sx, q.y - sy);
+          const p = laneEndGrip(e, lp), q = toScreen(cam, p.x, p.y), d = Math.hypot(q.x - sx, q.y - sy);
           if (d < bd) { bd = d; best = `${e.link.id}|${e.dir}|${lp.lane}`; }
         }
       }
@@ -508,12 +517,12 @@ export function PlanCanvas() {
       if (ce) { drag = { mode: "connEnd", id: ce.id, which: ce.which }; return; }
       const ch = hitConnHandle(sx, sy);
       if (ch) { drag = { mode: "conn", id: ch.id, which: ch.which }; return; }
+      // select tool: the curve handles of the selected road first (they win over a lane's end under them)
+      const h = u.layers.includes("roads") ? hitHandle(sx, sy) : null;
+      if (h && u.selection?.kind === "link") { drag = { mode: "handle", linkId: u.selection.id, handle: h, moved: false }; return; }
       // the end of a lane (zoomed in): a connector from it, dragged to a lane, or click the lanes after
       const le = tool === "select" ? hitLaneEnd(sx, sy) : null;
       if (le) { startConnect(le); drag = { mode: "connNew", from: le, sx, sy, moved: false }; return; }
-      // select tool: the curve handles of the selected road, then whatever the layers that are on pick
-      const h = u.layers.includes("roads") ? hitHandle(sx, sy) : null;
-      if (h && u.selection?.kind === "link") { drag = { mode: "handle", linkId: u.selection.id, handle: h, moved: false }; return; }
       const pick = pickInLayers(u.layers, sx, sy, w);
       if (pick) {
         // Shift+click: add the road to the selected roads (or take it out)
@@ -795,7 +804,7 @@ export function PlanCanvas() {
           satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, highlight: highlightedLayers(u.layers), maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
           focusNodes: focusNodes(),
           // (the junction being edited, zoomed in: its lanes' ends, where a connector can be started)
-          laneEnds: lanesAimable() ? focusNodes().flatMap(i => simController.compiled.nodes[i].arms.flatMap(a => a.inEdge?.lanes.map(lp => lp.poly.at(lp.len)) ?? [])) : [],
+          laneEnds: lanesAimable() ? focusNodes().flatMap(i => simController.compiled.nodes[i].arms.flatMap(a => a.inEdge?.lanes.map(lp => laneEndGrip(a.inEdge!, lp)) ?? [])) : [],
           connectPick: (() => {
             if (drag?.mode === "connEnd") {
               const t = connEndTargets(drag.id, drag.which);
