@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { connectorId, type CNode, type ConnectorView, type Edge, type LanePiece } from "@/engine/compile";
+import { sumCounters } from "@/engine/sim";
 import { junctionRefs, isJunction } from "@/engine/refs";
 import { polyArea, polyCentroid, tripWeight, USE_LABEL } from "@/engine/buildings";
 import { BUILDING_USES, LEVELS, MAX_LANES, type BuildingDef, type BuildingUse, type Control, type LinkDef, type Network, type NodeDef, type StopDef, type ZoneDef } from "@/engine/types";
@@ -81,6 +82,10 @@ export function Dataview() {
             { key: `h${d}`, label: d === 1 ? "Per hour →" : "Per hour ←", width: 90, align: "right" as const, value: (l: LinkDef) => { const r = sim?.counter(l.id, d); return r ? Math.round(r.perHour) : null; } },
             { key: `v${d}`, label: d === 1 ? "km/h →" : "km/h ←", width: 70, align: "right" as const, value: (l: LinkDef) => { const r = sim?.counter(l.id, d); return r && r.total ? Math.round(r.avgSpeed) : null; } },
           ]),
+          // (both directions together)
+          { key: "nb", label: "Vehicles ⇅", width: 90, align: "right" as const, value: (l: LinkDef) => sumCounters([sim?.counter(l.id, 1), sim?.counter(l.id, -1)])?.total ?? null },
+          { key: "hb", label: "Per hour ⇅", width: 90, align: "right" as const, value: (l: LinkDef) => { const r = sumCounters([sim?.counter(l.id, 1), sim?.counter(l.id, -1)]); return r ? Math.round(r.perHour) : null; } },
+          { key: "vb", label: "km/h ⇅", width: 70, align: "right" as const, value: (l: LinkDef) => { const r = sumCounters([sim?.counter(l.id, 1), sim?.counter(l.id, -1)]); return r && r.total ? Math.round(r.avgSpeed) : null; } },
         ];
         return { rows, cols, key: l => (l as LinkDef).id, sel: l => ({ kind: "link", id: (l as LinkDef).id }), at: l => { const e = c.edgeByKey.get(`${(l as LinkDef).id}:1`) ?? c.edgeByKey.get(`${(l as LinkDef).id}:-1`); return e ? e.center.at(e.center.len / 2) : null; } } as Def<unknown>;
       }

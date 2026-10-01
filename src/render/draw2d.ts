@@ -830,13 +830,19 @@ function drawCounters(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, 
     if (q.x < -120 || q.y < -40 || q.x > cam.w + 120 || q.y > cam.h + 40) continue;
     let text = "⇅ counter";
     if (sim) {
+      // each direction (by where it heads) and both together
       const f = sim.counter(l.id, 1), b = sim.counter(l.id, -1);
       const total = (f?.total ?? 0) + (b?.total ?? 0), rate = (f?.perHour ?? 0) + (b?.perHour ?? 0);
-      text = `⇅ ${total} · ${Math.round(rate)}/h`;
+      const A = compiled.nodeById.get(l.from)?.pos, B = compiled.nodeById.get(l.to)?.pos;
+      const head = (dx: number, dy: number) => ["E", "SE", "S", "SW", "W", "NW", "N", "NE"][((Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) % 8) + 8) % 8];
+      text = l.lanesF > 0 && l.lanesB > 0 && A && B
+        ? `${head(B.x - A.x, B.y - A.y)} ${f?.total ?? 0} · ${head(A.x - B.x, A.y - B.y)} ${b?.total ?? 0} · Σ ${total} · ${Math.round(rate)}/h`
+        : `⇅ ${total} · ${Math.round(rate)}/h`;
     }
     ctx.fillStyle = pal.primary; ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = pal.bg; ctx.lineWidth = 1.5; ctx.stroke();
-    const w = ctx.measureText(text).width + 10, x = q.x + 8, y = q.y - 14;
+    // (below the road's middle: a selected road's id tag sits above it)
+    const w = ctx.measureText(text).width + 10, x = q.x + 8, y = q.y + 14;
     ctx.fillStyle = pal.primary; roundRect(ctx, x, y - 9, w, 18, 4); ctx.fill();
     ctx.fillStyle = "#fff"; ctx.fillText(text, x + 5, y + 0.5);
   }

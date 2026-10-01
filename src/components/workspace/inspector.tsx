@@ -28,6 +28,7 @@ import { LaneArrowsEditor, SignPicker } from "./lane-arrows";
 import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
 import { junctionRefs } from "@/engine/refs";
 import { arrowLetters } from "@/engine/compile";
+import { sumCounters } from "@/engine/sim";
 import { JunctionEventLog, RoadEventLog, VehicleEventLog } from "./event-log";
 import { LaneConnectionsSection } from "./lane-connections";
 import { JunctionShapeSection } from "./junction-shape";
@@ -745,21 +746,26 @@ function CounterSection({ link, towards, onChange }: { link: LinkDef; towards: [
         <table className="w-full text-sm">
           <thead><tr className="text-xs text-muted-foreground"><th className="pb-1 text-left font-normal">Towards</th><th className="pb-1 text-right font-normal">Vehicles</th><th className="pb-1 text-right font-normal">Per hour</th><th className="pb-1 text-right font-normal">km/h</th></tr></thead>
           <tbody>
-            {dirs.map(([d, , name]) => {
-              const c = sim.counter(link.id, d);
-              return (
-                <tr key={d} className="border-t" title={c ? `${c.cars} cars, ${c.trucks} trucks, ${c.buses} buses` : undefined}>
-                  <td className="py-1">{name}</td>
-                  <td className="py-1 text-right font-mono tabular">{c?.total ?? 0}</td>
-                  <td className="py-1 text-right font-mono tabular">{c ? Math.round(c.perHour) : 0}</td>
-                  <td className="py-1 text-right font-mono tabular">{c && c.total ? c.avgSpeed.toFixed(0) : "–"}</td>
-                </tr>
-              );
-            })}
+            {[
+              ...dirs.map(([d, , name]) => ({ key: String(d), name, c: sim.counter(link.id, d), sum: false })),
+              // (a two-way road: both directions together)
+              ...(dirs.length > 1 ? [{ key: "both", name: "Both ways", c: sumCounters(dirs.map(([d]) => sim.counter(link.id, d))), sum: true }] : []),
+            ].map(({ key, name, c, sum }) => (
+              <tr key={key} className={sum ? "border-t-2 font-medium" : "border-t"} title={c ? `${c.cars} cars, ${c.trucks} trucks, ${c.buses} buses` : undefined}>
+                <td className="py-1">{name}</td>
+                <td className="py-1 text-right font-mono tabular">{c?.total ?? 0}</td>
+                <td className="py-1 text-right font-mono tabular">{c ? Math.round(c.perHour) : 0}</td>
+                <td className="py-1 text-right font-mono tabular">{c && c.total ? c.avgSpeed.toFixed(0) : "–"}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       ) : <p className="text-xs text-muted-foreground">Counts the vehicles passing the middle of the road, each direction apart. Run traffic to see the readings.</p>)}
-      {on && sim && <p className="text-[11px] text-muted-foreground">Per hour: the rate over the last 5 minutes. Hover a row for cars, trucks and buses.</p>}
+      {on && sim && (() => {
+        const all = sumCounters(dirs.map(([d]) => sim.counter(link.id, d)));
+        return all && all.total ? <p className="text-xs tabular">{all.cars} cars · {all.trucks} trucks · {all.buses} buses{dirs.length > 1 ? " (both ways)" : ""}</p> : null;
+      })()}
+      {on && sim && <p className="text-[11px] text-muted-foreground">Per hour: the rate over the last 5 minutes. Hover a row for its cars, trucks and buses.</p>}
     </Section>
   );
 }

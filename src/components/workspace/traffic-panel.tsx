@@ -12,6 +12,7 @@ import { network$, select, setSettings, settings$, stats$, ui } from "@/state/st
 import { simController } from "@/state/sim-controller";
 import { sendView } from "@/state/commands";
 import { junctionRefs } from "@/engine/refs";
+import { sumCounters } from "@/engine/sim";
 import { EventLogPanel } from "./event-log";
 import { FlowsTable } from "./flows";
 import { RouteTracer } from "./route-tracer";
@@ -157,7 +158,7 @@ function Spark({ data }: { data: number[] }) {
 }
 
 /** every junction with its reference and live numbers; click a row to jump to it */
-/** every road with a traffic counter, each direction on its own row */
+/** every road with a traffic counter, each direction on its own row (and both together on a two-way road) */
 function CountersTable() {
   const [net] = useSubject(network$);
   useSubject(stats$); // live readings (~4×/s)
@@ -166,9 +167,10 @@ function CountersTable() {
   const rows = net.links.filter(l => l.counter).flatMap(l => {
     const A = byId.get(l.from), B = byId.get(l.to);
     if (!A || !B) return [];
-    return ([[1, l.lanesF, compass(B.x - A.x, B.y - A.y).name], [-1, l.lanesB, compass(A.x - B.x, A.y - B.y).name]] as const)
+    const dirs = ([[1, l.lanesF, compass(B.x - A.x, B.y - A.y).name], [-1, l.lanesB, compass(A.x - B.x, A.y - B.y).name]] as const)
       .filter(([, lanes]) => lanes > 0)
-      .map(([d, , towards]) => ({ l, d, towards, c: sim?.counter(l.id, d) ?? null }));
+      .map(([d, , towards]) => ({ l, d: String(d), towards: `→ ${towards}`, c: sim?.counter(l.id, d) ?? null, sum: false }));
+    return dirs.length > 1 ? [...dirs, { l, d: "both", towards: "both ways", c: sumCounters(dirs.map(x => x.c)), sum: true }] : dirs;
   });
   if (!rows.length) return null;
   return (
@@ -176,10 +178,10 @@ function CountersTable() {
       <table className="w-full text-sm">
         <thead><tr className="text-xs text-muted-foreground"><th className="pb-1 text-left font-normal">Road</th><th className="pb-1 text-right font-normal">Vehicles</th><th className="pb-1 text-right font-normal">/h</th><th className="pb-1 text-right font-normal">km/h</th></tr></thead>
         <tbody>
-          {rows.map(({ l, d, towards, c }) => (
-            <tr key={`${l.id}:${d}`} className="cursor-pointer border-t hover:bg-accent" title={c ? `${c.cars} cars, ${c.trucks} trucks, ${c.buses} buses` : undefined}
+          {rows.map(({ l, d, towards, c, sum }) => (
+            <tr key={`${l.id}:${d}`} className={`cursor-pointer hover:bg-accent ${sum ? "font-medium" : "border-t"}`} title={c ? `${c.cars} cars, ${c.trucks} trucks, ${c.buses} buses` : undefined}
               onClick={() => { select({ kind: "link", id: l.id }); ui.getValue().panel = "inspect"; }}>
-              <td className="max-w-40 truncate py-1">{l.name || "Unnamed road"} <span className="text-muted-foreground">→ {towards}</span></td>
+              <td className="max-w-40 truncate py-1">{sum ? <span className="pl-3 text-muted-foreground">Σ {towards}</span> : <>{l.name || "Unnamed road"} <span className="text-muted-foreground">{towards}</span></>}</td>
               <td className="py-1 text-right font-mono tabular">{c?.total ?? 0}</td>
               <td className="py-1 text-right font-mono tabular">{c ? Math.round(c.perHour) : 0}</td>
               <td className="py-1 text-right font-mono tabular">{c && c.total ? c.avgSpeed.toFixed(0) : "–"}</td>

@@ -23,6 +23,16 @@ export interface FlowStats { sent: number; arrived: number; diverted: number; to
 
 /** a traffic counter's readings: vehicles passing so far (by kind), their average speed (km/h), and the recent rate (vehicles per hour, last 5 minutes) */
 export interface CounterStats { total: number; cars: number; trucks: number; buses: number; avgSpeed: number; perHour: number }
+/** both directions of a counted road together (null when neither has a reading): speeds averaged over the vehicles, rates added */
+export function sumCounters(list: readonly (CounterStats | null | undefined)[]): CounterStats | null {
+  const got = list.filter((c): c is CounterStats => !!c);
+  if (!got.length) return null;
+  const total = got.reduce((s, c) => s + c.total, 0);
+  return {
+    total, cars: got.reduce((s, c) => s + c.cars, 0), trucks: got.reduce((s, c) => s + c.trucks, 0), buses: got.reduce((s, c) => s + c.buses, 0),
+    avgSpeed: total ? got.reduce((s, c) => s + c.avgSpeed * c.total, 0) / total : 0, perHour: got.reduce((s, c) => s + c.perHour, 0),
+  };
+}
 export { LW } from "../compile";
 
 export class Sim extends SimDemand {
