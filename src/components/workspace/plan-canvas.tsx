@@ -114,9 +114,31 @@ export function PlanCanvas() {
       cam.w = Math.max(1, r.width); cam.h = Math.max(1, r.height); cam.dpr = Math.min(2, window.devicePixelRatio || 1);
       canvas.width = Math.round(cam.w * cam.dpr); canvas.height = Math.round(cam.h * cam.dpr);
       canvas.style.width = `${cam.w}px`; canvas.style.height = `${cam.h}px`;
-      if (fitted !== u.planId) { fitted = u.planId; ensureGeo(); fit(); }
+      if (fitted !== u.planId) { fitted = u.planId; ensureGeo(); if (!restoreView()) fit(); }
       markDirty();
     };
+    // the view of each plan (centre and zoom) is kept in this browser, and comes back when it is opened again
+    const viewKey = () => `trafficsim:view:${u.planId}`;
+    function restoreView(): boolean {
+      try {
+        const v = JSON.parse(localStorage.getItem(viewKey()) ?? "null") as { cx: number; cy: number; scale: number } | null;
+        if (!v || ![v.cx, v.cy, v.scale].every(Number.isFinite) || v.scale <= 0) return false;
+        cam.cx = v.cx; cam.cy = v.cy; cam.scale = Math.min(60, Math.max(0.02, v.scale));
+        markDirty();
+        return true;
+      } catch { return false; }
+    }
+    let savedView = "", viewTimer: ReturnType<typeof setTimeout> | null = null;
+    function rememberView() {
+      if (!u.planId || viewTimer) return;
+      viewTimer = setTimeout(() => {
+        viewTimer = null;
+        const v = JSON.stringify({ cx: Math.round(cam.cx * 100) / 100, cy: Math.round(cam.cy * 100) / 100, scale: Math.round(cam.scale * 10000) / 10000 });
+        if (v === savedView) return;
+        savedView = v;
+        try { localStorage.setItem(viewKey(), v); } catch { /* storage full or off: not kept */ }
+      }, 400);
+    }
     const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
 
     // ------------------------------------------------------------ hit testing
@@ -717,6 +739,7 @@ export function PlanCanvas() {
         });
         noteDraw(performance.now() - drawT0);
         viewport.cx = cam.cx; viewport.cy = cam.cy; viewport.wm = cam.w / cam.scale; viewport.hm = cam.h / cam.scale;
+        if (fitted === u.planId) rememberView();
         scaleBar(cam);
         dirty = false;
       }
