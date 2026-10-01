@@ -14,7 +14,7 @@ export interface Run { links: { id: string; aligned: boolean }[]; nodes: string[
 
 const twoWay = (l: LinkDef) => l.lanesF > 0 && l.lanesB > 0 && !l.rev;
 /** where the road may not run on through (it would split a set of traffic lights or a roundabout in two) */
-const stopsAt = (n: NodeDef) => n.gateway || n.control === "lights" || n.control === "roundabout" || !!n.align;
+const stopsAt = (net: Network, n: NodeDef) => (n.gateway && linksAt(net, n.id).length === 1) || n.control === "lights" || n.control === "roundabout" || !!n.align;
 /** an interior node it can't pass through, given its degree */
 const blocks = (net: Network, n: NodeDef) => {
   const deg = linksAt(net, n.id).length;
@@ -33,7 +33,7 @@ function leaving(net: Network, l: LinkDef, id: string): Vec {
 /** the road straight on from `l` at node `at`: another two-way road within 35° of carrying straight on */
 function straightOn(net: Network, l: LinkDef, at: string, seen: Set<string>): LinkDef | null {
   const n = nodeById(net, at);
-  if (!n || stopsAt(n) || blocks(net, n)) return null;
+  if (!n || stopsAt(net, n) || blocks(net, n)) return null;
   const v = leaving(net, l, at);
   let best: LinkDef | null = null, bd = -Math.cos((35 * Math.PI) / 180);
   for (const o of linksAt(net, at)) {

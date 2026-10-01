@@ -143,7 +143,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
             <div className="grid gap-3">
               <p className="text-xs text-muted-foreground">
                 {customLights
-                  ? "Custom phases, set lane by lane below. Yellow and all-red apply between every phase."
+                  ? `Custom phases, set ${node.phases?.some(p => p.conns) ? "connector by connector" : "lane by lane"} below. Yellow and all-red apply between every phase.`
                   : crossing
                   ? "Both directions get green together, then everyone stops for the red phase (e.g. a pedestrian crossing). Min green sets how long the red phase lasts when Actuated is on."
                   : `${cn?.phases.length ?? 0} phases: ${cn?.phases.map(g => g.length === 0 ? "all red" : g.map(i => compass(cn.arms[i].u.x, cn.arms[i].u.y).name).join(" + ")).join(" → ")}. ${sig.separate ? "Each approach gets its own green." : "Opposite approaches share a green; left turns yield to oncoming traffic."}`}
