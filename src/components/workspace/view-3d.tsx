@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useDeepSubject } from "subjecto/react";
-import { Crosshair, Gauge, Orbit, Plane } from "lucide-react";
+import { Crosshair, Eye, Gauge, Orbit, Plane, Volume2, VolumeX } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { buildRoadGeo, heightFn, laneSign } from "@/render/geometry";
 import { buildBuildings, buildFurniture, buildMarkers, buildRoads, buildingShell, laneSignMaterials, type Furniture } from "@/render/scene3d";
 import { satelliteMosaic } from "@/render/satellite";
 import { HELI_LAYER, HELI_MODEL_CREDIT, loadHelicopter, type Helicopter } from "@/render/helicopter";
+import { RotorSound } from "@/render/rotor-sound";
 import type { BuildingDef } from "@/engine/types";
 import { readPalette, speedColor, type Palette } from "@/render/palette";
 import { LEVEL_H, linkExtent } from "@/engine/compile";
@@ -26,11 +27,14 @@ const CAR3D = ["#ffffff", "#f1f2ee", "#e2e5e1", "#cdd1cd"];
 
 /** orbit: the usual turntable camera; heli: fly freely; track: the helicopter follows the selected vehicle */
 type CamMode = "orbit" | "heli" | "track";
+type HeliView = "cockpit" | "outside";
 const HELI_MIN = 4, HELI_MAX = 1500;
 /** the helicopter's top speed over the ground: 200 km/h */
 const HELI_VMAX = 200 / 3.6;
 /** free flight takes off at this height; tracking never goes lower */
 const HELI_START = 100, TRACK_MIN = 100;
+/** pointer steering: the still middle (share of the half width), and the fastest turn (rad/s) */
+const STEER_DEAD = 0.3, STEER_RATE = 0.9;
 
 /**
  * Switching between the plan view and 3D keeps the place: leaving 3D writes the ground point in the middle
@@ -68,9 +72,13 @@ export function View3D() {
   const [selection] = useDeepSubject(ui, "selection");
   const modeApi = useRef<(m: CamMode) => void>(null);
   const cockpitApi = useRef<CockpitApi>(null);
-  const [cockpit, setCockpit] = useState(true);
-  const cockpitOn = useRef(cockpit);
-  useEffect(() => { cockpitOn.current = cockpit; }, [cockpit]);
+  /** flying, seen from the pilot's seat or from behind the helicopter */
+  const [view, setView] = useState<HeliView>("cockpit");
+  const viewRef = useRef(view);
+  useEffect(() => { viewRef.current = view; }, [view]);
+  const [sound, setSound] = useState(true);
+  const soundRef = useRef(sound);
+  useEffect(() => { soundRef.current = sound; }, [sound]);
   useEffect(() => { modeApi.current?.(mode); }, [mode]);
   const vehicleSelected = selection?.kind === "vehicle";
 
@@ -326,23 +334,40 @@ export function View3D() {
     // E / Page Up climb, A / Page Down descend, the wheel too; Shift goes faster.
     // Tracking keeps the helicopter behind the selected vehicle; drag to circle it, arrows for distance and side.
     let camMode: CamMode = "orbit", yaw = 0, pitch = -0.35, hudText = "";
-    // the helicopter itself, loaded the first time it is flown with the cockpit on. Its cabin is drawn in a
-    // second pass, with a near plane close enough for the panel in front of the pilot's eye (the camera).
-    let heli: Helicopter | null = null, heliLoading = false, disposed = false;
+    // the helicopter itself, loaded the first time it is flown. The camera is always the pilot's eye (the flight
+    // moves it). From the seat, the cabin is drawn in a second pass, with a near plane close enough for it;
+    // from outside, a whole helicopter is drawn with the rest, seen by a camera following behind.
+    const heli: { cabin: Helicopter | null; whole: Helicopter | null } = { cabin: null, whole: null };
+    const loading = new Set<string>();
+    let disposed = false;
     const cabinCam = new THREE.PerspectiveCamera(60, 1, 0.03, 80);
     cabinCam.layers.set(HELI_LAYER);
-    sun.shadow.camera.layers.enable(HELI_LAYER); // its shadow on the ground
+    sun.shadow.camera.layers.enable(HELI_LAYER); // the cabin's shadow on the ground
+    const outCam = new THREE.PerspectiveCamera(50, 1, 0.5, 12000), outAt = new THREE.Vector3();
+    let outFresh = true;
     /** the airframe: heading (as a camera yaw), nose up, roll (right side up) */
     const air = { yaw: 0, pitch: 0, roll: 0 }, eyeOff = new THREE.Vector3();
-    const withCabin = () => camMode !== "orbit" && cockpitOn.current;
-    function ensureHeli() {
-      if (heli || heliLoading) return;
-      heliLoading = true;
-      loadHelicopter().then(h => {
+    const withCabin = () => camMode !== "orbit" && viewRef.current === "cockpit";
+    const outside = () => camMode !== "orbit" && viewRef.current === "outside";
+    function ensureHeli(kind: "cabin" | "whole") {
+      if (heli[kind] || loading.has(kind)) return;
+      loading.add(kind);
+      loadHelicopter(kind === "cabin" ? undefined : null, kind === "cabin" ? HELI_LAYER : 0).then(h => {
         if (disposed) { h.dispose(); return; }
-        heli = h; h.body.visible = false; scene.add(h.body);
+        heli[kind] = h; h.body.visible = false; scene.add(h.body);
       }).catch(() => setNote("The helicopter couldn't be loaded: flying without it."));
     }
+    /** put an airframe round the pilot's eye, and turn its rotor */
+    function placeAirframe(h: Helicopter, dt: number) {
+      h.body.rotation.order = "YXZ"; h.body.rotation.set(air.pitch, air.yaw, air.roll);
+      h.body.position.copy(camera.position).sub(eyeOff.copy(h.eye).applyEuler(h.body.rotation));
+      h.spin(dt);
+    }
+    // the sound: on while flying, unless turned off
+    const rotorSound = new RotorSound();
+    let soundOn = false;
+    // in free flight, with no button held, the pointer towards either side of the view turns the helicopter
+    const hover = { on: false, nx: 0 };
     const turnTo = (a: number, b: number, k: number) => { const d = Math.atan2(Math.sin(b - a), Math.cos(b - a)); return a + d * k; };
     const vel = new THREE.Vector3(), held = new Set<string>(), dir = new THREE.Vector3();
     const chase = { angle: 0, dist: 90, height: TRACK_MIN, heading: NaN, id: "" };
@@ -398,7 +423,10 @@ export function View3D() {
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
       if (e.type === "keyup") { held.delete(k); if (k === "shift") held.delete("shift"); return; }
-      if (camMode === "orbit" || u.view !== "3d" || e.metaKey || e.ctrlKey || e.altKey || typing(e) || !FLY_KEYS.has(k)) return;
+      if (camMode === "orbit" || u.view !== "3d" || e.metaKey || e.ctrlKey || e.altKey || typing(e)) return;
+      // C: from the seat or from outside
+      if (k === "c" && !e.repeat) { e.preventDefault(); e.stopPropagation(); setView(v => (v === "cockpit" ? "outside" : "cockpit")); return; }
+      if (!FLY_KEYS.has(k)) return;
       // Shift+E / Shift+Q stay layer shortcuts only when not flying; here they mean "faster"
       e.preventDefault(); e.stopPropagation();
       held.add(k);
@@ -415,12 +443,18 @@ export function View3D() {
       renderer.domElement.style.cursor = "grabbing";
     };
     const onLookMove = (e: PointerEvent) => {
+      if (!look && camMode === "heli" && e.buttons === 0) {
+        const r = renderer.domElement.getBoundingClientRect();
+        hover.on = true; hover.nx = ((e.clientX - r.left) / Math.max(1, r.width)) * 2 - 1;
+        renderer.domElement.style.cursor = Math.abs(hover.nx) > STEER_DEAD ? (hover.nx < 0 ? "w-resize" : "e-resize") : "grab";
+      }
       if (!look || e.pointerId !== look.id || camMode === "orbit") return;
       const dx = e.clientX - look.x, dy = e.clientY - look.y;
       look.x = e.clientX; look.y = e.clientY;
       if (camMode === "heli") { yaw -= dx * 0.004; pitch = Math.max(-1.5, Math.min(0.5, pitch - dy * 0.004)); }
       else { chase.angle -= dx * 0.006; chase.height = Math.max(TRACK_MIN, Math.min(400, chase.height + dy * 0.25)); }
     };
+    const onHoverLeave = () => { hover.on = false; };
     const onLookUp = (e: PointerEvent) => {
       if (!look || e.pointerId !== look.id) return;
       look = null;
@@ -437,6 +471,7 @@ export function View3D() {
     };
     renderer.domElement.addEventListener("pointerdown", onLookDown);
     renderer.domElement.addEventListener("pointermove", onLookMove);
+    renderer.domElement.addEventListener("pointerleave", onHoverLeave);
     renderer.domElement.addEventListener("pointerup", onLookUp);
     renderer.domElement.addEventListener("pointercancel", onLookUp);
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
@@ -448,12 +483,16 @@ export function View3D() {
       const climb = axis("e", "a") + axis("pageup", "pagedown");
       let speed = 0;
       if (camMode === "heli") {
+        // the pointer out towards a side turns that way, faster further out (none while dragging to look)
+        const out = hover.on && !look ? (Math.abs(hover.nx) - STEER_DEAD) / (1 - STEER_DEAD) : 0;
+        if (out > 0) yaw -= Math.sign(hover.nx) * Math.min(1, out) * STEER_RATE * dt;
         // faster high up, slower near the ground; the helicopter eases in and out of motion
         const cruise = Math.min(HELI_VMAX, Math.max(12, camera.position.y * 0.9) * fast);
         // (diagonally no faster than straight ahead)
         const sy = Math.sin(yaw), cy = Math.cos(yaw), k = cruise / Math.max(1, Math.hypot(fwd, side));
         const want = new THREE.Vector3((-sy * fwd + cy * side) * k, climb * Math.max(6, cruise * 0.5), (-cy * fwd - sy * side) * k);
-        vel.lerp(want, 1 - Math.exp(-dt * 2.5));
+        // (a helicopter gathers and loses speed slowly: some 3 s to 63 % of the change)
+        vel.lerp(want, 1 - Math.exp(-dt * 0.35));
         camera.position.addScaledVector(vel, dt);
         camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, camera.position.y));
         // the airframe faces where the pilot looks, dips its nose to speed up and leans into sideways flight
@@ -518,10 +557,11 @@ export function View3D() {
         const lookYaw = Math.atan2(-(lookAt.x - camera.position.x), -(lookAt.z - camera.position.z));
         air.yaw = turnTo(air.yaw, lookYaw + 1.31, 1 - Math.exp(-dt * 1.5));
         air.pitch += (-0.04 - air.pitch) * (1 - Math.exp(-dt * 2)); air.roll = -bank;
-        flight.roll = bank; flight.range = camera.position.distanceTo(lookAt);
+        // (the sights are on the vehicle only from the seat)
+        flight.roll = bank; flight.range = outside() ? NaN : camera.position.distanceTo(lookAt);
       }
       if (camMode !== "track") { lastSwing = NaN; bank = 0; }
-      if (cockpitOn.current) {
+      if (withCabin()) {
         // the airframe's vibration
         const t = now / 1000;
         camera.rotateX(0.00025 * Math.sin(t * 23) + 0.00012 * Math.sin(t * 61));
@@ -548,7 +588,7 @@ export function View3D() {
       down = null;
       const r = renderer.domElement.getBoundingClientRect();
       ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-      ray.setFromCamera(ndc, camera);
+      ray.setFromCamera(ndc, outside() ? outCam : camera);
       if (!ray.ray.intersectPlane(plane, hit)) return;
       const p = { x: hit.x, y: hit.z }, net = network$.getValue();
       const dist = camera.position.distanceTo(hit), flying = camMode !== "orbit";
@@ -592,18 +632,29 @@ export function View3D() {
         // a wider view from the cabin, as a pilot's eyes take in
         const fov = withCabin() ? 62 : 40;
         if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
-        if (withCabin()) ensureHeli();
+        if (withCabin()) ensureHeli("cabin");
+        if (outside()) ensureHeli("whole");
         // the helicopter moves first: drawing the tracked vehicle needs its smoothed position
         if (camMode !== "orbit") fly(dt, now, sim);
-        if (heli) {
-          heli.body.visible = withCabin();
-          if (heli.body.visible) {
-            // the airframe round the pilot's eye
-            heli.body.rotation.order = "YXZ"; heli.body.rotation.set(air.pitch, air.yaw, air.roll);
-            heli.body.position.copy(camera.position).sub(eyeOff.copy(heli.eye).applyEuler(heli.body.rotation));
-            heli.spin(dt);
-          }
-        }
+        if (heli.cabin) { heli.cabin.body.visible = withCabin(); if (withCabin()) placeAirframe(heli.cabin, dt); }
+        if (heli.whole) { heli.whole.body.visible = outside(); if (outside()) placeAirframe(heli.whole, dt); }
+        if (outside()) {
+          // from behind and above the helicopter, looking where the pilot looks. Tracking, from a little to the
+          // left, at a point between the helicopter and the vehicle: both in view, the helicopter not hiding it.
+          camera.getWorldDirection(dir);
+          const track = camMode === "track", want = eyeOff.copy(camera.position).addScaledVector(dir, track ? -18 : -14);
+          want.y += track ? 6 : 3.5;
+          if (track) { const l = Math.hypot(dir.x, dir.z) || 1; want.x += (dir.z / l) * 9; want.z -= (dir.x / l) * 9; }
+          if (outFresh) outCam.position.copy(want); else outCam.position.lerp(want, 1 - Math.exp(-dt * 4));
+          outFresh = false;
+          if (track) outAt.copy(camera.position).lerp(lookAt, 0.55); else outAt.copy(camera.position).addScaledVector(dir, 30);
+          outCam.lookAt(outAt);
+          if (outCam.aspect !== camera.aspect) { outCam.aspect = camera.aspect; outCam.updateProjectionMatrix(); }
+        } else outFresh = true;
+        // rotor sound while flying (its beat follows the work: speed and climbing)
+        const wantSound = camMode !== "orbit" && soundRef.current && !document.hidden;
+        if (wantSound !== soundOn) { soundOn = wantSound; if (soundOn) rotorSound.start(); else rotorSound.stop(); }
+        if (soundOn) rotorSound.set(0.75 * Math.min(1, flight.speed / HELI_VMAX) + 0.25 * Math.max(0, Math.min(1, flight.vs / 8)), outside());
         // vehicles
         let n = 0, ng = 0;
         if (vsim) for (const v of vsim.vehicles) {
@@ -698,12 +749,13 @@ export function View3D() {
           hl.geometry = geo;
         }
         if (camMode === "orbit") controls.update();
+        const viewCam = outside() ? outCam : camera;
         // compass: heading of the camera's view direction, 0° = looking north
-        camera.getWorldDirection(dir);
+        viewCam.getWorldDirection(dir);
         const heading = Math.round((Math.atan2(dir.x, -dir.z) * 180) / Math.PI * 10) / 10;
         if (heading !== lastHeading) { lastHeading = heading; compassEl()?.style.setProperty("--heading", `${-heading}deg`); }
-        renderer.render(scene, camera);
-        if (heli?.body.visible) {
+        renderer.render(scene, viewCam);
+        if (heli.cabin?.body.visible) {
           // the cabin over the view, its own depth (and no sky: the view is already there)
           cabinCam.position.copy(camera.position); cabinCam.quaternion.copy(camera.quaternion);
           if (cabinCam.fov !== camera.fov || cabinCam.aspect !== camera.aspect) { cabinCam.fov = camera.fov; cabinCam.aspect = camera.aspect; cabinCam.updateProjectionMatrix(); }
@@ -728,6 +780,7 @@ export function View3D() {
       renderer.domElement.removeEventListener("pointerup", onUp);
       renderer.domElement.removeEventListener("pointerdown", onLookDown);
       renderer.domElement.removeEventListener("pointermove", onLookMove);
+      renderer.domElement.removeEventListener("pointerleave", onHoverLeave);
       renderer.domElement.removeEventListener("pointerup", onLookUp);
       renderer.domElement.removeEventListener("pointercancel", onLookUp);
       renderer.domElement.removeEventListener("wheel", onWheel);
@@ -737,7 +790,8 @@ export function View3D() {
       modeApi.current = null;
       leave();
       disposed = true;
-      if (heli) { scene.remove(heli.body); heli.dispose(); }
+      for (const h of [heli.cabin, heli.whole]) if (h) { scene.remove(h.body); h.dispose(); }
+      rotorSound.dispose();
       controls.dispose();
       if (houses) { houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); }
       ulMat.map?.dispose(); ulMat.dispose(); ulMesh.geometry.dispose();
@@ -752,7 +806,7 @@ export function View3D() {
   return (
     <>
       <div ref={wrapRef} className="absolute inset-0 overflow-hidden" aria-label="3D view of the street plan" />
-      {mode !== "orbit" && cockpit && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} />}
+      {mode !== "orbit" && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} />}
       <div className="absolute top-3 right-3 z-10 flex max-w-72 flex-col items-end gap-1.5">
         <ToggleGroup
           type="single" value={mode} aria-label="Camera"
@@ -767,8 +821,15 @@ export function View3D() {
           ><Crosshair /> Track</ToggleGroupItem>
         </ToggleGroup>
         {mode !== "orbit" && (
-          <Button size="sm" variant={cockpit ? "default" : "outline"} aria-pressed={cockpit} onClick={() => setCockpit(c => !c)}
-            title="Show or hide the cockpit" className="h-8 shadow-sm"><Gauge /> Cockpit</Button>
+          <div className="flex gap-1.5">
+            <ToggleGroup type="single" value={view} aria-label="Seen from" onValueChange={v => { if (v) setView(v as HeliView); }} className="bg-background/95 shadow-sm backdrop-blur">
+              <ToggleGroupItem value="cockpit" aria-label="From the cockpit" title="From the pilot's seat (C)"><Gauge /> Cockpit</ToggleGroupItem>
+              <ToggleGroupItem value="outside" aria-label="From outside" title="From behind the helicopter (C)"><Eye /> Outside</ToggleGroupItem>
+            </ToggleGroup>
+            <Button size="icon-sm" variant="outline" aria-pressed={sound} onClick={() => setSound(x => !x)}
+              aria-label={sound ? "Turn the rotor sound off" : "Turn the rotor sound on"} title={sound ? "Sound on" : "Sound off"}
+              className="size-8 bg-background/95 shadow-sm">{sound ? <Volume2 /> : <VolumeX />}</Button>
+          </div>
         )}
         {mode !== "orbit" && (
           <div className="rounded-lg border bg-background/95 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground shadow-sm backdrop-blur">
@@ -776,22 +837,22 @@ export function View3D() {
             {mode === "heli" ? (
               <>
                 <div><Kbd>Z</Kbd> <Kbd>S</Kbd> forward, back · <Kbd>Q</Kbd> <Kbd>D</Kbd> left, right (or arrows)</div>
-                <div>Drag the mouse to look around</div>
+                <div>Mouse towards a side turns · drag to look around</div>
                 <div><Kbd>E</Kbd>/<Kbd>PgUp</Kbd> climb · <Kbd>A</Kbd>/<Kbd>PgDn</Kbd> descend · or scroll</div>
-                <div><Kbd>Shift</Kbd> faster · click a vehicle, then Track</div>
+                <div><Kbd>Shift</Kbd> faster · <Kbd>C</Kbd> cockpit / outside · click a vehicle, then Track</div>
               </>
             ) : (
               <>
                 <div>Following the selected vehicle; click another to switch</div>
                 <div>Drag to circle round it · <Kbd>Q</Kbd> <Kbd>D</Kbd> too</div>
                 <div><Kbd>Z</Kbd> <Kbd>S</Kbd> closer, further · scroll zooms</div>
-                <div><Kbd>E</Kbd>/<Kbd>A</Kbd> higher, lower</div>
+                <div><Kbd>E</Kbd>/<Kbd>A</Kbd> higher, lower · <Kbd>C</Kbd> cockpit / outside</div>
               </>
             )}
           </div>
         )}
         {note && <div className="rounded-md bg-background/95 px-2 py-1 text-[11px] shadow-sm">{note}</div>}
-        {mode !== "orbit" && cockpit && (
+        {mode !== "orbit" && (
           // the model's licence asks for its author to be named
           <a href={HELI_MODEL_CREDIT.url} target="_blank" rel="noreferrer" className="rounded bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground">
             {HELI_MODEL_CREDIT.title} model by {HELI_MODEL_CREDIT.author} · {HELI_MODEL_CREDIT.license}

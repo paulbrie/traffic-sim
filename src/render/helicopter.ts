@@ -9,11 +9,14 @@ import { basePath } from "@/lib/base-path";
  * compressed with gltf-transform (meshopt geometry, WebP textures at 2048 px), its rocket pods left out.
  *
  * Body frame: metres, y up, the nose towards −z, so a body yaw means what a camera yaw does
- * (0 = facing north). The model lives on its own layer, drawn in a second pass with a near plane
- * close enough for the cabin round the pilot's eye.
+ * (0 = facing north). From the pilot's seat the cabin lives on its own layer, drawn in a second pass with
+ * a near plane close enough for it; seen from outside, the whole helicopter is drawn with the rest.
  */
 export const HELI_MODEL_CREDIT = { title: "MD 500", author: "torreylee070", license: "CC BY 4.0", url: "https://sketchfab.com/3d-models/md-500-war-thunder-1b21240fb6fb4d228e0dd6847e044b50" };
 export const HELI_LAYER = 1;
+// the right-hand front seat (model x −0.3, half a turn round: +0.3), the eye a little higher and further
+// forward than a seated pilot's, to see more over the nose
+const EYE = new THREE.Vector3(0.3, 0.45, -1.05);
 
 // parts of the model, by node name: the main rotor's blades and head, the weapons (not on a police helicopter)
 const BLADES = "Object_8", HEAD = "Object_20", WEAPONS = ["Object_40", "Object_42", "Object_44", "Object_46"];
@@ -33,7 +36,16 @@ function loadModel(): Promise<THREE.Group> {
   return pending;
 }
 
-export async function loadHelicopter(): Promise<Helicopter> {
+/**
+ * Seen from the pilot's seat, the cabin ahead below this height is cut away (instrument panel, the nose's
+ * inner wall, controls, pedals) and the clear glass is left out, leaving the bubble's frame: the roof and the
+ * posts round the windscreen, so the view ahead and down through the nose stays open.
+ * Body frame (nose towards −z): ahead of `z`, under `y`.
+ */
+export const CABIN_CUT = { y: 0.32, z: -0.55 };
+
+/** `cut`: the cabin as seen from the pilot's seat (see CABIN_CUT); null: the whole helicopter, seen from outside */
+export async function loadHelicopter(cut: { y: number; z: number } | null = CABIN_CUT, layer = HELI_LAYER): Promise<Helicopter> {
   const model = (await loadModel()).clone(true);
   // the model has its nose towards +z: half a turn puts it towards −z
   model.rotation.y = Math.PI;
@@ -41,6 +53,14 @@ export async function loadHelicopter(): Promise<Helicopter> {
   body.add(model);
   body.updateMatrixWorld(true);
   for (const name of WEAPONS) { const o = model.getObjectByName(name); if (o) o.visible = false; }
+  model.traverse(o => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !cut) return;
+    // the clear glass goes too (cut through, its big panes would leave jagged edges): the frame keeps the bubble's shape
+    const mat = m.material as THREE.Material;
+    if (mat.transparent && mat.opacity < 0.5) m.visible = false;
+    else if (m.name !== BLADES && m.name !== HEAD) m.geometry = trimmed(m.geometry, m.matrixWorld, cut);
+  });
 
   // the rotor turns round the middle of its blades (five alike: their mean point is on the mast)
   const blades = model.getObjectByName(BLADES) as THREE.Mesh | undefined, head = model.getObjectByName(HEAD);
@@ -60,14 +80,12 @@ export async function loadHelicopter(): Promise<Helicopter> {
     rotor.add(disc);
   }
   body.traverse(o => {
-    o.layers.set(HELI_LAYER);
+    o.layers.set(layer);
     if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.frustumCulled = false; }
   });
   return {
     body,
-    // the right-hand front seat (model x −0.3, half a turn round: +0.3), the eye a little higher and further
-    // forward than a seated pilot's, to see more over the instrument panel and down through the nose
-    eye: new THREE.Vector3(0.3, 0.45, -1.05),
+    eye: EYE.clone(),
     // the real rotor turns about 8 times a second; this slower turn reads as turning on screen instead of strobing
     spin(dt) { rotor.rotation.y -= dt * 1.4 * 2 * Math.PI; },
     dispose() {
@@ -77,4 +95,21 @@ export async function loadHelicopter(): Promise<Helicopter> {
       });
     },
   };
+}
+
+/** a copy of the geometry without its triangles ahead of and under the cut (worked out in the body frame) */
+function trimmed(geo: THREE.BufferGeometry, toBody: THREE.Matrix4, cut: { y: number; z: number }): THREE.BufferGeometry {
+  const pos = geo.getAttribute("position"), index = geo.getIndex();
+  const n = index ? index.count : pos.count, at = (i: number) => (index ? index.getX(i) : i);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), keep: number[] = [];
+  for (let t = 0; t < n; t += 3) {
+    const i = at(t), j = at(t + 1), k = at(t + 2);
+    a.fromBufferAttribute(pos, i).applyMatrix4(toBody); b.fromBufferAttribute(pos, j).applyMatrix4(toBody); c.fromBufferAttribute(pos, k).applyMatrix4(toBody);
+    const y = (a.y + b.y + c.y) / 3, z = (a.z + b.z + c.z) / 3;
+    if (!(z < cut.z && y < cut.y)) keep.push(i, j, k);
+  }
+  if (keep.length === n) return geo;
+  const out = geo.clone();
+  out.setIndex(keep);
+  return out;
 }
