@@ -11,6 +11,7 @@ import { bboxCenter, bboxProblem, bboxSize, ROAD_CLASSES, type BBox, type Import
 import { convertOsm, suggestSettings, type ImportStats } from "@/lib/osm/convert";
 import { fetchOsm, OsmError } from "./osm";
 import { assertUser } from "./auth";
+import { sanitizeHeliKeys, type HeliKeys } from "@/lib/heli-keys";
 import { assertCity, assertPlan } from "./access";
 
 // Every action checks for a signed-in user and their access to the map (src/server/access.ts).
@@ -421,4 +422,30 @@ export async function restorePlanVersion(planId: string, versionId: string): Pro
   if (revision == null) return { ok: false, error: "Plan not found." };
   revalidatePath(`/plans/${planId}`);
   return { ok: true, revision };
+}
+
+/** save the signed-in user's helicopter keys (with their account) */
+export async function saveHeliKeys(input: unknown): Promise<{ ok: true; keys: HeliKeys } | { ok: false; error: string }> {
+  const user = await assertUser();
+  const keys = sanitizeHeliKeys(input);
+  try {
+    await db.insert(schema.userPrefs).values({ userId: user.id, heliKeys: keys, updatedAt: new Date() })
+      .onConflictDoUpdate({ target: schema.userPrefs.userId, set: { heliKeys: keys, updatedAt: new Date() } });
+    return { ok: true, keys };
+  } catch {
+    return { ok: false, error: "Couldn't save the keys (has the database been updated? npm run db:migrate)." };
+  }
+}
+
+/** save whether the signed-in user has war mode on (with their account) */
+export async function saveWarMode(on: unknown): Promise<{ ok: true } | { ok: false; error: string }> {
+  const user = await assertUser();
+  const warMode = on === true;
+  try {
+    await db.insert(schema.userPrefs).values({ userId: user.id, warMode, updatedAt: new Date() })
+      .onConflictDoUpdate({ target: schema.userPrefs.userId, set: { warMode, updatedAt: new Date() } });
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Couldn't save war mode (has the database been updated? npm run db:migrate)." };
+  }
 }

@@ -29,6 +29,20 @@
       "when": 1790518191068,
       "tag": "0003_sharing_history",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790947294234,
+      "tag": "0004_user_prefs",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790947792888,
+      "tag": "0005_user_prefs_war_mode",
+      "breakpoints": true
     }
   ]
 }

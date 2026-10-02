@@ -107,6 +107,16 @@ export const users = pgTable(
   (t) => [uniqueIndex("users_email_idx").on(t.email)],
 );
 
+/** Each user's own preferences, kept with their account (one row per user; missing = the defaults). */
+export const userPrefs = pgTable("user_prefs", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  /** the keys that fly the helicopter (see src/lib/heli-keys.ts) */
+  heliKeys: jsonb("heli_keys"),
+  /** war mode turned on in the settings (the helicopter's gun and rockets) */
+  warMode: boolean("war_mode").notNull().default(false),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 /** Server-side sessions; the cookie holds a random token, the table holds its SHA-256. */
 export const sessions = pgTable(
   "sessions",

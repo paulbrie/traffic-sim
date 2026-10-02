@@ -39,16 +39,16 @@ function loadModel(): Promise<THREE.Group> {
 /**
  * `cabin`: the helicopter as seen from the pilot's seat: only its rotor turning overhead, nothing else in the
  * way of the view ahead and below.
- * `whole`: the whole helicopter, seen from outside.
+ * `whole`: the whole helicopter, seen from outside. `armed`: with its gun and rocket pods (an enemy's).
  */
-export async function loadHelicopter(view: "cabin" | "whole" = "cabin", layer = HELI_LAYER): Promise<Helicopter> {
+export async function loadHelicopter(view: "cabin" | "whole" = "cabin", layer = HELI_LAYER, armed = false): Promise<Helicopter> {
   const model = (await loadModel()).clone(true);
   // the model has its nose towards +z: half a turn puts it towards −z
   model.rotation.y = Math.PI;
   const body = new THREE.Group();
   body.add(model);
   body.updateMatrixWorld(true);
-  for (const name of WEAPONS) { const o = model.getObjectByName(name); if (o) o.visible = false; }
+  if (!armed) for (const name of WEAPONS) { const o = model.getObjectByName(name); if (o) o.visible = false; }
   if (view === "cabin") {
     model.traverse(o => { if ((o as THREE.Mesh).isMesh && o.name !== BLADES && o.name !== HEAD) o.visible = false; });
   }

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { WorkspaceClient } from "@/components/workspace/workspace-client";
-import { getPlan } from "@/server/queries";
+import { getPlan, getUserPrefs } from "@/server/queries";
 import { sanitizeNetwork, sanitizeSettings } from "@/engine/validate";
 import { sanitizeUnderlay } from "@/lib/underlay";
 import { DbSetupNotice } from "@/components/db-setup-notice";
@@ -19,9 +19,9 @@ export async function generateMetadata({ params }: PageProps<"/plans/[planId]">)
 export default async function PlanPage({ params }: PageProps<"/plans/[planId]">) {
   const { planId } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(planId)) notFound();
-  const res = await tryDb(async () => { const user = await requireUser(); return { user, row: await getPlan(planId, user) }; });
+  const res = await tryDb(async () => { const user = await requireUser(); return { user, row: await getPlan(planId, user), prefs: await getUserPrefs(user.id) }; });
   if (!res.ok) return <DbSetupNotice problem={res.problem} />;
-  const { row, user } = res.data;
+  const { row, user, prefs } = res.data;
   if (!row) notFound();
   const { plan, cityName, access } = row;
   return (
@@ -32,6 +32,7 @@ export default async function PlanPage({ params }: PageProps<"/plans/[planId]">)
         revision: plan.revision, updatedAt: plan.updatedAt.toISOString(), access,
       }}
       user={{ email: user.email, name: user.name, role: user.role }}
+      prefs={prefs}
     />
   );
 }

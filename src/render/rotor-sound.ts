@@ -1,7 +1,8 @@
 /**
  * The helicopter's sound, made in the browser (Web Audio, no recordings): the blades' beat (noise pulsed
  * at the blade rate, with a low thump) and the engine's low rumble, no turbine whine. `set` follows the
- * flight: harder work (speed, climbing) beats faster and louder. War mode adds the gun and explosions.
+ * flight: harder work (speed, climbing) beats faster and louder. War mode adds the guns, rounds striking the
+ * airframe, and explosions.
  */
 export class RotorSound {
   private ctx: AudioContext | null = null;
@@ -38,22 +39,47 @@ export class RotorSound {
     this.chop!.gain.setTargetAtTime((outside ? 0.9 : 0.55) * (0.65 + 0.35 * l), t, 0.3);
   }
 
-  /** a round from the gun: a sharp crack */
-  shot() {
+  /** a round from the gun: a sharp crack (`level` below 1: someone else's gun, further off) */
+  shot(level = 1) {
     const ctx = this.ctx;
     if (!ctx || !this.on || !this.noiseBuf) return;
     const t = ctx.currentTime, src = ctx.createBufferSource();
     src.buffer = this.noiseBuf; src.playbackRate.value = 1.3;
     const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 500;
     const g = ctx.createGain();
-    g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+    g.gain.setValueAtTime(0.35 * level, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
     src.connect(hp).connect(g).connect(this.master!);
     src.start(t, Math.random()); src.stop(t + 0.09);
     // and a low punch
     const o = ctx.createOscillator(), og = ctx.createGain();
     o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.06);
-    og.gain.setValueAtTime(0.4, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    og.gain.setValueAtTime(0.4 * level, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
     o.connect(og).connect(this.master!); o.start(t); o.stop(t + 0.1);
+  }
+
+  /** a round striking the airframe: a sharp metallic clank, the panel ringing for a moment, a thud through the cabin */
+  hit() {
+    const ctx = this.ctx;
+    if (!ctx || !this.on || !this.noiseBuf) return;
+    // (no two alike: a little higher or lower each time, as rounds strike different panels)
+    const t = ctx.currentTime, p = 0.8 + Math.random() * 0.4;
+    const src = ctx.createBufferSource(); src.buffer = this.noiseBuf;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 2600 * p; bp.Q.value = 1.1;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    src.connect(bp).connect(g).connect(this.master!);
+    src.start(t, Math.random()); src.stop(t + 0.06);
+    // the ringing: a few partials, not in harmony (sheet metal, not a bell), the high ones dying first
+    for (const [f, a, d] of [[410, 0.3, 0.2], [1130, 0.2, 0.13], [2270, 0.11, 0.08], [3610, 0.06, 0.05]]) {
+      const o = ctx.createOscillator(), og = ctx.createGain();
+      o.frequency.value = f * p;
+      og.gain.setValueAtTime(a, t); og.gain.exponentialRampToValueAtTime(0.001, t + d);
+      o.connect(og).connect(this.master!); o.start(t); o.stop(t + d + 0.02);
+    }
+    const th = ctx.createOscillator(), tg = ctx.createGain();
+    th.frequency.setValueAtTime(170, t); th.frequency.exponentialRampToValueAtTime(55, t + 0.09);
+    tg.gain.setValueAtTime(0.55, t); tg.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
+    th.connect(tg).connect(this.master!); th.start(t); th.stop(t + 0.13);
   }
 
   /** an explosion, `distance` metres away: a boom with a long rumble, quieter and duller further off */

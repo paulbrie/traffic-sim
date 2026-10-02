@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Crosshair, Eye, Gauge, Orbit, Plane, Swords, Volume2, VolumeX } from "lucide-react";
+import { Building2, Crosshair, Eye, Gauge, Orbit, Plane, Plus, Swords, Volume2, VolumeX } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { buildRoadGeo, heightFn, laneSign } from "@/render/geometry";
@@ -10,7 +10,9 @@ import { buildBuildings, buildFurniture, buildMarkers, buildRoads, buildingShell
 import { satelliteMosaic } from "@/render/satellite";
 import { HELI_LAYER, HELI_MODEL_CREDIT, loadHelicopter, type Helicopter } from "@/render/helicopter";
 import { RotorSound } from "@/render/rotor-sound";
+import { GOOGLE_LOGO, PhotoTiles, photoProvider } from "@/render/photo-tiles";
 import { Combat, type World } from "@/render/combat";
+import { Enemies, ENEMY_MAX } from "@/render/enemies";
 import type { BuildingDef } from "@/engine/types";
 import { readPalette, speedColor, type Palette } from "@/render/palette";
 import { LEVEL_H, linkExtent } from "@/engine/compile";
@@ -26,9 +28,14 @@ import { Button } from "@/components/ui/button";
 import { Cockpit, type CockpitApi } from "./heli-cockpit";
 import { ReversibleControls, placeReversibleControls } from "./reversible-3d";
 import { HoverInfo, type Hovered } from "./hover-info";
+import { heliKeys$ } from "@/state/heli-keys";
+import { actionOf, keyLabel, type HeliAction } from "@/lib/heli-keys";
 import { BreakdownButton } from "./inspector";
 
 const CAR3D = ["#ffffff", "#f1f2ee", "#e2e5e1", "#cdd1cd"];
+
+/** where photorealistic 3D tiles come from (set when the app is built; null: none) */
+const PHOTO = photoProvider();
 
 /** orbit: the usual turntable camera; heli: fly freely; track: the helicopter follows the selected vehicle */
 type CamMode = "orbit" | "heli" | "track";
@@ -46,8 +53,6 @@ const HELI_START = 100, TRACK_MIN = 100;
 const STEER_DEAD = 0.3, STEER_RATE = 0.9;
 /** where the pilot looks (radians, up +) with the pointer at the top, middle and bottom of the view */
 const LOOK_UP = 0.15, LOOK_MID = -0.3, LOOK_DOWN = -1.35;
-/** war mode (the helicopter's gun and rockets): hidden for now; true brings its button back */
-const WAR_MODE = false;
 
 /**
  * Switching between the plan view and 3D keeps the place: leaving 3D writes the ground point in the middle
@@ -84,6 +89,13 @@ export function View3D() {
   const arriveRef = useRef(arrive);
   const [mode, setMode] = useState<CamMode>(arrive && "exact" in arrive ? arrive.exact.mode : "orbit");
   const [note, setNote] = useState("");
+  /** photorealistic 3D tiles: turned on (remembered in this browser), and the credits to show with them */
+  const [photo3d, setPhoto3d] = useState(() => typeof localStorage !== "undefined" && localStorage.getItem("trafficsim:photo3d") === "1");
+  const photoOn = useRef(photo3d);
+  useEffect(() => { photoOn.current = photo3d; try { localStorage.setItem("trafficsim:photo3d", photo3d ? "1" : "0"); } catch { /* not kept */ } }, [photo3d]);
+  const [credits, setCredits] = useState<{ provider: "google" | "ion"; text: string } | null>(null);
+  const [net] = useSubject(network$);
+  const geo = net.geo;
   const [selection] = useDeepSubject(ui, "selection");
   const modeApi = useRef<(m: CamMode) => void>(null);
   const cockpitApi = useRef<CockpitApi>(null);
@@ -92,15 +104,28 @@ export function View3D() {
   const viewRef = useRef(view);
   useEffect(() => { viewRef.current = view; }, [view]);
   /** war mode: the helicopter's gun and guided rockets */
-  const [war, setWar] = useState(false);
+  const [armedOn, setWar] = useState(false);
+  /** its button shows only when war mode is turned on in the settings; turned off, the helicopter is disarmed */
+  const [warMode] = useDeepSubject(ui, "warMode");
+  const war = armedOn && warMode;
   const warRef = useRef(war);
   useEffect(() => { warRef.current = war; }, [war]);
   const [kills, setKills] = useState(0);
+  /** the enemy helicopters: how many in the air, how many shot down, what is left of the player's (0…1) */
+  const [foes, setFoes] = useState({ count: 0, kills: 0, hull: 1 });
+  const warApi = useRef<{ spawn(): void; clear(): void }>(null);
+  const markersRef = useRef<HTMLDivElement>(null);
+  const flashRef = useRef<HTMLDivElement>(null);
   const [sound, setSound] = useState(true);
   const soundRef = useRef(sound);
   useEffect(() => { soundRef.current = sound; }, [sound]);
   useEffect(() => { modeApi.current?.(mode); }, [mode]);
   const vehicleSelected = selection?.kind === "vehicle";
+  const [heliKeys] = useSubject(heliKeys$);
+  /** an action's keys, as shown in the help (e.g. Z/↑) */
+  const keysOf = (a: HeliAction) => heliKeys[a].length
+    ? <span className="whitespace-nowrap">{heliKeys[a].map((k, i) => <span key={k}>{i > 0 && "/"}<Kbd>{keyLabel(k)}</Kbd></span>)}</span>
+    : <span className="italic">(no key)</span>;
 
   useEffect(() => {
     const wrap = wrapRef.current!;
@@ -132,7 +157,9 @@ export function View3D() {
     let roads: THREE.Group | null = null, furniture: Furniture | null = null, markers: THREE.Group | null = null, builtVersion = -1, builtLayers = "";
     /** is this layer on (drawn) */
     const shown = (l: string) => u.layers.includes(l as LayerId);
-    const buildingsOn = () => u.display.buildings && shown("buildings");
+    // photorealistic 3D tiles, when turned on (they replace the ground, the satellite image and the plan's buildings)
+    let photo: PhotoTiles | null = null, photoFor = "", photoWas = false, photoCredits = "";
+    const buildingsOn = () => u.display.buildings && shown("buildings") && !photo;
     // buildings are rebuilt only when the buildings themselves (or the theme) change
     let houses: { mesh: THREE.Mesh; owner: Int32Array; list: BuildingDef[] } | null = null;
     function syncBuildings(force = false) {
@@ -173,7 +200,7 @@ export function View3D() {
     let ulTexFor: HTMLImageElement | null = null;
     function syncUnderlay() {
       const ud = underlay$.getValue(), img = underlayImg$.getValue();
-      if (!ud || !img || !ud.visible || !ud.in3d) { ulMesh.visible = false; return; }
+      if (!ud || !img || !ud.visible || !ud.in3d || photo) { ulMesh.visible = false; return; }
       if (ulTexFor !== img) {
         ulMat.map?.dispose();
         // keep within the GPU's texture limit
@@ -204,7 +231,7 @@ export function View3D() {
     scene.add(satMesh);
     let satKey = "", satGen = 0;
     function syncSatellite() {
-      const net = network$.getValue(), geo = net.geo, want = !!geo && u.display.satellite;
+      const net = network$.getValue(), geo = net.geo, want = !!geo && u.display.satellite && !photo;
       satMesh.visible = want && !!satMat.map;
       satMat.color.setScalar(u.display.satBrightness ?? 1);
       if (!want || !geo) return;
@@ -221,7 +248,7 @@ export function View3D() {
         satMat.map = tex; satMat.needsUpdate = true;
         satMesh.scale.set(m.rect.maxX - m.rect.minX, m.rect.maxY - m.rect.minY, 1);
         satMesh.position.set((m.rect.minX + m.rect.maxX) / 2, 0.002, (m.rect.minY + m.rect.maxY) / 2);
-        satMesh.visible = !!network$.getValue().geo && u.display.satellite;
+        satMesh.visible = !!network$.getValue().geo && u.display.satellite && !photo;
       });
     }
 
@@ -393,6 +420,13 @@ export function View3D() {
     // war mode. Space (held) fires the gun at the sight in the middle of the view, a click fires a burst at that
     // point; R launches a rocket guided onto the vehicle nearest the sight (the tracked one, tracking)
     const combat = new Combat(scene);
+    // the enemy helicopters (spawned from the war panel): they hunt the player's helicopter
+    const enemies = new Enemies(scene, combat);
+    const foesNow = () => setFoes({ count: enemies.count, kills: enemies.kills, hull: enemies.player.hp / enemies.playerMax });
+    warApi.current = {
+      spawn() { enemies.player.pos.copy(camera.position); if (!enemies.spawn()) setNote(`At most ${ENEMY_MAX} enemies at once.`); foesNow(); },
+      clear() { enemies.clear(); foesNow(); },
+    };
     const armed = () => camMode !== "orbit" && warRef.current;
     const gun = { held: false, burst: 0, at: new THREE.Vector3(), next: 0 };
     let rocketAsked = false, lastForget = 0;
@@ -441,10 +475,16 @@ export function View3D() {
       }
       if (rocketAsked) {
         rocketAsked = false;
-        const to = sightPoint(cam, aimAt).clone(), sel = u.selection;
+        const to = sightPoint(cam, aimAt).clone(), sel = u.selection, from = hardpoint(-1.1, -1.4, 0.3);
+        // an enemy helicopter near the sight first
+        const foe = enemies.lockOn(cam.position, cam.getWorldDirection(new THREE.Vector3())), foeAt = foe ? enemies.air.at(foe) : null;
+        if (foe && foeAt) {
+          combat.launch(from, foeAt.clone().sub(from), null, foeAt, foe);
+          setNote("Rocket away, locked on an enemy helicopter");
+          return;
+        }
         // guided onto the tracked vehicle, or the one nearest the sight
         const target = camMode === "track" && sel?.kind === "vehicle" ? Number(sel.id) : world.near(to, 30)[0] ?? null;
-        const from = hardpoint(-1.1, -1.4, 0.3);
         combat.launch(from, to.clone().sub(from), target, to);
         setNote(target !== null ? `Rocket away, locked on vehicle #${target}` : "Rocket away (nothing to lock on)");
       }
@@ -459,7 +499,7 @@ export function View3D() {
     const followOffset = (v: { id: number }) => camMode === "track" && follow.ok && v.id === follow.vid;
     // what the cockpit's instruments show; bank leans into the tracked vehicle's turns
     const flight = { alt: 0, speed: 0, vs: 0, heading: 0, pitch: 0, roll: 0, range: NaN }, lastPos = new THREE.Vector3();
-    let bank = 0, lastSwing = NaN;
+    let bank = 0, lastSwing = NaN, jolt = 0;
     const lookAt = new THREE.Vector3();
     function fromCamera() {
       camera.getWorldDirection(dir);
@@ -502,20 +542,21 @@ export function View3D() {
     }
     modeApi.current = setCamMode;
     const typing = (e: Event) => !!(e.target as HTMLElement)?.closest?.("input,textarea,select,[contenteditable],[role=combobox],[role=slider],[role=tablist],[role=menu],[role=listbox]");
-    const FLY_KEYS = new Set(["arrowup", "arrowdown", "arrowleft", "arrowright", "z", "q", "s", "d", "e", "a", "pageup", "pagedown", "shift"]);
+    // the keys are the user's own (set in the settings, saved with their account)
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
       if (e.type === "keyup") { held.delete(k); if (k === " ") gun.held = false; return; }
       if (camMode === "orbit" || u.view !== "3d" || e.metaKey || e.ctrlKey || e.altKey || typing(e)) return;
-      // C: from the seat or from outside
-      if (k === "c" && !e.repeat) { e.preventDefault(); e.stopPropagation(); setView(v => (v === "cockpit" ? "outside" : "cockpit")); return; }
+      const act = actionOf(heliKeys$.getValue(), k);
+      // from the seat or from outside
+      if (act === "view") { e.preventDefault(); e.stopPropagation(); if (!e.repeat) setView(v => (v === "cockpit" ? "outside" : "cockpit")); return; }
       if (warRef.current && (k === " " || k === "r")) {
         e.preventDefault(); e.stopPropagation();
         if (k === " ") gun.held = true; else if (!e.repeat) rocketAsked = true;
         return;
       }
-      if (!FLY_KEYS.has(k)) return;
-      // Shift+E / Shift+Q stay layer shortcuts only when not flying; here they mean "faster"
+      if (!act) return;
+      // (Shift + a letter stays a layer shortcut only when not flying; here Shift is "faster")
       e.preventDefault(); e.stopPropagation();
       held.add(k);
     };
@@ -565,10 +606,9 @@ export function View3D() {
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
 
     function fly(dt: number, now: number, sim: typeof simController.sim) {
-      const fast = held.has("shift") ? 3 : 1;
-      const axis = (a: string, b: string) => (held.has(a) ? 1 : 0) - (held.has(b) ? 1 : 0);
-      const fwd = axis("arrowup", "arrowdown") + axis("z", "s"), side = axis("arrowright", "arrowleft") + axis("d", "q");
-      const climb = axis("e", "a") + axis("pageup", "pagedown");
+      const keys = heliKeys$.getValue(), on = (a: HeliAction) => (keys[a].some(k => held.has(k)) ? 1 : 0);
+      const fast = on("faster") ? 3 : 1;
+      const fwd = on("forward") - on("back"), side = on("right") - on("left"), climb = on("climb") - on("descend");
       let speed = 0;
       if (camMode === "heli") {
         // the pointer out towards a side turns that way, faster further out (none while dragging to look)
@@ -659,11 +699,12 @@ export function View3D() {
       }
       if (camMode !== "track") { lastSwing = NaN; bank = 0; }
       if (withCabin()) {
-        // the airframe's vibration
+        // the airframe's vibration, and a jolt when rounds strike it
         const t = now / 1000;
-        camera.rotateX(0.00025 * Math.sin(t * 23) + 0.00012 * Math.sin(t * 61));
-        camera.rotateZ(0.0002 * Math.sin(t * 17 + 1));
+        camera.rotateX(0.00025 * Math.sin(t * 23) + 0.00012 * Math.sin(t * 61) + (Math.random() - 0.5) * 0.014 * jolt);
+        camera.rotateZ(0.0002 * Math.sin(t * 17 + 1) + (Math.random() - 0.5) * 0.014 * jolt);
       }
+      jolt = Math.max(0, jolt - dt * 4);
       const text = `${Math.round(camera.position.y)} m up · ${Math.round(speed * 3.6)} km/h`;
       if (text !== hudText && hudRef.current) { hudText = text; hudRef.current.textContent = text; }
       if (cockpitApi.current && dt > 0) {
@@ -698,7 +739,8 @@ export function View3D() {
       }
       const node = net.nodes.find(n => Math.hypot(n.x - p.x, n.y - p.y) < tol * 1.5);
       if (node) return { kind: "node", id: node.id };
-      if (houses?.mesh.visible) {
+      // (with the photographed city shown, the plan's own buildings are hidden but still picked)
+      if (houses && (houses.mesh.visible || photo)) {
         const h = ray.intersectObject(houses.mesh, false)[0];
         if (h && h.faceIndex != null && h.distance < ray.ray.origin.distanceTo(hit)) {
           const b = houses.list[houses.owner[h.faceIndex]];
@@ -741,6 +783,34 @@ export function View3D() {
 
     let raf = 0, hlFor = "", lastHeading = NaN, lastNow = 0;
     const compassEl = () => wrap.parentElement?.querySelector<HTMLElement>("[data-compass]");
+    // the enemies on screen: a box round each with its distance; off screen (or behind), a mark at the edge towards it
+    const mk = new THREE.Vector3();
+    function placeMarkers(cam: THREE.Camera) {
+      const box = markersRef.current;
+      if (!box) return;
+      const list = armed() && u.view === "3d" ? enemies.positions() : [], w = box.clientWidth, h = box.clientHeight;
+      while (box.children.length < list.length) {
+        const d = document.createElement("div");
+        d.className = "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center text-[10px] font-semibold text-red-500 tabular-nums drop-shadow-[0_0_2px_rgba(0,0,0,0.8)]";
+        d.innerHTML = '<div class="size-5 rounded-sm border-[1.5px] border-current"></div><span></span>';
+        box.appendChild(d);
+      }
+      for (let i = 0; i < box.children.length; i++) {
+        const el = box.children[i] as HTMLDivElement, f = list[i];
+        if (!f) { el.style.display = "none"; continue; }
+        el.style.display = "";
+        mk.copy(f.pos).project(cam);
+        let x = mk.x, y = mk.y;
+        const behind = mk.z > 1;
+        if (behind) { x = -x; y = -y; }
+        const edge = behind || Math.abs(x) > 0.94 || Math.abs(y) > 0.9;
+        if (edge) { const k = Math.max(Math.abs(x) / 0.94, Math.abs(y) / 0.9, 1e-6); x /= k; y /= k; }
+        el.style.left = `${((x + 1) / 2) * w}px`; el.style.top = `${((1 - y) / 2) * h}px`;
+        (el.firstChild as HTMLElement).style.transform = edge ? "rotate(45deg) scale(0.6)" : "";
+        (el.lastChild as HTMLElement).textContent = `${Math.round(f.pos.distanceTo(camera.position))} m`;
+      }
+    }
+
     const frame = (now: number) => {
       const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
       lastNow = now;
@@ -776,10 +846,30 @@ export function View3D() {
         if (wantSound !== soundOn) { soundOn = wantSound; if (soundOn) rotorSound.start(); else rotorSound.stop(); }
         // war: fire, move the rounds and rockets, take the destroyed vehicles off the roads
         shoot(now);
-        const ev = combat.update(dt, world, outside() ? outCam.position : camera.position);
+        // the enemies: after the player's helicopter (where it is now), war mode off sends them away
+        if (!warRef.current && enemies.size) { enemies.clear(); foesNow(); }
+        enemies.player.pos.copy(camera.position); enemies.player.vel.copy(vel);
+        const fe = enemies.update(dt, armed());
+        if (fe.playerHits) {
+          flashRef.current?.animate([{ opacity: 0.5 }, { opacity: 0 }], { duration: 450, easing: "ease-out" });
+          if (soundOn) for (let k = 0; k < Math.min(3, fe.playerHits); k++) rotorSound.hit();
+          jolt = Math.min(1, jolt + 0.45 * fe.playerHits);
+        }
+        if (fe.playerDown) {
+          combat.explode(camera.position, 4);
+          setNote(`Shot down! ${enemies.kills} enemy helicopter${enemies.kills === 1 ? "" : "s"} destroyed; the others have gone. Back in the air, repaired.`);
+          enemies.clear();
+        }
+        if (fe.playerHits || fe.downed || fe.playerDown) foesNow();
+        const listener = outside() ? outCam.position : camera.position;
+        const ev = combat.update(dt, world, listener);
         // (they stay on the road as wrecks, obstacles in the traffic, until towed)
         if (ev.destroyed.length) { simController.breakDown(ev.destroyed, true); setKills(combat.destroyedCount); }
-        if (soundOn) { for (let k = 0; k < Math.min(2, ev.shots); k++) rotorSound.shot(); for (const d of ev.blasts) rotorSound.blast(d); }
+        if (soundOn) {
+          for (let k = 0; k < Math.min(2, ev.shots); k++) rotorSound.shot();
+          for (const at of ev.enemyShots.slice(0, 2)) rotorSound.shot(Math.max(0.02, Math.min(0.7, 50 / Math.max(1, at.distanceTo(listener)))));
+          for (const d of ev.blasts) rotorSound.blast(d);
+        }
         if (now - lastForget > 1000 && sim) { lastForget = now; combat.forget(id => sim.vehicles.some(v => v.id === id && !v.dead)); }
         if (soundOn) rotorSound.set(0.75 * Math.min(1, flight.speed / HELI_VMAX) + 0.25 * Math.max(0, Math.min(1, flight.vs / 8)), outside());
         // vehicles
@@ -884,7 +974,26 @@ export function View3D() {
         if (heading !== lastHeading) { lastHeading = heading; compassEl()?.style.setProperty("--heading", `${-heading}deg`); }
         // the reversible lanes' switches, over their roads (flying)
         placeReversibleControls(revRef.current, viewCam, renderer.domElement.clientWidth, renderer.domElement.clientHeight, camMode !== "orbit");
+        // photorealistic tiles: made when turned on (one billed session with Google), dropped when off
+        const geoRef = network$.getValue().geo, wantPhoto = photoOn.current && !!geoRef && !!PHOTO;
+        const photoKey = geoRef ? `${geoRef.lat},${geoRef.lon}` : "";
+        if (wantPhoto && (!photo || photoFor !== photoKey)) {
+          photo?.dispose();
+          photo = new PhotoTiles(PHOTO!, geoRef!, msg => setNote(msg)); photoFor = photoKey;
+          scene.add(photo.root);
+        } else if (!wantPhoto && photo) { photo.dispose(); photo = null; }
+        if (!!photo !== photoWas) {
+          photoWas = !!photo;
+          ground.visible = !photo; if (houses) houses.mesh.visible = buildingsOn(); syncSatellite(); syncUnderlay();
+          if (!photo) { photoCredits = ""; setCredits(null); }
+        }
+        if (photo) {
+          photo.update(viewCam, renderer, now);
+          const c = photo.credits().join(" · ");
+          if (c !== photoCredits) { photoCredits = c; setCredits({ provider: photo.provider.kind, text: c }); }
+        }
         renderer.render(scene, viewCam);
+        placeMarkers(viewCam);
         if (heli.cabin?.body.visible) {
           // the cabin over the view, its own depth (and no sky: the view is already there)
           cabinCam.position.copy(camera.position); cabinCam.quaternion.copy(camera.quaternion);
@@ -925,6 +1034,9 @@ export function View3D() {
       disposed = true;
       for (const h of [heli.cabin, heli.whole]) if (h) { scene.remove(h.body); h.dispose(); }
       rotorSound.dispose();
+      photo?.dispose();
+      enemies.dispose();
+      warApi.current = null;
       combat.dispose();
       controls.dispose();
       if (houses) { houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); }
@@ -942,8 +1054,23 @@ export function View3D() {
       <div ref={wrapRef} className="absolute inset-0 overflow-hidden" aria-label="3D view of the street plan" />
       {mode !== "orbit" && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} hovered={hover?.at ?? null} />}
       <div ref={revRef} className="pointer-events-none absolute inset-0 z-[6] overflow-hidden"><ReversibleControls /></div>
+      {credits && (
+        // the tiles' makers, as their terms ask (Google: its logo and the data credits)
+        <div className="pointer-events-none absolute bottom-9 left-16 z-10 flex max-w-[45%] items-center gap-2 rounded bg-background/85 px-2 py-1 text-[10px] text-muted-foreground shadow-sm">
+          {/* eslint-disable-next-line @next/next/no-img-element -- Google's own logo, from Google, as it must be shown */}
+          {credits.provider === "google" && <img src={GOOGLE_LOGO} alt="Google" className="h-4 w-auto" />}
+          <span className="truncate">{credits.text || (credits.provider === "google" ? "Map data ©Google" : "Cesium ion")}</span>
+        </div>
+      )}
       {/* (flying, it shows on the cockpit's display instead) */}
       {hover && mode === "orbit" && <HoverInfo at={hover.at} x={hover.x} y={hover.y} />}
+      {mode !== "orbit" && war && (
+        <>
+          {/* red at the edges when hit; the enemies' markers */}
+          <div ref={flashRef} className="pointer-events-none absolute inset-0 z-[5] opacity-0 shadow-[inset_0_0_140px_40px_rgba(220,38,38,0.85)]" aria-hidden />
+          <div ref={markersRef} className="pointer-events-none absolute inset-0 z-[6] overflow-hidden" aria-hidden />
+        </>
+      )}
       {mode !== "orbit" && war && (
         // the gunsight, in the middle of the view
         <svg viewBox="-40 -40 80 80" className="pointer-events-none absolute top-1/2 left-1/2 z-[6] size-16 -translate-x-1/2 -translate-y-1/2 text-red-500 drop-shadow-[0_0_3px_rgba(239,68,68,0.7)]" aria-hidden>
@@ -965,13 +1092,18 @@ export function View3D() {
             title={vehicleSelected ? "The helicopter follows the selected vehicle" : "Click a vehicle first, then track it"}
           ><Crosshair /> Track</ToggleGroupItem>
         </ToggleGroup>
+        {PHOTO && geo && (
+          <Button size="sm" variant={photo3d ? "default" : "outline"} aria-pressed={photo3d} onClick={() => { setNote(""); setPhoto3d(p => !p); }}
+            title={`Photorealistic 3D city (${PHOTO.kind === "google" ? "Google" : "Cesium ion"}): real buildings, trees and terrain${PHOTO.kind === "google" ? "; each time it is turned on is one billed Google session" : ""}`}
+            className={cn("h-8 shadow-sm", !photo3d && "bg-background/95")}><Building2 /> Real 3D</Button>
+        )}
         {mode !== "orbit" && (
           <div className="flex gap-1.5">
             <ToggleGroup type="single" value={view} aria-label="Seen from" onValueChange={v => { if (v) setView(v as HeliView); }} className="bg-background/95 shadow-sm backdrop-blur">
               <ToggleGroupItem value="cockpit" aria-label="From the cockpit" title="From the pilot's seat (C)"><Gauge /> Cockpit</ToggleGroupItem>
               <ToggleGroupItem value="outside" aria-label="From outside" title="From behind the helicopter (C)"><Eye /> Outside</ToggleGroupItem>
             </ToggleGroup>
-            {WAR_MODE && (
+            {warMode && (
               <Button size="sm" variant={war ? "destructive" : "outline"} aria-pressed={war} onClick={() => { setWar(w => !w); setNote(""); }}
                 title="War mode: the gun (Space, or click) and guided rockets (R)" className={cn("h-8 shadow-sm", !war && "bg-background/95")}><Swords /> War</Button>
             )}
@@ -985,17 +1117,17 @@ export function View3D() {
             <div className="mb-1 font-medium text-foreground tabular-nums"><span ref={hudRef} /></div>
             {mode === "heli" ? (
               <>
-                <div><Kbd>Z</Kbd> <Kbd>S</Kbd> forward, back · <Kbd>Q</Kbd> <Kbd>D</Kbd> left, right (or arrows)</div>
+                <div>{keysOf("forward")} {keysOf("back")} forward, back · {keysOf("left")} {keysOf("right")} left, right</div>
                 <div>Mouse left / right turns · up / down looks far ahead or below</div>
-                <div><Kbd>E</Kbd>/<Kbd>PgUp</Kbd> climb · <Kbd>A</Kbd>/<Kbd>PgDn</Kbd> descend · or scroll</div>
-                <div><Kbd>Shift</Kbd> faster · <Kbd>C</Kbd> cockpit / outside · click a vehicle, then Track</div>
+                <div>{keysOf("climb")} climb · {keysOf("descend")} descend · or scroll</div>
+                <div>{keysOf("faster")} faster · {keysOf("view")} cockpit / outside · click a vehicle, then Track</div>
               </>
             ) : (
               <>
                 <div>Following the selected vehicle; click another to switch</div>
-                <div>Drag to circle round it · <Kbd>Q</Kbd> <Kbd>D</Kbd> too</div>
-                <div><Kbd>Z</Kbd> <Kbd>S</Kbd> closer, further · scroll zooms</div>
-                <div><Kbd>E</Kbd>/<Kbd>A</Kbd> higher, lower · <Kbd>C</Kbd> cockpit / outside</div>
+                <div>Drag to circle round it · {keysOf("left")} {keysOf("right")} too</div>
+                <div>{keysOf("forward")} {keysOf("back")} closer, further · scroll zooms</div>
+                <div>{keysOf("climb")} {keysOf("descend")} higher, lower · {keysOf("view")} cockpit / outside</div>
               </>
             )}
           </div>
@@ -1004,7 +1136,20 @@ export function View3D() {
           <div className="rounded-lg border border-red-500/40 bg-background/95 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground shadow-sm backdrop-blur">
             <div className="mb-0.5 font-medium text-red-600 dark:text-red-400">War mode · {kills} destroyed</div>
             <div><Kbd>Space</Kbd> gun at the sight · click: a burst there</div>
-            <div><Kbd>R</Kbd> rocket, locked on the vehicle nearest the sight{mode === "track" ? " (the tracked one)" : ""}</div>
+            <div><Kbd>R</Kbd> rocket, locked on the enemy or vehicle nearest the sight{mode === "track" ? " (the tracked one)" : ""}</div>
+            <div className="mt-1.5 flex items-center gap-2">
+              <span>Hull</span>
+              <div className="h-1.5 flex-1 overflow-hidden rounded bg-muted" role="meter" aria-label="Hull" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(foes.hull * 100)}>
+                <div className={cn("h-full transition-[width]", foes.hull > 0.5 ? "bg-emerald-500" : foes.hull > 0.25 ? "bg-amber-500" : "bg-red-500")} style={{ width: `${foes.hull * 100}%` }} />
+              </div>
+            </div>
+            <div className="mt-1 flex items-center gap-1.5">
+              {/* (blurred after a click: Space, the gun, mustn't press it again) */}
+              <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={foes.count >= ENEMY_MAX}
+                onClick={e => { warApi.current?.spawn(); e.currentTarget.blur(); }} title="An enemy helicopter, a kilometre off, coming for you"><Plus /> Enemy</Button>
+              {foes.count > 0 && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={e => { warApi.current?.clear(); e.currentTarget.blur(); }}>Clear</Button>}
+              <span className="ml-auto tabular-nums">{foes.count} up · {foes.kills} down</span>
+            </div>
           </div>
         )}
         {mode !== "orbit" && vehicleSelected && <SelectedVehicleActions id={selection!.id} />}

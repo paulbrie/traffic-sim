@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, ChevronDown, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, ChevronDown, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, Keyboard, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -14,14 +14,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { HeliKeysDialog } from "./heli-keys-dialog";
 import { Kbd } from "@/components/ui/kbd";
-import { savePlan } from "@/server/actions";
+import { savePlan, saveWarMode } from "@/server/actions";
 import { MAX_LANES, type Network, type PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 import { allLayersOn, commit, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll } from "@/state/store";
 import { DELETABLE, deleteSelected } from "@/state/bulk";
 import { simController } from "@/state/sim-controller";
+import { heliKeys$ } from "@/state/heli-keys";
+import type { UserPrefs } from "@/server/queries";
 import { changeConnection } from "@/state/connections";
 import { sendView, viewport } from "@/state/commands";
 import { OsmImportDialog, describeStats, type OsmImportMode } from "@/components/osm/osm-import-dialog";
@@ -56,9 +59,9 @@ export interface WorkspacePlan {
   access: "owner" | "write" | "read";
 }
 
-export function Workspace({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
+export function Workspace({ plan, user, prefs }: { plan: WorkspacePlan; user: MenuUser; prefs: UserPrefs }) {
   // load once per mount (the component is keyed by plan id) before children read the stores
-  useState(() => { simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read"); setSavedBuildings(plan.network.buildings); startUnderlayImage(); return plan.id; });
+  useState(() => { heliKeys$.next(prefs.heliKeys); simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read"); ui.getValue().warMode = prefs.warMode; setSavedBuildings(plan.network.buildings); startUnderlayImage(); return plan.id; });
   useAutosave(plan.id);
   useShortcuts();
   const [view] = useDeepSubject(ui, "view");
@@ -242,12 +245,22 @@ function LayerPicker() {
   );
 }
 
-/** editor settings (in the top bar): the grid step for drawing and snapping */
+/** editor settings (in the top bar): the grid step for drawing and snapping, the helicopter's keys and war mode */
 function SettingsMenu() {
   const [snap, setSnap] = useDeepSubject(ui, "snap");
   const [record, setRecord] = useDeepSubject(ui, "record");
+  const [warMode, setWarMode] = useDeepSubject(ui, "warMode");
+  // (saved with the user's account; turned back if that fails)
+  const toggleWar = async (on: boolean) => {
+    setWarMode(on);
+    const res = await saveWarMode(on).catch(() => ({ ok: false as const, error: "Couldn't save war mode." }));
+    if (!res.ok) { setWarMode(!on); toast.error(res.error); }
+  };
+  const [keysOpen, setKeysOpen] = useState(false);
   const keep = (e: Event) => e.preventDefault();
   return (
+    <>
+    <HeliKeysDialog open={keysOpen} onOpenChange={setKeysOpen} />
     <DropdownMenu>
       <Tip label="Settings">
         <DropdownMenuTrigger asChild>
@@ -264,8 +277,15 @@ function SettingsMenu() {
         {[0.5, 1, 2, 5, 10, 20].map(st => (
           <DropdownMenuCheckboxItem key={st} checked={snap.step === st} onCheckedChange={() => setSnap({ ...snap, step: st })} onSelect={keep}>{st} m</DropdownMenuCheckboxItem>
         ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => setKeysOpen(true)}><Keyboard /> Helicopter keys…</DropdownMenuItem>
+        <DropdownMenuCheckboxItem checked={warMode} onCheckedChange={v => toggleWar(!!v)} onSelect={keep}>
+          War mode
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuLabel className="pt-0 text-[10px] font-normal text-muted-foreground">Arms the helicopter: a War button appears while flying, for its gun and guided rockets.</DropdownMenuLabel>
       </DropdownMenuContent>
     </DropdownMenu>
+    </>
   );
 }
 

@@ -1,0 +1,1 @@
+ALTER TABLE "user_prefs" ADD COLUMN "war_mode" boolean DEFAULT false NOT NULL;

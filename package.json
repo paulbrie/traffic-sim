@@ -21,6 +21,7 @@
     "audit": "tsx scripts/junction-audit.ts"
   },
   "dependencies": {
+    "3d-tiles-renderer": "^0.5.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.3",

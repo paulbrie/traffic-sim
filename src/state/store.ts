@@ -83,6 +83,8 @@ export interface UiState {
   connectFrom: string | null;
   /** keep every simulation step for the replay bar (costs time and memory on big plans) */
   record: boolean;
+  /** war mode available while flying: the helicopter's gun and rockets (off by default) */
+  warMode: boolean;
 }
 
 export const ui = new DeepSubject<UiState>(
@@ -113,6 +115,7 @@ export const ui = new DeepSubject<UiState>(
     shape: { edit: null, paint: null },
     connectFrom: null,
     record: true,
+    warMode: false,
   },
   { name: "ui" },
 );

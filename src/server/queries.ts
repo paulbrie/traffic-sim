@@ -5,6 +5,7 @@ import { db, schema } from "@/db";
 import type { Network } from "@/engine/types";
 import type { CurrentUser } from "./auth";
 import { cityAccess, planAccess, type Access } from "./access";
+import { sanitizeHeliKeys, type HeliKeys } from "@/lib/heli-keys";
 
 const planCount = sql<number>`(select count(*)::int from plans p where p.city_id = "cities"."id")`;
 const lastPlanAt = sql<string | null>`(select max(p.updated_at) from plans p where p.city_id = "cities"."id")`;
@@ -78,6 +79,17 @@ export async function getCity(id: string, user: CurrentUser) {
     .where(eq(schema.plans.cityId, id))
     .orderBy(desc(schema.plans.updatedAt));
   return { city: city.city, owner: city.ownerName || city.ownerEmail || null, ownerIsMe: city.city.ownerId === user.id, access, plans };
+}
+
+export interface UserPrefs { heliKeys: HeliKeys; warMode: boolean }
+/** the user's preferences: helicopter keys and war mode (the defaults if none saved, or when the preferences table isn't there yet) */
+export async function getUserPrefs(userId: string): Promise<UserPrefs> {
+  try {
+    const [row] = await db.select({ keys: schema.userPrefs.heliKeys, warMode: schema.userPrefs.warMode }).from(schema.userPrefs).where(eq(schema.userPrefs.userId, userId)).limit(1);
+    return { heliKeys: sanitizeHeliKeys(row?.keys), warMode: row?.warMode ?? false };
+  } catch {
+    return { heliKeys: sanitizeHeliKeys(null), warMode: false };
+  }
 }
 
 export async function getPlan(id: string, user: CurrentUser) {
