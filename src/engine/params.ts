@@ -32,9 +32,14 @@ export interface SimParams {
   // stuck vehicles
   rerouteAfter: number;
   towAfter: number;
+  // breakdowns
+  /** engine failures across the plan, per hour (picked among moving vehicles at random) */
+  breakdownsPerHour: number;
+  /** a broken-down or wrecked vehicle stays on the road this long, then is towed away (s) */
+  brokenTowAfter: number;
 }
 
-export type ParamGroup = "Drivers" | "Trucks" | "Lane changes" | "Junctions" | "Pedestrians" | "Stuck vehicles";
+export type ParamGroup = "Drivers" | "Trucks" | "Lane changes" | "Junctions" | "Pedestrians" | "Stuck vehicles" | "Breakdowns";
 
 export interface ParamInfo {
   key: keyof SimParams;
@@ -70,10 +75,12 @@ export const PARAMS: ParamInfo[] = [
   { key: "pedWalk", group: "Pedestrians", label: "Walk time at a red", unit: "s", min: 3, max: 20, step: 1, def: 8, help: "At lights: seconds at the start of a red in which people may step onto the crossing." },
   { key: "pedYield", group: "Pedestrians", label: "Gap left for cars at zebras", unit: "s", min: 0, max: 20, step: 1, def: 5, help: "At zebras: after a group crosses, seconds before the next may step out." },
   { key: "rerouteAfter", group: "Stuck vehicles", label: "Look for another way after", unit: "s", min: 10, max: 300, step: 5, def: 40, help: "A driver waiting this long at a junction looks for another route." },
+  { key: "breakdownsPerHour", group: "Breakdowns", label: "Engine failures", unit: "per hour", min: 0, max: 120, step: 1, def: 0, help: "Vehicles whose engine fails, across the plan: each rolls to a stop with its hazard lights on and stays there, blocking its lane; others go round it where there is another lane, or wait." },
+  { key: "brokenTowAfter", group: "Breakdowns", label: "Broken-down vehicles towed after", unit: "s", min: 30, max: 3600, step: 30, def: 600, help: "How long a broken-down (or wrecked) vehicle stays on the road before it is towed away." },
   { key: "towAfter", group: "Stuck vehicles", label: "Tow away after", unit: "s", min: 30, max: 900, step: 10, def: 150, help: "A vehicle stuck this long is removed (counted as towed)." },
 ];
 
-export const PARAM_GROUPS: ParamGroup[] = ["Drivers", "Trucks", "Lane changes", "Junctions", "Pedestrians", "Stuck vehicles"];
+export const PARAM_GROUPS: ParamGroup[] = ["Drivers", "Trucks", "Lane changes", "Junctions", "Pedestrians", "Stuck vehicles", "Breakdowns"];
 
 export const DEFAULT_PARAMS: SimParams = Object.fromEntries(PARAMS.map(p => [p.key, p.def])) as unknown as SimParams;
 

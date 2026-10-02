@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import { ArrowLeftRight, Footprints, Merge, Minus, Plus, Spline, TrafficCone, Trash2, TriangleAlert, Minus as StraightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -27,6 +28,7 @@ import { ZonePicker, ZonesSection } from "./zones";
 import { LaneArrowsEditor, SignPicker } from "./lane-arrows";
 import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
 import { junctionRefs } from "@/engine/refs";
+import { minSec } from "@/lib/time";
 import { arrowLetters } from "@/engine/compile";
 import { sumCounters } from "@/engine/sim";
 import { JunctionEventLog, RoadEventLog, VehicleEventLog } from "./event-log";
@@ -829,6 +831,18 @@ function BuildingInspector({ net, b }: { net: Network; b: BuildingDef }) {
 }
 
 // ---------------------------------------------------------------- vehicle
+/** an engine failure for this vehicle (it stops in its lane, an obstacle), or, broken down, towing it away */
+export function BreakdownButton({ id, state, className }: { id: number; state: string; className?: string }) {
+  const readOnly = ui.getValue().readOnly, broken = state === "broken down" || state === "wrecked";
+  return broken ? (
+    <Button size="sm" variant="outline" className={cn("h-7 text-xs", className)} disabled={readOnly} onClick={() => simController.tow([id])}
+      title="Tow it away now (otherwise it is towed after the time set in the simulation settings)">Tow away</Button>
+  ) : (
+    <Button size="sm" variant="outline" className={cn("h-7 text-xs", className)} disabled={readOnly} onClick={() => simController.breakDown([id])}
+      title="Its engine fails: it rolls to a stop in its lane with its hazard lights on; others go round it where they can">Engine failure</Button>
+  );
+}
+
 function VehicleInspector({ id }: { id: string }) {
   useSubject(stats$); // re-render with the stats cadence (~4×/s)
   const sim = simController.sim;
@@ -854,6 +868,8 @@ function VehicleInspector({ id }: { id: string }) {
     ["Lane", v.lane !== null && v.lanes !== null ? `${v.lane + 1} of ${v.lanes}` : "–"],
     ["Heading to", v.heading],
     ["Waiting", `${v.wait.toFixed(0)} s`],
+    ["Driving for", minSec(v.trip)],
+    ["In traffic", `${minSec(v.jam)}${v.trip > 0 ? ` (${Math.round((100 * v.jam) / v.trip)}%)` : ""}`],
     ["Lane changes", String(v.laneChanges)],
     ["Re-routes", String(v.reroutes)],
     ["Max accel / braking", `${v.a.toFixed(1)} / ${v.b.toFixed(1)} m/s²`],
@@ -870,7 +886,10 @@ function VehicleInspector({ id }: { id: string }) {
     <div>
       <Header kind={v.kind === "car" ? "Car" : v.kind === "truck" ? "Truck" : "Bus"} id={`#${v.id}`} title={v.road} />
       <Section>
-        <Badge variant="secondary" className="w-fit">{v.state}</Badge>
+        <div className="flex items-center justify-between gap-2">
+          <Badge variant="secondary" className="w-fit">{v.state}</Badge>
+          <BreakdownButton id={v.id} state={v.state} />
+        </div>
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
           {rows.map(([k, val]) => (<Fragment key={k}><dt className="text-muted-foreground">{k}</dt><dd className="text-right font-mono text-xs leading-5 tabular">{val}</dd></Fragment>))}
         </dl>

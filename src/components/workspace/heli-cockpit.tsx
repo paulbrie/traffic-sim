@@ -5,6 +5,7 @@ import { useDeepSubject, useSubject } from "subjecto/react";
 import { simController } from "@/state/sim-controller";
 import { stats$, ui } from "@/state/store";
 import { junctionRefs } from "@/engine/refs";
+import { minSec } from "@/lib/time";
 
 /** what the 3D view tells the cockpit every frame */
 export interface Flight {
@@ -198,6 +199,8 @@ function VehicleScreen({ tracking }: { tracking: boolean }) {
       ["NEXT", nt ? `${TURN[nt.turn]}${ref ? ` @ ${ref}` : ""}` : "–"],
       ["TO", d.heading],
       ["GAP", Number.isFinite(d.gap) && d.gap < 100 ? `${d.gap.toFixed(1)} m` : "CLEAR"],
+      ["TRIP", minSec(d.trip)],
+      ["IN TRAFFIC", `${minSec(d.jam)}${d.trip > 0 ? ` · ${Math.round((100 * d.jam) / d.trip)}%` : ""}`],
       ["WAIT", `${d.wait.toFixed(0)} s`],
       ["LN CHG", `${d.laneChanges}  RRT ${d.reroutes}`],
     ];

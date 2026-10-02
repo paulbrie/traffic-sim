@@ -869,14 +869,15 @@ function drawCounters(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, 
     if (q.x < -120 || q.y < -40 || q.x > cam.w + 120 || q.y > cam.h + 40) continue;
     let text = "⇅ counter";
     if (sim) {
-      // each direction (by where it heads) and both together
+      // each direction (by where it heads) and both together: vehicles counted, and per hour
       const f = sim.counter(l.id, 1), b = sim.counter(l.id, -1);
       const total = (f?.total ?? 0) + (b?.total ?? 0), rate = (f?.perHour ?? 0) + (b?.perHour ?? 0);
       const A = compiled.nodeById.get(l.from)?.pos, B = compiled.nodeById.get(l.to)?.pos;
       const head = (dx: number, dy: number) => ["E", "SE", "S", "SW", "W", "NW", "N", "NE"][((Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) % 8) + 8) % 8];
+      const count = (n: number, h: number) => `${n} (${Math.round(h)}/h)`;
       text = l.lanesF > 0 && l.lanesB > 0 && A && B
-        ? `${head(B.x - A.x, B.y - A.y)} ${f?.total ?? 0} · ${head(A.x - B.x, A.y - B.y)} ${b?.total ?? 0} · Σ ${total} · ${Math.round(rate)}/h`
-        : `⇅ ${total} · ${Math.round(rate)}/h`;
+        ? `${head(B.x - A.x, B.y - A.y)} ${count(f?.total ?? 0, f?.perHour ?? 0)} · ${head(A.x - B.x, A.y - B.y)} ${count(b?.total ?? 0, b?.perHour ?? 0)} · Σ ${count(total, rate)}`
+        : `⇅ ${count(total, rate)}`;
     }
     ctx.fillStyle = pal.primary; ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = pal.bg; ctx.lineWidth = 1.5; ctx.stroke();
@@ -1078,11 +1079,14 @@ function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, byS
     const pts: [number, number][] = [[hl - r, -hw], [hl, -hw + r], [hl, hw - r], [hl - r, hw], [-hl + r, hw], [-hl, hw - r], [-hl, -hw + r], [-hl + r, -hw]];
     pts.forEach(([x, y], i) => { const X = cx + ux * x - uy * y, Y = cy + uy * x + ux * y; if (i) body!.lineTo(X, Y); else body!.moveTo(X, Y); });
     body.closePath();
-    // turn signals: amber corners on the side the vehicle is heading (local +y = right)
+    // turn signals: amber corners on the side the vehicle is heading (local +y = right); 2: hazard lights, both sides
     const bl = blinkOn ? sim.blinker(v) : 0;
     if (bl) {
-      const bw = Math.max(0.65, px * 4), bh = Math.max(0.5, px * 3.2), y = bl > 0 ? hw - bh * 0.6 : -hw - bh * 0.4;
-      quad(signals, cx, cy, ux, uy, hl - bw, hl, y, y + bh); quad(signals, cx, cy, ux, uy, -hl, -hl + bw, y, y + bh);
+      const bw = Math.max(0.65, px * 4), bh = Math.max(0.5, px * 3.2);
+      for (const sd of bl === 2 ? [1, -1] : [bl]) {
+        const y = sd > 0 ? hw - bh * 0.6 : -hw - bh * 0.4;
+        quad(signals, cx, cy, ux, uy, hl - bw, hl, y, y + bh); quad(signals, cx, cy, ux, uy, -hl, -hl + bw, y, y + bh);
+      }
     }
     if (v.kind === "car") quad(windows, cx, cy, ux, uy, L * 0.08, L * 0.28, -w * 0.38, w * 0.38);
     else if (v.kind === "truck") quad(windows, cx, cy, ux, uy, L * 0.28, L * 0.32, -hw, hw);

@@ -6,6 +6,14 @@ import { SimJunctions } from "./junctions";
 /** Driving: each vehicle's acceleration against what lies ahead (IDM), lane changes (MOBIL-style), moving along pieces, buses at their stops. */
 export abstract class SimMotion extends SimJunctions {
   protected think(v: Vehicle) {
+    // broken down (rolls to a stop) or wrecked (stopped where it was hit): an obstacle in its lane, no
+    // longer asking for junctions, until towed away. (Not towed as "stuck": its wait isn't counted.)
+    if (v.broken) {
+      v.acc = v.v > 0 ? -Math.min(v.broken === 2 ? v.bmax : 2.5, v.v / DT) : 0;
+      v.state = v.broken === 2 ? "wrecked" : "broken down"; v.leader = null; v.gap = Infinity; v.wait = 0;
+      if ((this.tick - v.brokenAt) * DT > this.P.brokenTowAfter) this.kill(v, v.broken === 2 ? "destroyed" : "towed");
+      return;
+    }
     v.lcCool -= DT;
     if (v.lcT > 0) v.lcT = Math.max(0, v.lcT - DT / 1.4);
     if (v.dwell > 0) { v.state = "boarding"; v.acc = 0; v.leader = null; v.gap = Infinity; return; }
@@ -379,7 +387,10 @@ export abstract class SimMotion extends SimJunctions {
     const p = v.piece, e = p.edge;
     if (e.n <= 1 || v.s < 2 || v.s > p.len - (v.v < 1 ? 0.3 : 3) || v.granted) return;
     const need = this.neededLanes(v), a = v.lane;
-    const dir = a < need.lo ? 1 : a > need.hi ? -1 : 0;
+    // stuck behind a broken-down vehicle in this lane: any lane beside will do to get round it
+    // (back to the one it needs once past)
+    const blocked = !!v.leader?.broken && v.leader.piece === p && v.gap < 60;
+    const dir = blocked ? 0 : a < need.lo ? 1 : a > need.hi ? -1 : 0;
     const aCur = this.idm(v, v.gap, v.leader ? v.leader.v : 0, v.v0);
     let best = -1, bestGain = 0, bestMandatory = false;
     const bayRoad = e.left > 0 || e.right > 0 || e.dropLane >= 0;
@@ -391,10 +402,12 @@ export abstract class SimMotion extends SimJunctions {
       if (e.open[c] > 0 && v.s * (e.lanes[c].len / p.len) < e.open[c]) continue;
       const mandatory = dir !== 0 && Math.sign(c - a) === dir;
       if (dir !== 0 && !mandatory) continue;
-      if (!mandatory && (c < need.lo || c > need.hi)) continue;
+      if (!mandatory && !blocked && (c < need.lo || c > need.hi)) continue;
       const L = this.laneLeader(v, c), F = this.laneFollower(v, c);
-      // squeezing into a slow queue to reach a turning lane: neighbours let you in
-      const courtesy = mandatory && v.v < 3 && (!F.u || F.u.v < 4);
+      // never into a lane only to stop behind a broken-down vehicle there
+      if (L.u?.broken && L.gap < 80) continue;
+      // squeezing into a slow queue to reach a turning lane (or round a breakdown): neighbours let you in
+      const courtesy = (mandatory || blocked) && v.v < 3 && (!F.u || F.u.v < 4);
       if (L.gap < (courtesy ? 0.8 : 1.5 + 0.25 * v.v)) continue;
       let fLoss = 0;
       if (F.u) {
@@ -407,6 +420,7 @@ export abstract class SimMotion extends SimJunctions {
       let gain = aNew - aCur - v.politeness * fLoss + (c > a ? 0.08 : -0.08);
       if (v.kind === "truck") gain += c > a ? 0.25 : -0.25;
       if (mandatory) gain += need.urgent < 60 ? 5 : 1;
+      if (blocked) gain += 2;
       // getting to a turn bay (across to it, then into its queue): any safe gap will do
       if (mandatory && bayRoad) gain = Math.max(gain, 0.01);
       if (gain > (mandatory ? 0 : this.P.laneChangeGain) && gain > bestGain) { best = c; bestGain = gain; bestMandatory = mandatory; }

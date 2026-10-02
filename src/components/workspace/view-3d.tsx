@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useDeepSubject } from "subjecto/react";
+import { useDeepSubject, useSubject } from "subjecto/react";
 import { Crosshair, Eye, Gauge, Orbit, Plane, Swords, Volume2, VolumeX } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -14,7 +14,7 @@ import { Combat, type World } from "@/render/combat";
 import type { BuildingDef } from "@/engine/types";
 import { readPalette, speedColor, type Palette } from "@/render/palette";
 import { LEVEL_H, linkExtent } from "@/engine/compile";
-import { network$, select, ui, underlay$, type LayerId, type UiState } from "@/state/store";
+import { network$, select, ui, underlay$, type LayerId, type UiState, stats$ } from "@/state/store";
 import { underlayImg$ } from "@/state/underlay-image";
 import { simController } from "@/state/sim-controller";
 import { planViewKey, viewCmd$, viewport } from "@/state/commands";
@@ -24,6 +24,8 @@ import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Cockpit, type CockpitApi } from "./heli-cockpit";
+import { ReversibleControls, placeReversibleControls } from "./reversible-3d";
+import { BreakdownButton } from "./inspector";
 
 const CAR3D = ["#ffffff", "#f1f2ee", "#e2e5e1", "#cdd1cd"];
 
@@ -67,6 +69,7 @@ function arrival(planId: string): Arrival {
 export function View3D() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const hudRef = useRef<HTMLSpanElement>(null);
+  const revRef = useRef<HTMLDivElement>(null);
   const [arrive] = useState(() => arrival(ui.getValue().planId));
   const arriveRef = useRef(arrive);
   const [mode, setMode] = useState<CamMode>(arrive && "exact" in arrive ? arrive.exact.mode : "orbit");
@@ -731,7 +734,8 @@ export function View3D() {
         // war: fire, move the rounds and rockets, take the destroyed vehicles off the roads
         shoot(now);
         const ev = combat.update(dt, world, outside() ? outCam.position : camera.position);
-        if (ev.destroyed.length) { simController.destroy(ev.destroyed); setKills(combat.destroyedCount); }
+        // (they stay on the road as wrecks, obstacles in the traffic, until towed)
+        if (ev.destroyed.length) { simController.breakDown(ev.destroyed, true); setKills(combat.destroyedCount); }
         if (soundOn) { for (let k = 0; k < Math.min(2, ev.shots); k++) rotorSound.shot(); for (const d of ev.blasts) rotorSound.blast(d); }
         if (now - lastForget > 1000 && sim) { lastForget = now; combat.forget(id => sim.vehicles.some(v => v.id === id && !v.dead)); }
         if (soundOn) rotorSound.set(0.75 * Math.min(1, flight.speed / HELI_VMAX) + 0.25 * Math.max(0, Math.min(1, flight.vs / 8)), outside());
@@ -765,15 +769,16 @@ export function View3D() {
         let nl = 0;
         if (vsim && Math.floor(now / 380) % 2 === 0) for (const v of vsim.vehicles) {
           const b = vsim.blinker(v);
-          if (!b || nl + 2 > 16000 || combat.isGone(v.id)) continue;
+          if (!b || nl + 4 > 16000 || combat.isGone(v.id)) continue;
           const q = vsim.pose(v);
           let mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
           if (followOffset(v)) { mx += follow.ox; mz += follow.oz; }
           const dx = q.fx - q.rx, dz = q.fy - q.ry, m = Math.hypot(dx, dz) || 1, ux = dx / m, uz = dz / m;
-          const nx = -uz * b, nz = ux * b, half = v.len / 2 - 0.15, side = v.width / 2 + 0.02, h = (v.kind === "car" ? 0.6 : 0.9) + v.z * LEVEL_H;
+          const half = v.len / 2 - 0.15, side = v.width / 2 + 0.02, h = (v.kind === "car" ? 0.6 : 0.9) + v.z * LEVEL_H;
           dummy.rotation.set(0, Math.atan2(-dz, dx), 0); dummy.scale.set(1, 1, 1);
-          for (const f of [half, -half]) {
-            dummy.position.set(mx + ux * f + nx * side, h, mz + uz * f + nz * side); dummy.updateMatrix();
+          // (2: hazard lights, both sides)
+          for (const sd of b === 2 ? [1, -1] : [b]) for (const f of [half, -half]) {
+            dummy.position.set(mx + ux * f - uz * sd * side, h, mz + uz * f + ux * sd * side); dummy.updateMatrix();
             lamps.setMatrixAt(nl++, dummy.matrix);
           }
         }
@@ -834,6 +839,8 @@ export function View3D() {
         viewCam.getWorldDirection(dir);
         const heading = Math.round((Math.atan2(dir.x, -dir.z) * 180) / Math.PI * 10) / 10;
         if (heading !== lastHeading) { lastHeading = heading; compassEl()?.style.setProperty("--heading", `${-heading}deg`); }
+        // the reversible lanes' switches, over their roads (flying)
+        placeReversibleControls(revRef.current, viewCam, renderer.domElement.clientWidth, renderer.domElement.clientHeight, camMode !== "orbit");
         renderer.render(scene, viewCam);
         if (heli.cabin?.body.visible) {
           // the cabin over the view, its own depth (and no sky: the view is already there)
@@ -888,6 +895,7 @@ export function View3D() {
     <>
       <div ref={wrapRef} className="absolute inset-0 overflow-hidden" aria-label="3D view of the street plan" />
       {mode !== "orbit" && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} />}
+      <div ref={revRef} className="pointer-events-none absolute inset-0 z-[6] overflow-hidden"><ReversibleControls /></div>
       {mode !== "orbit" && war && (
         // the gunsight, in the middle of the view
         <svg viewBox="-40 -40 80 80" className="pointer-events-none absolute top-1/2 left-1/2 z-[6] size-16 -translate-x-1/2 -translate-y-1/2 text-red-500 drop-shadow-[0_0_3px_rgba(239,68,68,0.7)]" aria-hidden>
@@ -949,6 +957,7 @@ export function View3D() {
             <div><Kbd>R</Kbd> rocket, locked on the vehicle nearest the sight{mode === "track" ? " (the tracked one)" : ""}</div>
           </div>
         )}
+        {mode !== "orbit" && vehicleSelected && <SelectedVehicleActions id={selection!.id} />}
         {note && <div className="rounded-md bg-background/95 px-2 py-1 text-[11px] shadow-sm">{note}</div>}
         {mode !== "orbit" && (
           // the model's licence asks for its author to be named
@@ -958,5 +967,18 @@ export function View3D() {
         )}
       </div>
     </>
+  );
+}
+
+/** flying: the selected vehicle's state, and its engine failure (or, broken down, towing it away) */
+function SelectedVehicleActions({ id }: { id: string }) {
+  useSubject(stats$); // live state (~4×/s)
+  const v = simController.sim?.vehicles.find(x => String(x.id) === id);
+  if (!v) return null;
+  return (
+    <div className="flex items-center gap-2 rounded-lg border bg-background/95 py-1 pr-1 pl-2.5 text-[11px] shadow-sm backdrop-blur">
+      <span className="text-muted-foreground">#{v.id} · {v.state}</span>
+      <BreakdownButton id={v.id} state={v.state} />
+    </div>
   );
 }

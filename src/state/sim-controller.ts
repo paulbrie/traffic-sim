@@ -39,8 +39,10 @@ class SimController {
   private pending = new Map<number, (r: TestResult) => void>();
   private req = 0;
 
-  /** take these vehicles off the roads (destroyed from the helicopter) */
-  destroy(ids: number[]) { if (ids.length) this.post({ type: "destroy", ids }); }
+  /** these vehicles break down (engine failure) or are wrecked (war mode): obstacles in their lanes until towed */
+  breakDown(ids: number[], wreck = false) { if (ids.length) this.post({ type: "breakdown", ids, wreck }); }
+  /** tow these broken-down (or wrecked) vehicles away now */
+  tow(ids: number[]) { if (ids.length) this.post({ type: "tow", ids }); }
 
   /** send one test vehicle from an entry point to an exit (starts the simulation if needed) */
   sendTest(from: string, to: string, lane: number | null): Promise<TestResult> {

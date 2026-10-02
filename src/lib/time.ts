@@ -6,3 +6,9 @@ export function timeAgo(d: Date): string {
   if (s < 86400 * 7) return `${Math.floor(s / 86400)} d ago`;
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
+
+/** a duration in seconds as m:ss (h:mm:ss from an hour) */
+export function minSec(sec: number): string {
+  const t = Math.max(0, Math.round(sec)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}

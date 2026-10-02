@@ -9,7 +9,7 @@
 import { pieceLevel, pieceZ, type CNode, type Compiled } from "../compile";
 import { isJunction } from "../refs";
 import { signalAspect, type Aspect } from "../signals";
-import type { JunctionEvent, Kind, RevStateCode, Stats, TestTrip, Vehicle } from "./base";
+import { DT, type JunctionEvent, type Kind, type RevStateCode, type Stats, type TestTrip, type Vehicle } from "./base";
 
 /** a pedestrian crossing right now: its arm, people waiting, people crossing and how far across (0..1) */
 export interface PedView { arm: number; waiting: number; crossing: number; progress: number }
@@ -31,6 +31,8 @@ export interface VehicleDetail {
   v: number; v0: number; acc: number; gap: number;
   road: string; lane: number | null; lanes: number | null;
   heading: string; wait: number; laneChanges: number; reroutes: number;
+  /** seconds since it set off, and of those, in traffic (stopped or crawling) */
+  trip: number; jam: number;
   a: number; b: number; pax: number; cap: number;
   /** an aggressive driver (wants to go over the limit), and how much faster than the limit it would like to go (×) */
   aggressive: boolean; pref: number;
@@ -184,7 +186,7 @@ function vehicleDetail(sim: Sim, v: Vehicle): VehicleDetail {
     road: e ? e.link.name || "unnamed" : v.piece.kind === "ring" ? "roundabout" : "junction",
     lane: e ? v.lane : null, lanes: e ? e.n : null,
     heading: v.dest.kind === "gateway" ? "leaving the plan" : v.dest.kind === "stop" ? `stop ${v.dest.stop.def.name}` : `${v.dest.edge.link.name || "a road"}`,
-    wait: v.wait, laneChanges: v.laneChanges, reroutes: v.reroutes, a: v.a, b: v.b, pax: v.pax, cap: v.cap, aggressive: v.aggressive, pref: v.pref,
+    wait: v.wait, trip: (sim.tick - v.bornT) * DT, jam: v.jam, laneChanges: v.laneChanges, reroutes: v.reroutes, a: v.a, b: v.b, pax: v.pax, cap: v.cap, aggressive: v.aggressive, pref: v.pref,
     nextTurn: nt ? { node: nt.node.def.id, turn: nt.move.turn, lo: nt.move.lo, hi: nt.move.hi } : null,
     route: sim.routeAhead(v, 800),
   };
@@ -196,7 +198,7 @@ function vehicleDetail(sim: Sim, v: Vehicle): VehicleDetail {
 export interface VehicleView {
   id: number; kind: Kind; tint: number; state: string; dead: false;
   v: number; v0: number; len: number; width: number;
-  fx: number; fy: number; rx: number; ry: number; blink: -1 | 0 | 1;
+  fx: number; fy: number; rx: number; ry: number; blink: -1 | 0 | 1 | 2;
   /** the elevation level it is drawn at, and its height in levels (see LinkDef.level) */
   level: number; z: number;
 }
@@ -238,7 +240,7 @@ export class SimMirror {
       const o = i * G, v = list[i] ?? (list[i] = {} as VehicleView);
       v.id = s.ids[i]; v.kind = KINDS[s.kinds[i]]; v.tint = s.tints[i]; v.state = s.stateNames[s.states[i]]; v.dead = false;
       v.fx = s.geo[o]; v.fy = s.geo[o + 1]; v.rx = s.geo[o + 2]; v.ry = s.geo[o + 3];
-      v.v = s.geo[o + 4]; v.v0 = s.geo[o + 5]; v.len = s.geo[o + 6]; v.width = s.geo[o + 7]; v.blink = s.geo[o + 8] as -1 | 0 | 1;
+      v.v = s.geo[o + 4]; v.v0 = s.geo[o + 5]; v.len = s.geo[o + 6]; v.width = s.geo[o + 7]; v.blink = s.geo[o + 8] as -1 | 0 | 1 | 2;
       v.level = s.geo[o + 9]; v.z = s.geo[o + 10];
     }
     this.net.stops.forEach((st, i) => { st.waiting = s.waiting[i] ?? st.waiting; });

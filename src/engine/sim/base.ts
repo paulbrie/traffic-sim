@@ -41,6 +41,11 @@ export interface Vehicle {
    */
   early?: { conn: Conn; at: number; d: number; granted: boolean } | null;
   dest: Dest; state: string; wait: number; enterT: number; bornT: number;
+  /** seconds spent in traffic so far: stopped, queuing or crawling (under 30% of the speed it wants here) */
+  jam: number;
+  /** 1: its engine failed (rolls to a stop, hazard lights on); 2: wrecked (stopped where it was hit). Either
+   *  way it stays in its lane as an obstacle from `brokenAt` (tick) until towed away */
+  broken: 0 | 1 | 2; brokenAt: number;
   gap: number; leader: Vehicle | null; v0: number;
   /** an aggressive driver: wants to go over the limit (see SimParams.aggressiveShare) */
   aggressive: boolean;
@@ -92,7 +97,7 @@ export interface JunctionEvent {
   veh: number | null;
   vkind: string | null;
   kind: "approach" | "request" | "grant" | "deny" | "revoke" | "enter" | "leave" | "lane" | "wrong-lane" | "turn-changed" | "reroute" | "signal" | "towed"
-    | "appear" | "enter-road" | "state" | "leave-road" | "exit" | "arrive" | "reversible";
+    | "appear" | "enter-road" | "state" | "leave-road" | "exit" | "arrive" | "reversible" | "breakdown";
   detail: string;
   /** machine-readable bits for analysis (lanes are 1-based) */
   data?: { turn?: string; from?: string; to?: string; lane?: number; outLane?: number; lo?: number; hi?: number; sig?: string | null; code?: string };
@@ -434,12 +439,12 @@ export abstract class SimBase {
     const rate = (l: number[]) => { let k = 0; while (k < l.length && l[k] < since) k++; return ((l.length - k) / span) * 3600; };
     return [...this.gateRecent].map(([id, r]) => [id, rate(r.in), rate(r.out)]);
   }
-  /** destroyed: shot down from the helicopter (counted with the towed ones in the flows: gone from the plan) */
+  /** destroyed: a wreck (war mode) towed away (counted with the towed ones in the flows: gone from the plan) */
   protected kill(v: Vehicle, why: "exit" | "arrived" | "towed" | "removed" | "destroyed") {
     if (v.dead) return;
     if (why === "exit" && v.piece.kind === "lane") this.countGate(v.piece.edge.to.def.id, "out");
     if (v.piece.kind === "lane") this.evRoad(v.piece.edge, v, why === "exit" ? "exit" : why === "arrived" ? "arrive" : why === "towed" ? "towed" : "leave-road",
-      why === "exit" ? "leaves the plan" : why === "arrived" ? "reached its destination" : why === "towed" ? `removed after ${v.wait.toFixed(0)} s stuck (${v.state})` : why === "destroyed" ? "destroyed" : "removed (no way on)");
+      why === "exit" ? "leaves the plan" : why === "arrived" ? "reached its destination" : why === "towed" ? (v.broken ? `towed away, ${((this.tick - v.brokenAt) * DT).toFixed(0)} s after breaking down` : `removed after ${v.wait.toFixed(0)} s stuck (${v.state})`) : why === "destroyed" ? `wreck towed away, ${((this.tick - v.brokenAt) * DT).toFixed(0)} s after it was destroyed` : "removed (no way on)");
     v.dead = true;
     if (v.test !== undefined && v.test >= 0) {
       const t = this.tests[v.test];

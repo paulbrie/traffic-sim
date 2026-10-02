@@ -3,7 +3,8 @@ import * as THREE from "three";
 /**
  * War mode's effects in the 3D view: the helicopter's gun (tracer rounds), guided rockets with a smoke
  * trail, explosions, and burning wrecks. It knows nothing of the simulation: the view tells it where
- * vehicles are (`World`) and takes back the ones destroyed, to remove them from the traffic.
+ * vehicles are (`World`) and takes back the ones destroyed, which stay on the road as wrecks (obstacles
+ * in the traffic) until towed: each wreck here lasts as long as its vehicle does.
  * World frame: metres, y up (plan x → x, plan y → z).
  */
 export interface World {
@@ -26,12 +27,13 @@ export interface CombatEvents {
 const HITS_TO_DESTROY = 3;
 const ROUND_SPEED = 420, ROUND_SPREAD = 0.006, HIT_RADIUS = 2.4;
 const ROCKET_SPEED = 95, ROCKET_TURN = 4.5, ROCKET_LIFE = 9, BLAST_RADIUS = 8;
-const WRECK_LIFE = 30;
+/** how long a wreck burns (it smoulders a little longer, then just lies there until towed) */
+const BURN = 30;
 
 interface Round { mesh: THREE.Mesh; vel: THREE.Vector3; to: THREE.Vector3; left: number }
 interface Rocket { mesh: THREE.Group; vel: THREE.Vector3; target: number | null; aim: THREE.Vector3; age: number; puffAt: number }
 interface Puff { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; age: number; life: number; grow: number; rise: number; from: number }
-interface Wreck { group: THREE.Group; fire: THREE.Mesh; at: THREE.Vector3; age: number; puffAt: number }
+interface Wreck { id: number; group: THREE.Group; fire: THREE.Mesh; at: THREE.Vector3; age: number; puffAt: number }
 
 export class Combat {
   private group = new THREE.Group();
@@ -143,14 +145,15 @@ export class Combat {
       p.mesh.position.y += p.rise * dt;
       p.mat.opacity = p.from * (1 - f) * (1 - f);
     }
-    // wrecks burn, smoke, then are towed away
+    // wrecks burn and smoke, then lie there until towed away (their vehicle gone from the traffic)
     for (let i = this.wrecks.length - 1; i >= 0; i--) {
       const w = this.wrecks[i];
       w.age += dt;
-      const s = 0.8 + Math.random() * 0.5, fade = Math.max(0, 1 - w.age / WRECK_LIFE);
+      if (!world.at(w.id)) { this.group.remove(w.group); this.wrecks.splice(i, 1); continue; }
+      const s = 0.8 + Math.random() * 0.5, fade = Math.max(0, 1 - w.age / BURN);
+      w.fire.visible = fade > 0;
       w.fire.scale.set(s * fade, (1 + Math.random() * 0.6) * fade, s * fade);
-      if (w.age > w.puffAt && fade > 0.15) { w.puffAt = w.age + 0.18; this.puff(w.at.clone().setY(w.at.y + 1.5), 0x2a2724, 0.55, 4, 1.4, 3.5); }
-      if (w.age > WRECK_LIFE) { this.group.remove(w.group); this.wrecks.splice(i, 1); }
+      if (w.age > w.puffAt && w.age < BURN * 1.5) { w.puffAt = w.age + (fade > 0 ? 0.18 : 0.6); this.puff(w.at.clone().setY(w.at.y + 1.5), 0x2a2724, fade > 0 ? 0.55 : 0.25, 4, 1.4, 3.5); }
     }
     this.events = { destroyed: [], shots: 0, blasts: [] };
     return ev;
@@ -168,11 +171,11 @@ export class Combat {
       this.gone.add(id); this.hits.delete(id);
       this.destroyedCount++;
       ev.destroyed.push(id);
-      this.wreck(p, sh);
+      this.wreck(id, p, sh);
     }
   }
 
-  private wreck(p: THREE.Vector3, sh: { heading: number; len: number; width: number } | null) {
+  private wreck(id: number, p: THREE.Vector3, sh: { heading: number; len: number; width: number } | null) {
     const group = new THREE.Group();
     const hull = new THREE.Mesh(this.geo.box, this.mat.wreck);
     hull.scale.set(sh?.len ?? 4.4, 1.1, sh?.width ?? 1.8);
@@ -183,7 +186,7 @@ export class Combat {
     group.add(hull, fire);
     group.position.copy(p).setY(p.y);
     this.group.add(group);
-    this.wrecks.push({ group, fire, at: p.clone(), age: 0, puffAt: 0 });
+    this.wrecks.push({ id, group, fire, at: p.clone(), age: 0, puffAt: 0 });
   }
 
   /** a ball that grows, rises and fades: smoke, dust, sparks or fire */

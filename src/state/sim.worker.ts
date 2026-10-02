@@ -21,7 +21,8 @@ export type ToWorker =
   | { type: "test"; from: string; to: string; lane: number | null; req: number }
   | { type: "replay"; tick: number; req: number }
   | { type: "record"; on: boolean }
-  | { type: "destroy"; ids: number[] };
+  | { type: "breakdown"; ids: number[]; wreck: boolean }
+  | { type: "tow"; ids: number[] };
 
 let compiled: Compiled | null = null, settings: PlanSettings | null = null, sim: Sim | null = null, gen = 0;
 let running = false, speed = 3, acc = 0, last = performance.now(), lastPost = 0, dirty = false;
@@ -72,7 +73,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     case "run": running = m.running; speed = m.speed; break;
     case "log": log = { all: m.all, nodes: m.nodes, links: m.links, vehicles: m.vehicles }; applyLog(); break;
     case "watch": watch = m.watch; dirty = true; break;
-    case "destroy": if (sim && sim.destroy(m.ids)) dirty = true; break;
+    case "breakdown": if (sim && sim.breakDown(m.ids, m.wreck)) dirty = true; break;
+    case "tow": if (sim && sim.tow(m.ids)) dirty = true; break;
     case "clearEvents": if (sim) { sim.events.length = 0; writer.reset(); dirty = true; } break;
     case "test": {
       if (!sim) startSim();

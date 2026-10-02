@@ -15,6 +15,7 @@ import type { LanePiece, Movement, Piece } from "../compile";
 import type { Poly } from "../geom";
 import type { Vehicle } from "./base";
 import { SimDemand } from "./demand";
+import { DT } from "./base";
 
 export { DT, REV_STATES, type Kind, type Dest, type Vehicle, type JunctionEvent, type Stats } from "./base";
 
@@ -48,17 +49,42 @@ export class Sim extends SimDemand {
     for (const v of this.vehicles) if (!v.dead && (v.id + this.tick) % 5 === 0) this.considerLaneChange(v);
     this.updatePeds();
     for (const st of this.ns) if (st.node.controlled && !st.node.ring) this.arbitrate(st);
-    for (const v of this.vehicles) if (!v.dead) this.move(v);
+    for (const v of this.vehicles) if (!v.dead) { this.move(v); if (!v.broken && v.v < 0.3 * v.v0) v.jam += DT; }
+    if (this.P.breakdownsPerHour > 0 && this.rng() < (this.P.breakdownsPerHour * DT) / 3600) this.randomBreakdown();
     if (this.tick % 10 === 0) this.sample();
     if (this.tick % 50 === 0) this.housekeeping();
   }
   run(n: number) { for (let k = 0; k < n; k++) this.step(); }
-  /** take these vehicles off the roads at once (destroyed); how many there were */
-  destroy(ids: number[]): number {
+  /**
+   * These vehicles break down (engine failure) or are wrecked (war mode): each stays in its lane as an
+   * obstacle until towed. A junction it had booked but not entered is given back. How many there were.
+   */
+  breakDown(ids: number[], wreck: boolean): number {
     const want = new Set(ids);
     let n = 0;
-    for (const v of this.vehicles) if (!v.dead && want.has(v.id)) { this.kill(v, "destroyed"); n++; }
+    for (const v of this.vehicles) {
+      // (a broken-down vehicle can still be wrecked; nothing else changes twice)
+      if (v.dead || !want.has(v.id) || (v.broken && !(wreck && v.broken === 1))) continue;
+      v.broken = wreck ? 2 : 1; v.brokenAt = this.tick; n++;
+      if (wreck) { v.v = 0; v.acc = 0; }
+      if (v.piece.kind === "lane") {
+        v.granted = false; v.conn = null; v.reqFor = null; v.early = null;
+        this.evRoad(v.piece.edge, v, "breakdown", wreck ? "destroyed: a wreck in its lane" : "engine failure: stops in its lane, hazard lights on");
+      }
+    }
     return n;
+  }
+  /** tow these broken-down (or wrecked) vehicles away now */
+  tow(ids: number[]): number {
+    const want = new Set(ids);
+    let n = 0;
+    for (const v of this.vehicles) if (!v.dead && v.broken && want.has(v.id)) { this.kill(v, v.broken === 2 ? "destroyed" : "towed"); n++; }
+    return n;
+  }
+  /** an engine fails: a vehicle driving along a road, picked at random */
+  protected randomBreakdown() {
+    const list = this.vehicles.filter(v => !v.dead && !v.broken && v.piece.kind === "lane" && v.v > 3 && v.test === undefined);
+    if (list.length) this.breakDown([list[Math.floor(this.rng() * list.length)].id], false);
   }
   /** road and vehicle event logs: what each vehicle on a logged road (or being logged) is doing, when that changes */
   protected logStates() {
@@ -128,8 +154,10 @@ export class Sim extends SimDemand {
    * Turn signal: -1 left, 1 right, 0 off. Lit while changing lane, in the last 45 m before a
    * junction where the vehicle turns, and while turning through it.
    */
-  blinker(v: Vehicle): -1 | 0 | 1 {
-    if (v.dead) return 0;
+  /** turn signal: −1 left, 1 right, 2 both (hazard lights, broken down), 0 none */
+  blinker(v: Vehicle): -1 | 0 | 1 | 2 {
+    if (v.dead || v.broken === 2) return 0;
+    if (v.broken) return 2;
     if (v.lcT > 0.1 && Math.abs(v.lcOff) > 0.5) return v.lcOff < 0 ? 1 : -1;
     let m: Movement | null = null;
     const p = v.piece;
