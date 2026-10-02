@@ -39,6 +39,9 @@ class SimController {
   private pending = new Map<number, (r: TestResult) => void>();
   private req = 0;
 
+  /** take these vehicles off the roads (destroyed from the helicopter) */
+  destroy(ids: number[]) { if (ids.length) this.post({ type: "destroy", ids }); }
+
   /** send one test vehicle from an entry point to an exit (starts the simulation if needed) */
   sendTest(from: string, to: string, lane: number | null): Promise<TestResult> {
     this.ensureSim();

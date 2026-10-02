@@ -53,6 +53,13 @@ export class Sim extends SimDemand {
     if (this.tick % 50 === 0) this.housekeeping();
   }
   run(n: number) { for (let k = 0; k < n; k++) this.step(); }
+  /** take these vehicles off the roads at once (destroyed); how many there were */
+  destroy(ids: number[]): number {
+    const want = new Set(ids);
+    let n = 0;
+    for (const v of this.vehicles) if (!v.dead && want.has(v.id)) { this.kill(v, "destroyed"); n++; }
+    return n;
+  }
   /** road and vehicle event logs: what each vehicle on a logged road (or being logged) is doing, when that changes */
   protected logStates() {
     for (const v of this.vehicles) {

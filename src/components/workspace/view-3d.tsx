@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useDeepSubject } from "subjecto/react";
-import { Crosshair, Eye, Gauge, Orbit, Plane, Volume2, VolumeX } from "lucide-react";
+import { Crosshair, Eye, Gauge, Orbit, Plane, Swords, Volume2, VolumeX } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { buildRoadGeo, heightFn, laneSign } from "@/render/geometry";
@@ -10,6 +10,7 @@ import { buildBuildings, buildFurniture, buildMarkers, buildRoads, buildingShell
 import { satelliteMosaic } from "@/render/satellite";
 import { HELI_LAYER, HELI_MODEL_CREDIT, loadHelicopter, type Helicopter } from "@/render/helicopter";
 import { RotorSound } from "@/render/rotor-sound";
+import { Combat, type World } from "@/render/combat";
 import type { BuildingDef } from "@/engine/types";
 import { readPalette, speedColor, type Palette } from "@/render/palette";
 import { LEVEL_H, linkExtent } from "@/engine/compile";
@@ -20,6 +21,7 @@ import { planViewKey, viewCmd$, viewport } from "@/state/commands";
 import * as ops from "@/state/ops";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Kbd } from "@/components/ui/kbd";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Cockpit, type CockpitApi } from "./heli-cockpit";
 
@@ -76,6 +78,11 @@ export function View3D() {
   const [view, setView] = useState<HeliView>("cockpit");
   const viewRef = useRef(view);
   useEffect(() => { viewRef.current = view; }, [view]);
+  /** war mode: the helicopter's gun and guided rockets */
+  const [war, setWar] = useState(false);
+  const warRef = useRef(war);
+  useEffect(() => { warRef.current = war; }, [war]);
+  const [kills, setKills] = useState(0);
   const [sound, setSound] = useState(true);
   const soundRef = useRef(sound);
   useEffect(() => { soundRef.current = sound; }, [sound]);
@@ -368,6 +375,66 @@ export function View3D() {
     let soundOn = false;
     // in free flight, with no button held, the pointer towards either side of the view turns the helicopter
     const hover = { on: false, nx: 0 };
+
+    // war mode. Space (held) fires the gun at the sight in the middle of the view, a click fires a burst at that
+    // point; R launches a rocket guided onto the vehicle nearest the sight (the tracked one, tracking)
+    const combat = new Combat(scene);
+    const armed = () => camMode !== "orbit" && warRef.current;
+    const gun = { held: false, burst: 0, at: new THREE.Vector3(), next: 0 };
+    let rocketAsked = false, lastForget = 0;
+    const vehicleById = (id: number) => { const sim = simController.sim; return sim?.vehicles.find(v => v.id === id && !v.dead) ?? null; };
+    const world: World = {
+      at(id) {
+        const v = vehicleById(id), sim = simController.sim;
+        if (!v || !sim) return null;
+        const q = sim.pose(v), o = followOffset(v);
+        return new THREE.Vector3((q.fx + q.rx) / 2 + (o ? follow.ox : 0), v.z * LEVEL_H, (q.fy + q.ry) / 2 + (o ? follow.oz : 0));
+      },
+      near(p, r) {
+        const sim = simController.sim, out: [number, number][] = [];
+        if (sim) for (const v of sim.vehicles) {
+          if (v.dead) continue;
+          const q = sim.pose(v), d = Math.hypot((q.fx + q.rx) / 2 - p.x, (q.fy + q.ry) / 2 - p.z);
+          if (d < r + v.len / 2 && Math.abs(v.z * LEVEL_H - p.y) < 6) out.push([v.id, d]);
+        }
+        return out.sort((a, b) => a[1] - b[1]).map(x => x[0]);
+      },
+      shape(id) {
+        const v = vehicleById(id), sim = simController.sim;
+        if (!v || !sim) return null;
+        const q = sim.pose(v);
+        return { heading: Math.atan2(q.fy - q.ry, q.fx - q.rx), len: v.len, width: v.width };
+      },
+    };
+    const aimRay = new THREE.Raycaster(), aimAt = new THREE.Vector3(), center = new THREE.Vector2(0, 0);
+    /** the ground point under the sight (or far ahead, looking above the horizon) */
+    function sightPoint(cam: THREE.Camera, out: THREE.Vector3) {
+      aimRay.setFromCamera(center, cam);
+      if (!aimRay.ray.intersectPlane(plane, out) || out.distanceTo(cam.position) > 3000) out.copy(aimRay.ray.origin).addScaledVector(aimRay.ray.direction, 1500);
+      return out;
+    }
+    /** a point on the airframe (body frame: x right, y up, −z ahead) in the world */
+    const hardpoint = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).applyEuler(new THREE.Euler(air.pitch, air.yaw, air.roll, "YXZ")).add(camera.position);
+    function shoot(now: number) {
+      if (!armed()) { gun.held = false; gun.burst = 0; rocketAsked = false; return; }
+      const cam = outside() ? outCam : camera;
+      if ((gun.held || gun.burst > 0) && now >= gun.next) {
+        gun.next = now + 85;
+        const to = gun.burst > 0 ? gun.at : sightPoint(cam, aimAt);
+        if (gun.burst > 0) gun.burst--;
+        // the gun hangs under the cabin, on the pilot's side
+        combat.fire(hardpoint(0.9, -1.5, 0.2), to);
+      }
+      if (rocketAsked) {
+        rocketAsked = false;
+        const to = sightPoint(cam, aimAt).clone(), sel = u.selection;
+        // guided onto the tracked vehicle, or the one nearest the sight
+        const target = camMode === "track" && sel?.kind === "vehicle" ? Number(sel.id) : world.near(to, 30)[0] ?? null;
+        const from = hardpoint(-1.1, -1.4, 0.3);
+        combat.launch(from, to.clone().sub(from), target, to);
+        setNote(target !== null ? `Rocket away, locked on vehicle #${target}` : "Rocket away (nothing to lock on)");
+      }
+    }
     const turnTo = (a: number, b: number, k: number) => { const d = Math.atan2(Math.sin(b - a), Math.cos(b - a)); return a + d * k; };
     const vel = new THREE.Vector3(), held = new Set<string>(), dir = new THREE.Vector3();
     const chase = { angle: 0, dist: 90, height: TRACK_MIN, heading: NaN, id: "" };
@@ -422,16 +489,21 @@ export function View3D() {
     const FLY_KEYS = new Set(["arrowup", "arrowdown", "arrowleft", "arrowright", "z", "q", "s", "d", "e", "a", "pageup", "pagedown", "shift"]);
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (e.type === "keyup") { held.delete(k); if (k === "shift") held.delete("shift"); return; }
+      if (e.type === "keyup") { held.delete(k); if (k === " ") gun.held = false; return; }
       if (camMode === "orbit" || u.view !== "3d" || e.metaKey || e.ctrlKey || e.altKey || typing(e)) return;
       // C: from the seat or from outside
       if (k === "c" && !e.repeat) { e.preventDefault(); e.stopPropagation(); setView(v => (v === "cockpit" ? "outside" : "cockpit")); return; }
+      if (warRef.current && (k === " " || k === "r")) {
+        e.preventDefault(); e.stopPropagation();
+        if (k === " ") gun.held = true; else if (!e.repeat) rocketAsked = true;
+        return;
+      }
       if (!FLY_KEYS.has(k)) return;
       // Shift+E / Shift+Q stay layer shortcuts only when not flying; here they mean "faster"
       e.preventDefault(); e.stopPropagation();
       held.add(k);
     };
-    const onBlur = () => held.clear();
+    const onBlur = () => { held.clear(); gun.held = false; };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keyup", onKey, true);
     window.addEventListener("blur", onBlur);
@@ -507,7 +579,7 @@ export function View3D() {
         const sel = u.selection, v = sel?.kind === "vehicle" && sim ? sim.vehicles.find(x => String(x.id) === sel.id && !x.dead) : undefined;
         if (!v) {
           // the vehicle finished its trip (or the selection moved on): hover where we are
-          setNote(sel?.kind === "vehicle" ? "The vehicle left the network: flying freely." : "Nothing to track: flying freely.");
+          setNote(sel?.kind === "vehicle" ? (combat.isGone(Number(sel.id)) ? "Target destroyed: flying freely." : "The vehicle left the network: flying freely.") : "Nothing to track: flying freely.");
           setMode("heli"); setCamMode("heli"); fromCamera();
           return;
         }
@@ -590,6 +662,8 @@ export function View3D() {
       ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
       ray.setFromCamera(ndc, outside() ? outCam : camera);
       if (!ray.ray.intersectPlane(plane, hit)) return;
+      // armed, a click fires a burst there
+      if (armed()) { gun.at.copy(hit); gun.burst = 5; gun.next = 0; return; }
       const p = { x: hit.x, y: hit.z }, net = network$.getValue();
       const dist = camera.position.distanceTo(hit), flying = camMode !== "orbit";
       // (from the helicopter, high up, vehicles are small: a more forgiving click)
@@ -654,11 +728,17 @@ export function View3D() {
         // rotor sound while flying (its beat follows the work: speed and climbing)
         const wantSound = camMode !== "orbit" && soundRef.current && !document.hidden;
         if (wantSound !== soundOn) { soundOn = wantSound; if (soundOn) rotorSound.start(); else rotorSound.stop(); }
+        // war: fire, move the rounds and rockets, take the destroyed vehicles off the roads
+        shoot(now);
+        const ev = combat.update(dt, world, outside() ? outCam.position : camera.position);
+        if (ev.destroyed.length) { simController.destroy(ev.destroyed); setKills(combat.destroyedCount); }
+        if (soundOn) { for (let k = 0; k < Math.min(2, ev.shots); k++) rotorSound.shot(); for (const d of ev.blasts) rotorSound.blast(d); }
+        if (now - lastForget > 1000 && sim) { lastForget = now; combat.forget(id => sim.vehicles.some(v => v.id === id && !v.dead)); }
         if (soundOn) rotorSound.set(0.75 * Math.min(1, flight.speed / HELI_VMAX) + 0.25 * Math.max(0, Math.min(1, flight.vs / 8)), outside());
         // vehicles
         let n = 0, ng = 0;
         if (vsim) for (const v of vsim.vehicles) {
-          if (v.dead || n + 2 >= MAXV) continue;
+          if (v.dead || n + 2 >= MAXV || combat.isGone(v.id)) continue;
           const q = vsim.pose(v), y0 = v.z * LEVEL_H;
           let mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
           if (followOffset(v)) { mx += follow.ox; mz += follow.oz; }
@@ -685,7 +765,7 @@ export function View3D() {
         let nl = 0;
         if (vsim && Math.floor(now / 380) % 2 === 0) for (const v of vsim.vehicles) {
           const b = vsim.blinker(v);
-          if (!b || nl + 2 > 16000) continue;
+          if (!b || nl + 2 > 16000 || combat.isGone(v.id)) continue;
           const q = vsim.pose(v);
           let mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
           if (followOffset(v)) { mx += follow.ox; mz += follow.oz; }
@@ -792,6 +872,7 @@ export function View3D() {
       disposed = true;
       for (const h of [heli.cabin, heli.whole]) if (h) { scene.remove(h.body); h.dispose(); }
       rotorSound.dispose();
+      combat.dispose();
       controls.dispose();
       if (houses) { houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); }
       ulMat.map?.dispose(); ulMat.dispose(); ulMesh.geometry.dispose();
@@ -807,6 +888,14 @@ export function View3D() {
     <>
       <div ref={wrapRef} className="absolute inset-0 overflow-hidden" aria-label="3D view of the street plan" />
       {mode !== "orbit" && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} />}
+      {mode !== "orbit" && war && (
+        // the gunsight, in the middle of the view
+        <svg viewBox="-40 -40 80 80" className="pointer-events-none absolute top-1/2 left-1/2 z-[6] size-16 -translate-x-1/2 -translate-y-1/2 text-red-500 drop-shadow-[0_0_3px_rgba(239,68,68,0.7)]" aria-hidden>
+          <circle r="18" fill="none" stroke="currentColor" strokeWidth="1.6" />
+          <path d="M0 -34 V-22 M0 22 V34 M-34 0 H-22 M22 0 H34" stroke="currentColor" strokeWidth="1.8" />
+          <circle r="1.8" fill="currentColor" />
+        </svg>
+      )}
       <div className="absolute top-3 right-3 z-10 flex max-w-72 flex-col items-end gap-1.5">
         <ToggleGroup
           type="single" value={mode} aria-label="Camera"
@@ -826,6 +915,8 @@ export function View3D() {
               <ToggleGroupItem value="cockpit" aria-label="From the cockpit" title="From the pilot's seat (C)"><Gauge /> Cockpit</ToggleGroupItem>
               <ToggleGroupItem value="outside" aria-label="From outside" title="From behind the helicopter (C)"><Eye /> Outside</ToggleGroupItem>
             </ToggleGroup>
+            <Button size="sm" variant={war ? "destructive" : "outline"} aria-pressed={war} onClick={() => { setWar(w => !w); setNote(""); }}
+              title="War mode: the gun (Space, or click) and guided rockets (R)" className={cn("h-8 shadow-sm", !war && "bg-background/95")}><Swords /> War</Button>
             <Button size="icon-sm" variant="outline" aria-pressed={sound} onClick={() => setSound(x => !x)}
               aria-label={sound ? "Turn the rotor sound off" : "Turn the rotor sound on"} title={sound ? "Sound on" : "Sound off"}
               className="size-8 bg-background/95 shadow-sm">{sound ? <Volume2 /> : <VolumeX />}</Button>
@@ -849,6 +940,13 @@ export function View3D() {
                 <div><Kbd>E</Kbd>/<Kbd>A</Kbd> higher, lower · <Kbd>C</Kbd> cockpit / outside</div>
               </>
             )}
+          </div>
+        )}
+        {mode !== "orbit" && war && (
+          <div className="rounded-lg border border-red-500/40 bg-background/95 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground shadow-sm backdrop-blur">
+            <div className="mb-0.5 font-medium text-red-600 dark:text-red-400">War mode · {kills} destroyed</div>
+            <div><Kbd>Space</Kbd> gun at the sight · click: a burst there</div>
+            <div><Kbd>R</Kbd> rocket, locked on the vehicle nearest the sight{mode === "track" ? " (the tracked one)" : ""}</div>
           </div>
         )}
         {note && <div className="rounded-md bg-background/95 px-2 py-1 text-[11px] shadow-sm">{note}</div>}

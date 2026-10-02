@@ -1,17 +1,16 @@
 /**
  * The helicopter's sound, made in the browser (Web Audio, no recordings): the blades' beat (noise pulsed
- * at the blade rate, with a low thump), the engine's rumble and the turbine's whine. `set` follows the
- * flight: harder work (speed, climbing) beats faster and louder.
+ * at the blade rate, with a low thump) and the engine's low rumble, no turbine whine. `set` follows the
+ * flight: harder work (speed, climbing) beats faster and louder. War mode adds the gun and explosions.
  */
 export class RotorSound {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private beat: OscillatorNode | null = null;
   private chop: GainNode | null = null;
-  private whine: OscillatorNode[] = [];
-  private whineGain: GainNode | null = null;
   private sources: AudioScheduledSourceNode[] = [];
   private on = false;
+  private noiseBuf: AudioBuffer | null = null;
 
   /** start (or resume) the sound, fading in */
   start() {
@@ -31,14 +30,48 @@ export class RotorSound {
     setTimeout(() => { if (!this.on && ctx.state === "running") void ctx.suspend(); }, 1500);
   }
 
-  /** load: 0 hovering … 1 flat out; outside: heard from outside (more beat, less turbine) */
+  /** load: 0 hovering … 1 flat out; outside: heard from outside (more beat) */
   set(load: number, outside: boolean) {
     if (!this.ctx || !this.on) return;
     const t = this.ctx.currentTime, l = Math.max(0, Math.min(1, load));
     this.beat!.frequency.setTargetAtTime(9.5 + l * 2.5, t, 0.6);
     this.chop!.gain.setTargetAtTime((outside ? 0.9 : 0.55) * (0.65 + 0.35 * l), t, 0.3);
-    this.whine.forEach((o, i) => o.frequency.setTargetAtTime((i ? 2 : 1) * (1180 + l * 160), t, 0.8));
-    this.whineGain!.gain.setTargetAtTime(outside ? 0.004 : 0.012, t, 0.3);
+  }
+
+  /** a round from the gun: a sharp crack */
+  shot() {
+    const ctx = this.ctx;
+    if (!ctx || !this.on || !this.noiseBuf) return;
+    const t = ctx.currentTime, src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf; src.playbackRate.value = 1.3;
+    const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 500;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+    src.connect(hp).connect(g).connect(this.master!);
+    src.start(t, Math.random()); src.stop(t + 0.09);
+    // and a low punch
+    const o = ctx.createOscillator(), og = ctx.createGain();
+    o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.06);
+    og.gain.setValueAtTime(0.4, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    o.connect(og).connect(this.master!); o.start(t); o.stop(t + 0.1);
+  }
+
+  /** an explosion, `distance` metres away: a boom with a long rumble, quieter and duller further off */
+  blast(distance: number) {
+    const ctx = this.ctx;
+    if (!ctx || !this.on || !this.noiseBuf) return;
+    const t = ctx.currentTime + Math.min(1.5, distance / 340), level = Math.min(1.2, 60 / Math.max(30, distance));
+    const src = ctx.createBufferSource(); src.buffer = this.noiseBuf; src.loop = true;
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass";
+    lp.frequency.setValueAtTime(Math.max(300, 2400 - distance * 4), t); lp.frequency.exponentialRampToValueAtTime(120, t + 1.6);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(level, t + 0.02); g.gain.exponentialRampToValueAtTime(0.001, t + 2.2);
+    src.connect(lp).connect(g).connect(this.master!);
+    src.start(t, Math.random()); src.stop(t + 2.3);
+    const o = ctx.createOscillator(), og = ctx.createGain();
+    o.frequency.setValueAtTime(70, t); o.frequency.exponentialRampToValueAtTime(28, t + 0.8);
+    og.gain.setValueAtTime(level * 0.9, t); og.gain.exponentialRampToValueAtTime(0.001, t + 1);
+    o.connect(og).connect(this.master!); o.start(t); o.stop(t + 1.05);
   }
 
   dispose() {
@@ -55,6 +88,7 @@ export class RotorSound {
     // two seconds of white noise, looped: the air the blades beat and the engine's roar
     const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = buf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    this.noiseBuf = buf;
     const noise = () => { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; s.start(); this.sources.push(s); return s; };
 
     // the beat: a sine at the blade rate, sharpened into short pulses, opens and closes the gain of the chop
@@ -82,12 +116,6 @@ export class RotorSound {
     const rumble = ctx.createGain(); rumble.gain.value = 0.35;
     noise().connect(lowpass).connect(rumble).connect(master);
 
-    // turbine whine: two tones an octave apart, softened
-    const whineGain = ctx.createGain(); whineGain.gain.value = 0.012;
-    const soft = ctx.createBiquadFilter(); soft.type = "lowpass"; soft.frequency.value = 3000;
-    this.whine = [1180, 2360].map(f => { const o = ctx.createOscillator(); o.type = "triangle"; o.frequency.value = f; o.connect(soft); o.start(); this.sources.push(o); return o; });
-    soft.connect(whineGain).connect(master);
-
-    Object.assign(this, { ctx, master, beat, chop, whineGain });
+    Object.assign(this, { ctx, master, beat, chop });
   }
 }

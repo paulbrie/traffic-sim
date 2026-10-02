@@ -434,11 +434,12 @@ export abstract class SimBase {
     const rate = (l: number[]) => { let k = 0; while (k < l.length && l[k] < since) k++; return ((l.length - k) / span) * 3600; };
     return [...this.gateRecent].map(([id, r]) => [id, rate(r.in), rate(r.out)]);
   }
-  protected kill(v: Vehicle, why: "exit" | "arrived" | "towed" | "removed") {
+  /** destroyed: shot down from the helicopter (counted with the towed ones in the flows: gone from the plan) */
+  protected kill(v: Vehicle, why: "exit" | "arrived" | "towed" | "removed" | "destroyed") {
     if (v.dead) return;
     if (why === "exit" && v.piece.kind === "lane") this.countGate(v.piece.edge.to.def.id, "out");
     if (v.piece.kind === "lane") this.evRoad(v.piece.edge, v, why === "exit" ? "exit" : why === "arrived" ? "arrive" : why === "towed" ? "towed" : "leave-road",
-      why === "exit" ? "leaves the plan" : why === "arrived" ? "reached its destination" : why === "towed" ? `removed after ${v.wait.toFixed(0)} s stuck (${v.state})` : "removed (no way on)");
+      why === "exit" ? "leaves the plan" : why === "arrived" ? "reached its destination" : why === "towed" ? `removed after ${v.wait.toFixed(0)} s stuck (${v.state})` : why === "destroyed" ? "destroyed" : "removed (no way on)");
     v.dead = true;
     if (v.test !== undefined && v.test >= 0) {
       const t = this.tests[v.test];
@@ -451,13 +452,13 @@ export abstract class SimBase {
       const f = this.flowState[v.flow], to = this.net.flows[v.flow].to;
       if (why === "exit" && v.dest.kind === "gateway" && v.dest.node === to) { f.arrived++; f.travelSum += (this.tick - v.bornT) * DT; }
       else if (why === "exit") f.diverted++;
-      else if (why === "towed") f.towed++;
+      else if (why === "towed" || why === "destroyed") f.towed++;
     }
     if (v.zflow >= 0) {
       const f = this.zoneFlowState[v.zflow];
       if ((why === "exit" || why === "arrived") && v.dest === v.goal) { f.arrived++; f.travelSum += (this.tick - v.bornT) * DT; }
       else if (why === "exit" || why === "arrived") f.diverted++;
-      else if (why === "towed") f.towed++;
+      else if (why === "towed" || why === "destroyed") f.towed++;
     }
   }
   protected exitRoom(st: NodeState, c: Conn, v: Vehicle) {
