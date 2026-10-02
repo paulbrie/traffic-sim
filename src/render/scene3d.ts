@@ -354,6 +354,7 @@ export function buildMarkers(net: Network, pal: Palette): THREE.Group {
       const tex = new THREE.CanvasTexture(canvas);
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false }));
       sprite.position.set(m.x, base + 9.6, m.y); sprite.scale.set((w / 48) * 2.4, 2.4, 1);
+      sprite.userData.marker = m.id;
       group.add(sprite);
     }
   }

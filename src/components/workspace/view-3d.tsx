@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Cockpit, type CockpitApi } from "./heli-cockpit";
 import { ReversibleControls, placeReversibleControls } from "./reversible-3d";
+import { HoverInfo, type Hovered } from "./hover-info";
 import { BreakdownButton } from "./inspector";
 
 const CAR3D = ["#ffffff", "#f1f2ee", "#e2e5e1", "#cdd1cd"];
@@ -35,10 +36,18 @@ type HeliView = "cockpit" | "outside";
 const HELI_MIN = 4, HELI_MAX = 1500;
 /** the helicopter's top speed over the ground: 200 km/h */
 const HELI_VMAX = 200 / 3.6;
+/** how quickly the helicopter gathers and loses speed (1/s: some 3 s to 63 % of a change), flying or tracking */
+const HELI_RESPONSE = 0.35;
+/** tracking: closing speed towards its place behind the vehicle, per metre away (1/s) */
+const TRACK_CLOSE = 0.25;
 /** free flight takes off at this height; tracking never goes lower */
 const HELI_START = 100, TRACK_MIN = 100;
 /** pointer steering: the still middle (share of the half width), and the fastest turn (rad/s) */
 const STEER_DEAD = 0.3, STEER_RATE = 0.9;
+/** where the pilot looks (radians, up +) with the pointer at the top, middle and bottom of the view */
+const LOOK_UP = 0.15, LOOK_MID = -0.3, LOOK_DOWN = -1.35;
+/** war mode (the helicopter's gun and rockets): hidden for now; true brings its button back */
+const WAR_MODE = false;
 
 /**
  * Switching between the plan view and 3D keeps the place: leaving 3D writes the ground point in the middle
@@ -70,6 +79,7 @@ export function View3D() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const hudRef = useRef<HTMLSpanElement>(null);
   const revRef = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<{ at: Hovered; x: number; y: number } | null>(null);
   const [arrive] = useState(() => arrival(ui.getValue().planId));
   const arriveRef = useRef(arrive);
   const [mode, setMode] = useState<CamMode>(arrive && "exact" in arrive ? arrive.exact.mode : "orbit");
@@ -353,6 +363,7 @@ export function View3D() {
     const cabinCam = new THREE.PerspectiveCamera(60, 1, 0.03, 80);
     cabinCam.layers.set(HELI_LAYER);
     sun.shadow.camera.layers.enable(HELI_LAYER); // the cabin's shadow on the ground
+    hemi.layers.enable(HELI_LAYER); sun.layers.enable(HELI_LAYER); // and light on its metal frame
     const outCam = new THREE.PerspectiveCamera(50, 1, 0.5, 12000), outAt = new THREE.Vector3();
     let outFresh = true;
     /** the airframe: heading (as a camera yaw), nose up, roll (right side up) */
@@ -362,7 +373,7 @@ export function View3D() {
     function ensureHeli(kind: "cabin" | "whole") {
       if (heli[kind] || loading.has(kind)) return;
       loading.add(kind);
-      loadHelicopter(kind === "cabin" ? undefined : null, kind === "cabin" ? HELI_LAYER : 0).then(h => {
+      loadHelicopter(kind, kind === "cabin" ? HELI_LAYER : 0).then(h => {
         if (disposed) { h.dispose(); return; }
         heli[kind] = h; h.body.visible = false; scene.add(h.body);
       }).catch(() => setNote("The helicopter couldn't be loaded: flying without it."));
@@ -377,7 +388,8 @@ export function View3D() {
     const rotorSound = new RotorSound();
     let soundOn = false;
     // in free flight, with no button held, the pointer towards either side of the view turns the helicopter
-    const hover = { on: false, nx: 0 };
+    // and the pointer's height sets where the pilot looks: far to the horizon at the top, down below at the bottom
+    const hover = { on: false, nx: 0, ny: 0 };
 
     // war mode. Space (held) fires the gun at the sight in the middle of the view, a click fires a burst at that
     // point; R launches a rocket guided onto the vehicle nearest the sight (the tracked one, tracking)
@@ -458,7 +470,9 @@ export function View3D() {
     function setCamMode(m: CamMode) {
       if (m === camMode) return;
       const was = camMode;
-      camMode = m; vel.set(0, 0, 0); held.clear(); hudText = "";
+      // (flying on from one mode to the other keeps the helicopter's speed: no sudden stop)
+      if (m === "orbit" || was === "orbit") vel.set(0, 0, 0);
+      camMode = m; held.clear(); hudText = "";
       if (m === "orbit") {
         // orbit round the ground point the helicopter was looking at (or straight below)
         camera.getWorldDirection(dir);
@@ -520,7 +534,7 @@ export function View3D() {
     const onLookMove = (e: PointerEvent) => {
       if (!look && camMode === "heli" && e.buttons === 0) {
         const r = renderer.domElement.getBoundingClientRect();
-        hover.on = true; hover.nx = ((e.clientX - r.left) / Math.max(1, r.width)) * 2 - 1;
+        hover.on = true; hover.nx = ((e.clientX - r.left) / Math.max(1, r.width)) * 2 - 1; hover.ny = ((e.clientY - r.top) / Math.max(1, r.height)) * 2 - 1;
         renderer.domElement.style.cursor = Math.abs(hover.nx) > STEER_DEAD ? (hover.nx < 0 ? "w-resize" : "e-resize") : "grab";
       }
       if (!look || e.pointerId !== look.id || camMode === "orbit") return;
@@ -561,13 +575,19 @@ export function View3D() {
         // the pointer out towards a side turns that way, faster further out (none while dragging to look)
         const out = hover.on && !look ? (Math.abs(hover.nx) - STEER_DEAD) / (1 - STEER_DEAD) : 0;
         if (out > 0) yaw -= Math.sign(hover.nx) * Math.min(1, out) * STEER_RATE * dt;
+        if (hover.on && !look) {
+          // top: just above the horizon; middle: a little down ahead; bottom: nearly straight down
+          const t = Math.max(-1, Math.min(1, hover.ny));
+          const want = LOOK_MID + Math.abs(t) * ((t < 0 ? LOOK_UP : LOOK_DOWN) - LOOK_MID);
+          pitch += (want - pitch) * (1 - Math.exp(-dt * 3));
+        }
         // faster high up, slower near the ground; the helicopter eases in and out of motion
         const cruise = Math.min(HELI_VMAX, Math.max(12, camera.position.y * 0.9) * fast);
         // (diagonally no faster than straight ahead)
         const sy = Math.sin(yaw), cy = Math.cos(yaw), k = cruise / Math.max(1, Math.hypot(fwd, side));
         const want = new THREE.Vector3((-sy * fwd + cy * side) * k, climb * Math.max(6, cruise * 0.5), (-cy * fwd - sy * side) * k);
         // (a helicopter gathers and loses speed slowly: some 3 s to 63 % of the change)
-        vel.lerp(want, 1 - Math.exp(-dt * 0.35));
+        vel.lerp(want, 1 - Math.exp(-dt * HELI_RESPONSE));
         camera.position.addScaledVector(vel, dt);
         camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, camera.position.y));
         // the airframe faces where the pilot looks, dips its nose to speed up and leans into sideways flight
@@ -611,12 +631,16 @@ export function View3D() {
         else { let d = h - chase.heading; d = Math.atan2(Math.sin(d), Math.cos(d)); chase.heading += d * (1 - Math.exp(-dt * 1.5)); }
         const a = chase.heading + Math.PI + chase.angle;
         const want = new THREE.Vector3(mx + Math.cos(a) * chase.dist, y0 + chase.height, mz + Math.sin(a) * chase.dist);
-        const before = camera.position.clone();
-        camera.position.lerp(want, 1 - Math.exp(-dt * 3));
-        // no faster than its top speed, even when it has a long way to catch up
-        const sx = camera.position.x - before.x, sz = camera.position.z - before.z, step = Math.hypot(sx, sz), cap = HELI_VMAX * dt;
-        if (step > cap) { camera.position.x = before.x + (sx / step) * cap; camera.position.z = before.z + (sz / step) * cap; }
-        speed = before.distanceTo(camera.position) / Math.max(dt, 1e-3);
+        // the helicopter flies to its place behind the vehicle as in free flight: it wants the vehicle's own
+        // speed plus a gentle closing speed, no more than its top speed, and gathers and loses speed just as
+        // slowly (switching to another vehicle is a flight across, not a jump)
+        const aim = want.sub(camera.position).multiplyScalar(TRACK_CLOSE).add(new THREE.Vector3(ux * ms, 0, uz * ms));
+        const flat = Math.hypot(aim.x, aim.z);
+        if (flat > HELI_VMAX) { aim.x *= HELI_VMAX / flat; aim.z *= HELI_VMAX / flat; }
+        vel.lerp(aim, 1 - Math.exp(-dt * HELI_RESPONSE));
+        camera.position.addScaledVector(vel, dt);
+        camera.position.y = Math.max(HELI_MIN, camera.position.y);
+        speed = Math.hypot(vel.x, vel.z);
         lookAt.set(mx, y0 + 1.5, mz);
         camera.lookAt(lookAt);
         // lean into the swing round the vehicle, as a helicopter banks into a turn
@@ -627,10 +651,9 @@ export function View3D() {
         }
         lastSwing = swing;
         camera.rotateZ(-bank);
-        // police crews watch from the side: the nose stays some 75° left of the vehicle, seen through the middle
-        // of the pilot's door window (the instrument panel would hide it ahead and below)
+        // the nose towards the vehicle: seen ahead, through the windscreen
         const lookYaw = Math.atan2(-(lookAt.x - camera.position.x), -(lookAt.z - camera.position.z));
-        air.yaw = turnTo(air.yaw, lookYaw + 1.31, 1 - Math.exp(-dt * 1.5));
+        air.yaw = turnTo(air.yaw, lookYaw, 1 - Math.exp(-dt * 1.5));
         air.pitch += (-0.04 - air.pitch) * (1 - Math.exp(-dt * 2)); air.roll = -bank;
         // (the sights are on the vehicle only from the seat)
         flight.roll = bank; flight.range = outside() ? NaN : camera.position.distanceTo(lookAt);
@@ -658,31 +681,29 @@ export function View3D() {
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
     let down: { x: number; y: number } | null = null;
     const onDown = (e: PointerEvent) => { down = { x: e.clientX, y: e.clientY }; };
-    const onUp = (e: PointerEvent) => {
-      if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5 || e.button !== 0) { down = null; return; }
-      down = null;
+    /** what is under the pointer (vehicle, marker, junction, building, road): for clicks and for hovering */
+    function pickAt(clientX: number, clientY: number): Hovered | null | undefined {
       const r = renderer.domElement.getBoundingClientRect();
-      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
       ray.setFromCamera(ndc, outside() ? outCam : camera);
-      if (!ray.ray.intersectPlane(plane, hit)) return;
-      // armed, a click fires a burst there
-      if (armed()) { gun.at.copy(hit); gun.burst = 5; gun.next = 0; return; }
-      const p = { x: hit.x, y: hit.z }, net = network$.getValue();
-      const dist = camera.position.distanceTo(hit), flying = camMode !== "orbit";
-      // (from the helicopter, high up, vehicles are small: a more forgiving click)
-      const tol = Math.max(3, dist * (flying ? 0.025 : 0.012));
-      const sim = simController.sim;
-      const v = sim?.vehicleNear(p.x, p.y, tol);
-      if (v) return select({ kind: "vehicle", id: String(v.id) });
-      // flying, only vehicles can be picked; a miss keeps the selection (and what is being tracked)
-      if (flying) return;
+      // (undefined: the pointer is above the horizon, over nothing)
+      if (!ray.ray.intersectPlane(plane, hit)) return undefined;
+      const p = { x: hit.x, y: hit.z }, net = network$.getValue(), flying = camMode !== "orbit";
+      // (from the helicopter, high up, vehicles are small: a more forgiving pick)
+      const dist = ray.ray.origin.distanceTo(hit), tol = Math.max(3, dist * (flying ? 0.025 : 0.012));
+      const v = simController.sim?.vehicleNear(p.x, p.y, tol);
+      if (v) return { kind: "vehicle", id: String(v.id) };
+      if (markers?.visible) {
+        const m = ray.intersectObjects(markers.children, false).find(x => x.object.userData.marker);
+        if (m) return { kind: "marker", id: m.object.userData.marker as string };
+      }
       const node = net.nodes.find(n => Math.hypot(n.x - p.x, n.y - p.y) < tol * 1.5);
-      if (node) return select({ kind: "node", id: node.id });
+      if (node) return { kind: "node", id: node.id };
       if (houses?.mesh.visible) {
         const h = ray.intersectObject(houses.mesh, false)[0];
         if (h && h.faceIndex != null && h.distance < ray.ray.origin.distanceTo(hit)) {
           const b = houses.list[houses.owner[h.faceIndex]];
-          if (b) return select({ kind: "building", id: b.id });
+          if (b) return { kind: "building", id: b.id };
         }
       }
       let best: { id: string; d: number } | null = null;
@@ -691,8 +712,31 @@ export function View3D() {
         const [lo, hi] = linkExtent(l), r2 = ops.nearestT(l, A, B, p);
         if (r2.d < Math.max(-lo, hi) + 1 && (!best || r2.d < best.d)) best = { id: l.id, d: r2.d };
       }
-      select(best ? { kind: "link", id: best.id } : null);
+      return best ? { kind: "link", id: best.id } : null;
+    }
+    const onUp = (e: PointerEvent) => {
+      if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5 || e.button !== 0) { down = null; return; }
+      down = null;
+      const at = pickAt(e.clientX, e.clientY);
+      if (at === undefined) return;
+      // armed, a click fires a burst there
+      if (armed()) { gun.at.copy(hit); gun.burst = 5; gun.next = 0; return; }
+      // flying, only vehicles can be picked; a miss keeps the selection (and what is being tracked)
+      if (camMode !== "orbit") { if (at?.kind === "vehicle") select(at); return; }
+      select(at);
     };
+    // hovering (no button held): what is under the pointer, a few times a second
+    let hoverAt = 0;
+    const onHover = (e: PointerEvent) => {
+      if (e.buttons !== 0 || e.timeStamp - hoverAt < 80) return;
+      hoverAt = e.timeStamp;
+      const r = renderer.domElement.getBoundingClientRect(), at = pickAt(e.clientX, e.clientY) ?? null;
+      setHover(h => (at && h?.at.kind === at.kind && h.at.id === at.id ? { ...h, x: e.clientX - r.left, y: e.clientY - r.top } : at ? { at, x: e.clientX - r.left, y: e.clientY - r.top } : null));
+    };
+    const onHoverOut = () => setHover(null);
+    renderer.domElement.addEventListener("pointermove", onHover);
+    renderer.domElement.addEventListener("pointerleave", onHoverOut);
+    renderer.domElement.addEventListener("pointerdown", onHoverOut);
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointerup", onUp);
 
@@ -865,6 +909,9 @@ export function View3D() {
       mq.removeEventListener("change", applyTheme);
       renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointerup", onUp);
+      renderer.domElement.removeEventListener("pointermove", onHover);
+      renderer.domElement.removeEventListener("pointerleave", onHoverOut);
+      renderer.domElement.removeEventListener("pointerdown", onHoverOut);
       renderer.domElement.removeEventListener("pointerdown", onLookDown);
       renderer.domElement.removeEventListener("pointermove", onLookMove);
       renderer.domElement.removeEventListener("pointerleave", onHoverLeave);
@@ -896,6 +943,7 @@ export function View3D() {
       <div ref={wrapRef} className="absolute inset-0 overflow-hidden" aria-label="3D view of the street plan" />
       {mode !== "orbit" && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} />}
       <div ref={revRef} className="pointer-events-none absolute inset-0 z-[6] overflow-hidden"><ReversibleControls /></div>
+      {hover && <HoverInfo at={hover.at} x={hover.x} y={hover.y} />}
       {mode !== "orbit" && war && (
         // the gunsight, in the middle of the view
         <svg viewBox="-40 -40 80 80" className="pointer-events-none absolute top-1/2 left-1/2 z-[6] size-16 -translate-x-1/2 -translate-y-1/2 text-red-500 drop-shadow-[0_0_3px_rgba(239,68,68,0.7)]" aria-hidden>
@@ -923,8 +971,10 @@ export function View3D() {
               <ToggleGroupItem value="cockpit" aria-label="From the cockpit" title="From the pilot's seat (C)"><Gauge /> Cockpit</ToggleGroupItem>
               <ToggleGroupItem value="outside" aria-label="From outside" title="From behind the helicopter (C)"><Eye /> Outside</ToggleGroupItem>
             </ToggleGroup>
-            <Button size="sm" variant={war ? "destructive" : "outline"} aria-pressed={war} onClick={() => { setWar(w => !w); setNote(""); }}
-              title="War mode: the gun (Space, or click) and guided rockets (R)" className={cn("h-8 shadow-sm", !war && "bg-background/95")}><Swords /> War</Button>
+            {WAR_MODE && (
+              <Button size="sm" variant={war ? "destructive" : "outline"} aria-pressed={war} onClick={() => { setWar(w => !w); setNote(""); }}
+                title="War mode: the gun (Space, or click) and guided rockets (R)" className={cn("h-8 shadow-sm", !war && "bg-background/95")}><Swords /> War</Button>
+            )}
             <Button size="icon-sm" variant="outline" aria-pressed={sound} onClick={() => setSound(x => !x)}
               aria-label={sound ? "Turn the rotor sound off" : "Turn the rotor sound on"} title={sound ? "Sound on" : "Sound off"}
               className="size-8 bg-background/95 shadow-sm">{sound ? <Volume2 /> : <VolumeX />}</Button>
@@ -936,7 +986,7 @@ export function View3D() {
             {mode === "heli" ? (
               <>
                 <div><Kbd>Z</Kbd> <Kbd>S</Kbd> forward, back · <Kbd>Q</Kbd> <Kbd>D</Kbd> left, right (or arrows)</div>
-                <div>Mouse towards a side turns · drag to look around</div>
+                <div>Mouse left / right turns · up / down looks far ahead or below</div>
                 <div><Kbd>E</Kbd>/<Kbd>PgUp</Kbd> climb · <Kbd>A</Kbd>/<Kbd>PgDn</Kbd> descend · or scroll</div>
                 <div><Kbd>Shift</Kbd> faster · <Kbd>C</Kbd> cockpit / outside · click a vehicle, then Track</div>
               </>
