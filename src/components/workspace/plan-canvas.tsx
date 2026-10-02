@@ -415,6 +415,16 @@ export function PlanCanvas() {
       if (e.button === 2 && tool === "road") { pending = null; markDirty(); return; }
       if (e.button !== 0) return;
 
+      // picking a transit flow's exit: a click on an exit point sends the flow there
+      const pe = ui.getValue().pickExit;
+      if (pe) {
+        const flow = net.flows?.find(f => f.id === pe), exits = new Set(ops.entryPoints(net).map(n => n.id));
+        const id = flow ? hitNode(sx, sy, flow.from, nid => exits.has(nid)) : null;
+        if (flow && id) { commit(ops.updateFlow(net, pe, { to: id })); ui.getValue().pickExit = null; }
+        else if (!flow) ui.getValue().pickExit = null;
+        markDirty();
+        return;
+      }
       // drawing a lane connector: a click on a lane leaving the junction ends it there
       const cf = ui.getValue().connectFrom;
       if (cf) {
@@ -684,7 +694,7 @@ export function PlanCanvas() {
       if (JSON.stringify(hv) !== JSON.stringify(hover)) { hover = hv; }
       ulHover = u.tool === "image" && !u.calib.active ? hitUnderlay(sx, sy) : null;
       const ulCursor = ulHover === "move" ? "move" : ulHover === "rotate" ? "grab" : ulHover ? (ulHover === "c0" || ulHover === "c2" ? "nwse-resize" : "nesw-resize") : null;
-      canvas.style.cursor = drag ? "grabbing" : u.calib.active ? "crosshair" : ulCursor ?? (u.tool === "pan" || u.tool === "image" || spaceHeld ? "grab" : u.tool === "road" || u.tool === "stop" || u.tool === "marker" ? "crosshair" : hv ? "pointer" : "default");
+      canvas.style.cursor = drag ? "grabbing" : u.calib.active ? "crosshair" : ulCursor ?? (u.tool === "pan" || u.tool === "image" || spaceHeld ? "grab" : u.tool === "road" || u.tool === "stop" || u.tool === "marker" || u.pickExit ? "crosshair" : hv ? "pointer" : "default");
       markDirty();
     }
 
@@ -764,6 +774,7 @@ export function PlanCanvas() {
       if (e.type === "keydown" && e.key === "Escape") setMenu(null);
       const sh = ui.getValue().shape;
       if (e.type === "keydown" && !typing && e.key === "Escape" && ui.getValue().connectFrom) { ui.getValue().connectFrom = null; e.stopPropagation(); markDirty(); return; }
+      if (e.type === "keydown" && !typing && e.key === "Escape" && ui.getValue().pickExit) { ui.getValue().pickExit = null; e.stopPropagation(); markDirty(); return; }
       if (e.type === "keydown" && !typing && sh.paint && (e.key === "Enter" || e.key === "Escape")) {
         if (e.key === "Enter") finishPaint(); else sh.paint = null;
         e.stopPropagation(); e.preventDefault(); markDirty(); return;
@@ -867,6 +878,12 @@ export function PlanCanvas() {
           satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, highlight: highlightedLayers(u.layers), show: u.layers, maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
           focusNodes: focusNodes(),
           box: drag?.mode === "box" ? { a: drag.a, b: drag.b } : null,
+          exitPick: u.pickExit ? (() => {
+            const flow = net.flows?.find(f => f.id === u.pickExit);
+            if (!flow) return null;
+            const ends = ops.entryPoints(net).filter(n => n.id !== flow.from), to = ops.nodeById(net, flow.to);
+            return { targets: ends.map(n => ({ x: n.x, y: n.y })), current: to ? { x: to.x, y: to.y } : null };
+          })() : null,
           markersSel: selectedAll(u).filter(x => x.kind === "marker").map(x => x.id),
           group: u.extra.length ? (() => {
             const c = simController.compiled, ex = u.extra;

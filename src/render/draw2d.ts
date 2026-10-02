@@ -156,6 +156,8 @@ export interface Overlay {
   focusNodes?: readonly number[];
   /** lane ends a connector can be started from (click or drag from them), marked when zoomed in */
   laneEnds?: readonly Vec[];
+  /** picking a transit flow's exit: the exit points it can go to (each marked with a target), and the one it goes to now */
+  exitPick?: { targets: readonly Vec[]; current: Vec | null } | null;
   /** markers selected (by id): drawn with a ring */
   markersSel?: readonly string[];
   /** a selection box being dragged (Shift+drag), world coordinates */
@@ -584,6 +586,17 @@ export function drawScene(
   if (ov.junctions && on("junctions")) drawJunctionTags(ctx, cam, pal, compiled, sim);
   if (on("counters")) drawCounters(ctx, cam, pal, net, compiled, sim);
   if (on("markers") && net.markers?.length) drawMarkers(ctx, cam, pal, net, ov.markersSel ?? []);
+  if (ov.exitPick) {
+    // a target on every exit point the flow can go to, filled on the one it goes to now
+    for (const t of ov.exitPick.targets) {
+      const q = toScreen(cam, t.x, t.y), cur = !!ov.exitPick.current && Math.hypot(ov.exitPick.current.x - t.x, ov.exitPick.current.y - t.y) < 0.01;
+      ctx.strokeStyle = pal.select; ctx.fillStyle = pal.select; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(q.x, q.y, 12, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(q.x, q.y, 6, 0, Math.PI * 2); if (cur) ctx.fill(); else ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(q.x - 17, q.y); ctx.lineTo(q.x - 9, q.y); ctx.moveTo(q.x + 9, q.y); ctx.lineTo(q.x + 17, q.y);
+      ctx.moveTo(q.x, q.y - 17); ctx.lineTo(q.x, q.y - 9); ctx.moveTo(q.x, q.y + 9); ctx.lineTo(q.x, q.y + 17); ctx.stroke();
+    }
+  }
   if (ov.highlight.includes("lanes")) drawLaneIds(ctx, cam, pal, compiled);
   if (ov.selection) drawSelectionIds(ctx, cam, pal, geo, net, compiled, sim, ov.selection, ov.alsoSelected);
   if (ov.selection?.kind === "node") drawFlows(ctx, cam, pal, net, ov.selection.id);

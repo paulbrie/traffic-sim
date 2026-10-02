@@ -1,7 +1,7 @@
 "use client";
 
-import { useSubject } from "subjecto/react";
-import { Plus, Trash2, TriangleAlert } from "lucide-react";
+import { useDeepSubject, useSubject } from "subjecto/react";
+import { Crosshair, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -38,6 +38,7 @@ function FlowResult({ f }: { f: FlowStats | null }) {
 /** transit flows starting at (and arriving at) an entry point */
 export function FlowsSection({ net, node }: { net: Network; node: NodeDef }) {
   useSubject(stats$); // live results (~4×/s)
+  const [picking] = useDeepSubject(ui, "pickExit");
   const sim = simController.sim;
   const out = (net.flows ?? []).filter(f => f.from === node.id), inn = (net.flows ?? []).filter(f => f.to === node.id);
   const exits = ops.entryPoints(net).filter(n => n.id !== node.id);
@@ -53,10 +54,16 @@ export function FlowsSection({ net, node }: { net: Network; node: NodeDef }) {
               <Label className="text-xs text-muted-foreground">Leaving at</Label>
               <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Delete this flow" onClick={() => commit(ops.deleteFlow(net, f.id))}><Trash2 /></Button>
             </div>
-            <Select value={f.to} onValueChange={v => commit(ops.updateFlow(net, f.id, { to: v }))}>
-              <SelectTrigger size="sm" className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>{exits.map(n => <SelectItem key={n.id} value={n.id}>{entryLabel(net, n.id)}</SelectItem>)}</SelectContent>
-            </Select>
+            <div className="flex gap-1.5">
+              <Select value={f.to} onValueChange={v => commit(ops.updateFlow(net, f.id, { to: v }))}>
+                <SelectTrigger size="sm" className="min-w-0 flex-1"><SelectValue /></SelectTrigger>
+                <SelectContent>{exits.map(n => <SelectItem key={n.id} value={n.id}>{entryLabel(net, n.id)}</SelectItem>)}</SelectContent>
+              </Select>
+              <Button variant={picking === f.id ? "default" : "outline"} size="icon-sm" className="size-8 shrink-0" aria-pressed={picking === f.id}
+                aria-label="Pick the exit on the map" title={picking === f.id ? "Click an exit point on the map (Esc to cancel)" : "Pick the exit on the map"}
+                onClick={() => { ui.getValue().pickExit = picking === f.id ? null : f.id; }}><Crosshair /></Button>
+            </div>
+            {picking === f.id && <p className="text-xs text-muted-foreground">Click an exit point on the map (marked with a target). Esc to cancel.</p>}
           </div>
           <div className="grid grid-cols-2 gap-2">
             <NumberField id={`fr-${f.id}`} label="Vehicles per hour" unit="/h" value={f.rate} min={0} max={10000} step={10} digits={0} onCommit={v => commit(ops.updateFlow(net, f.id, { rate: Math.round(v) }), `fr:${f.id}`)} />

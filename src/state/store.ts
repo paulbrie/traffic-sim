@@ -53,6 +53,8 @@ export interface UiState {
   multi: string[];
   /** more objects of any kind selected with it (Shift+click, Shift+drag a box), e.g. to delete them together */
   extra: Selection[];
+  /** picking a transit flow's exit on the map (the flow's id) */
+  pickExit: string | null;
   /** route tracer: from an entry point to an exit, starting in an entry lane (null = the kerb-side one) */
   trace: { from: string | null; to: string | null; lane: number | null };
   display: { bySpeed: boolean; reservations: boolean; labels: boolean; buildings: boolean; junctions: boolean; satellite: boolean; connectors: boolean; maskRoads: boolean; /** satellite imagery brightness (0.3–1) */ satBrightness: number; /** the CPU / memory load panel */ perf: boolean };
@@ -94,6 +96,7 @@ export const ui = new DeepSubject<UiState>(
     trace: { from: null, to: null, lane: null },
     multi: [],
     extra: [],
+    pickExit: null,
     display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85, perf: false },
     sim: { running: false, speed: 3, epoch: 0 },
     save: { status: "saved", revision: 1, savedAt: null, message: "" },
@@ -227,6 +230,7 @@ export function select(sel: Selection | null) {
   if (cur === sel || (cur && sel && cur.kind === sel.kind && cur.id === sel.id)) return;
   batch(() => {
     u.selection = sel ? { ...sel } : null; if (u.multi.length) u.multi = []; if (u.extra.length) u.extra = [];
+    if (u.pickExit) u.pickExit = null;
     // (the junction editor belongs to its junction: selecting something else ends it)
     const keep = sel?.kind === "node" ? sel.id : null;
     if (u.shape.edit && u.shape.edit !== keep) u.shape.edit = null;

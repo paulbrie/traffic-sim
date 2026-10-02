@@ -97,7 +97,7 @@ export function Workspace({ plan, user }: { plan: WorkspacePlan; user: MenuUser 
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <TabsContent value="inspect"><CollapsibleSections.Provider value={true}><Inspector /></CollapsibleSections.Provider></TabsContent>
-                <TabsContent value="traffic"><TrafficPanel /></TabsContent>
+                <TabsContent value="traffic"><CollapsibleSections.Provider value={true}><TrafficPanel /></CollapsibleSections.Provider></TabsContent>
                 <TabsContent value="lines"><LinesPanel /></TabsContent>
                 <TabsContent value="image"><UnderlayPanel /></TabsContent>
               </div>
@@ -454,7 +454,9 @@ function StatusBar() {
   const [view] = useDeepSubject(ui, "view");
   const [tool] = useDeepSubject(ui, "tool");
   const [calib] = useDeepSubject(ui, "calib");
-  const hint = calib.active && view === "2d" ? "Calibrating: click two points on the image whose real distance you know · Esc to cancel"
+  const [pickExit] = useDeepSubject(ui, "pickExit");
+  const hint = pickExit && view === "2d" ? "Click an exit point (marked with a target) to send the transit flow there · Esc to cancel"
+    : calib.active && view === "2d" ? "Calibrating: click two points on the image whose real distance you know · Esc to cancel"
     : view === "3d"
     ? "Drag to orbit · right-drag to pan · scroll to zoom · click to select"
     : tool === "road" ? "Click to place points · C toggles curved · click a road to join it · Shift for 15° · Esc to finish"
