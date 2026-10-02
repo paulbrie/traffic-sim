@@ -37,8 +37,8 @@ function loadModel(): Promise<THREE.Group> {
 }
 
 /**
- * `cabin`: the helicopter as seen from the pilot's seat: only its rotor from the model, and the bubble's frame
- * drawn here (thin metal tubes along the canopy) so the view ahead and down through the nose stays open.
+ * `cabin`: the helicopter as seen from the pilot's seat: only its rotor turning overhead, nothing else in the
+ * way of the view ahead and below.
  * `whole`: the whole helicopter, seen from outside.
  */
 export async function loadHelicopter(view: "cabin" | "whole" = "cabin", layer = HELI_LAYER): Promise<Helicopter> {
@@ -51,7 +51,6 @@ export async function loadHelicopter(view: "cabin" | "whole" = "cabin", layer = 
   for (const name of WEAPONS) { const o = model.getObjectByName(name); if (o) o.visible = false; }
   if (view === "cabin") {
     model.traverse(o => { if ((o as THREE.Mesh).isMesh && o.name !== BLADES && o.name !== HEAD) o.visible = false; });
-    body.add(cabinFrame());
   }
 
   // the rotor turns round the middle of its blades (five alike: their mean point is on the mast)
@@ -83,36 +82,9 @@ export async function loadHelicopter(view: "cabin" | "whole" = "cabin", layer = 
     dispose() {
       body.traverse(o => {
         const m = o as THREE.Mesh;
-        // (what was made here: the rotor's disc and the cabin's frame; the model's own parts are shared)
-        if (m.isMesh && (m.geometry.type === "CircleGeometry" || m.parent?.userData.frame)) { m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
+        // (what was made here: the rotor's disc; the model's own parts are shared)
+        if (m.isMesh && m.geometry.type === "CircleGeometry") { m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
       });
     },
   };
-}
-
-/*
- * The bubble's frame, in the body frame (metres: x right, y up, −z ahead), measured off the model's canopy
- * and set a few centimetres inside the glass: the post down the middle of the windscreen, the posts at its
- * corners, the arch across its top, the rails along the roof and the posts behind the doors.
- */
-const FRAME: { r: number; pts: [number, number, number][] }[] = [
-  // down the middle of the windscreen, to the nose
-  { r: 0.016, pts: [[0, 0.7, -1.02], [0, 0.58, -1.24], [0, 0.48, -1.45], [0, 0.3, -1.62], [0, 0.1, -1.79], [0, -0.2, -1.84], [0, -0.6, -1.82]] },
-  // where the windscreen meets each door (some 45° either side of the pilot's view ahead)
-  ...[1, -1].map(sd => ({ r: 0.019, pts: [[0.38 * sd, 0.6, -1.12], [0.48 * sd, 0.4, -1.3], [0.55 * sd, 0.2, -1.4], [0.57 * sd, 0, -1.42], [0.57 * sd, -0.3, -1.42], [0.48 * sd, -0.6, -1.5]] as [number, number, number][] })),
-  // across the top of the windscreen
-  { r: 0.016, pts: [[-0.38, 0.6, -1.12], [-0.2, 0.67, -1.06], [0, 0.7, -1.02], [0.2, 0.67, -1.06], [0.38, 0.6, -1.12]] },
-  // along the roof over each door, and the post behind it
-  ...[1, -1].map(sd => ({ r: 0.018, pts: [[0.38 * sd, 0.6, -1.12], [0.42 * sd, 0.62, -0.9], [0.44 * sd, 0.62, -0.5], [0.6 * sd, 0.42, -0.45], [0.67 * sd, 0.1, -0.45], [0.69 * sd, -0.4, -0.45], [0.66 * sd, -0.7, -0.45]] as [number, number, number][] })),
-];
-function cabinFrame(): THREE.Group {
-  const g = new THREE.Group(), mat = new THREE.MeshStandardMaterial({ color: 0x8d949d, metalness: 0.2, roughness: 0.45 });
-  for (const f of FRAME) {
-    const curve = new THREE.CatmullRomCurve3(f.pts.map(p => new THREE.Vector3(...p)), false, "centripetal");
-    g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 48, f.r, 10, false), mat));
-    // rounded ends where a tube stops in view
-    for (const p of [f.pts[0], f.pts[f.pts.length - 1]]) { const cap = new THREE.Mesh(new THREE.SphereGeometry(f.r, 10, 8), mat); cap.position.set(...p); g.add(cap); }
-  }
-  g.userData.frame = true;
-  return g;
 }

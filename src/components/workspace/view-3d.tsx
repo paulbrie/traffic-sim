@@ -363,7 +363,6 @@ export function View3D() {
     const cabinCam = new THREE.PerspectiveCamera(60, 1, 0.03, 80);
     cabinCam.layers.set(HELI_LAYER);
     sun.shadow.camera.layers.enable(HELI_LAYER); // the cabin's shadow on the ground
-    hemi.layers.enable(HELI_LAYER); sun.layers.enable(HELI_LAYER); // and light on its metal frame
     const outCam = new THREE.PerspectiveCamera(50, 1, 0.5, 12000), outAt = new THREE.Vector3();
     let outFresh = true;
     /** the airframe: heading (as a camera yaw), nose up, roll (right side up) */
@@ -941,9 +940,10 @@ export function View3D() {
   return (
     <>
       <div ref={wrapRef} className="absolute inset-0 overflow-hidden" aria-label="3D view of the street plan" />
-      {mode !== "orbit" && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} />}
+      {mode !== "orbit" && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} hovered={hover?.at ?? null} />}
       <div ref={revRef} className="pointer-events-none absolute inset-0 z-[6] overflow-hidden"><ReversibleControls /></div>
-      {hover && <HoverInfo at={hover.at} x={hover.x} y={hover.y} />}
+      {/* (flying, it shows on the cockpit's display instead) */}
+      {hover && mode === "orbit" && <HoverInfo at={hover.at} x={hover.x} y={hover.y} />}
       {mode !== "orbit" && war && (
         // the gunsight, in the middle of the view
         <svg viewBox="-40 -40 80 80" className="pointer-events-none absolute top-1/2 left-1/2 z-[6] size-16 -translate-x-1/2 -translate-y-1/2 text-red-500 drop-shadow-[0_0_3px_rgba(239,68,68,0.7)]" aria-hidden>

@@ -37,10 +37,11 @@ export function HoverInfo({ at, x, y }: { at: Hovered; x: number; y: number }) {
   );
 }
 
-type Info = { title: string; sub?: string; rows: [string, string][] };
+export type Info = { title: string; sub?: string; rows: [string, string][] };
 const kmh = (ms: number) => `${Math.round(ms * 3.6)} km/h`;
 
-function describe(at: Hovered, net: Network, c: Compiled): Info | null {
+/** what to say about the object under the pointer (live figures from the latest snapshot) */
+export function describe(at: Hovered, net: Network, c: Compiled): Info | null {
   const sim = simController.sim;
   if (at.kind === "link") {
     const l = net.links.find(x => x.id === at.id);

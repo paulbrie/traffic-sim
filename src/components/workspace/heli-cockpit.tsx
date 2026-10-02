@@ -3,9 +3,10 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import { simController } from "@/state/sim-controller";
-import { stats$, ui } from "@/state/store";
+import { network$, stats$, ui } from "@/state/store";
 import { junctionRefs } from "@/engine/refs";
 import { minSec } from "@/lib/time";
+import { describe, type Hovered } from "./hover-info";
 
 /** what the 3D view tells the cockpit every frame */
 export interface Flight {
@@ -26,16 +27,18 @@ const GREEN = "#62f5a0", AMBER = "#ffb83d", CYAN = "#6fd8ff", MAG = "#ff6bd6";
 const MONO = "ui-monospace,SFMono-Regular,Menlo,monospace";
 
 // the display's drawing (units): the vehicle screen and, right of it, the flight display (PFD)
+// (and left of the vehicle screen, what the pointer is over)
+const I = { x: 40, y: 676, w: 290, h: 204 };
 const M = { x: 360, y: 676, w: 290, h: 204 };
 const P = { x: 680, y: 676, w: 240, h: 204, cy: 766 };
-const VIEW = { x: M.x - 14, y: M.y - 14, w: P.x + P.w + 14 - (M.x - 14), h: M.h + 28 };
+const VIEW = { x: I.x - 14, y: M.y - 14, w: P.x + P.w + 14 - (I.x - 14), h: M.h + 28 };
 
 /**
  * What the pilot sees besides the helicopter's own cabin (the 3D model): sights on the tracked vehicle and
  * a display at the bottom with the selected (or tracked) vehicle's live data and the flight instruments.
  * The view drives the instruments every frame through `apiRef` (direct DOM writes, no React renders).
  */
-export function Cockpit({ apiRef, tracking }: { apiRef: RefObject<CockpitApi | null>; tracking: boolean }) {
+export function Cockpit({ apiRef, tracking, hovered }: { apiRef: RefObject<CockpitApi | null>; tracking: boolean; hovered: Hovered | null }) {
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -79,9 +82,11 @@ export function Cockpit({ apiRef, tracking }: { apiRef: RefObject<CockpitApi | n
         </svg>
         <span data-g="range" className="absolute top-full left-1/2 mt-1 -translate-x-1/2 font-mono text-[11px] whitespace-nowrap" />
       </div>
-      <div className="absolute bottom-3 left-1/2 w-[min(600px,62%)] -translate-x-1/2 rounded-xl bg-[#111316]/90 shadow-lg ring-1 ring-black/60 backdrop-blur-sm">
+      <div className="absolute bottom-3 left-1/2 w-[min(900px,88%)] -translate-x-1/2 rounded-xl bg-[#111316]/90 shadow-lg ring-1 ring-black/60 backdrop-blur-sm">
         <svg viewBox={`${VIEW.x} ${VIEW.y} ${VIEW.w} ${VIEW.h}`} className="block w-full">
           <Defs />
+          <Bezel x={I.x} y={I.y} w={I.w} h={I.h} />
+          <foreignObject x={I.x} y={I.y} width={I.w} height={I.h}><InspectScreen at={hovered} /></foreignObject>
           <Bezel x={M.x} y={M.y} w={M.w} h={M.h} />
           <foreignObject x={M.x} y={M.y} width={M.w} height={M.h}><VehicleScreen tracking={tracking} /></foreignObject>
           <Bezel x={P.x} y={P.y} w={P.w} h={P.h} />
@@ -229,6 +234,36 @@ function VehicleScreen({ tracking }: { tracking: boolean }) {
     <div className="relative size-full overflow-hidden rounded-[3px] bg-[#03100a] px-2.5 py-2 font-mono" style={{ color: GREEN, textShadow: `0 0 4px ${GREEN}55` }}>
       {body}
       {/* scanlines and a little glare on the glass */}
+      <div className="pointer-events-none absolute inset-0 opacity-25" style={{ background: "repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,0,0,0.6) 2px 3px)" }} />
+      <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(125deg, rgba(255,255,255,0.06) 0 30%, transparent 30%)" }} />
+    </div>
+  );
+}
+/** the screen left of the vehicle's: what the pointer is over (a road, junction, building, marker, vehicle) */
+function InspectScreen({ at }: { at: Hovered | null }) {
+  useSubject(stats$); // live figures (~4×/s)
+  const [net] = useSubject(network$);
+  const info = at ? describe(at, net, simController.compiled) : null;
+  return (
+    <Screen>
+      {!info ? <Center>INSPECT<small>point at a road, a junction, a building…</small></Center> : (
+        <div className="flex h-full flex-col">
+          <div className="text-[9px] text-[#6fd8ff]">INSPECT · {({ link: "ROAD", node: "JUNCTION", building: "BUILDING", marker: "MARKER", vehicle: "VEHICLE" } as const)[at!.kind]}</div>
+          <div className="mt-1 truncate text-[15px] font-semibold leading-tight">{info.title}</div>
+          {info.sub && <div className="truncate text-[9.5px] opacity-70">{info.sub}</div>}
+          <dl className="mt-auto grid grid-cols-[auto_1fr] gap-x-2 gap-y-[3px] text-[9.5px] leading-tight">
+            {info.rows.map(([k, v]) => <div key={k} className="contents"><dt className="text-[#6fd8ff]/80 uppercase">{k}</dt><dd className="truncate text-right">{v}</dd></div>)}
+          </dl>
+        </div>
+      )}
+    </Screen>
+  );
+}
+/** a green display: dark glass, scanlines, a little glare */
+function Screen({ children }: { children: ReactNode }) {
+  return (
+    <div className="relative size-full overflow-hidden rounded-[3px] bg-[#03100a] px-2.5 py-2 font-mono" style={{ color: GREEN, textShadow: `0 0 4px ${GREEN}55` }}>
+      {children}
       <div className="pointer-events-none absolute inset-0 opacity-25" style={{ background: "repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,0,0,0.6) 2px 3px)" }} />
       <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(125deg, rgba(255,255,255,0.06) 0 30%, transparent 30%)" }} />
     </div>
