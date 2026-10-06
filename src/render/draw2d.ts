@@ -103,10 +103,7 @@ export function buildPaths(geo: RoadGeo): PathCache {
       c.jIsland.moveTo(j.ring.c.x + ir, j.ring.c.y); c.jIsland.arc(j.ring.c.x, j.ring.c.y, ir, 0, Math.PI * 2);
       c.jIslandEdge.moveTo(j.ring.c.x + ir, j.ring.c.y); c.jIslandEdge.arc(j.ring.c.x, j.ring.c.y, ir, 0, Math.PI * 2);
     }
-    if (j.deadEnd) {
-      c.jAsphalt.moveTo(j.deadEnd.c.x + j.deadEnd.r, j.deadEnd.c.y); c.jAsphalt.arc(j.deadEnd.c.x, j.deadEnd.c.y, j.deadEnd.r, 0, Math.PI * 2);
-      c.jCurb.moveTo(j.deadEnd.c.x + j.deadEnd.r + 0.6, j.deadEnd.c.y); c.jCurb.arc(j.deadEnd.c.x, j.deadEnd.c.y, j.deadEnd.r + 0.6, 0, Math.PI * 2);
-    }
+    if (j.deadEnd) { poly(c.jAsphalt, j.deadEnd.neck); poly(c.jCurb, j.deadEnd.neckCurb); }
   }
   for (const b of geo.busBands) stripPath(L(b.on).bus, b);
   // raised medians are kerbed islands; painted ones are just their lines and hatching

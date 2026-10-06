@@ -424,7 +424,8 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     }
     for (let i = 0; i < n.arms.length; i++) {
       const arm = n.arms[i];
-      if (n.degree === 1) { arm.setback = n.gateway ? 0 : 9; continue; }
+      // (a dead end: lanes stop just short of its point, so their ends sit by it; the U-turn fits in between)
+      if (n.degree === 1) { arm.setback = n.gateway ? 0 : 3; continue; }
       if (roundabout) { arm.setback = n.ringR + 4.5; continue; }
       const nbrs = n.degree === 2 ? [n.arms[1 - i]] : [n.arms[(i + 1) % n.degree], n.arms[(i - 1 + n.degree) % n.degree]];
       let d = 0;
@@ -1107,7 +1108,8 @@ function buildConn(n: CNode, move: Movement, a: number, b: number, id: number): 
     }
     pts.push(...connectorPoints(X, tX, Q, tq, 8));
   } else if (move.turn === "U" && n.deadEnd) {
-    const reach = 9;
+    // (a cubic's handles at `reach` take it 3/4 of that past the lanes' ends: up to just short of the dead end's point)
+    const reach = Math.max(2, Math.min(9, (((n.pos.x - P.x) * tp.x + (n.pos.y - P.y) * tp.y) - 0.4) / 0.75));
     const c1 = { x: P.x + tp.x * reach, y: P.y + tp.y * reach }, c2 = { x: Q.x - tq.x * reach, y: Q.y - tq.y * reach };
     pts = [];
     for (let k = 0; k <= 16; k++) {

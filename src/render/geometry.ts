@@ -21,7 +21,7 @@ export interface RoadGeo {
   /** zebra crossings at traffic lights: one polygon per stripe */
   zebras: { pts: Vec[]; on: On }[];
   /** ring: centre and radius of a roundabout's (outer) circulating lane; `r2` the inner lane of a two-lane one */
-  junctions: { nodeId: string; polygon: Vec[]; surface: Vec[]; ring: { c: Vec; r: number; r2?: number } | null; deadEnd: { c: Vec; r: number } | null; on: On }[];
+  junctions: { nodeId: string; polygon: Vec[]; surface: Vec[]; ring: { c: Vec; r: number; r2?: number } | null; deadEnd: DeadEnd | null; on: On }[];
   busBands: (Strip & { on: On })[];
   lines: LineGeo[];
   stopLines: { a: Vec; b: Vec; kind: "stop" | "yield" | "signal" | "priority"; on: On }[];
@@ -161,6 +161,23 @@ function armLines(n: CNode, a: Arm, byLink: Map<string, { f: Edge | null; b: Edg
 }
 
 /** zebra stripes across a road (lateral lo..hi of direction u from p), between d0 and d1 along it */
+/** a dead end: the road's asphalt and kerb carried on from where its lanes stop (the arm's mouth) to the node, kerbed across the end */
+export interface DeadEnd { neck: Vec[]; neckCurb: Vec[] }
+
+/** (an arm's lo / hi already take in the kerb) */
+function deadEnd(pos: Vec, a: Arm): DeadEnd {
+  const u = a.u, C = (d: number, y: number) => ({ x: pos.x + u.x * d - u.y * y, y: pos.y + u.y * d + u.x * y });
+  const M = (y: number) => ({ x: a.mouth.x - a.mu.y * y, y: a.mouth.y + a.mu.x * y });
+  return { neck: [M(a.lo + CURB), M(a.hi - CURB), C(0, a.hi - CURB), C(0, a.lo + CURB)], neckCurb: [M(a.lo), M(a.hi), C(-CURB, a.hi), C(-CURB, a.lo)] };
+}
+
+/** the end of a dead end's road: a solid line across it, just inside the kerb */
+function deadEndMarks(geo: RoadGeo, on: On, pos: Vec, a: Arm) {
+  const u = a.u, C = (d: number, y: number) => ({ x: pos.x + u.x * d - u.y * y, y: pos.y + u.y * d + u.x * y });
+  const p = C(0.3, a.lo + CURB + 0.3), q = C(0.3, a.hi - CURB - 0.3);
+  geo.lines.push({ poly: new Poly([p.x, p.y, q.x, q.y]), dashed: false, kind: "lane", on });
+}
+
 function zebra(out: { pts: Vec[]; on: On }[], on: On, p: Vec, u: Vec, lo: number, hi: number, d0: number, d1: number) {
   const r = { x: -u.y, y: u.x }, P = (d: number, y: number) => ({ x: p.x + u.x * d + r.x * y, y: p.y + u.y * d + r.y * y });
   for (let y = lo + 0.5; y + 0.5 <= hi - 0.4; y += 1.1) out.push({ pts: [P(d0, y), P(d1, y), P(d1, y + 0.5), P(d0, y + 0.5)], on });
@@ -415,15 +432,15 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
   }
   for (const n of c.nodes) {
     if (n.degree === 0) continue;
-    const w = Math.max(...n.arms.map(a => a.w));
     geo.junctions.push({
       nodeId: n.def.id,
       // (a road's loose end in a junction over several nodes too: its asphalt reaches the lanes it joins)
       polygon: n.degree >= 2 || n.cluster.length > 1 ? n.polygon : [], surface: n.degree >= 2 || n.cluster.length > 1 ? n.surface : [],
       ring: n.ringR > 0 ? { c: n.pos, r: n.ringR, ...(n.ring2 ? { r2: n.ringR2 } : {}) } : null,
-      deadEnd: n.deadEnd ? { c: { x: n.pos.x - n.arms[0].u.x * 1, y: n.pos.y - n.arms[0].u.y * 1 }, r: Math.max(6.5, w + 0.5) } : null,
+      deadEnd: n.deadEnd ? deadEnd(n.pos, n.arms[0]) : null,
       on: onN(n),
     });
+    if (n.deadEnd) deadEndMarks(geo, onN(n), n.pos, n.arms[0]);
   }
   // painted areas and lane lines through junctions (set on the junction)
   for (const n of c.nodes) {

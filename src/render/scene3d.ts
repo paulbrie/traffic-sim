@@ -149,7 +149,7 @@ export function buildRoads(geo: RoadGeo, pal: Palette, hf?: HeightFn, show: Show
       curb.polygon(j.polygon, 0.045); asphalt.polygon(j.surface.length >= 3 ? j.surface : j.polygon, 0.105);
     }
     if (j.ring) { asphalt.disk(j.ring.c, j.ring.r + 2.4, 0.107); curb.disk(j.ring.c, j.ring.r + 3, 0.047); }
-    if (j.deadEnd) { asphalt.disk(j.deadEnd.c, j.deadEnd.r, 0.107); curb.disk(j.deadEnd.c, j.deadEnd.r + 0.6, 0.047); }
+    if (j.deadEnd) { asphalt.polygon(j.deadEnd.neck, 0.107); curb.polygon(j.deadEnd.neckCurb, 0.047); }
   }
   if (Ln) for (const b of geo.busBands) { on(b.on); bus.strip(b, 0.16); }
   if (R) for (const m of geo.medians) if (m.kind === "raised") { on(m.on); curb.strip(m.strip, 0.2); island.strip(shrink(m.strip), 0.24); }
