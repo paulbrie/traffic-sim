@@ -10,7 +10,7 @@ import { readFileSync } from "fs";
 import { sanitizeNetwork, sanitizeSettings } from "../src/engine/validate";
 import { DEFAULT_PARAMS } from "../src/engine/params";
 import { polyCentroid } from "../src/engine/buildings";
-import type { Network } from "../src/engine/types";
+import type { LaneTurns, Network } from "../src/engine/types";
 import type { Piece } from "../src/engine/compile";
 import type { Vehicle } from "../src/engine/sim";
 import { customizePhases, addPhase, approachesTo, toConnectorPhases, setConnGreen, setLaneGreen, reverseLink, splitLink, linkPoint, nodeById, addSlipLane, mergeLinks, smoothBetween } from "../src/state/ops";
@@ -1084,4 +1084,25 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const ok = same && per100 > 5 && per100 < 40 && F.idle > 0 && F.idle < F.total && liveOk && reset && probe.onFar > 0 && probe.onPoint > 0 && probe.missed === 0;
   console.log(`fuel: same traffic ${same}, ${F.total.toFixed(1)} L (${(100 * F.idle / F.total).toFixed(0)}% standing still), ${per100.toFixed(1)} L/100 km; one junction live ${liveOk} (${jf.idle.toFixed(2)} L idle, ${jf.crossed} crossed); tallies reset ${reset}; split road: counted at the junction ${probe.onFar} ticks on the far half, ${probe.onPoint} crossing the road point, missed ${probe.missed} | ok ${ok}`);
   if (!ok) process.exit(1);
+}
+
+// exit lanes stay on the road from any lane, also lanes outside the turn's own (a vehicle asking early, before it has moved over)
+{
+  let checked = 0, out = 0;
+  // (and a right turn from the leftmost lane only, the others straight on: the lanes right of it are outside the turn's)
+  const town = sampleTown(), c0 = compile(town, { outlines: false });
+  const appr = c0.edges.find(e => e.n >= 2 && e.left + e.right === 0 && (e.to.moves.get(e.idx) ?? []).some(m => m.turn === "R") && (e.to.moves.get(e.idx) ?? []).some(m => m.turn === "S"))!;
+  const turns = ["R", ...Array(appr.n - 1).fill("S")] as LaneTurns;
+  const leftOnly = { ...town, links: town.links.map(l => (l.id === appr.link.id ? { ...l, [appr.dir === 1 ? "turnsF" : "turnsB"]: turns } : l)) };
+  const rm = compile(leftOnly, { outlines: false }).edges[appr.idx].to.moves.get(appr.idx)!.find(m => m.turn === "R")!;
+  if (rm.hi !== 0) { console.log("exit lanes: the right turn should be from lane 1 only", rm.lo, rm.hi); process.exit(1); }
+  for (const net of [leftOnly, sanitizeNetwork(JSON.parse(readFileSync("scripts/fixtures/osm-cluj.json", "utf8"))), sanitizeNetwork(JSON.parse(readFileSync("scripts/fixtures/claude-tests.json", "utf8")))]) {
+    const c = compile(net, { outlines: false });
+    for (const n of c.nodes) for (const ms of n.moves.values()) for (const m of ms) for (let a = 0; a < m.in.lanes.length; a++) for (const bus of [false, true]) {
+      const b = exitLane(m, a, bus); checked++;
+      if (!(b >= 0 && b < m.out.lanes.length)) out++;
+    }
+  }
+  console.log(`exit lanes from any lane: ${checked} checked, ${out} off the road | ok ${out === 0}`);
+  if (out) process.exit(1);
 }
