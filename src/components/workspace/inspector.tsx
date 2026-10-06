@@ -38,6 +38,7 @@ import { ReversibleSection } from "./reversible-lane";
 import { CarriagewaysSection } from "./carriageways";
 import { MultiSelection } from "./multi-selection";
 import { MarkerInspector } from "./marker-inspector";
+import { JunctionFuelSection, fmtFuel } from "./fuel";
 import { deleteSelected } from "@/state/bulk";
 import { resetApproach } from "@/state/connections";
 
@@ -210,6 +211,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
       {degree >= 2 && node.control !== "roundabout" && <JunctionShapeSection net={net} node={node} />}
       {degree >= 2 && node.control !== "roundabout" && <LaneConnectionsSection net={net} node={node} />}
       {ref && cn && <JunctionLive net={net} nodeIdx={cn.idx} />}
+      {ref && cn && <JunctionFuelSection net={net} node={node} nodeIdx={cn.idx} />}
       {ref && cn && <Section title="Event log"><JunctionEventLog nodeId={node.id} refName={ref} /></Section>}
       {degree === 2 && !crossing && (
         <Section title="Road joint">
@@ -870,6 +872,7 @@ function VehicleInspector({ id }: { id: string }) {
     ["Waiting", `${v.wait.toFixed(0)} s`],
     ["Driving for", minSec(v.trip)],
     ["In traffic", `${minSec(v.jam)}${v.trip > 0 ? ` (${Math.round((100 * v.jam) / v.trip)}%)` : ""}`],
+    ...(v.fuel ? [["Fuel burnt", `${fmtFuel(v.fuel.total)}${v.fuel.partial ? " (since fuel was on)" : ""}`], ["Of it standing still", `${fmtFuel(v.fuel.idle)}`]] as [string, string][] : []),
     ["Lane changes", String(v.laneChanges)],
     ["Re-routes", String(v.reroutes)],
     ["Max accel / braking", `${v.a.toFixed(1)} / ${v.b.toFixed(1)} m/s²`],

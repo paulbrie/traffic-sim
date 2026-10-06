@@ -13,11 +13,14 @@
  */
 import type { LanePiece, Movement, Piece } from "../compile";
 import type { Poly } from "../geom";
+import type { PlanSettings } from "../types";
 import type { Vehicle } from "./base";
 import { SimDemand } from "./demand";
-import { DT } from "./base";
+import { DT, FUEL_APPROACH, type JunctionFuel } from "./base";
+import { FUEL_STILL, fuelRate, hasStopStart } from "../fuel";
+import { isJunction } from "../refs";
 
-export { DT, REV_STATES, type Kind, type Dest, type Vehicle, type JunctionEvent, type Stats } from "./base";
+export { DT, FUEL_APPROACH, REV_STATES, type Kind, type Dest, type Vehicle, type JunctionEvent, type Stats, type FuelStats, type JunctionFuel } from "./base";
 
 /** a transit flow's results: vehicles sent, arrived at its exit, diverted to another exit, removed when stuck, waiting to enter, still driving; average travel time (s); failed spawns for lack of a route */
 export interface FlowStats { sent: number; arrived: number; diverted: number; towed: number; backlog: number; inPlan: number; avgTravel: number; noRoute: number }
@@ -49,7 +52,12 @@ export class Sim extends SimDemand {
     for (const v of this.vehicles) if (!v.dead && (v.id + this.tick) % 5 === 0) this.considerLaneChange(v);
     this.updatePeds();
     for (const st of this.ns) if (st.node.controlled && !st.node.ring) this.arbitrate(st);
-    for (const v of this.vehicles) if (!v.dead) { this.move(v); if (!v.broken && v.v < 0.3 * v.v0) v.jam += DT; }
+    const fuel = this.syncFuel();
+    for (const v of this.vehicles) if (!v.dead) {
+      const v1 = v.v, p = v.piece, s = v.s;
+      this.move(v); if (!v.broken && v.v < 0.3 * v.v0) v.jam += DT;
+      if (fuel) this.burnFuel(v, v1, p, s);
+    }
     if (this.P.breakdownsPerHour > 0 && this.rng() < (this.P.breakdownsPerHour * DT) / 3600) this.randomBreakdown();
     if (this.tick % 10 === 0) this.sample();
     if (this.tick % 50 === 0) this.housekeeping();
@@ -146,6 +154,103 @@ export class Sim extends SimDemand {
     while (c.recent.length && c.recent[0] < since) c.recent.shift();
     const window = Math.min(300, Math.max(1, this.time));
     return { total: c.total, cars: c.cars, trucks: c.trucks, buses: c.buses, avgSpeed: c.total ? (c.speedSum / c.total) * 3.6 : 0, perHour: (c.recent.length * 3600) / window };
+  }
+
+  // ------------------------------------------------------------ fuel
+  /** is anything measured (the whole plan, or junctions in `fuelNodes`) */
+  private fuelAny = false;
+  /** the settings the fuel measuring was last set up for (a new object whenever they change) */
+  private fuelFor: PlanSettings | null = null;
+  /**
+   * Per edge, the road leading into a junction its fuel counts towards (index, -1 = none) and how far
+   * that road's stop line is beyond its own end (m): roads joined end to end at plain road points count
+   * towards the junction they lead to, as long as they are within FUEL_APPROACH of it.
+   */
+  private fuelTo: Int32Array | null = null;
+  private fuelExtra: Float64Array | null = null;
+  /**
+   * Start or stop measuring as the settings change, while traffic runs: a junction starts afresh when it
+   * is switched on, the whole plan (and every vehicle's own tally) too. Whether anything is measured.
+   */
+  protected syncFuel(): boolean {
+    const S = this.settings;
+    if (S === this.fuelFor) return this.fuelAny;
+    const first = !this.fuelFor;
+    this.fuelFor = S;
+    if (!this.fuelTo) this.fuelTargets();
+    const all = S.fuel === true, ids = new Set(S.fuelNodes ?? []);
+    if (first || all !== this.fuelAll) {
+      this.fuelAll = all;
+      this.stats.fuel = all ? { total: 0, idle: 0, km: 0, idleTime: 0, trips: 0, tripFuel: 0, since: this.time } : undefined;
+      if (all) for (const v of this.vehicles) { v.fuel = 0; v.fuelIdle = 0; }
+    }
+    let any = all;
+    for (const n of this.net.nodes) {
+      const on = all || ids.has(n.def.id), f = this.nodeFuel[n.idx];
+      if (on) any = true;
+      if (on && f.since < 0) {
+        Object.assign(f, { since: this.tick, through0: this.nodeThrough[n.idx] ?? 0, inside: 0, idleTime: 0 });
+        for (const a of n.arms) if (a.inEdge) { this.edgeFuel[a.inEdge.idx] = 0; this.edgeIdle[a.inEdge.idx] = 0; }
+      } else if (!on) f.since = -1;
+    }
+    this.fuelAny = any;
+    return any;
+  }
+  private fuelTargets() {
+    const E = this.net.edges.length, to = new Int32Array(E).fill(-1), extra = new Float64Array(E);
+    for (const e of this.net.edges) {
+      let cur = e, d = 0, guard = 0;
+      // through plain road points (one way on) to the junction ahead
+      while (!isJunction(cur.to) && !cur.to.gateway && d < FUEL_APPROACH && guard++ < 50) {
+        const on = (this.movesFrom[cur.idx] ?? []).filter(m => m.turn !== "U");
+        if (on.length !== 1) break;
+        cur = on[0].out; d += cur.length;
+      }
+      if (isJunction(cur.to) && d < FUEL_APPROACH) { to[e.idx] = cur.idx; extra[e.idx] = d; }
+    }
+    this.fuelTo = to; this.fuelExtra = extra;
+  }
+  /** fuel a vehicle burnt this tick, going from speed `v1` to its speed now, from position `s` on piece `p` */
+  protected burnFuel(v: Vehicle, v1: number, p: Piece, s: number) {
+    if (v.broken) return; // engine off (failed, or wrecked)
+    const P = this.P, vAvg = (v1 + v.v) / 2, still = vAvg < FUEL_STILL;
+    const idle = still && hasStopStart(v.id, P.stopStartShare) ? 0 : (v.kind === "car" ? P.fuelIdleCar : P.fuelIdleTruck) / 3.6;
+    const mL = fuelRate(v.kind, vAvg, (v.v - v1) / DT, idle) * DT;
+    // standing still in traffic (a bus at its stop is not)
+    const jam = still && v.dwell <= 0;
+    const F = this.stats.fuel;
+    if (F) {
+      v.fuel = (v.fuel ?? 0) + mL;
+      F.total += mL / 1000; F.km += (vAvg * DT) / 1000;
+      if (jam) { v.fuelIdle = (v.fuelIdle ?? 0) + mL; F.idle += mL / 1000; F.idleTime += DT; }
+    }
+    if (p.kind === "lane") this.approachFuel(p.edge.idx, p.len - s, mL, jam);
+    // crossing a plain road point: on the way to the junction ahead, like the roads either side
+    else if (p.kind === "conn" && !isJunction(p.node)) this.approachFuel(p.outEdge.idx, p.len - s + p.outEdge.length, mL, jam);
+    else {
+      const f = this.nodeFuel[p.node.idx];
+      if (f.since >= 0) f.inside += mL;
+    }
+  }
+  /** fuel burnt `d` m before the end of edge `ei`: counted at the junction ahead when within its approach */
+  private approachFuel(ei: number, d: number, mL: number, jam: boolean) {
+    const k = this.fuelTo![ei];
+    if (k < 0 || d + this.fuelExtra![ei] > FUEL_APPROACH) return;
+    const f = this.nodeFuel[this.net.edges[k].to.idx];
+    if (f.since < 0) return;
+    this.edgeFuel[k] += mL;
+    if (jam) { this.edgeIdle[k] += mL; f.idleTime += DT; }
+  }
+  /** fuel measured at junction `nodeIdx` (null when it isn't measured) */
+  junctionFuel(nodeIdx: number): JunctionFuel | null {
+    const f = this.nodeFuel[nodeIdx], n = this.net.nodes[nodeIdx];
+    if (!f || f.since < 0 || !n) return null;
+    const approaches = n.arms.filter(a => a.inEdge).map(a => ({ total: this.edgeFuel[a.inEdge!.idx] / 1000, idle: this.edgeIdle[a.inEdge!.idx] / 1000 }));
+    const onRoads = approaches.reduce((x, a) => x + a.total, 0);
+    return {
+      total: onRoads + f.inside / 1000, idle: approaches.reduce((x, a) => x + a.idle, 0), inside: f.inside / 1000, idleTime: f.idleTime,
+      crossed: (this.nodeThrough[nodeIdx] ?? 0) - f.through0, since: f.since * DT, approaches,
+    };
   }
 
   // ------------------------------------------------------------ queries for renderers

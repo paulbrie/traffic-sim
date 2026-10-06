@@ -307,7 +307,14 @@ export function sanitizeSettings(input: unknown): PlanSettings {
     ...(typeof s.through === "number" && isFinite(s.through) ? { through: Math.min(1, Math.max(0, s.through)) } : {}),
     ...(params ? { params } : {}),
     ...(revHold(s.revHold) ?? {}),
+    ...(s.fuel === true ? { fuel: true } : {}),
+    ...(fuelNodes(s.fuelNodes) ?? {}),
   };
+}
+function fuelNodes(v: unknown): { fuelNodes: string[] } | null {
+  if (!Array.isArray(v)) return null;
+  const out = [...new Set(v.filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 64))].slice(0, 2000);
+  return out.length ? { fuelNodes: out } : null;
 }
 function revHold(v: unknown): { revHold: Record<string, "closed" | "1" | "2"> } | null {
   if (!v || typeof v !== "object") return null;

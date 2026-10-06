@@ -417,6 +417,14 @@ export interface PlanSettings {
    * corridor's mode until handed back. Kept with the plan, so a restart or a reload keeps them.
    */
   revHold?: Record<string, "closed" | "1" | "2">;
+  /** measure every vehicle's fuel use (and at every junction); off = only at the junctions in `fuelNodes` */
+  fuel?: boolean;
+  /**
+   * Junctions (node ids) where fuel is measured: what vehicles burn on the last FUEL_APPROACH metres of the
+   * roads leading in and crossing them, and how much of that standing still (waiting for green, queuing).
+   * A setting rather than part of the network, so switching it doesn't restart the traffic.
+   */
+  fuelNodes?: string[];
 }
 
 export const DEFAULT_SIGNAL: SignalTiming = { green: 18, yellow: 3, allRed: 2, minGreen: 6, actuated: true };
