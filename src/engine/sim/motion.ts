@@ -450,10 +450,9 @@ export abstract class SimMotion extends SimJunctions {
     const list = this.index.get(piece.id);
     if (list) for (const u of list) { if (u === v || u.s > s) continue; const gg = s - v.len - u.s; if (gg < gap) { gap = gg; best = u; } }
     // (and one still in the junction behind, coming into that lane)
-    if (s - v.len < 30) for (const u of this.vehicles) {
-      const cp = u.piece;
-      if (u === v || u.dead || cp.kind !== "conn" || cp.outEdge !== e || cp.outLane !== c) continue;
-      const gg = s - v.len - (u.s - cp.len);
+    if (s - v.len < 30) for (const u of this.intoLane.get(piece.id) ?? []) {
+      if (u === v || u.dead || u.piece.kind !== "conn") continue;
+      const gg = s - v.len - (u.s - u.piece.len);
       if (gg < gap) { gap = gg; best = u; }
     }
     return { u: best, gap };

@@ -113,7 +113,7 @@ export function compileParking(net: Network, edgeByKey: Map<string, Edge>): CPar
 const accessCache = new Map<string, BayAccess[]>();
 type Vec4 = { x: number; y: number; hx: number; hy: number };
 /** the way out found for a row's bay before: the next one, much alike, tries it first */
-interface AccessHint { one?: { back: number; turn: number }; two?: { back: number; r: number; th: number; ahead: number; reach: number } }
+interface AccessHint { one?: { back: number; turn: number; reach: number }; two?: { back: number; r: number; th: number; ahead: number; reach: number; near: number } }
 
 /** the direction a car in the bay faces: along the row for parallel bays, else into the bay at its angle */
 function axis(p: CParking, f: BayFrame): Vec {
@@ -239,13 +239,18 @@ function bayAccess(p: CParking, i: number, parked: Vec4[], hint: AccessHint): Ba
     return worst;
   };
   const back0 = Math.max(0.5, Math.min(straight, toInner)), turn0 = Math.max(3, CAR_LEN * 0.8);
-  let best: BayAccess | null = null, bestR = Infinity;
-  if (hint.one) { const acc = build(hint.one.back, hint.one.turn); if (reach(acc) <= 0) return acc; }
-  if (!hint.two) for (let back = back0; back >= 0.5; back -= 0.4) for (const turn of [turn0, turn0 * 1.5, turn0 * 2, turn0 * 3]) {
+  // (one move — the row's bay before's, if it does as well here — unless two reach less into the other lanes: a
+  // bay beyond a bus lane always reaches across it, and backs out in one move all the same)
+  let best: BayAccess | null = null, bestR = Infinity, one: { back: number; turn: number; reach: number } | null = null;
+  if (hint.one) { const acc = build(hint.one.back, hint.one.turn); if (reach(acc) <= Math.max(0, hint.one.reach) + 0.1) return acc; }
+  // (one move is looked for again where fewer cars are parked around than at the bay that needed two: an end
+  // bay may well back out within its lane)
+  if (!hint.two || parked.length < hint.two.near) for (let back = back0; back >= 0.5; back -= 0.4) for (const turn of [turn0, turn0 * 1.5, turn0 * 2, turn0 * 3]) {
     const acc = build(back, turn), r = reach(acc);
-    if (r <= 0) { hint.one = { back, turn }; hint.two = undefined; return acc; }
-    if (r < bestR - 0.05) { best = acc; bestR = r; }
+    if (r <= 0) { hint.one = { back, turn, reach: r }; hint.two = undefined; return acc; }
+    if (r < bestR - 0.05) { best = acc; bestR = r; one = { back, turn, reach: r }; }
   }
+  const oneWins = (twoReach: number) => !!one && twoReach >= one.reach - 0.05;
   // (no way out in one move within the lane: back out in an arc, turning by `th` toward the traffic's way,
   // to a stop across the lanes, then forwards into the lane — backing out no further than it has to)
   const u0 = at(sK).t, hu = u0.x * h.x + u0.y * h.y, wm = Math.hypot(u0.x - h.x * hu, u0.y - h.y * hu) || 1;
@@ -270,7 +275,7 @@ function bayAccess(p: CParking, i: number, parked: Vec4[], hint: AccessHint): Ba
   let cramped = false;
   if (hint.two) {
     const t = hint.two, acc = twoMoves(t.back, t.r, t.th, t.ahead), rr = reach(acc, accessLen(acc, "out"), t.reach + 0.1);
-    if (rr < Infinity) return acc;
+    if (rr < Infinity && !oneWins(rr)) return acc;
   }
   // (for each turn, the least it can back out before turning without touching the cars beside it: found by halving)
   const revs: { back: number; r: number; th: number; reach: number }[] = [];
@@ -283,16 +288,19 @@ function bayAccess(p: CParking, i: number, parked: Vec4[], hint: AccessHint): Ba
     revs.push({ back: hi, r, th, reach: revReach(hi, r, th) });
   }
   revs.sort((a, b) => a.reach - b.reach);
+  let two: BayAccess | null = null, twoHint: AccessHint["two"];
   for (const rev of revs) {
     let bestS = Infinity;
     for (const ahead of [2, 3.5, 5, 8, 12]) {
       const acc = twoMoves(rev.back, rev.r, rev.th, ahead), rr = reach(acc);
       if (rr === Infinity) continue;
       const score = Math.max(0, rr - Math.max(rev.reach, 0)) + (swing * 180) / Math.PI / 50 + (cramped ? 50 : 0);
-      if (score < bestS) { best = acc; bestS = score; hint.two = { ...rev, ahead, reach: rr }; hint.one = undefined; }
+      if (score < bestS) { two = acc; bestS = score; twoHint = { ...rev, ahead, reach: rr, near: parked.length }; }
     }
     if (bestS < Infinity) break;
   }
+  if (two && !oneWins(twoHint!.reach)) { hint.two = twoHint; hint.one = undefined; return two; }
+  if (one) { hint.one = one; hint.two = undefined; }
   return best ?? build(back0, turn0);
 }
 

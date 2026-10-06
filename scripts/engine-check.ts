@@ -10,10 +10,10 @@ import { readFileSync } from "fs";
 import { sanitizeNetwork, sanitizeSettings } from "../src/engine/validate";
 import { DEFAULT_PARAMS } from "../src/engine/params";
 import { pointInPoly, polyCentroid } from "../src/engine/buildings";
-import type { LaneTurns, Network } from "../src/engine/types";
+import type { LaneTurns, Network, NodeDef } from "../src/engine/types";
 import type { Piece } from "../src/engine/compile";
 import type { Vehicle } from "../src/engine/sim";
-import { customizePhases, addPhase, approachesTo, toConnectorPhases, setConnGreen, setLaneGreen, reverseLink, splitLink, linkPoint, nodeById, addSlipLane, mergeLinks, smoothBetween, moveNode } from "../src/state/ops";
+import { deleteNode, customizePhases, addPhase, approachesTo, toConnectorPhases, setConnGreen, setLaneGreen, reverseLink, splitLink, linkPoint, nodeById, addSlipLane, mergeLinks, smoothBetween, moveNode } from "../src/state/ops";
 import { buildRoadGeo } from "../src/render/geometry";
 import { routeBetween, routeShape } from "../src/engine/route";
 import { canJoin, createJunction, deleteJunction, setJunctionControl } from "../src/state/junctions";
@@ -1179,6 +1179,31 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const before = lit(net), after = lit(split);
   const ok = before.green === before.roads && after.green === after.roads && after.roads === 4 && after.through > 40 && after.towed === 0;
   console.log(`lights per connector, road split: roads with green ${before.green}/${before.roads} before, ${after.green}/${after.roads} after; ${after.through} through, ${after.towed} towed | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// deleting a junction's first road end (it holds the junction's settings): the next takes them over — the
+// lights, and the outline where it was; one left with a single road end is a loose end again
+{
+  const N = (x: number, y: number) => makeNode(x, y);
+  const w = N(-200, 0), e = N(200, 0), sN = N(3, -9), sS = N(-3, 9), n1 = N(3, -200), s1 = N(-3, 200);
+  const base: Network = { version: 1, nodes: [w, e, sN, sS, n1, s1], stops: [], lines: [], manualJunctions: true,
+    links: [makeLink(w, e, 2, 2), makeLink(n1, sN, 1, 1), makeLink(sS, s1, 1, 1)] };
+  const r = createJunction(base, [{ x: -10, y: -8 }, { x: 10, y: -8 }, { x: 10, y: 8 }, { x: -10, y: 8 }]);
+  if ("error" in r) { console.log("junction's first road end deleted:", r.error); process.exit(1); }
+  const net = sanitizeNetwork(setJunctionControl(r.net, r.junction, "lights")), lead = nodeById(net, r.junction.nodes[0])!;
+  const after = deleteNode(net, lead.id), j2 = after.junctions?.find(x => x.id === r.junction.id), lead2 = j2 && nodeById(after, j2.nodes[0]);
+  const where = (n: NodeDef) => n.outline!.map(p => `${(n.x + p.x).toFixed(1)},${(n.y + p.y).toFixed(1)}`).join(" ");
+  const handed = !!lead2 && j2!.nodes.length === 3 && lead2.control === "lights" && JSON.stringify(lead2.phases) === JSON.stringify(lead.phases) && !!lead2.outline && where(lead2) === where(lead);
+  const runs = handed && new Sim(compile(sanitizeNetwork(after)), { cars: 60, trucks: 2, seed: 7 });
+  if (runs) runs.run(2000);
+  // down to one road end: no junction left, that end loose
+  let few = net;
+  for (const id of r.junction.nodes.slice(0, 3)) few = deleteNode(few, id);
+  const last = nodeById(few, r.junction.nodes[3]);
+  const dissolved = !few.junctions?.length && !!last?.gateway && !last.outline;
+  const ok = handed && !!runs && runs.stats.trips > 20 && runs.stats.towed === 0 && dissolved;
+  console.log(`junction's first road end deleted: settings handed on ${handed}, runs ${runs ? runs.stats.trips : 0} trips; one end left: dissolved ${dissolved} | ok ${ok}`);
   if (!ok) process.exit(1);
 }
 

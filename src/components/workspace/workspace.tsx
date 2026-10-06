@@ -51,6 +51,7 @@ import { HistoryButton } from "./history-dialog";
 import { OptimizeButton } from "./optimize-dialog";
 import { Dataview } from "./dataview";
 import { ProblemConsole, useProblemCount } from "./problem-console";
+import { deleteJunction } from "@/state/junctions";
 
 const View3D = dynamic(() => import("./view-3d").then(m => m.View3D), { ssr: false, loading: () => <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading 3D…</div> });
 
@@ -711,7 +712,11 @@ function useShortcuts() {
         // several selected (Shift+click, Shift+drag): all of them go, in one step
         const all = selectedAll(u);
         if (all.length > 1) { commit(deleteSelected(net, all.filter(x => DELETABLE.has(x.kind)))); select(null); return; }
-        if (sel.kind === "node") commit(ops.deleteNode(net, sel.id));
+        // (a junction drawn by hand, selected — its first road end stands for it: the junction goes, as with its
+        // inspector's delete, leaving the roads' ends loose)
+        const hand = sel.kind === "node" ? net.junctions?.find(j => j.nodes[0] === sel.id) : undefined;
+        if (hand) { commit(deleteJunction(net, hand.id)); select(null); }
+        else if (sel.kind === "node") commit(ops.deleteNode(net, sel.id));
         else if (sel.kind === "link") commit(ops.deleteLink(net, sel.id));
         else if (sel.kind === "stop") commit(ops.deleteStop(net, sel.id));
         else if (sel.kind === "marker") commit(ops.deleteMarker(net, sel.id));

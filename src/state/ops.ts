@@ -129,8 +129,9 @@ export function moveNode(net: Network, id: string, p: Vec): Network {
 }
 
 export function deleteNode(net: Network, id: string): Network {
+  // (the node goes with its roads, unused: pruneRefs takes it out, and hands on what it held for a junction)
   const links = net.links.filter(l => l.from !== id && l.to !== id);
-  return pruneRefs({ ...net, nodes: net.nodes.filter(n => n.id !== id), links });
+  return pruneRefs({ ...net, links });
 }
 
 export function addLink(net: Network, from: string, to: string, draft: Pick<LinkDef, "lanesF" | "lanesB" | "busF" | "busB" | "speed">): [Network, LinkDef | null] {
@@ -275,14 +276,29 @@ function pruneRefs(net: Network): Network {
   const stops = net.stops.filter(s => linkIds.has(s.link));
   const stopIds = new Set(stops.map(s => s.id));
   const used = new Set(net.links.flatMap(l => [l.from, l.to]));
-  const nodes = net.nodes.filter(n => used.has(n.id));
+  let nodes = net.nodes.filter(n => used.has(n.id));
   const nodeIds = new Set(nodes.map(n => n.id));
   const groups = net.signalGroups?.map(g => ({ ...g, members: g.members.filter(m => nodeIds.has(m.node)) })).filter(g => g.members.length);
   const flows = net.flows?.filter(f => nodeIds.has(f.from) && nodeIds.has(f.to));
   const reversibles = net.reversibles?.filter(r => net.links.some(l => l.rev === r.id));
   const parking = net.parking?.filter(p => linkIds.has(p.link));
-  // (junctions drawn by hand keep the road ends still there)
-  const junctions = net.junctions?.map(j => ({ ...j, nodes: j.nodes.filter(id => nodeIds.has(id)) })).filter(j => j.nodes.length);
+  // (junctions drawn by hand keep the road ends still there; the first holds the junction's own settings —
+  // control, lights, outline — and hands them on to the next when it goes; one left with a single road end
+  // is a junction no more: that end is a loose end again)
+  const junctions = net.junctions?.map(j => ({ ...j, nodes: j.nodes.filter(id => nodeIds.has(id)) })).filter(j => j.nodes.length >= 2);
+  for (const j of net.junctions ?? []) {
+    const left = j.nodes.filter(id => nodeIds.has(id)), was = net.nodes.find(n => n.id === j.nodes[0]);
+    if (left.length >= 2 && was && left[0] !== j.nodes[0]) {
+      nodes = nodes.map(n => {
+        if (n.id !== left[0]) return n;
+        const dx = was.x - n.x, dy = was.y - n.y, shift = (p: Vec) => ({ x: round(p.x + dx), y: round(p.y + dy) });
+        return { ...n, control: was.control, signal: was.signal, phases: was.phases ?? null,
+          outline: was.outline?.map(shift), paint: was.paint?.map(p => ({ ...p, pts: p.pts.map(shift) })) };
+      });
+    } else if (left.length === 1) {
+      nodes = nodes.map(n => (n.id === left[0] ? { ...n, gateway: true, connectors: undefined, closed: undefined, outline: undefined, paint: undefined, phases: null, laneLines: undefined } : n));
+    }
+  }
   return {
     ...net,
     ...(net.junctions ? { junctions: junctions!.length ? junctions : undefined } : {}),

@@ -362,6 +362,8 @@ export abstract class SimBase {
   protected sweeps: { in: SweepSpan[]; out: SweepSpan[] }[][] = [];
   /** stretches kept clear by piece id, for cars on a bay's path (going in, or coming out: waiting with priority, or on their way) */
   protected bayHolds = new Map<number, { v: Vehicle; z0: number; z1: number }[]>();
+  /** by lane (piece id): vehicles on a path through the junction before it, coming into it */
+  protected intoLane = new Map<number, Vehicle[]>();
   /** by piece id: vehicles whose front has gone on but whose body is still over it (from `s0` to its end) */
   protected tails = new Map<number, { v: Vehicle; s0: number }[]>();
   /** cars on a bay's path (as of the last index; whether they have set off is read as it is now) */
@@ -599,6 +601,13 @@ export abstract class SimBase {
     this.index.clear(); this.groupIndex.clear(); this.ringClaims.clear();
     // (a car on a bay's path is in its lane's traffic only while part of it is in the lane)
     for (const v of this.vehicles) if (!v.dead && !(v.bayMove && !v.bayMove.inLane)) this.addToIndex(v);
+    // (vehicles on a path through a junction, by the lane it leads into)
+    this.intoLane.clear();
+    for (const v of this.vehicles) {
+      if (v.dead || v.piece.kind !== "conn") continue;
+      const id = v.piece.outEdge.lanes[v.piece.outLane].id, l = this.intoLane.get(id);
+      if (l) l.push(v); else this.intoLane.set(id, [v]);
+    }
     // (the part of a long vehicle still on the pieces behind its front: from where along each it starts)
     this.tails.clear();
     for (const v of this.vehicles) {
