@@ -67,7 +67,9 @@ export function JunctionFuelSection({ net, node, nodeIdx }: { net: Network; node
     setSettings({ ...settings, fuelNodes: next.length ? next : undefined });
   };
   const f = on && sim ? sim.junctionFuel(nodeIdx) : null;
-  const ins = simController.compiled.nodes[nodeIdx]?.arms.filter(a => a.inEdge).map(a => a.inEdge!) ?? [];
+  // (a junction drawn by hand: the roads into all its road ends, as junctionFuel lists them)
+  const n = simController.compiled.nodes[nodeIdx];
+  const ins = n ? (n.lead === n ? n.cluster.filter(k => k.lead === n) : [n]).flatMap(k => k.arms).filter(a => a.inEdge).map(a => a.inEdge!) : [];
   const name = (i: number) => {
     const e = ins[i]; if (!e) return "Road";
     const A = ops.nodeById(net, e.dir === 1 ? e.link.from : e.link.to), B = ops.nodeById(net, e.dir === 1 ? e.link.to : e.link.from);

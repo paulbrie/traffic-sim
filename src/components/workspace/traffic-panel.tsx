@@ -37,7 +37,11 @@ function ThroughField() {
         </label>
       </div>
       <Slider id="through" disabled={!manual} min={0} max={100} step={5} value={[pct]} onValueChange={([v]) => setSettings({ ...settings, through: v / 100 })} />
-      <p className="text-xs text-muted-foreground">{pct}% of trips come in or leave through entry points; the rest start and end {net.buildings?.length ? "at buildings" : "along roads"} inside the plan.</p>
+      <p className="text-xs text-muted-foreground">
+        {pct >= 100
+          ? "Every trip comes in and leaves through entry points (or starts and ends in a parking bay): no vehicle appears or disappears along the roads."
+          : `${pct}% of trips come in or leave through entry points; the rest start and end ${net.buildings?.length ? "at buildings" : "along roads"} inside the plan. At 100%, vehicles only appear and disappear at entry points and parking bays.`}
+      </p>
     </div>
   );
 }

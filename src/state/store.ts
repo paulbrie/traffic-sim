@@ -11,16 +11,18 @@ import { DEFAULT_SETTINGS, emptyNetwork, type Network, type PlanSettings } from 
 import type { Stats } from "@/engine/sim";
 import type { Vec } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
+import { mergeNetworks, mergeSettings, mergeUnderlay } from "./merge";
 
-export type Tool = "select" | "road" | "segment" | "stop" | "pan" | "image" | "marker";
+export type Tool = "select" | "road" | "segment" | "stop" | "pan" | "image" | "marker" | "junction" | "crossing" | "parking";
 /** the kinds of object the map shows and can select (TransModeler-style layers); any combination can be on */
-export type LayerId = "roads" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones" | "markers";
+export type LayerId = "roads" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones" | "markers" | "crossings" | "parking";
 /** `key`: Shift + this letter switches the layer on or off (Shift+A: all of them) */
 export const LAYERS: { id: LayerId; label: string; key: string }[] = [
   { id: "roads", label: "Roads", key: "R" }, { id: "lanes", label: "Lanes", key: "L" }, { id: "junctions", label: "Junctions", key: "J" },
   { id: "connectors", label: "Lane connectors", key: "C" }, { id: "entries", label: "Entry / exit points", key: "E" }, { id: "signals", label: "Signals", key: "S" },
   { id: "stops", label: "Bus stops", key: "B" }, { id: "counters", label: "Traffic counters", key: "T" }, { id: "buildings", label: "Buildings", key: "U" },
   { id: "vehicles", label: "Vehicles", key: "V" }, { id: "zones", label: "Zones", key: "Z" }, { id: "markers", label: "Markers", key: "M" },
+  { id: "crossings", label: "Zebra crossings", key: "X" }, { id: "parking", label: "Parking", key: "G" },
 ];
 /** a layer's highlights (lane outlines, connectors, rings around junctions…) show when at most this many layers are on */
 export const LAYER_HIGHLIGHT_MAX = 3;
@@ -39,7 +41,9 @@ export type Selection =
   | { kind: "connector"; id: string }
   | { kind: "zone"; id: string }
   | { kind: "vehicle"; id: string }
-  | { kind: "marker"; id: string };
+  | { kind: "marker"; id: string }
+  | { kind: "crossing"; id: string }
+  | { kind: "parking"; id: string };
 export type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
 
 export interface UiState {
@@ -78,7 +82,9 @@ export interface UiState {
   /** opened with view-only access: edits are blocked and nothing is saved */
   readOnly: boolean;
   /** junction editor: the junction whose outline is being edited, and a painted area being drawn */
-  shape: { edit: string | null; paint: { node: string; kind: "hatch" | "island"; pts: Vec[] } | null };
+  /** `paint` of kind "junction": the outline of a junction drawn by hand (Junction tool; `node` unused) */
+  /** `paint` also holds a zebra crossing being drawn (its first end) and a row of parking bays (`node`: "linkId|dir|t" where it starts) */
+  shape: { edit: string | null; paint: { node: string; kind: "hatch" | "island" | "junction" | "crossing" | "parking"; pts: Vec[] } | null };
   /** drawing a lane connector: the lane it starts from ("linkId|dir|lane"); the next lane clicked on the map ends it */
   connectFrom: string | null;
   /** keep every simulation step for the replay bar (costs time and memory on big plans) */
@@ -204,6 +210,37 @@ export function setUnderlay(next: Underlay | null | ((cur: Underlay) => Underlay
   markDirty();
 }
 
+// ---------------------------------------------------------------- live updates
+/** the plan as last loaded or saved here: what this page and the server both started from (for merging) */
+let synced: { network: Network; settings: PlanSettings; underlay: Underlay | null } = { network: emptyNetwork(), settings: DEFAULT_SETTINGS, underlay: null };
+/** what was just saved is now what the server has */
+export function markSynced(network: Network, settings: PlanSettings, underlay: Underlay | null) { synced = { network, settings, underlay }; }
+
+/**
+ * A newer version saved elsewhere (another person, tab or window, or written to the database): taken in,
+ * merged with what is not saved here yet (see ./merge), and the undo history rebased onto it, so undoing
+ * still undoes only this page's own edits. Unsaved changes stay unsaved (the merged plan saves next).
+ */
+export function applyRemote(revision: number, savedAt: string, theirs: { network: Network; settings: PlanSettings; underlay: Underlay | null }) {
+  const b = synced, mineN = network$.getValue(), mineS = settings$.getValue(), mineU = underlay$.getValue();
+  const mineChanged = mineN !== b.network || mineS !== b.settings || mineU !== b.underlay;
+  const net = mergeNetworks(b.network, mineN, theirs.network);
+  for (let i = 0; i < past.length; i++) past[i] = mergeNetworks(b.network, past[i], theirs.network);
+  for (let i = 0; i < future.length; i++) future[i] = mergeNetworks(b.network, future[i], theirs.network);
+  synced = theirs;
+  const s = ui.getValue().save;
+  batch(() => {
+    s.revision = revision; s.savedAt = savedAt; s.message = "";
+    if (!mineChanged) s.status = "saved";
+    else if (s.status === "conflict" || s.status === "saved") s.status = "dirty";
+  });
+  network$.next(net);
+  settings$.next(mergeSettings(b.settings, mineS, theirs.settings));
+  underlay$.next(mergeUnderlay(b.underlay, mineU, theirs.underlay));
+  pruneSelection(net);
+  syncHistoryFlags();
+}
+
 /** Load a plan into the stores (clears history). */
 export function loadPlan(planId: string, network: Network, settings: PlanSettings, revision: number, savedAt: string, underlay: Underlay | null = null, readOnly = false) {
   past.length = 0; future.length = 0; coalesceKey = null;
@@ -221,6 +258,7 @@ export function loadPlan(planId: string, network: Network, settings: PlanSetting
     u.save.message = "";
     u.calib.active = false; u.calib.a = null; u.calib.b = null;
   });
+  synced = { network, settings, underlay };
   network$.next(network);
   settings$.next(settings);
   underlay$.next(underlay);
@@ -289,7 +327,9 @@ function pruneSelection(net: Network) {
           : sel.kind === "line" ? net.lines.some(l => l.id === sel.id)
             : sel.kind === "building" ? (net.buildings ?? []).some(b => b.id === sel.id)
               : sel.kind === "marker" ? (net.markers ?? []).some(m => m.id === sel.id)
-                : true;
+                : sel.kind === "crossing" ? (net.crossings ?? []).some(x => x.id === sel.id)
+                  : sel.kind === "parking" ? (net.parking ?? []).some(x => x.id === sel.id)
+                    : true;
   const all = selectedAll();
   if (all.every(alive)) return;
   const left = all.filter(alive);

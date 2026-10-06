@@ -6,8 +6,10 @@
  */
 import polygonClipping from "polygon-clipping";
 import { Poly, connectorPoints, connectorReach, cubicPoints, signedAngle, normAngle, hull, dist } from "./geom";
-import { MAX_LANES, type ConnShape, type ConnectorDef, type FlowDef, type LaneTargets, type LinkDef, type ReversibleDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
+import { MAX_LANES, type ConnShape, type ConnectorDef, type FlowDef, type JunctionDef, type LaneTargets, type LinkDef, type ReversibleDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
 import { attachBuildings, type Place } from "./buildings";
+import { compileCrossings, type CCrossing } from "./crossings";
+import { compileParking, type CParking } from "./parking";
 
 export const LW = 3.2;          // lane width (m)
 export const CURB = 0.6;        // kerb / shoulder beyond the outer lane (m)
@@ -144,6 +146,11 @@ export interface CNode {
   cluster: CNode[];
   /** the node whose lights run this one's (itself, or with lights per connector the junction's controller) */
   signals: CNode;
+  /** a road end on the outline of a junction drawn by hand (see JunctionDef), and that junction's leading node */
+  hand: JunctionDef | null;
+  lead: CNode | null;
+  /** on a junction drawn by hand's leading node: all its road ends (itself first); its outline covers them all */
+  handNodes: CNode[] | null;
   /** lights per connector (on the controller): per phase the keys (connShapeKey) of the connectors green in it */
   connPhases?: Set<string>[];
 }
@@ -184,6 +191,9 @@ export interface Compiled {
   zoneFlows: CZoneFlow[];
   /** reversible-lane corridors (only those whose roads form one continuous road) */
   corridors: CCorridor[];
+  /** zebra crossings drawn by hand, and rows of parking bays (see ./crossings, ./parking) */
+  crossings: CCrossing[];
+  parking: CParking[];
   warnings: string[];
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
   /** each road's centre line as laid out (with any "line up lanes" shift), by link id */
@@ -352,18 +362,26 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
   const warnings: string[] = [];
   const nodes: CNode[] = [];
   const nodeById = new Map<string, CNode>();
-  for (const def of net.nodes) {
+  // junctions drawn by hand: their road ends take the leading node's control (it is the junction's)
+  const handOf = new Map<string, JunctionDef>();
+  for (const j of net.junctions ?? []) for (const id of j.nodes) handOf.set(id, j);
+  const defById = new Map(net.nodes.map(d => [d.id, d]));
+  for (const own of net.nodes) {
+    const hand = handOf.get(own.id) ?? null, leadDef = hand ? defById.get(hand.nodes[0]) : undefined;
+    const def: NodeDef = leadDef && leadDef !== own ? { ...own, control: leadDef.control, signal: leadDef.signal, peds: leadDef.peds, laneLines: leadDef.laneLines } : own;
     const n: CNode = {
       idx: nodes.length, def, pos: { x: def.x, y: def.y }, arms: [], degree: 0,
       controlled: false, gateway: false, deadEnd: false, ringR: 0, polygon: [], surface: [], rounded: false, level: 0, peds: 0, phases: [], lanePhases: [], phaseGreen: [], phaseMinGreen: [], customPhases: false, coord: null,
       moves: new Map(), conns: new Map(), ring: null, ring2: null, ringR2: 0,
       shapes: new Map(def.connectors ? def.connectors.flatMap(c => (c.shape ? [[`${c.in}|${c.a}>${c.out}|${c.b}`, c.shape] as const] : [])) : Object.entries(def.connShape ?? {})),
       manual: !!def.connectors,
-      cluster: [],
+      cluster: [], hand, lead: null, handNodes: null,
     } as unknown as CNode;
     n.cluster.push(n); n.signals = n;
     nodes.push(n); nodeById.set(def.id, n);
   }
+  for (const n of nodes) if (n.hand) n.lead = nodeById.get(n.hand.nodes[0]) ?? n;
+  for (const n of nodes) if (n.lead) (n.lead.handNodes ??= []).push(n);
 
   // ---- edges (directed) ----
   const edges: Edge[] = [];
@@ -407,15 +425,39 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     if (eb && link.dropB) { if (link.dropB.side === "right") aA.lo += lw; else if (!ef) aA.hi -= lw; }
   }
 
+  /** a junction's outline and asphalt (worked out from its lanes, or drawn by hand) */
+  function shapeOf(n: CNode) {
+    // a junction's shape comes from the lanes through it: the road ends plus every lane path at its
+    // full width, so the road always covers its lanes (and the kerbs follow the turns)
+    if (opts.outlines !== false && !n.ringR && !(n.lead && n.lead !== n) && (n.degree >= 3 || n.controlled || n.rounded || outlineArms(n).length > n.arms.length)) {
+      const inp = outlineInputs(n, 0), got = shapeCache.get(inp.key);
+      if (got) { n.polygon = got.polygon; n.surface = got.surface; }
+      else if (got === null) { /* merging failed before: keep the simple outline */ }
+      else if (opts.outlines === "cached") pendingShapes.push({ node: n.idx, key: inp.key });
+      else {
+        const outer = mergeOutline(inp);
+        const shape = outer ? { polygon: outer, surface: kerbInset(n, outer) ?? outer } : null;
+        if (shapeCache.size > 20000) shapeCache.clear();
+        shapeCache.set(inp.key, shape);
+        if (shape) { n.polygon = shape.polygon; n.surface = shape.surface; }
+      }
+    }
+    // an outline drawn by hand wins (its kerb band is worked out the same way)
+    if (opts.outlines !== false && !n.ringR && (n.degree >= 2 || n.lead === n) && n.def.outline && n.def.outline.length >= 3) {
+      const outer = orient(n.def.outline.map(p => ({ x: n.pos.x + p.x, y: n.pos.y + p.y })));
+      n.polygon = outer; n.surface = kerbInset(n, outer) ?? outer;
+    }
+  }
+
   // ---- node classification, setbacks ----
   for (const n of nodes) {
     n.arms.sort((a, b) => a.angle - b.angle);
     n.arms.forEach((a, i) => { if (a.inEdge) a.inEdge.inArm = i; if (a.outEdge) a.outEdge.outArm = i; });
     n.degree = n.arms.length;
     n.level = n.arms.length ? Math.min(...n.arms.map(a => a.link.level ?? 0)) : 0;
-    n.gateway = n.degree === 1 && n.def.gateway;
-    n.deadEnd = n.degree === 1 && !n.def.gateway;
-    n.controlled = n.degree > 0 && !n.gateway && (n.degree !== 2 || n.def.junction === true);
+    n.gateway = n.degree === 1 && n.def.gateway && !n.hand;
+    n.deadEnd = n.degree === 1 && !n.def.gateway && !n.hand;
+    n.controlled = n.degree > 0 && !n.gateway && (n.degree !== 2 || n.def.junction === true || !!n.hand);
     const roundabout = n.controlled && n.degree >= 3 && n.def.control === "roundabout";
     n.peds = n.controlled && !roundabout && n.degree >= 2 ? n.def.peds ?? 0 : 0;
     if (roundabout) {
@@ -425,7 +467,8 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     for (let i = 0; i < n.arms.length; i++) {
       const arm = n.arms[i];
       // (a dead end: lanes stop just short of its point, so their ends sit by it; the U-turn fits in between)
-      if (n.degree === 1) { arm.setback = n.gateway ? 0 : 3; continue; }
+      // (a road end on a junction drawn by hand: its lanes reach the outline)
+      if (n.degree === 1) { arm.setback = n.gateway || n.hand ? 0 : 3; continue; }
       if (roundabout) { arm.setback = n.ringR + 4.5; continue; }
       const nbrs = n.degree === 2 ? [n.arms[1 - i]] : [n.arms[(i + 1) % n.degree], n.arms[(i - 1 + n.degree) % n.degree]];
       let d = 0;
@@ -708,26 +751,10 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       });
       if (next.length !== list.length) n.moves.set(k, next);
     }
-    // a junction's shape comes from the lanes through it: the road ends plus every lane path at its
-    // full width, so the road always covers its lanes (and the kerbs follow the turns)
-    if (opts.outlines !== false && !n.ringR && (n.degree >= 3 || n.controlled || n.rounded || outlineArms(n).length > n.arms.length)) {
-      const inp = outlineInputs(n, 0), got = shapeCache.get(inp.key);
-      if (got) { n.polygon = got.polygon; n.surface = got.surface; }
-      else if (got === null) { /* merging failed before: keep the simple outline */ }
-      else if (opts.outlines === "cached") pendingShapes.push({ node: n.idx, key: inp.key });
-      else {
-        const outer = mergeOutline(inp);
-        const shape = outer ? { polygon: outer, surface: kerbInset(n, outer) ?? outer } : null;
-        if (shapeCache.size > 20000) shapeCache.clear();
-        shapeCache.set(inp.key, shape);
-        if (shape) { n.polygon = shape.polygon; n.surface = shape.surface; }
-      }
-    }
-    // an outline drawn by hand wins (its kerb band is worked out the same way)
-    if (opts.outlines !== false && !n.ringR && n.degree >= 2 && n.def.outline && n.def.outline.length >= 3) {
-      const outer = orient(n.def.outline.map(p => ({ x: n.pos.x + p.x, y: n.pos.y + p.y })));
-      n.polygon = outer; n.surface = kerbInset(n, outer) ?? outer;
-    }
+    // (a junction drawn by hand: worked out once all its road ends have their turns, below)
+    if (!n.handNodes) shapeOf(n);
+    // (a junction drawn by hand is drawn once, by its leading node)
+    if (n.lead && n.lead !== n) { n.polygon = []; n.surface = []; }
     // signal phases: group arms that face each other
     if (n.controlled && n.degree === 2) {
       // both directions share one green; the second phase is all-red (e.g. pedestrians crossing)
@@ -776,7 +803,8 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
         const e = a.inEdge;
         if (!e) return;
         const dark = n.lanePhases[n.arms.indexOf(a)].map((ps, lane) => (ps.length ? -1 : lane)).filter(l => l >= 0);
-        if (dark.length) warnings.push(`Traffic lights: lane${dark.length > 1 ? "s" : ""} ${dark.map(l => l + 1).join(", ")} of ${e.link.name || "an unnamed road"} never get${dark.length > 1 ? "" : "s"} green; set ${dark.length > 1 ? "them" : "it"} in the junction's phases.`);
+        // (lights per connector are checked connector by connector, below)
+        if (dark.length && !defs.some(p => p.conns)) warnings.push(`Traffic lights: lane${dark.length > 1 ? "s" : ""} ${dark.map(l => l + 1).join(", ")} of ${e.link.name || "an unnamed road"} never get${dark.length > 1 ? "" : "s"} green; set ${dark.length > 1 ? "them" : "it"} in the junction's phases.`);
       });
     } else {
       n.lanePhases = n.arms.map((a, i) => {
@@ -788,11 +816,16 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     }
   }
 
+  // junctions drawn by hand: their shape, now that every road end has its turns
+  for (const n of nodes) if (n.handNodes) shapeOf(n);
+
   // ---- junctions over several nodes: nodes linked by connectors grant their crossings as one ----
   {
     const up = nodes.map((_, i) => i), find = (i: number): number => (up[i] === i ? i : (up[i] = find(up[i])));
     let any = false;
     for (const n of nodes) for (const ms of n.moves.values()) for (const m of ms) if (m.out.from !== n) { up[find(m.out.from.idx)] = find(n.idx); any = true; }
+    // (a junction drawn by hand is one even before its connectors are)
+    for (const n of nodes) if (n.lead && n.lead !== n) { up[find(n.idx)] = find(n.lead.idx); any = true; }
     if (any) {
       const groups = new Map<number, CNode[]>();
       for (const n of nodes) { const r = find(n.idx); groups.set(r, [...(groups.get(r) ?? []), n]); }
@@ -814,6 +847,17 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     if (n.cluster.some(k => k !== n && k.signals !== k)) continue;
     const sets = defs.map(p => new Set(p.conns ?? []));
     n.connPhases = sets;
+    // a connector in no phase (one added since the phases were set, e.g. a lane added to a road) goes with the
+    // others from its approach: green whenever they are (the plan's phases stay as they are; set it there to change that)
+    for (const k of n.cluster) for (const [, ms] of k.moves) for (const m of ms) for (let lane = 0; lane < m.in.n; lane++) {
+      if (!laneAllowed(m, lane)) continue;
+      for (const b of exitLanesOf(m, lane)) {
+        const key = connShapeKey(m, lane, b);
+        if (sets.some(x => x.has(key))) continue;
+        const from = `${m.in.key}|`;
+        for (const x of sets) if ([...x].some(o => o.startsWith(from))) x.add(key);
+      }
+    }
     const dark: string[] = [];
     for (const k of n.cluster) {
       k.signals = n; k.customPhases = true; k.controlled = true;
@@ -960,6 +1004,7 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
 
   const compiled: Compiled = {
     nodes, edges, pieces, nodeById, edgeByKey, stops, stopById, lines, places, flows, zones, zoneFlows, corridors, warnings,
+    crossings: compileCrossings(net), parking: compileParking(net, edgeByKey),
     bounds: { minX, minY, maxX, maxY }, linkCenters, pendingShapes,
     getConn(move, a, b) {
       const cache = (move.conns ??= []), k = a * 8 + b;
@@ -1039,7 +1084,8 @@ function applyConnectors(n: CNode, list: ConnectorDef[], closed: string[], edgeB
     const ein = edgeByKey.get(c.in), eout = edgeByKey.get(c.out);
     if (!ein || !eout || ein.to !== n || c.a >= ein.n || c.b >= eout.n || !ein.lanes.length || !eout.lanes.length) continue;
     // (into a road starting at another node: only one nearby, and not round a roundabout)
-    if (eout.from !== n && (eout.from.ringR > 0 || n.ringR > 0 || dist(ein.lanes[c.a].poly.at(ein.lanes[c.a].len), eout.lanes[c.b].poly.at(0)) > CROSS_REACH)) continue;
+    // (across a junction drawn by hand: between any of its road ends)
+    if (eout.from !== n && !(n.hand && eout.from.hand === n.hand) && (eout.from.ringR > 0 || n.ringR > 0 || dist(ein.lanes[c.a].poly.at(ein.lanes[c.a].len), eout.lanes[c.b].poly.at(0)) > CROSS_REACH)) continue;
     const k = `${c.in}>${c.out}`;
     const t = turns.get(k) ?? turns.set(k, { ein, eout, outs: Array.from({ length: ein.n }, () => []) }).get(k)!;
     if (!t.outs[c.a].includes(c.b)) t.outs[c.a].push(c.b);
@@ -1239,13 +1285,16 @@ export function connectionIssues(c: Compiled, only?: CNode): ConnectionIssue[] {
   const out: ConnectionIssue[] = [];
   const name = (e: Edge) => e.link.name || e.link.id;
   for (const n of only ? [only] : c.nodes) {
-    if (n.degree < 2 || n.ringR > 0) continue;
+    // (a junction drawn by hand is checked as a whole, from its leading node)
+    if (n.lead && n.lead !== n) continue;
+    if ((n.degree < 2 && !n.lead) || n.ringR > 0) continue;
+    const group = n.lead ? n.cluster.filter(k => k.lead === n) : [n], arms = group.flatMap(k => k.arms.map(arm => ({ k, arm })));
     const plainJoint = n.degree === 2 && !n.controlled;
     const fed = new Map<Edge, Set<number>>();
-    for (const arm of n.arms) {
+    for (const { k, arm } of arms) {
       const e = arm.inEdge;
       if (!e) continue;
-      const moves = n.moves.get(e.idx) ?? [];
+      const moves = k.moves.get(e.idx) ?? [];
       if (!moves.length) { out.push({ node: n, level: "error", message: `${name(e)} leads nowhere here: traffic on it has no way on`, link: e.link.id }); continue; }
       const views: { a: number; b: number; m: Movement; pts: ArrayLike<number> }[] = [];
       for (let a = 0; a < e.n; a++) {
@@ -1255,7 +1304,7 @@ export function connectionIssues(c: Compiled, only?: CNode): ConnectionIssue[] {
         if (!ms.length) { out.push({ node: n, level: "warn", message: `Lane ${a + 1} of ${name(e)} has no connection here`, link: e.link.id }); continue; }
         for (const m of ms) for (const b of exitLanesOf(m, a)) {
           (fed.get(m.out) ?? fed.set(m.out, new Set()).get(m.out)!).add(b);
-          if (!plainJoint) views.push({ a, b, m, pts: buildConn(n, m, a, b, -1).poly.pts });
+          if (!plainJoint) views.push({ a, b, m, pts: buildConn(k, m, a, b, -1).poly.pts });
         }
       }
       // two lanes of the same approach whose paths cross (into different exit lanes)
@@ -1266,11 +1315,11 @@ export function connectionIssues(c: Compiled, only?: CNode): ConnectionIssue[] {
       }
     }
     // exit lanes that nothing feeds here (a lane that opens at a road point is expected)
-    if (!plainJoint) for (const arm of n.arms) {
+    if (!plainJoint) for (const { arm } of arms) {
       const e = arm.outEdge;
       if (!e) continue;
       const got = fed.get(e);
-      if (!got) { if (n.arms.some(o => o.inEdge && o.link !== e.link)) out.push({ node: n, level: "warn", message: `Nothing turns into ${name(e)} here`, link: e.link.id }); continue; }
+      if (!got) { if (arms.some(o => o.arm.inEdge && o.arm.link !== e.link)) out.push({ node: n, level: "warn", message: `Nothing turns into ${name(e)} here`, link: e.link.id }); continue; }
       for (let b = e.left; b < e.left + e.thru; b++) if (!got.has(b) && !(e.bus && b === e.kerb)) out.push({ node: n, level: "warn", message: `Lane ${b + 1} of ${name(e)} is not fed by any lane here`, link: e.link.id });
     }
   }
@@ -1418,7 +1467,20 @@ interface OutlineInputs { n: CNode; polys: Ring[][]; pieces: Ring[][]; key: stri
  * The road ends a junction's outline is made of: its own, and those of other nodes its connectors lead into
  * (a junction over several nodes: the asphalt reaches the lanes they join)
  */
+/** the nodes a junction's outline covers: itself, or a junction drawn by hand's road ends (from its leading node) */
+const outlineNodes = (n: CNode): CNode[] => n.handNodes ?? [n];
 function outlineArms(n: CNode): Arm[] {
+  if (n.handNodes) {
+    // (a junction drawn by hand: every road end's arm, and the roads its connectors lead into elsewhere)
+    const out: Arm[] = [];
+    for (const k of n.handNodes) for (const a of k.arms) if (!out.includes(a)) out.push(a);
+    for (const k of n.handNodes) for (const ms of k.moves.values()) for (const m of ms) {
+      if (n.handNodes.includes(m.out.from)) continue;
+      const a = m.out.from.arms.find(x => x.outEdge === m.out);
+      if (a && !out.includes(a)) out.push(a);
+    }
+    return out;
+  }
   let out: Arm[] | null = null;
   for (const ms of n.moves.values()) for (const m of ms) {
     if (m.out.from === n) continue;
@@ -1431,14 +1493,15 @@ function outlineInputs(n: CNode, inset: number): OutlineInputs {
   const polys: Ring[][] = [], pieces: Ring[][] = [], extra = CURB - inset;
   for (const a of outlineArms(n)) {
     const r = { x: -a.mu.y, y: a.mu.x }, m = a.mouth, lo = a.lo + inset, hi = a.hi - inset;
-    const d = Math.min(1.5, Math.max(0.3, a.setback * 0.5));
+    // (a junction drawn by hand's road ends have no setback: their whole width still reaches into it)
+    const d = n.handNodes ? 1.5 : Math.min(1.5, Math.max(0.3, a.setback * 0.5));
     const pt = (side: number, back: number): Pair => [m.x + r.x * side - a.mu.x * back, m.y + r.y * side - a.mu.y * back];
     polys.push([[pt(lo, 0), pt(hi, 0), pt(hi, d), pt(lo, d), pt(lo, 0)]]);
   }
-  for (const list of n.moves.values()) for (const mv of list) for (let q = mv.lo; q <= mv.hi; q++) {
+  for (const k of outlineNodes(n)) for (const list of k.moves.values()) for (const mv of list) for (let q = mv.lo; q <= mv.hi; q++) {
     if (!laneAllowed(mv, q)) continue;
     for (const b of exitLanesOf(mv, q)) {
-      const P = buildConn(n, mv, q, b, -1).poly.pts, cnt = P.length / 2;
+      const P = buildConn(k, mv, q, b, -1).poly.pts, cnt = P.length / 2;
       if (cnt < 2) continue;
       const half = Math.max(mv.in.lw, mv.out.lw) / 2 + extra, left: Pair[] = [], right: Pair[] = [];
       for (let i = 0; i < cnt; i++) {

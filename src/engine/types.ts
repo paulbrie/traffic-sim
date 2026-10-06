@@ -345,6 +345,54 @@ export interface MarkerDef {
   color?: string;
 }
 
+/**
+ * A junction drawn by hand (plans with `Network.manualJunctions`): its outline is drawn as it is on the
+ * ground and the roads stop on it; the road ends on the outline (`nodes`) make one junction, joined by
+ * lane connectors from lanes ending on the border to lanes starting on it, at any distance. The first
+ * node leads: its control, signal timing, lights and outline (NodeDef.outline, relative to it) are the
+ * junction's.
+ */
+export interface JunctionDef { id: string; nodes: string[] }
+
+/**
+ * A zebra crossing drawn by hand, anywhere: across a road, or inside a junction. `a` → `b` runs from
+ * kerb to kerb (world m) and the stripes are `width` m deep along the traffic. Pedestrians (`peds` per
+ * hour) have priority on it; where the paths it crosses have traffic lights they walk while the
+ * straight-on traffic over it has red, and turning traffic gives way to them. A crossing with a refuge
+ * in the middle is two crossings.
+ */
+export interface CrossingDef { id: string; a: Vec; b: Vec; width: number; peds: number }
+
+export type ParkingKind = "parallel" | "perpendicular" | "angled";
+/**
+ * A row of parking bays along the kerb of one direction of a road (on the right of its traffic), from
+ * `from` to `to` (0..1 along the road). Cars driving there park in a free bay (stopping in the kerb lane
+ * to manoeuvre in), stay a while and pull out again.
+ * With `line` the row stands on its own, anywhere (a car park, bays beside a junction): its bays open
+ * along the line from `a` to `b`, on its right (`side` 1) or left (-1), and cars reach it from the kerb
+ * lane of `link` / `dir` (the road nearest it), turning in and out there.
+ */
+export interface ParkingDef {
+  id: string;
+  link: string; dir: 1 | -1;
+  from: number; to: number;
+  line?: { a: Vec; b: Vec; side: 1 | -1 } | null;
+  kind: ParkingKind;
+  /** angled bays: the angle to the kerb (degrees) */
+  angle?: number;
+  /** bay size (m): across, and along its own axis; defaults by kind */
+  bayW?: number; bayL?: number;
+  /** distance from the edge of the kerb lane to the bays (m) */
+  gap?: number;
+  /** share of bays taken on average (0..1), and how long a car stays (minutes, on average) */
+  occupancy?: number; stay?: number;
+  /** cars pulling out give way to the lane's traffic (default: they have priority, traffic lets them out) */
+  giveWay?: boolean;
+}
+export const PARKING = { angle: 60, occupancy: 0.8, stay: 45 };
+/** bay size by kind (m): across and along its own axis */
+export const BAY_SIZE: Record<ParkingKind, { w: number; l: number }> = { parallel: { w: 2.2, l: 5.8 }, perpendicular: { w: 2.5, l: 5 }, angled: { w: 2.5, l: 5 } };
+
 /** Where the plan sits on Earth: the latitude/longitude of world point (0, 0). */
 export interface GeoRef { lat: number; lon: number }
 
@@ -397,6 +445,14 @@ export interface Network {
   reversibles?: ReversibleDef[];
   /** markers placed on the map */
   markers?: MarkerDef[];
+  /** junctions are only drawn by hand (see JunctionDef): roads drawn to meet don't make one by themselves */
+  manualJunctions?: boolean;
+  /** junctions drawn by hand */
+  junctions?: JunctionDef[];
+  /** zebra crossings drawn by hand */
+  crossings?: CrossingDef[];
+  /** rows of parking bays */
+  parking?: ParkingDef[];
   /** set for plans imported from a map, so later imports line up; `areas` are the frames imported so far */
   geo?: (GeoRef & { areas?: GeoArea[] }) | null;
 }

@@ -155,6 +155,14 @@ export function buildRoads(geo: RoadGeo, pal: Palette, hf?: HeightFn, show: Show
   if (R) for (const m of geo.medians) if (m.kind === "raised") { on(m.on); curb.strip(m.strip, 0.2); island.strip(shrink(m.strip), 0.24); }
   if (R) for (const isl of geo.islands) { on(isl.on); curb.polygon(isl.pts, 0.2); island.polygon(isl.pts, 0.24); }
   if (J) for (const z of geo.zebras) { on(z.on); mark.polygon(z.pts, 0.19); }
+  // parking bays: asphalt, and their lines (the sides; a parallel bay is closed at the back too)
+  if (R) for (const b of geo.bays) {
+    on(b.on);
+    const [p0, p1, p2, p3] = b.pts;
+    asphalt.polygon(b.pts, 0.1);
+    mark.line(new Poly([p0.x, p0.y, p3.x, p3.y]), 0.12, 0.2); mark.line(new Poly([p1.x, p1.y, p2.x, p2.y]), 0.12, 0.2);
+    if (b.parallel) mark.line(new Poly([p3.x, p3.y, p2.x, p2.y]), 0.12, 0.2);
+  }
   for (const l of geo.lines) {
     // (lane lines with the lanes, turn guides with the junctions, the rest with the roads)
     if (!(l.kind === "lane" || l.kind === "bus" ? Ln : l.kind === "guide" ? J : R)) continue;

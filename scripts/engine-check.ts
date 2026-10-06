@@ -9,13 +9,18 @@ import * as mirrorModule from "../src/engine/sim/mirror";
 import { readFileSync } from "fs";
 import { sanitizeNetwork, sanitizeSettings } from "../src/engine/validate";
 import { DEFAULT_PARAMS } from "../src/engine/params";
-import { polyCentroid } from "../src/engine/buildings";
+import { pointInPoly, polyCentroid } from "../src/engine/buildings";
 import type { LaneTurns, Network } from "../src/engine/types";
 import type { Piece } from "../src/engine/compile";
 import type { Vehicle } from "../src/engine/sim";
-import { customizePhases, addPhase, approachesTo, toConnectorPhases, setConnGreen, setLaneGreen, reverseLink, splitLink, linkPoint, nodeById, addSlipLane, mergeLinks, smoothBetween } from "../src/state/ops";
+import { customizePhases, addPhase, approachesTo, toConnectorPhases, setConnGreen, setLaneGreen, reverseLink, splitLink, linkPoint, nodeById, addSlipLane, mergeLinks, smoothBetween, moveNode } from "../src/state/ops";
 import { buildRoadGeo } from "../src/render/geometry";
 import { routeBetween, routeShape } from "../src/engine/route";
+import { canJoin, createJunction, deleteJunction, setJunctionControl } from "../src/state/junctions";
+import { junctionRefs } from "../src/engine/refs";
+import { bayOutline, rowEnds } from "../src/engine/parking";
+import { mergeNetworks, mergeSettings } from "../src/state/merge";
+import { addNode, deleteLink, updateLink } from "../src/state/ops";
 const net = sampleTown();
 const c = compile(net);
 console.log("edges", c.edges.length, "nodes", c.nodes.length, "warnings", c.warnings);
@@ -1105,4 +1110,219 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   }
   console.log(`exit lanes from any lane: ${checked} checked, ${out} off the road | ok ${out === 0}`);
   if (out) process.exit(1);
+}
+
+// junctions drawn by hand: roads cut at the outline, loose ends moved onto it, one junction (one queue, every control)
+{
+  const N = (x: number, y: number) => makeNode(x, y);
+  const w = N(-200, 0), e = N(200, 0), sN = N(3, -9), sS = N(-3, 9), n1 = N(3, -200), s1 = N(-3, 200);
+  // a main road straight through (cut), two side roads ending 1 m outside the outline (moved onto it)
+  const base: Network = { version: 1, nodes: [w, e, sN, sS, n1, s1], stops: [], lines: [], manualJunctions: true,
+    links: [makeLink(w, e, 2, 2), makeLink(n1, sN, 1, 1), makeLink(sS, s1, 1, 1)] };
+  const outline = [{ x: -10, y: -8 }, { x: 10, y: -8 }, { x: 10, y: 8 }, { x: -10, y: 8 }];
+  const r = createJunction(base, outline);
+  if ("error" in r) { console.log("junction drawn by hand:", r.error); process.exit(1); }
+  const net = sanitizeNetwork(r.net), c = compile(net), j = r.junction;
+  const onOutline = j.nodes.every(id => { const n = nodeById(net, id)!; return Math.abs(Math.abs(n.x) - 10) < 0.05 || Math.abs(Math.abs(n.y) - 8) < 0.05; });
+  const refs = [...junctionRefs(c).keys()];
+  const shape = j.nodes.length === 4 && net.links.length === 4 && onOutline && refs.length === 1 && refs[0] === j.nodes[0] && c.warnings.length === 0 && connectionIssues(c, c.nodeById.get(j.nodes[0])!).filter(i => i.level === "error").length === 0;
+  const runs = (["priority", "stop", "free", "lights"] as const).map(ctl => {
+    const nc = compile(sanitizeNetwork(setJunctionControl(net, j, ctl))), lead = nc.nodeById.get(j.nodes[0])!;
+    const sim = new Sim(nc, { cars: 120, trucks: 6, seed: 7 }); sim.run(4000);
+    return { ctl, through: sim.junctionStats(lead.idx).through, towed: sim.stats.towed, warnings: nc.warnings.length, phases: nc.nodes.filter(k => k.lead === lead && k.customPhases).length };
+  });
+  const runsOk = runs.every(x => x.through > 40 && x.towed === 0 && x.warnings === 0) && runs[3].phases === 4;
+  // joining: a road may carry on from a loose end, never end on the junction or make a T
+  const joinOk = canJoin(net, w.id) && !canJoin(net, j.nodes[0]) && !canJoin(net, j.nodes[1], w.id) && canJoin({ ...net, manualJunctions: undefined }, j.nodes[0]);
+  // moving the leading road end keeps the outline where it is; deleting the junction leaves entry points
+  const lead0 = nodeById(net, j.nodes[0])!, moved = moveNode(net, lead0.id, { x: lead0.x, y: lead0.y + 1 }), lead1 = nodeById(moved, lead0.id)!;
+  const outlineKept = lead1.outline!.every((p, i) => Math.abs(lead1.x + p.x - (lead0.x + lead0.outline![i].x)) < 0.02 && Math.abs(lead1.y + p.y - (lead0.y + lead0.outline![i].y)) < 0.02);
+  const gone = deleteJunction(net, j.id), back = compile(gone);
+  const deleteOk = !gone.junctions && j.nodes.every(id => back.nodeById.get(id)!.gateway);
+  // its automatic outline (the drawn one taken away) covers every road end's whole mouth, kerb to kerb
+  const auto = compile(sanitizeNetwork({ ...net, nodes: net.nodes.map(n => (n.id === j.nodes[0] ? { ...n, outline: undefined } : n)) }));
+  const leadPoly = auto.nodeById.get(j.nodes[0])!.polygon;
+  const autoOk = leadPoly.length > 4 && j.nodes.every(id => {
+    const a = auto.nodeById.get(id)!.arms[0], r = { x: -a.mu.y, y: a.mu.x };
+    return [a.lo + 0.7, 0, a.hi - 0.7].every(sd => pointInPoly(leadPoly, a.mouth.x + r.x * sd - a.mu.x * 0.5, a.mouth.y + r.y * sd - a.mu.y * 0.5));
+  });
+  const ok = shape && runsOk && joinOk && outlineKept && deleteOk && autoOk;
+  console.log(`junction drawn by hand: automatic outline covers every mouth ${autoOk};`);
+  console.log(`junction drawn by hand: ${j.nodes.length} road ends on the outline ${onOutline}, refs ${refs.length}; ${runs.map(x => `${x.ctl} ${x.through} through, ${x.towed} towed`).join("; ")}; joining ${joinOk}, outline kept ${outlineKept}, delete ${deleteOk} | ok ${ok}`);
+  if (!ok) { console.log(JSON.stringify(runs), c.warnings); process.exit(1); }
+}
+
+// zebra crossings drawn by hand (on a plain road, and at a lit junction's mouth) and rows of parking bays
+{
+  // a plain road: pedestrians cross, traffic stops for them, nobody stuck
+  const w0 = makeNode(-300, 0), e0 = makeNode(300, 0), road = makeLink(w0, e0, 2, 2);
+  const plain = sanitizeNetwork({ version: 1, nodes: [w0, e0], links: [road], stops: [], lines: [], crossings: [{ id: "x1", a: { x: 0, y: -8 }, b: { x: 0, y: 8 }, width: 4, peds: 400 }] });
+  const s1 = new Sim(plain, { cars: 50, trucks: 0, seed: 7 });
+  let waited = 0;
+  for (let t = 0; t < 6000; t++) { s1.step(); if (t % 20 === 0) for (const v of s1.vehicles) if (!v.dead && v.v < 0.3 && v.piece.kind === "lane" && Math.abs(v.piece.poly.at(v.s).x) < 5) waited++; }
+  const z1 = s1.crossingStats(0)!;
+  const plainOk = z1.crossed > 50 && waited > 0 && s1.stats.towed === 0 && s1.stats.trips > 100;
+  // at a lit junction's mouth: a group only steps out while the straight-on traffic over it has red
+  const town = sampleTown(), ct = compile(town), lit = ct.nodes.find(n => n.def.control === "lights" && n.degree === 4)!, arm = lit.arms[0];
+  const P = { x: arm.mouth.x + arm.mu.x * 2.5, y: arm.mouth.y + arm.mu.y * 2.5 }, r = { x: -arm.mu.y, y: arm.mu.x };
+  const zt = sanitizeNetwork({ ...town, crossings: [{ id: "x2", a: { x: P.x + r.x * (arm.lo + 0.5), y: P.y + r.y * (arm.lo + 0.5) }, b: { x: P.x + r.x * (arm.hi - 0.5), y: P.y + r.y * (arm.hi - 0.5) }, width: 4, peds: 600 }] });
+  class Watch extends Sim {
+    starts = 0; onGreen = 0; through = 0;
+    protected updateCrossings() {
+      const p = this.crosses[0].ped, before = p.crossing;
+      super.updateCrossings();
+      this.through = this.crosses[0].through.length;
+      if (!before && p.crossing) { this.starts++; if (this.crosses[0].through.some(x => this.connSignal(x) !== "red")) this.onGreen++; }
+    }
+  }
+  const s2 = new Watch(compile(zt), { cars: 140, trucks: 14, seed: 7 });
+  s2.run(6000);
+  const litOk = s2.through > 0 && s2.starts > 5 && s2.onGreen === 0 && s2.stats.towed <= 2;
+  // parking: cars park (stopping in the lane to manoeuvre), stay, pull out; the row stays about as full as set
+  const pk = sanitizeNetwork({ version: 1, nodes: [w0, e0], links: [road], stops: [], lines: [],
+    parking: [{ id: "p1", link: road.id, dir: 1, from: 0.3, to: 0.5, kind: "perpendicular", stay: 10, occupancy: 0.6 }, { id: "p2", link: road.id, dir: -1, from: 0.55, to: 0.7, kind: "parallel", stay: 5 },
+      // standing on its own, 12 m off the road (a car park), reached from the eastbound lanes
+      { id: "p3", link: road.id, dir: 1, from: 0, to: 1, kind: "angled", angle: 60, stay: 5, line: { a: { x: 150, y: 15 }, b: { x: 180, y: 15 }, side: 1 } }] });
+  const cp = compile(pk), s3 = new Sim(cp, { cars: 50, trucks: 0, seed: 7 });
+  let manoeuvring = 0, takenSum = 0, samples = 0;
+  // (every car that leaves a bay drives out of it: rows facing one exit only included)
+  const cameOut = new Set<number>();
+  for (let t = 0; t < 9000; t++) {
+    s3.step();
+    for (const v of s3.vehicles) if (!v.dead && v.bayMove?.way === "out") cameOut.add(v.id);
+    if (t % 10 === 0) for (const v of s3.vehicles) if (!v.dead && (v.state === "parking" || v.state === "pulling out")) manoeuvring++;
+    if (t > 3000 && t % 100 === 0) { takenSum += s3.parkingStats(0)!.taken / s3.parkingStats(0)!.bays; samples++; }
+  }
+  const p0 = s3.parkingStats(0)!, p1 = s3.parkingStats(1)!, p2 = s3.parkingStats(2)!, share = takenSum / samples;
+  // (the free row: its bays where drawn, 15 m below the road's centre, cars stopping by them on the road)
+  const fr = cp.parking[2], frOk = fr.free && fr.bays.length === 10 && bayOutline(fr, 0).every(q => q.y >= 14.9) && fr.bays.every(s => s > 440 && s < 490) && p2.parked > 12 && p2.left > 12;
+  // (a row's end handles: the first at `from`, along the road as drawn, on either side of it; a free row's are its line's ends)
+  const endsOk = [cp.parking[0], cp.parking[1]].every(p => { const [ea, eb] = rowEnds(p); return ea.x < eb.x; }) && rowEnds(fr)[0].x === 150 && rowEnds(fr)[1].x === 180;
+  const noVanish = cameOut.size >= p0.left + p1.left + p2.left;
+  const parkOk = noVanish && endsOk && cp.parking[0].bays.length === 48 && cp.parking[1].bays.length === 15 && p0.parked > 20 && p0.left > 20 && p1.parked > 20 && frOk && manoeuvring > 0 && share > 0.35 && share < 0.85 && s3.stats.towed === 0;
+  // editing the road keeps the bays where they are: reversed, and split (in two rows)
+  const pose = (net: Network) => compile(net).parking.flatMap(p => p.bays.map((_, i) => bayOutline(p, i)[0])).map(q => `${q.x.toFixed(1)},${q.y.toFixed(1)}`).sort().join(" ");
+  const before = pose(pk), rev = pose(reverseLink(pk, road.id));
+  const [sp] = splitLink(pk, road.id, 0.4, linkPoint(road, w0, e0, 0.4));
+  const editOk = before === rev && sp.parking!.length === 4 && compile(sp).parking.reduce((n, p) => n + p.bays.length, 0) >= 70;
+  // replay: each kept step has its parked cars and its pedestrians, as they were then
+  const rp = new Sim(compile(sanitizeNetwork({ ...pk, crossings: plain.crossings })), { cars: 50, trucks: 0, seed: 7 }), rec = new Recorder(), truth = new Map<number, { parked: string; peds: string }>();
+  const pedsOf = (x: { waiting: number; crossing: number } | null) => `${x?.waiting ?? 0}/${x?.crossing ?? 0}`;
+  for (let t = 0; t < 3000; t++) { rp.step(); rec.record(rp); if (t % 400 === 0) truth.set(rp.tick, { parked: rp.parkedFlags().join(""), peds: pedsOf(rp.crossingStats(0)) }); }
+  let replayOk = truth.size > 5, changes = 0, last = "";
+  for (const [tick, want] of truth) {
+    const f = rec.frameAt(tick, rp)!, got = Array.from(f.parked ?? []).join("");
+    if (got !== want.parked || `${f.crossPeds?.[0] ?? 0}/${f.crossPeds?.[1] ?? 0}` !== want.peds) replayOk = false;
+    if (last && got !== last) changes++;
+    last = got;
+  }
+  replayOk &&= changes > 0;
+  const ok = plainOk && litOk && parkOk && editOk && replayOk;
+  console.log(`replay: parked cars and pedestrians as they were ${replayOk} (${changes} changes between the moments looked at)`);
+  console.log(`crossings: plain road ${z1.crossed} crossed (avg wait ${z1.avgWait.toFixed(0)} s), traffic waited ${plainOk}; at lights ${s2.starts} groups, ${s2.onGreen} on green (${s2.through} paths over it) ${litOk} | parking (every car leaving drives out ${noVanish}): ${p0.parked}/${p0.left}, ${p1.parked}/${p1.left} and free row ${p2.parked}/${p2.left} parked/left (${frOk}), ${(share * 100).toFixed(0)}% taken (60% set), manoeuvres seen ${manoeuvring > 0}, towed ${s3.stats.towed}; edits keep bays ${editOk} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// live updates: merging a version saved elsewhere with this page's unsaved changes, object by object
+{
+  const base = sampleTown(), [l1, l2, l3] = base.links;
+  const [mineA] = addNode(base, { x: 999, y: 999 });
+  const mine = deleteLink(updateLink({ ...mineA, links: [...mineA.links, makeLink(mineA.nodes[0], mineA.nodes[mineA.nodes.length - 1])] }, l1.id, { name: "Mine" }), l3.id);
+  // (theirs comes back from the server: equal copies, not the same objects)
+  const theirs0 = JSON.parse(JSON.stringify(base)) as Network;
+  const theirs = { ...updateLink(updateLink(updateLink(theirs0, l1.id, { name: "Theirs" }), l2.id, { speed: 30 }), l3.id, { speed: 70 }), crossings: [{ id: "xz", a: { x: 0, y: 0 }, b: { x: 0, y: 8 }, width: 4, peds: 100 }], nodes: theirs0.nodes.filter(n => n.id !== base.nodes[base.nodes.length - 1].id || base.links.some(l => l.from === n.id || l.to === n.id)) };
+  const m = mergeNetworks(base, mine, theirs);
+  const link = (id: string) => m.links.find(l => l.id === id);
+  const ok1 = link(l1.id)?.name === "Mine" && link(l2.id)?.speed === 30 && !link(l3.id) && m.links.length === base.links.length && m.nodes.length === base.nodes.length + 1 && m.crossings?.length === 1;
+  const ok2 = mergeNetworks(base, base, theirs) === theirs;
+  const s = mergeSettings({ cars: 10, trucks: 1, seed: 7 }, { cars: 20, trucks: 1, seed: 7 }, { cars: 10, trucks: 5, seed: 7, fuel: true });
+  const ok3 = s.cars === 20 && s.trucks === 5 && s.fuel === true;
+  console.log(`live merge: both sides' changes kept, mine wins on the same road, my deletion kept ${ok1}; nothing of mine: theirs as is ${ok2}; settings ${ok3} | ok ${ok1 && ok2 && ok3}`);
+  if (!(ok1 && ok2 && ok3)) process.exit(1);
+}
+
+// pulling out of a bay into a queue: with priority (the default) the lane's traffic lets cars out; giving way they wait for a gap
+{
+  const w0 = makeNode(-300, 0), j = makeNode(0, 0), e0 = makeNode(300, 0), n0 = makeNode(0, -200), s0 = makeNode(0, 200);
+  j.control = "lights"; j.gateway = false;
+  const r1 = makeLink(e0, j, 1, 1), links = [makeLink(w0, j, 1, 1), r1, makeLink(n0, j, 1, 1), makeLink(s0, j, 1, 1)];
+  const run = (giveWay: boolean) => {
+    const net = sanitizeNetwork({ version: 1, nodes: [w0, j, e0, n0, s0], links, stops: [], lines: [],
+      parking: [{ id: "p", link: r1.id, dir: 1, from: 0.55, to: 0.85, kind: "perpendicular", stay: 3, occupancy: 0.7, ...(giveWay ? { giveWay: true } : {}) }] });
+    const sim = new Sim(compile(net), { cars: 160, trucks: 0, seed: 7, through: 1 });
+    let waiting = 0, n = 0;
+    for (let t = 0; t < 6000; t++) { sim.step(); if (t % 50 === 0) { waiting += sim.vehicles.filter(v => !v.dead && v.state === "waiting to pull out").length; n++; } }
+    return { left: sim.parkingStats(0)!.left, waiting: waiting / n, towed: sim.stats.towed };
+  };
+  const pr = run(false), gw = run(true);
+  // ("left" counts cars that started to leave, waiting in their bay included: how many wait is what tells)
+  const ok = pr.towed === 0 && gw.towed === 0 && pr.waiting < gw.waiting / 2;
+  console.log(`pulling out into a queue: with priority ${pr.left} out, ${pr.waiting.toFixed(1)} waiting on average; giving way ${gw.left} out, ${gw.waiting.toFixed(1)} waiting; towed ${pr.towed}/${gw.towed} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// pulling out of parallel bays on a busy street with many trucks: never into a vehicle in the lane (with or without priority)
+{
+  // a 1+1 street with parallel bays on both sides, a lit junction at its end (queues), lots of trucks
+    const w0 = makeNode(-300, 0), j = makeNode(0, 0), e0 = makeNode(300, 0), n0 = makeNode(0, -200), s0 = makeNode(0, 200);
+  j.control = "lights"; j.gateway = false;
+  const r1 = makeLink(e0, j, 1, 1), links = [makeLink(w0, j, 1, 1), r1, makeLink(n0, j, 1, 1), makeLink(s0, j, 1, 1)];
+  for (const giveWay of [false, true]) {
+    const net = sanitizeNetwork({ version: 1, nodes: [w0, j, e0, n0, s0], links, stops: [], lines: [], parking: [
+      { id: "a", link: r1.id, dir: 1, from: 0.4, to: 0.8, kind: "parallel", stay: 2, occupancy: 0.7, ...(giveWay ? { giveWay: true } : {}) },
+      { id: "b", link: r1.id, dir: -1, from: 0.4, to: 0.8, kind: "parallel", stay: 2, occupancy: 0.7, ...(giveWay ? { giveWay: true } : {}) }] });
+    const sim = new Sim(compile(net), { cars: 100, trucks: 40, seed: 7, through: 1 });
+    let overlaps = 0, samples = 0;
+    for (let t = 0; t < 9000; t++) {
+      sim.step();
+      if (t % 5) continue;
+      // a car coming out of a bay, its body in the lane, overlapping a vehicle in that lane
+      for (const v of sim.vehicles) {
+        if (v.dead || !v.bayMove || v.bayMove.way !== "out" || !v.bayMove.go) continue;
+        const q = sim.pose(v);
+        for (const u of sim.vehicles) {
+          if (u === v || u.dead || u.bayMove || u.piece !== v.piece) continue;
+          const p = sim.pose(u), cx = (p.fx + p.rx) / 2, cy = (p.fy + p.ry) / 2;
+          // (centres closer than half their lengths along, and a lane width across)
+          const vx = (q.fx + q.rx) / 2, vy = (q.fy + q.ry) / 2, dx = p.fx - p.rx, dy = p.fy - p.ry, L = Math.hypot(dx, dy) || 1;
+          const along = Math.abs(((vx - cx) * dx + (vy - cy) * dy) / L), across = Math.abs(((vx - cx) * -dy + (vy - cy) * dx) / L);
+          if (along < (u.len + v.len) / 2 - 0.3 && across < 1.8) overlaps++;
+        }
+        samples++;
+      }
+    }
+    const st = [0, 1].map(r => sim.parkingStats(r)!);
+    const ok = overlaps === 0 && sim.stats.towed === 0 && st[0].parked + st[1].parked > 20;
+  console.log(`pulling out among trucks (${giveWay ? "giving way" : "with priority"}): ${overlaps} overlaps in ${samples} looks, ${st[0].parked + st[1].parked} parked, towed ${sim.stats.towed} | ok ${ok}`);
+  if (!ok) process.exit(1);
+  }
+}
+
+// parking along a road with a bus lane: cars reach the bays from the lane beside it (crossing it), never driving in it
+{
+  const w0 = makeNode(-300, 0), e0 = makeNode(300, 0), road = makeLink(w0, e0, 3, 2, { busF: true });
+  // (with buses running in the bus lane, both ways along the road)
+  const net = sanitizeNetwork({ version: 1, nodes: [w0, e0], links: [road], lines: [{ id: "bl", name: "B", color: "#2f6fb5", stops: ["s1", "s2"], buses: 4 }],
+    stops: [{ id: "s1", name: "West", link: road.id, dir: 1, pos: 0.1 }, { id: "s2", name: "East", link: road.id, dir: 1, pos: 0.95 }],
+    parking: [{ id: "p", link: road.id, dir: 1, from: 0.3, to: 0.6, kind: "perpendicular", stay: 3 }] });
+  const c = compile(net), row = c.parking[0], e = row.edge, sim = new Sim(c, { cars: 60, trucks: 0, seed: 7 });
+  let inBusLane = 0, intoBus = 0;
+  for (let t = 0; t < 6000; t++) {
+    sim.step();
+    for (const v of sim.vehicles) if (!v.dead && v.kind !== "bus" && !v.bayMove && v.piece.kind === "lane" && v.piece.edge === e && v.lane === e.kerb) inBusLane++;
+    // (a car turning across the bus lane, its body on a bus)
+    if (t % 5 === 0) for (const v of sim.vehicles) if (!v.dead && v.bayMove) for (const b of sim.vehicles) {
+      if (b.dead || b.kind !== "bus") continue;
+      const q = sim.pose(v), p = sim.pose(b), cx = (p.fx + p.rx) / 2, cy = (p.fy + p.ry) / 2, dx = p.fx - p.rx, dy = p.fy - p.ry, L = Math.hypot(dx, dy) || 1;
+      for (const [x, y] of [[q.fx, q.fy], [(q.fx + q.rx) / 2, (q.fy + q.ry) / 2], [q.rx, q.ry]]) {
+        const along = Math.abs(((x - cx) * dx + (y - cy) * dy) / L), across = Math.abs(((x - cx) * -dy + (y - cy) * dx) / L);
+        if (along < b.len / 2 && across < b.width / 2) { intoBus++; break; }
+      }
+    }
+  }
+  // (the bays still line the kerb, beyond the bus lane)
+  const kerb = e.lanes[e.kerb].poly.at(e.lanes[e.kerb].len / 2), bay = bayOutline(row, 0)[0];
+  const st = sim.parkingStats(0)!, ok = e.bus && row.lane === e.kerb - 1 && inBusLane === 0 && intoBus === 0 && st.parked > 10 && st.left > 10 && bay.y > kerb.y + e.lw / 2 - 0.05;
+  console.log(`parking beside a bus lane: reached from lane ${row.lane + 1} (bus lane ${e.kerb + 1}), cars driving in the bus lane ${inBusLane}, cars turning into a bus ${intoBus}, ${st.parked} parked, ${st.left} left | ok ${ok}`);
+  if (!ok) process.exit(1);
 }

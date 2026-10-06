@@ -22,6 +22,7 @@ export function MultiSelection() {
     if (s.kind === "building") return net.buildings?.find(b => b.id === s.id)?.name || s.id;
     if (s.kind === "stop") return net.stops.find(x => x.id === s.id)?.name || s.id;
     if (s.kind === "marker") return net.markers?.find(x => x.id === s.id)?.label || s.id;
+    if (s.kind === "parking") { const p = net.parking?.find(x => x.id === s.id); return p ? `${p.kind} bays` : s.id; }
     return s.id;
   };
   const remove = () => { commit(deleteSelected(net, deletable)); select(null); };

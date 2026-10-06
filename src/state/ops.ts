@@ -1,6 +1,6 @@
 /** Pure network edit operations. Each returns a new Network (never mutates). */
 import { newId, makeNode } from "@/engine/sample";
-import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type ReversibleDef, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape, type LaneTargets, type MarkerDef } from "@/engine/types";
+import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type ReversibleDef, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape, type LaneTargets, type MarkerDef, type CrossingDef, type ParkingDef } from "@/engine/types";
 import { connShapeKey, exitLanesOf, laneAllowed, linkExtent, type Compiled } from "@/engine/compile";
 import { greenWaveOffsets, withCustomPhases } from "@/engine/signals";
 
@@ -101,9 +101,11 @@ export function moveNode(net: Network, id: string, p: Vec): Network {
   if (!n) return net;
   const dx = round(p.x) - n.x, dy = round(p.y) - n.y;
   if (!dx && !dy) return net;
+  // (the leading road end of a junction drawn by hand: its outline, relative to it, stays where it is)
+  const leads = !!n.outline && !!net.junctions?.some(j => j.nodes[0] === id);
   return {
     ...net,
-    nodes: net.nodes.map(m => (m.id === id ? { ...m, x: m.x + dx, y: m.y + dy } : m)),
+    nodes: net.nodes.map(m => (m.id === id ? { ...m, x: m.x + dx, y: m.y + dy, ...(leads ? { outline: m.outline!.map(q => ({ x: round(q.x - dx), y: round(q.y - dy) })) } : {}) } : m)),
     links: net.links.map(l => {
       if (!l.c1 || !l.c2) return l;
       if (l.from === id) return { ...l, c1: { x: l.c1.x + dx, y: l.c1.y + dy } };
@@ -139,6 +141,7 @@ export function deleteLink(net: Network, id: string): Network {
 export function reverseLink(net: Network, id: string): Network {
   // (its directions swap names: "id:1" is now the other way)
   net = remapLink(net, id, (_, d) => `${id}:${-d}`);
+  if (net.parking?.some(p => p.link === id)) net = { ...net, parking: net.parking.map(p => (p.link === id ? { ...p, dir: (p.dir === 1 ? -1 : 1) as 1 | -1, from: 1 - p.to, to: 1 - p.from } : p)) };
   return updateLinkWith(net, id, l => ({ ...l, from: l.to, to: l.from, c1: l.c2, c2: l.c1, lanesF: l.lanesB, lanesB: l.lanesF, busF: l.busB, busB: l.busF, turnsF: l.turnsB ?? null, turnsB: l.turnsF ?? null, signF: l.signB ?? null, signB: l.signF ?? null, splitF: l.splitB ?? null, splitB: l.splitF ?? null, greenF: l.greenB ?? null, greenB: l.greenF ?? null, baysF: l.baysB ?? null, baysB: l.baysF ?? null, dropF: l.dropB ?? null, dropB: l.dropF ?? null }), true);
 }
 
@@ -175,7 +178,17 @@ export function splitLink(net: Network, id: string, t: number, at: Vec): [Networ
   });
   // the junctions at its ends now meet the piece on their side
   net = remapLink(net, id, (end, d) => `${end === l.from ? first.id : second.id}:${d}`, [l.from, l.to]);
-  return [{ ...net, nodes: [...net.nodes, node], links: [...net.links.filter(x => x.id !== id), first, second], stops }, node];
+  // rows of parking bays: the part on each piece (a row across the split becomes two)
+  const parking = net.parking?.flatMap(p => {
+    if (p.link !== id) return [p];
+    // (a row standing on its own stays whole, reached from the piece nearer it)
+    if (p.line) { const mid = { x: (p.line.a.x + p.line.b.x) / 2, y: (p.line.a.y + p.line.b.y) / 2 }; return [{ ...p, link: nearestT(l, A, B, mid).t < t ? first.id : second.id }]; }
+    const out: ParkingDef[] = [];
+    if (p.from < t) out.push({ ...p, link: first.id, from: p.from / t, to: Math.min(p.to, t) / t });
+    if (p.to > t) out.push({ ...p, id: p.from < t ? newId("pk") : p.id, link: second.id, from: (Math.max(p.from, t) - t) / (1 - t), to: (p.to - t) / (1 - t) });
+    return out;
+  });
+  return [{ ...net, nodes: [...net.nodes, node], links: [...net.links.filter(x => x.id !== id), first, second], stops, ...(parking ? { parking } : {}) }, node];
 }
 
 /** Merge a node into another (used when a drawn road ends on an existing node). */
@@ -187,6 +200,36 @@ export function mergeNodes(net: Network, keep: string, drop: string): Network {
   // flows follow the merged node (and are dropped if both ends end up the same)
   const flows = net.flows?.map(f => ({ ...f, from: f.from === drop ? keep : f.from, to: f.to === drop ? keep : f.to })).filter(f => f.from !== f.to);
   return pruneRefs({ ...net, nodes: net.nodes.filter(n => n.id !== drop), links, ...(flows ? { flows } : {}) });
+}
+
+// ---------------------------------------------------------------- zebra crossings drawn by hand, rows of parking bays
+export function addCrossing(net: Network, a: Vec, b: Vec): [Network, CrossingDef] {
+  const x: CrossingDef = { id: newId("x"), a: { x: round(a.x), y: round(a.y) }, b: { x: round(b.x), y: round(b.y) }, width: 4, peds: 300 };
+  return [{ ...net, crossings: [...(net.crossings ?? []), x] }, x];
+}
+export function updateCrossing(net: Network, id: string, patch: Partial<CrossingDef>): Network {
+  return { ...net, crossings: (net.crossings ?? []).map(x => (x.id === id ? { ...x, ...patch } : x)) };
+}
+export function deleteCrossing(net: Network, id: string): Network {
+  const rest = (net.crossings ?? []).filter(x => x.id !== id);
+  return { ...net, crossings: rest.length ? rest : undefined };
+}
+/** a row of bays standing on its own: opening along a → b, bays on `side` of it, reached from direction `dir` of road `link` */
+export function addFreeParking(net: Network, link: string, dir: 1 | -1, a: Vec, b: Vec, side: 1 | -1, kind: ParkingDef["kind"] = "perpendicular"): [Network, ParkingDef] {
+  const p: ParkingDef = { id: newId("pk"), link, dir, from: 0, to: 1, kind, line: { a: { x: round(a.x), y: round(a.y) }, b: { x: round(b.x), y: round(b.y) }, side } };
+  return [{ ...net, parking: [...(net.parking ?? []), p] }, p];
+}
+/** a row of bays along the kerb of direction `dir` of a road, between `from` and `to` (0..1 along it) */
+export function addParking(net: Network, link: string, dir: 1 | -1, from: number, to: number, kind: ParkingDef["kind"] = "perpendicular"): [Network, ParkingDef] {
+  const p: ParkingDef = { id: newId("pk"), link, dir, from: Math.min(from, to), to: Math.max(from, to), kind };
+  return [{ ...net, parking: [...(net.parking ?? []), p] }, p];
+}
+export function updateParking(net: Network, id: string, patch: Partial<ParkingDef>): Network {
+  return { ...net, parking: (net.parking ?? []).map(x => (x.id === id ? { ...x, ...patch } : x)) };
+}
+export function deleteParking(net: Network, id: string): Network {
+  const rest = (net.parking ?? []).filter(x => x.id !== id);
+  return { ...net, parking: rest.length ? rest : undefined };
 }
 
 export function addStop(net: Network, link: string, dir: 1 | -1, pos: number): [Network, StopDef] {
@@ -224,8 +267,13 @@ function pruneRefs(net: Network): Network {
   const groups = net.signalGroups?.map(g => ({ ...g, members: g.members.filter(m => nodeIds.has(m.node)) })).filter(g => g.members.length);
   const flows = net.flows?.filter(f => nodeIds.has(f.from) && nodeIds.has(f.to));
   const reversibles = net.reversibles?.filter(r => net.links.some(l => l.rev === r.id));
+  const parking = net.parking?.filter(p => linkIds.has(p.link));
+  // (junctions drawn by hand keep the road ends still there)
+  const junctions = net.junctions?.map(j => ({ ...j, nodes: j.nodes.filter(id => nodeIds.has(id)) })).filter(j => j.nodes.length);
   return {
     ...net,
+    ...(net.junctions ? { junctions: junctions!.length ? junctions : undefined } : {}),
+    ...(net.parking ? { parking: parking!.length ? parking : undefined } : {}),
     ...(net.reversibles ? { reversibles } : {}),
     nodes,
     stops,

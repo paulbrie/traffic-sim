@@ -1,4 +1,4 @@
-import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type ReversibleDef, type PlanSettings, type Vec, type ConnShape, type ConnectorDef, type LaneTargets, type MarkerDef } from "./types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type ReversibleDef, type PlanSettings, type Vec, type ConnShape, type ConnectorDef, type LaneTargets, type MarkerDef, BAY_SIZE, PARKING, type CrossingDef, type ParkingDef, type ParkingKind } from "./types";
 import { sanitizeParams } from "./params";
 
 const num = (v: unknown, lo: number, hi: number, def: number) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
@@ -175,7 +175,32 @@ export function sanitizeNetwork(input: unknown): Network {
     id: str(m.id, "m", 64), x: Math.round(Number(m.x) * 100) / 100, y: Math.round(Number(m.y) * 100) / 100, label: str(m.label, "", 120),
     ...(typeof m.color === "string" && /^#[0-9a-fA-F]{6}$/.test(m.color) ? { color: m.color } : {}),
   }));
-  return { version: 1, nodes, links, stops, lines, ...(markers.length ? { markers } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(zones.length ? { zones } : {}), ...(zoneFlows.length ? { zoneFlows } : {}), ...(reversibles.length ? { reversibles } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
+  // junctions drawn by hand: existing road ends, each in one junction at most
+  const ends = new Set(links.flatMap(l => [l.from, l.to])), inJunction = new Set<string>();
+  const junctions = arr("junctions").filter(j => typeof j.id === "string" && j.id).slice(0, 2000).map(j => ({
+    id: str(j.id, "", 64),
+    nodes: (Array.isArray(j.nodes) ? j.nodes : []).filter((x: unknown): x is string => typeof x === "string" && ends.has(x) && !inJunction.has(x) && (inJunction.add(x), true)),
+  })).filter(j => j.nodes.length);
+  // zebra crossings drawn by hand (anywhere), and rows of parking bays (on existing roads)
+  const crossings = arr("crossings").filter(x => typeof x.id === "string" && x.id && vec(x.a) && vec(x.b)).slice(0, 2000).map((x): CrossingDef => ({
+    id: str(x.id, "", 64), a: vec(x.a)!, b: vec(x.b)!, width: Math.round(num(x.width, 1.5, 12, 4) * 10) / 10, peds: Math.round(num(x.peds, 0, 5000, 300)),
+  })).filter(x => Math.hypot(x.b.x - x.a.x, x.b.y - x.a.y) >= 1);
+  const parking = arr("parking").filter(x => typeof x.id === "string" && x.id && linkIds.has(x.link as string)).slice(0, 5000).map((x): ParkingDef => {
+    const kind: ParkingKind = x.kind === "parallel" || x.kind === "angled" ? x.kind : "perpendicular";
+    const from = num(x.from, 0, 1, 0), to = num(x.to, 0, 1, 1);
+    return {
+      id: str(x.id, "", 64), link: str(x.link), dir: x.dir === -1 ? -1 : 1, from: Math.min(from, to), to: Math.max(from, to), kind,
+      ...(lineOf(x.line) ?? {}),
+      ...(kind === "angled" ? { angle: Math.round(num(x.angle, 20, 80, PARKING.angle)) } : {}),
+      ...(typeof x.bayW === "number" ? { bayW: Math.round(num(x.bayW, 1.8, 4, BAY_SIZE[kind].w) * 10) / 10 } : {}),
+      ...(typeof x.bayL === "number" ? { bayL: Math.round(num(x.bayL, 3.5, 9, BAY_SIZE[kind].l) * 10) / 10 } : {}),
+      ...(typeof x.gap === "number" && x.gap !== 0 ? { gap: Math.round(num(x.gap, -2, 30, 0) * 10) / 10 } : {}),
+      ...(typeof x.occupancy === "number" ? { occupancy: num(x.occupancy, 0, 1, PARKING.occupancy) } : {}),
+      ...(typeof x.stay === "number" ? { stay: num(x.stay, 1, 1440, PARKING.stay) } : {}),
+      ...(x.giveWay === true ? { giveWay: true } : {}),
+    };
+  }).filter(x => x.line || x.to - x.from > 0.001);
+  return { version: 1, nodes, links, stops, lines, ...(crossings.length ? { crossings } : {}), ...(parking.length ? { parking } : {}), ...(src.manualJunctions === true ? { manualJunctions: true } : {}), ...(junctions.length ? { junctions } : {}), ...(markers.length ? { markers } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(zones.length ? { zones } : {}), ...(zoneFlows.length ? { zoneFlows } : {}), ...(reversibles.length ? { reversibles } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
 }
 
 /** most buildings a plan keeps (an imported district of a few km²) */
@@ -310,6 +335,13 @@ export function sanitizeSettings(input: unknown): PlanSettings {
     ...(s.fuel === true ? { fuel: true } : {}),
     ...(fuelNodes(s.fuelNodes) ?? {}),
   };
+}
+/** a free-standing row of parking bays: its line (at least a metre long) and the side its bays are on */
+function lineOf(v: unknown): { line: NonNullable<ParkingDef["line"]> } | null {
+  if (!v || typeof v !== "object") return null;
+  const l = v as Record<string, unknown>, a = vec(l.a), b = vec(l.b);
+  if (!a || !b || Math.hypot(b.x - a.x, b.y - a.y) < 1) return null;
+  return { line: { a, b, side: l.side === -1 ? -1 : 1 } };
 }
 function fuelNodes(v: unknown): { fuelNodes: string[] } | null {
   if (!Array.isArray(v)) return null;

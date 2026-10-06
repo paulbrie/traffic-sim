@@ -51,6 +51,7 @@ export class Sim extends SimDemand {
     if (this.logLinks.size || this.logVehicles.size) this.logStates();
     for (const v of this.vehicles) if (!v.dead && (v.id + this.tick) % 5 === 0) this.considerLaneChange(v);
     this.updatePeds();
+    if (this.crosses.length) this.updateCrossings();
     for (const st of this.ns) if (st.node.controlled && !st.node.ring) this.arbitrate(st);
     const fuel = this.syncFuel();
     for (const v of this.vehicles) if (!v.dead) {
@@ -186,7 +187,8 @@ export class Sim extends SimDemand {
     }
     let any = all;
     for (const n of this.net.nodes) {
-      const on = all || ids.has(n.def.id), f = this.nodeFuel[n.idx];
+      // (a junction drawn by hand is measured at every road end when its leading node is)
+      const on = all || ids.has(n.def.id) || (!!n.lead && ids.has(n.lead.def.id)), f = this.nodeFuel[n.idx];
       if (on) any = true;
       if (on && f.since < 0) {
         Object.assign(f, { since: this.tick, through0: this.nodeThrough[n.idx] ?? 0, inside: 0, idleTime: 0 });
@@ -245,11 +247,13 @@ export class Sim extends SimDemand {
   junctionFuel(nodeIdx: number): JunctionFuel | null {
     const f = this.nodeFuel[nodeIdx], n = this.net.nodes[nodeIdx];
     if (!f || f.since < 0 || !n) return null;
-    const approaches = n.arms.filter(a => a.inEdge).map(a => ({ total: this.edgeFuel[a.inEdge!.idx] / 1000, idle: this.edgeIdle[a.inEdge!.idx] / 1000 }));
-    const onRoads = approaches.reduce((x, a) => x + a.total, 0);
+    // (a junction drawn by hand: all its road ends, in the order junctionStats lists them)
+    const all = this.handNodes(n), fs = all.map(k => this.nodeFuel[k.idx]);
+    const approaches = all.flatMap(k => k.arms).filter(a => a.inEdge).map(a => ({ total: this.edgeFuel[a.inEdge!.idx] / 1000, idle: this.edgeIdle[a.inEdge!.idx] / 1000 }));
+    const onRoads = approaches.reduce((x, a) => x + a.total, 0), inside = fs.reduce((s, x) => s + x.inside, 0) / 1000;
     return {
-      total: onRoads + f.inside / 1000, idle: approaches.reduce((x, a) => x + a.idle, 0), inside: f.inside / 1000, idleTime: f.idleTime,
-      crossed: (this.nodeThrough[nodeIdx] ?? 0) - f.through0, since: f.since * DT, approaches,
+      total: onRoads + inside, idle: approaches.reduce((x, a) => x + a.idle, 0), inside, idleTime: fs.reduce((s, x) => s + x.idleTime, 0),
+      crossed: all.reduce((s, k, i) => s + (this.nodeThrough[k.idx] ?? 0) - fs[i].through0, 0), since: f.since * DT, approaches,
     };
   }
 
@@ -277,6 +281,18 @@ export class Sim extends SimDemand {
   /** blink phase shared by all vehicles (about 1.25 flashes per second) */
   get blinkOn() { return Math.floor(this.tick / 4) % 2 === 0; }
   pose(v: Vehicle): { fx: number; fy: number; rx: number; ry: number } {
+    // on a bay's path (into the bay, or out of it): the leading end on the path, the car behind it
+    const bm = v.bayMove;
+    if (bm) {
+      const acc = this.net.parking[bm.row]?.access[bm.bay];
+      if (acc) {
+        const path = bm.way === "in" ? acc.inPath : acc.outPath, d = bm.s, lead = path.at(d), t = path.tangent(d);
+        // (backing out: the rear leads, the car facing the other way)
+        if (bm.way === "out" && acc.reverse) return { rx: lead.x, ry: lead.y, fx: lead.x - t.x * v.len, fy: lead.y - t.y * v.len };
+        const t0 = path.tangent(0), p0 = path.at(0), r = d >= v.len ? path.at(d - v.len) : { x: p0.x - t0.x * (v.len - d), y: p0.y - t0.y * (v.len - d) };
+        return { fx: lead.x, fy: lead.y, rx: r.x, ry: r.y };
+      }
+    }
     const f = v.piece.poly.at(v.s);
     let d = v.s - v.len, poly: Poly = v.piece.poly, k = 0;
     while (d < 0 && k < v.trail.length) { poly = v.trail[k].poly; d += poly.len; k++; }

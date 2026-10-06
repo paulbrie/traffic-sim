@@ -2,7 +2,8 @@
  * Every simulation step kept in memory, compactly, so the page can replay them (a slider like a video
  * player's). A frame stores per vehicle what drawing it needs — id, front point, heading, length on screen,
  * speed, turn signal, level, height, state — about 21 bytes; what doesn't change (kind, colour, length, width) is kept
- * once per vehicle; per junction its signal phase and stage. Oldest frames go when over the budget.
+ * once per vehicle; per junction its signal phase and stage; per parking bay whether a car is in it (a bit),
+ * per crossing drawn by hand its pedestrians (3 bytes). Oldest frames go when over the budget.
  */
 import { pieceLevel, pieceZ } from "../compile";
 import type { Sim } from "./index";
@@ -38,14 +39,16 @@ export class Recorder {
 
   /** keep the current step */
   record(sim: Sim) {
-    const vs = sim.vehicles, N = sim.net.nodes.length, C = sim.net.corridors.length;
+    const vs = sim.vehicles, N = sim.net.nodes.length, C = sim.net.corridors.length, X = sim.net.crossings.length;
+    const parked = sim.net.parking.length ? sim.parkedFlags() : null, PB = parked ? Math.ceil(parked.length / 8) : 0;
     let n = 0;
     for (let i = 0; i < vs.length; i++) if (!vs[i].dead) n++;
     // (heights only matter on plans with bridges or tunnels)
     if (this.flat === null || this.flatNet !== sim.net) { this.flatNet = sim.net; this.flat = sim.net.nodes.every(nd => nd.level === 0) && sim.net.edges.every(e => !e.link.level); }
     // layout: 4-byte fields, then 2-byte, then 1-byte (so every view is aligned)
     // (reversible corridors: the tick their state began; then state + set by hand, vehicles in the lane, density each way)
-    const size = n * 4 + n * 8 + C * 4 + n * 2 + N * 2 + n * 7 + N + C * 4;
+    // (then the parking bays, a bit each, and the crossings drawn by hand: waiting, crossing, how far across)
+    const size = n * 4 + n * 8 + C * 4 + n * 2 + N * 2 + n * 7 + N + C * 4 + PB + X * 3;
     const buf = new ArrayBuffer(Math.ceil(size / 4) * 4);
     let o = 0;
     const ids = new Int32Array(buf, o, n); o += n * 4;
@@ -61,7 +64,14 @@ export class Recorder {
     const st = new Uint8Array(buf, o, n); o += n;
     const cl = new Uint8Array(buf, o, n); o += n;
     const sg = new Int8Array(buf, o, N); o += N;
-    const rv = new Uint8Array(buf, o, C * 4);
+    const rv = new Uint8Array(buf, o, C * 4); o += C * 4;
+    const pk = new Uint8Array(buf, o, PB); o += PB;
+    const xp = new Uint8Array(buf, o, X * 3);
+    if (parked) for (let i = 0; i < parked.length; i++) if (parked[i]) pk[i >> 3] |= 1 << (i & 7);
+    for (let k = 0; k < X; k++) {
+      const c = sim.crossingStats(k);
+      if (c) { xp[k * 3] = Math.min(255, c.waiting); xp[k * 3 + 1] = Math.min(255, c.crossing); xp[k * 3 + 2] = Math.round(c.progress * 255); }
+    }
     for (let k = 0; k < C; k++) {
       const r = sim.reversibleState(k)!;
       rs[k] = Math.round(sim.tick - r.t / DT);
@@ -106,7 +116,8 @@ export class Recorder {
     let lo = this.head, hi = this.frames.length - 1;
     if (tick <= this.frames[lo].tick) hi = lo;
     while (lo < hi) { const m = (lo + hi + 1) >> 1; if (this.frames[m].tick <= tick) lo = m; else hi = m - 1; }
-    const f = this.frames[lo], n = f.n, N = sim.net.nodes.length, C = sim.net.corridors.length, buf = f.buf;
+    const f = this.frames[lo], n = f.n, N = sim.net.nodes.length, C = sim.net.corridors.length, X = sim.net.crossings.length, buf = f.buf;
+    const B = sim.net.parking.reduce((k, p) => k + p.bays.length, 0), PB = Math.ceil(B / 8);
     let o = 0;
     const ids = new Int32Array(buf, o, n); o += n * 4;
     const xy = new Float32Array(buf, o, n * 2); o += n * 8;
@@ -121,7 +132,11 @@ export class Recorder {
     const st = new Uint8Array(buf, o, n); o += n;
     const cl = new Uint8Array(buf, o, n); o += n;
     const sg = new Int8Array(buf, o, N); o += N;
-    const rv = new Uint8Array(buf, o, C * 4);
+    const rv = new Uint8Array(buf, o, C * 4); o += C * 4;
+    const pk = new Uint8Array(buf, o, PB); o += PB;
+    const xp = new Uint8Array(buf, o, X * 3);
+    const parked = B ? Uint8Array.from({ length: B }, (_, i) => (pk[i >> 3] >> (i & 7)) & 1) : undefined;
+    const crossPeds = X ? Float32Array.from({ length: X * 3 }, (_, i) => (i % 3 === 2 ? xp[i] / 255 : xp[i])) : undefined;
     const rev: RevView[] = Array.from({ length: C }, (_, k) => ({
       state: (rv[k * 4] & 15) as RevStateCode, hold: HOLDS[rv[k * 4] >> 4] ?? null, t: (f.tick - rs[k]) * DT,
       inside: rv[k * 4 + 1], density: [rv[k * 4 + 2], rv[k * 4 + 3]] as [number, number],
@@ -144,6 +159,7 @@ export class Recorder {
       phase: Int16Array.from(ph), stage: Int8Array.from(sg), stageT: new Float32Array(N), occupied: new Int16Array(N), cycleAt: new Float32Array(N).fill(NaN),
       waiting: Float32Array.from(sim.net.stops, s => s.waiting), events: [], resetEvents: false, peds: [],
       ...(C ? { rev } : {}),
+      ...(parked ? { parked } : {}), ...(crossPeds ? { crossPeds } : {}),
     };
   }
 }

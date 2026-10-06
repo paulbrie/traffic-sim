@@ -16,6 +16,7 @@ export abstract class SimMotion extends SimJunctions {
     }
     v.lcCool -= DT;
     if (v.lcT > 0) v.lcT = Math.max(0, v.lcT - DT / 1.4);
+    if (v.bayMove) { this.bayThink(v); return; }
     if (v.dwell > 0) { v.state = "boarding"; v.acc = 0; v.leader = null; v.gap = Infinity; return; }
 
     let acc = -v.s, gap = Infinity, lv = 0, leader: Vehicle | null = null;
@@ -110,6 +111,35 @@ export abstract class SimMotion extends SimJunctions {
         const d = acc + sOn;
         if (d > -0.5 && d < stopD) { stopD = d; stopKind = "stop"; }
       }
+      // its parking bay: stop by it (in the lane) to manoeuvre in
+      if (p.kind === "lane" && v.park && v.dest.kind === "edge" && p.edge === v.dest.edge && ri === v.route.length - 1) {
+        const d = acc + v.dest.s * (p.len / Math.max(1e-6, p.edge.length));
+        if (d > -0.5 && d < stopD) { stopD = d; stopKind = "stop"; }
+      }
+      // a car on a bay's path (going in, or coming out): keep off the stretch it sweeps, if there is room to stop
+      // (not in a junction, nor on the road into one it has been let through: it would stop in the junction or hold
+      // its path there, keeping others waiting — a car only pulls out when those are clear of it; nor once its
+      // front is well into the stretch: it carries on through)
+      if (this.bayHolds.size && !v.bayMove && v.piece.kind === "lane" && !(p.kind === "lane" && (v.granted || v.early?.granted))) for (const z of this.bayHolds.get(p.id) ?? []) {
+        // (one only waiting to pull out can't go while anything is in its way: a car at its stretch already drives on
+        // through; one on its way is stopped for unless well into the stretch)
+        if (z.v === v || (first && v.s > z.z0 + (z.v.bayMove?.way === "in" || z.v.bayMove?.go ? 0.5 : -0.3))) continue;
+        const d = Math.max(0.05, acc + z.z0 - 0.5);
+        if (d < (v.v * v.v) / (2 * v.b) * 0.8) continue;
+        if (d < stopD) { stopD = d; stopKind = "stop"; }
+      }
+      // a crossing drawn by hand that pedestrians are on, or waiting at (unless too close to stop for
+      // them: they wait for it); a path through a junction stops at its line instead (see pedBlocks)
+      if (this.crosses.length && !(p.kind === "conn" && (first || (v.granted && v.conn === p)))) {
+        for (const o of this.crossOn.get(p.id) ?? []) {
+          const ped = this.crosses[o.k].ped;
+          if (!ped.crossing && !ped.claim) continue;
+          if (first && v.s > o.s0 - 0.3) continue;
+          const d = acc + o.s0 - 0.5;
+          if (!ped.crossing && d < (v.v * v.v) / (2 * v.b) * 0.8) continue;
+          if (d < stopD) { stopD = d; stopKind = "stop"; }
+        }
+      }
       const endD = acc + p.len;
       // what comes after this piece?
       if (p.kind === "lane") {
@@ -191,7 +221,8 @@ export abstract class SimMotion extends SimJunctions {
     v.wait = v.v < 0.3 ? v.wait + DT : 0;
     // junction request
     if (pendConn) {
-      const node = pendConn.node, st = this.ns[node.idx], e = pendConn.inEdge;
+      // (a junction drawn by hand takes every request at its leading node: one queue, in arrival order)
+      const node = pendConn.node, st = this.ns[(node.lead ?? node).idx], e = pendConn.inEdge;
       // the vehicle's own movement (a roundabout entry piece is shared by all turns from that arm)
       const m = (v.route[v.ri] === e && v.route[v.ri + 1] ? this.moveOf(e, v.route[v.ri + 1]) : undefined) ?? pendConn.move;
       // wrong lane for the planned turn and too late to change: take a turn this lane allows
@@ -292,7 +323,7 @@ export abstract class SimMotion extends SimJunctions {
    */
   protected askEarly(v: Vehicle, c: Conn, d: number) {
     if (v.early) { v.early.d = d; if (v.early.granted) return; }
-    const node = c.node, st = this.ns[node.idx], lp = c.inEdge.lanes[c.inLane];
+    const node = c.node, st = this.ns[(node.lead ?? node).idx], lp = c.inEdge.lanes[c.inLane];
     if ((this.index.get(lp.id) ?? []).some(u => u !== v && !this.mayGo(u))) return;
     if (!v.early) {
       v.early = { conn: c, at: this.tick, d, granted: false };
@@ -356,6 +387,11 @@ export abstract class SimMotion extends SimJunctions {
         lo = hi = beside; urgent = Math.min(urgent, e.open[k] - sk);
       }
     }
+    // parking: in the kerb lane by its bay
+    if (v.park && v.dest.kind === "edge" && v.dest.edge === e && v.ri === v.route.length - 1) {
+      const k = this.net.parking[v.park.row].lane;
+      if (hi >= k) { lo = hi = k; urgent = Math.min(urgent, Math.max(0, v.dest.s * (p.len / Math.max(1e-6, e.length)) - v.s)); }
+    }
     if (v.kind === "bus") {
       const stopHere = v.dest.kind === "stop" && v.dest.stop.edge === e;
       if ((stopHere || e.bus) && hi >= e.kerb) { lo = e.kerb; urgent = Math.min(urgent, toEnd); }
@@ -383,7 +419,7 @@ export abstract class SimMotion extends SimJunctions {
     return { u: best, gap };
   }
   protected considerLaneChange(v: Vehicle) {
-    if (v.dwell > 0 || v.lcCool > 0 || v.piece.kind !== "lane") return;
+    if (v.dwell > 0 || v.bayMove || v.lcCool > 0 || v.piece.kind !== "lane") return;
     const p = v.piece, e = p.edge;
     if (e.n <= 1 || v.s < 2 || v.s > p.len - (v.v < 1 ? 0.3 : 3) || v.granted) return;
     const need = this.neededLanes(v), a = v.lane;
@@ -403,6 +439,11 @@ export abstract class SimMotion extends SimJunctions {
       const mandatory = dir !== 0 && Math.sign(c - a) === dir;
       if (dir !== 0 && !mandatory) continue;
       if (!mandatory && !blocked && (c < need.lo || c > need.hi)) continue;
+      // never into a stretch a car going into or out of a bay is passing over
+      if (this.bayHolds.size) {
+        const tp = e.lanes[c], sc = v.s * (tp.len / p.len);
+        if ((this.bayHolds.get(tp.id) ?? []).some(z => z.v !== v && z.z0 < sc + 2 && z.z1 > sc - v.len - 1)) continue;
+      }
       const L = this.laneLeader(v, c), F = this.laneFollower(v, c);
       // never into a lane only to stop behind a broken-down vehicle there
       if (L.u?.broken && L.gap < 80) continue;
@@ -439,6 +480,7 @@ export abstract class SimMotion extends SimJunctions {
   }
   // ------------------------------------------------------------ movement
   protected move(v: Vehicle) {
+    if (v.bayMove) { this.bayMoveOn(v); return; }
     if (v.dwell > 0) { v.dwell -= DT; if (v.dwell <= 0) this.busDepart(v); return; }
     v.v = Math.max(0, v.v + v.acc * DT);
     v.s += v.v * DT;
@@ -498,8 +540,126 @@ export abstract class SimMotion extends SimJunctions {
     // destinations along an edge
     if (v.piece.kind === "lane" && v.ri === v.route.length - 1) {
       const e = v.piece.edge, f = v.piece.len / Math.max(1e-6, e.length);
-      if (v.dest.kind === "edge" && v.dest.edge === e && v.s >= v.dest.s * f) this.kill(v, "arrived");
+      // (a car parking pulls up by its bay, as a bus at its stop: a little short of it)
+      if (v.dest.kind === "edge" && v.dest.edge === e && v.s >= v.dest.s * f - (v.park ? 0.6 : 0)) {
+        // (parking: it stops in the lane and manoeuvres in)
+        // (it turns in once the lanes it crosses to the bay, a bus lane, are clear; until then it waits there)
+        if (v.park) {
+          if (this.sweepClear(v, v.park.row, v.park.bay, "in", false)) { v.parkWait = false; v.v = Math.min(v.v, 1); v.bayMove = { row: v.park.row, bay: v.park.bay, way: "in", s: 0, inLane: true, go: true }; }
+          else { v.parkWait = true; v.v = 0; v.s = Math.min(v.s, v.dest.s * f); }
+        }
+        else this.kill(v, "arrived");
+      }
       else if (v.dest.kind === "stop" && v.dest.stop.edge === e && v.s >= v.dest.stop.s * f - 0.6) { v.v = 0; this.busArrive(v); }
+    }
+  }
+  // ------------------------------------------------------------ parking bays
+  /** speed on a bay's path (m/s), and how far short of the lane a car pulling out waits for its gap (beyond its length, m) */
+  private static readonly BAY_V = 3;
+  private static readonly BAY_WAIT = 1.5;
+  /**
+   * A car on its bay's path: up to walking-to-jogging speed, easing to a stop at the end going in; going out
+   * it stops just short of the lane until there is a gap in the lane's traffic (it gives way, as at a junction).
+   */
+  protected bayThink(v: Vehicle) {
+    const bm = v.bayMove!, acc = this.net.parking[bm.row].access[bm.bay], path = bm.way === "in" ? acc.inPath : acc.outPath;
+    const vmax = SimMotion.BAY_V, rem = path.len - bm.s;
+    // (up to its speed; into the bay, easing down so it rolls in at walking pace)
+    const vt = bm.way === "in" ? Math.min(vmax, Math.sqrt(0.25 + 2 * Math.max(0, rem - 0.3))) : vmax;
+    let a = v.v < vt ? Math.min(1.2, (vt - v.v) / DT) : Math.max(-3, (vt - v.v) / DT);
+    if (bm.way === "out" && !bm.go) {
+      if (this.mergeGap(v)) bm.go = true;
+      else {
+        const d = path.len - (v.len + SimMotion.BAY_WAIT) - bm.s;
+        a = d <= 0.05 ? -v.v / DT : Math.min(a, -(v.v * v.v) / (2 * d));
+      }
+    }
+    v.acc = Math.max(-v.bmax, a); v.v0 = vmax; v.leader = null; v.gap = Infinity;
+    v.state = bm.way === "in" ? "parking" : bm.go ? "pulling out" : "waiting to pull out";
+    v.wait = v.v < 0.3 ? v.wait + DT : 0;
+  }
+  /** room to pull out (see sweepClear): with priority traffic lets it out, giving way it waits for a gap */
+  protected mergeGap(v: Vehicle): boolean {
+    const bm = v.bayMove!, giveWay = !!this.net.parking[bm.row].def.giveWay;
+    // ready: nothing standing in its way (a queue in a lane it crosses, another car manoeuvring there), so traffic
+    // may be asked to let it out — see bayHolds; then out once it has its gap
+    bm.ready = this.nothingStanding(v, bm.row, bm.bay);
+    return bm.ready && this.sweepClear(v, bm.row, bm.bay, "out", giveWay);
+  }
+  /** on a bay's way out, nothing standing still (a queue), and no other car on a bay's path over it */
+  protected nothingStanding(v: Vehicle, row: number, bay: number): boolean {
+    for (const sp of this.sweeps[row]?.[bay]?.out ?? []) {
+      for (const u of this.index.get(sp.piece.id) ?? []) if (u !== v && !u.dead && !u.bayMove && u.v < 0.5 && u.s - u.len < sp.s1 && u.s > sp.s0) return false;
+      for (const o of this.bayHolds.get(sp.piece.id) ?? []) if (o.v !== v && (o.v.bayMove?.way === "in" || o.v.bayMove?.go) && o.z0 < sp.s1 && o.z1 > sp.s0) return false;
+    }
+    return true;
+  }
+  /**
+   * Is the way into (or out of) a bay clear: on every lane and junction path the car's body would sweep, nothing
+   * in the stretch, nothing coming that couldn't stop before it (`giveWay`: nothing coming within a few seconds,
+   * as at a junction), no other car on a bay's path over it, and nothing about to come onto it from just before.
+   * Going in from its lane, what is behind it there doesn't matter (it turns away from it).
+   */
+  protected sweepClear(v: Vehicle, row: number, bay: number, way: "in" | "out", giveWay: boolean, skip?: Piece): boolean {
+    const coming = (u: Vehicle, d: number) => (giveWay ? d < Math.max(12, u.v * 4.5) : u.v > 0.5 && d < (u.v * u.v) / (2 * u.b) + 1);
+    for (const sp of this.sweeps[row]?.[bay]?.[way] ?? []) {
+      if (sp.piece === skip) continue;
+      const z0 = sp.s0, z1 = sp.s1;
+      for (const u of this.index.get(sp.piece.id) ?? []) {
+        if (u === v || u.dead || u.bayMove) continue;
+        if (way === "in" && sp.piece === v.piece && u.s <= v.s) continue;
+        if (u.s - u.len < z1 && u.s > z0) return false;
+        // (one let through the junction ahead doesn't stop for it — see think — so it has to be well clear)
+        if (u.s <= z0 && (coming(u, z0 - u.s) || ((u.granted || u.early?.granted) && z0 - u.s < Math.max(15, u.v * 4)))) return false;
+      }
+      for (const o of this.bayHolds.get(sp.piece.id) ?? []) if (o.v !== v && (o.v.bayMove?.way === "in" || o.v.bayMove?.go) && o.z0 < z1 && o.z1 > z0) return false;
+      // (a stretch near a lane's start: those about to come onto it, out of the junction or along the road before)
+      if (sp.piece.kind === "lane" && z0 < 60) {
+        const lane = sp.piece, e = lane.edge;
+        for (const u of this.vehicles) {
+          if (u === v || u.dead || u.bayMove) continue;
+          let d = Infinity;
+          if (u.piece.kind === "conn" && u.piece.outEdge === e && u.piece.outLane === lane.lane) {
+            // (in the junction heading for this lane: it won't stop in there, slow or not)
+            d = u.piece.len - u.s + z0;
+            if (d < 15) return false;
+          } else if (u.piece.kind === "lane" && u.route[u.ri + 1] === e && u.piece.len - u.s < 60) d = u.piece.len - u.s + z0;
+          if (d < Infinity && coming(u, d)) return false;
+        }
+      }
+    }
+    return true;
+  }
+  /** where a vehicle's front and rear are (see Sim.pose) */
+  abstract pose(v: Vehicle): { fx: number; fy: number; rx: number; ry: number };
+  /** is any part of a car on a bay's path (front, middle, rear) within the width of its lane */
+  protected bodyInLane(v: Vehicle): boolean {
+    const lane = v.piece as LanePiece, q = this.pose(v), reach = lane.edge.lw / 2 + v.width / 2 - 0.15;
+    for (const [x, y] of [[q.fx, q.fy], [(q.fx + q.rx) / 2, (q.fy + q.ry) / 2], [q.rx, q.ry]]) if (lane.poly.project(x, y).d < reach) return true;
+    return false;
+  }
+  /** along the bay's path: into the bay (the lane left behind once its rear is clear), or out and into the lane */
+  protected bayMoveOn(v: Vehicle) {
+    const bm = v.bayMove!, row = this.net.parking[bm.row], acc = row.access[bm.bay], path = bm.way === "in" ? acc.inPath : acc.outPath;
+    v.v = Math.max(0, v.v + v.acc * DT);
+    bm.s = Math.min(path.len, bm.s + v.v * DT);
+    if (bm.way === "in") {
+      // (the lane is left behind once no part of the car is in it any more)
+      if (bm.inLane && bm.s > 1 && !this.bodyInLane(v)) bm.inLane = false;
+      if (bm.s >= path.len - 0.05) {
+        // parked: in the bay until its stay is over
+        const st = this.parks[bm.row];
+        st.until[bm.bay] = this.tick + this.stayTicks(row.def.stay); st.parked++;
+        v.bayMove = null; v.park = null; this.kill(v, "arrived");
+      }
+      return;
+    }
+    // (in the lane's traffic once it has its gap and comes into the lane: waiting, it is still in its bay)
+    if (!bm.inLane && bm.go && this.bodyInLane(v)) bm.inLane = true;
+    if (bm.s >= path.len) {
+      // in the lane: the bay is free, and it drives on (from a standstill after backing out)
+      this.parks[bm.row].until[bm.bay] = 0;
+      v.bayMove = null; if (acc.reverse) v.v = 0;
     }
   }
   protected busArrive(v: Vehicle) {
