@@ -76,7 +76,6 @@ export function sanitizeNetwork(input: unknown): Network {
       ...(paintOf(n.paint) ?? {}),
       ...(n.laneLines === true ? { laneLines: true } : {}),
       ...(n.align === true ? { align: true } : {}),
-      ...(n.fuel === true ? { fuel: true } : {}),
       ...(typeof n.peds === "number" && isFinite(n.peds) && n.peds > 0 ? { peds: Math.round(Math.min(3000, n.peds)) } : {}),
       signal: {
         green: num(s.green, 3, 180, DEFAULT_SIGNAL.green), yellow: num(s.yellow, 1, 10, DEFAULT_SIGNAL.yellow),
@@ -309,7 +308,13 @@ export function sanitizeSettings(input: unknown): PlanSettings {
     ...(params ? { params } : {}),
     ...(revHold(s.revHold) ?? {}),
     ...(s.fuel === true ? { fuel: true } : {}),
+    ...(fuelNodes(s.fuelNodes) ?? {}),
   };
+}
+function fuelNodes(v: unknown): { fuelNodes: string[] } | null {
+  if (!Array.isArray(v)) return null;
+  const out = [...new Set(v.filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 64))].slice(0, 2000);
+  return out.length ? { fuelNodes: out } : null;
 }
 function revHold(v: unknown): { revHold: Record<string, "closed" | "1" | "2"> } | null {
   if (!v || typeof v !== "object") return null;

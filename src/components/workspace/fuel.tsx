@@ -1,10 +1,10 @@
 "use client";
 
-import { useSubject } from "subjecto/react";
+import { useDeepSubject, useSubject } from "subjecto/react";
 import { Switch } from "@/components/ui/switch";
 import { FUEL_APPROACH } from "@/engine/sim";
 import type { Network, NodeDef } from "@/engine/types";
-import { setSettings, settings$, stats$ } from "@/state/store";
+import { setSettings, settings$, stats$, ui } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import * as ops from "@/state/ops";
 import { Section, compass } from "./fields";
@@ -56,10 +56,16 @@ export function PlanFuelSection() {
 }
 
 /** Junction inspector: measure fuel here, and what was burnt on the roads leading in and in the junction */
-export function JunctionFuelSection({ net, node, nodeIdx, set }: { net: Network; node: NodeDef; nodeIdx: number; set: (patch: Partial<NodeDef>) => void }) {
+export function JunctionFuelSection({ net, node, nodeIdx }: { net: Network; node: NodeDef; nodeIdx: number }) {
   useSubject(stats$); // live readings (~4×/s)
   const [settings] = useSubject(settings$);
-  const sim = simController.sim, all = settings.fuel === true, on = all || node.fuel === true;
+  const [readOnly] = useDeepSubject(ui, "readOnly");
+  const sim = simController.sim, all = settings.fuel === true, mine = settings.fuelNodes?.includes(node.id) ?? false, on = all || mine;
+  // (a plan setting: the running traffic carries on, measuring here from now)
+  const toggle = (v: boolean) => {
+    const rest = (settings.fuelNodes ?? []).filter(id => id !== node.id), next = v ? [...rest, node.id] : rest;
+    setSettings({ ...settings, fuelNodes: next.length ? next : undefined });
+  };
   const f = on && sim ? sim.junctionFuel(nodeIdx) : null;
   const ins = simController.compiled.nodes[nodeIdx]?.arms.filter(a => a.inEdge).map(a => a.inEdge!) ?? [];
   const name = (i: number) => {
@@ -71,7 +77,7 @@ export function JunctionFuelSection({ net, node, nodeIdx, set }: { net: Network;
     <Section title="Fuel">
       <label className="flex items-center justify-between gap-2 text-sm">
         <span>Measure fuel at this junction</span>
-        <Switch checked={on} disabled={all} onCheckedChange={v => set({ fuel: v || undefined })} aria-label="Measure fuel at this junction" />
+        <Switch checked={on} disabled={all || readOnly} onCheckedChange={toggle} aria-label="Measure fuel at this junction" />
       </label>
       {all && <p className="text-xs text-muted-foreground">Measured at every junction: fuel is on for the whole plan (Traffic panel).</p>}
       {on && (f ? (

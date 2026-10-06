@@ -170,7 +170,7 @@ export interface Stats {
  */
 export interface FuelStats { total: number; idle: number; km: number; idleTime: number; trips: number; tripFuel: number; since: number }
 
-/** fuel measured at one junction since `since` (s): what vehicles burnt on its approaches and in it (see NodeDef.fuel) */
+/** fuel measured at one junction since `since` (s): what vehicles burnt on its approaches and in it (see PlanSettings.fuelNodes) */
 export interface JunctionFuel {
   /** litres in all, of it standing still, of it inside the junction; vehicle-seconds standing still on the approaches */
   total: number; idle: number; inside: number; idleTime: number;

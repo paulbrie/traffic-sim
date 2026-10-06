@@ -11,6 +11,8 @@ import { sanitizeNetwork, sanitizeSettings } from "../src/engine/validate";
 import { DEFAULT_PARAMS } from "../src/engine/params";
 import { polyCentroid } from "../src/engine/buildings";
 import type { Network } from "../src/engine/types";
+import type { Piece } from "../src/engine/compile";
+import type { Vehicle } from "../src/engine/sim";
 import { customizePhases, addPhase, approachesTo, toConnectorPhases, setConnGreen, setLaneGreen, reverseLink, splitLink, linkPoint, nodeById, addSlipLane, mergeLinks, smoothBetween } from "../src/state/ops";
 import { buildRoadGeo } from "../src/render/geometry";
 import { routeBetween, routeShape } from "../src/engine/route";
@@ -1037,4 +1039,49 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const none = plain.vehicles.every(v => !v.aggressive);
   console.log(`aggressive drivers: ${aggr.length} of ${all.length} cars (${(share * 100).toFixed(0)}% for 30%), fastest ${fastest.toFixed(1)} km/h on a 50 limit (up to ${(50 * 1.25).toFixed(1)}), others at most ${calmTop.toFixed(1)}; none by default ${none} | ok ${ok && none}`);
   if (!(ok && none)) process.exit(1);
+}
+
+// fuel: observing only; per junction switched on live (a setting); roads joined at plain points count towards the junction ahead
+{
+  const net = sampleTown();
+  const off = new Sim(net, { cars: 140, trucks: 14, seed: 7 }), on = new Sim(net, { cars: 140, trucks: 14, seed: 7, fuel: true });
+  off.run(3000); on.run(3000);
+  const same = off.stats.trips === on.stats.trips && off.stats.avgSpeed === on.stats.avgSpeed && off.vehicles.length === on.vehicles.length && off.stats.fuel === undefined;
+  const F = on.stats.fuel!, per100 = (100 * F.total) / F.km;
+  // a junction switched on mid-run: measured from then, nothing else
+  const j = on.net.nodes.find(n => n.def.control === "lights")!;
+  const live = new Sim(net, { cars: 140, trucks: 14, seed: 7 });
+  live.run(1000);
+  const before = live.junctionFuel(j.idx);
+  live.settings = { ...live.settings, fuelNodes: [j.def.id] };
+  live.run(2000);
+  const jf = live.junctionFuel(j.idx)!;
+  const liveOk = before === null && jf.since > 99 && jf.total > 0 && jf.idle > 0 && jf.crossed > 0 && live.stats.fuel === undefined && live.net.nodes.every(n => n.idx === j.idx || live.junctionFuel(n.idx) === null) && live.stats.trips === off.stats.trips;
+  // the whole plan switched off and on: every vehicle's tally starts again
+  on.settings = { ...on.settings, fuel: false }; on.run(10); on.settings = { ...on.settings, fuel: true }; on.run(1);
+  const reset = on.vehicles.every(v => v.dead || (v.fuel ?? 0) < 5);
+  // a road split at a plain point just before a junction: fuel on both halves counts there
+  const lk = net.links.find(l => l.to === j.def.id && l.lanesF > 0 && !l.c1)!;
+  const A = nodeById(net, lk.from)!, B = nodeById(net, lk.to)!, len = Math.hypot(B.x - A.x, B.y - A.y);
+  const [split] = splitLink(net, lk.id, 1 - 60 / len, linkPoint(lk, A, B, 1 - 60 / len));
+  // (the half next to the junction starts at the new road point; the far half and the point itself are within its approach)
+  const nearLink = split.links.find(l => l.to === j.def.id && !net.nodes.some(n => n.id === l.from))!;
+  const farLink = split.links.find(l => l.to === nearLink.from)!;
+  class Probe extends Sim {
+    onFar = 0; onPoint = 0; missed = 0;
+    protected burnFuel(v: Vehicle, v1: number, p: Piece, s: number) {
+      const n = this.net.nodeById.get(j.def.id)!, k = n.arms.filter(a => a.inEdge).findIndex(a => a.inEdge!.link.id === nearLink.id);
+      const far = p.kind === "lane" && p.edge.link.id === farLink.id && p.edge.dir === 1, point = p.kind === "conn" && p.outEdge.link.id === nearLink.id && p.outEdge.dir === 1;
+      if (!far && !point) return super.burnFuel(v, v1, p, s);
+      const before = this.junctionFuel(n.idx)!.approaches[k].total;
+      super.burnFuel(v, v1, p, s);
+      if (v.broken) return;
+      if (this.junctionFuel(n.idx)!.approaches[k].total > before) { if (far) this.onFar++; else this.onPoint++; } else this.missed++;
+    }
+  }
+  const probe = new Probe(split, { cars: 140, trucks: 14, seed: 7, fuelNodes: [j.def.id] });
+  probe.run(3000);
+  const ok = same && per100 > 5 && per100 < 40 && F.idle > 0 && F.idle < F.total && liveOk && reset && probe.onFar > 0 && probe.onPoint > 0 && probe.missed === 0;
+  console.log(`fuel: same traffic ${same}, ${F.total.toFixed(1)} L (${(100 * F.idle / F.total).toFixed(0)}% standing still), ${per100.toFixed(1)} L/100 km; one junction live ${liveOk} (${jf.idle.toFixed(2)} L idle, ${jf.crossed} crossed); tallies reset ${reset}; split road: counted at the junction ${probe.onFar} ticks on the far half, ${probe.onPoint} crossing the road point, missed ${probe.missed} | ok ${ok}`);
+  if (!ok) process.exit(1);
 }

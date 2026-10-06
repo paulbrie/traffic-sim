@@ -211,7 +211,7 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
       {degree >= 2 && node.control !== "roundabout" && <JunctionShapeSection net={net} node={node} />}
       {degree >= 2 && node.control !== "roundabout" && <LaneConnectionsSection net={net} node={node} />}
       {ref && cn && <JunctionLive net={net} nodeIdx={cn.idx} />}
-      {ref && cn && <JunctionFuelSection net={net} node={node} nodeIdx={cn.idx} set={set} />}
+      {ref && cn && <JunctionFuelSection net={net} node={node} nodeIdx={cn.idx} />}
       {ref && cn && <Section title="Event log"><JunctionEventLog nodeId={node.id} refName={ref} /></Section>}
       {degree === 2 && !crossing && (
         <Section title="Road joint">
