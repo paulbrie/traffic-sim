@@ -37,9 +37,15 @@ export interface SimParams {
   breakdownsPerHour: number;
   /** a broken-down or wrecked vehicle stays on the road this long, then is towed away (s) */
   brokenTowAfter: number;
+  // fuel (only used when fuel is measured: PlanSettings.fuel or NodeDef.fuel)
+  /** fuel a car's engine burns idling (L/h); trucks and buses */
+  fuelIdleCar: number;
+  fuelIdleTruck: number;
+  /** share of vehicles whose engine switches off while standing still (%) */
+  stopStartShare: number;
 }
 
-export type ParamGroup = "Drivers" | "Trucks" | "Lane changes" | "Junctions" | "Pedestrians" | "Stuck vehicles" | "Breakdowns";
+export type ParamGroup = "Drivers" | "Trucks" | "Lane changes" | "Junctions" | "Pedestrians" | "Stuck vehicles" | "Breakdowns" | "Fuel";
 
 export interface ParamInfo {
   key: keyof SimParams;
@@ -77,10 +83,13 @@ export const PARAMS: ParamInfo[] = [
   { key: "rerouteAfter", group: "Stuck vehicles", label: "Look for another way after", unit: "s", min: 10, max: 300, step: 5, def: 40, help: "A driver waiting this long at a junction looks for another route." },
   { key: "breakdownsPerHour", group: "Breakdowns", label: "Engine failures", unit: "per hour", min: 0, max: 120, step: 1, def: 0, help: "Vehicles whose engine fails, across the plan: each rolls to a stop with its hazard lights on and stays there, blocking its lane; others go round it where there is another lane, or wait." },
   { key: "brokenTowAfter", group: "Breakdowns", label: "Broken-down vehicles towed after", unit: "s", min: 30, max: 3600, step: 30, def: 600, help: "How long a broken-down (or wrecked) vehicle stays on the road before it is towed away." },
+  { key: "fuelIdleCar", group: "Fuel", label: "Car idling", unit: "L/h", min: 0.3, max: 2.5, step: 0.05, def: 0.8, help: "Fuel a car burns standing still with its engine running (modern petrol cars about 0.6–1 L/h). Driving adds to this with speed and acceleration." },
+  { key: "fuelIdleTruck", group: "Fuel", label: "Truck and bus idling", unit: "L/h", min: 0.5, max: 6, step: 0.1, def: 2.5, help: "Fuel a truck or bus burns standing still with its engine running." },
+  { key: "stopStartShare", group: "Fuel", label: "Vehicles with stop-start", unit: "%", min: 0, max: 100, step: 1, def: 0, help: "Share of vehicles whose engine switches off while they stand still (at a red light, in a queue): they burn nothing then." },
   { key: "towAfter", group: "Stuck vehicles", label: "Tow away after", unit: "s", min: 30, max: 900, step: 10, def: 150, help: "A vehicle stuck this long is removed (counted as towed)." },
 ];
 
-export const PARAM_GROUPS: ParamGroup[] = ["Drivers", "Trucks", "Lane changes", "Junctions", "Pedestrians", "Stuck vehicles", "Breakdowns"];
+export const PARAM_GROUPS: ParamGroup[] = ["Drivers", "Trucks", "Lane changes", "Junctions", "Pedestrians", "Stuck vehicles", "Breakdowns", "Fuel"];
 
 export const DEFAULT_PARAMS: SimParams = Object.fromEntries(PARAMS.map(p => [p.key, p.def])) as unknown as SimParams;
 

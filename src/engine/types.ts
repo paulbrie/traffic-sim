@@ -91,6 +91,11 @@ export interface NodeDef {
    * sideways (fading out along it) so they continue exactly where that direction's lanes are.
    */
   align?: boolean;
+  /**
+   * Measure fuel at this junction: what vehicles burn on the last FUEL_APPROACH metres of the roads
+   * leading in and crossing it, and how much of that standing still (waiting for green, queuing).
+   */
+  fuel?: boolean;
 }
 
 /** where one incoming lane goes on a turn set by hand: an outgoing lane, several, or none */
@@ -417,6 +422,8 @@ export interface PlanSettings {
    * corridor's mode until handed back. Kept with the plan, so a restart or a reload keeps them.
    */
   revHold?: Record<string, "closed" | "1" | "2">;
+  /** measure every vehicle's fuel use (and at every junction); off = only at junctions with `fuel` on */
+  fuel?: boolean;
 }
 
 export const DEFAULT_SIGNAL: SignalTiming = { green: 18, yellow: 3, allRed: 2, minGreen: 6, actuated: true };

@@ -9,7 +9,7 @@
 import { pieceLevel, pieceZ, type CNode, type Compiled } from "../compile";
 import { isJunction } from "../refs";
 import { signalAspect, type Aspect } from "../signals";
-import { DT, type JunctionEvent, type Kind, type RevStateCode, type Stats, type TestTrip, type Vehicle } from "./base";
+import { DT, type JunctionEvent, type JunctionFuel, type Kind, type RevStateCode, type Stats, type TestTrip, type Vehicle } from "./base";
 
 /** a pedestrian crossing right now: its arm, people waiting, people crossing and how far across (0..1) */
 export interface PedView { arm: number; waiting: number; crossing: number; progress: number }
@@ -36,6 +36,8 @@ export interface VehicleDetail {
   a: number; b: number; pax: number; cap: number;
   /** an aggressive driver (wants to go over the limit), and how much faster than the limit it would like to go (×) */
   aggressive: boolean; pref: number;
+  /** fuel burnt (litres), and of it standing still in traffic, when the whole plan's fuel is measured; `partial` = it set off before that was switched on */
+  fuel: { total: number; idle: number; partial: boolean } | null;
   nextTurn: { node: string; turn: "L" | "S" | "R" | "U"; lo: number; hi: number } | null;
   /** route ahead as x, y pairs */
   route: number[];
@@ -72,6 +74,8 @@ export interface Snapshot {
   exited?: [string, number][];
   /** per entry / exit point: vehicles per hour in and out (last 5 minutes) */
   gateRates?: [string, number, number][];
+  /** fuel at the junctions being measured, by node index */
+  fuel?: [number, JunctionFuel][];
   /** traffic counters by edge key ("linkId:dir") */
   counters?: [string, CounterStats][];
   /** transit flows by flow id */
@@ -160,6 +164,7 @@ export class SnapshotWriter {
       for (let i = 0; i < nl; i++) if (lanes[i * 2]) lanes[i * 2 + 1] /= lanes[i * 2];
       snap.lanes = lanes;
       transfer.push(lanes.buffer as ArrayBuffer);
+      snap.fuel = sim.net.nodes.flatMap(nd => { const f = isJunction(nd) ? sim.junctionFuel(nd.idx) : null; return f ? [[nd.idx, f] as [number, JunctionFuel]] : []; });
       snap.counters = sim.net.edges.flatMap(e => { const c = sim.counterStats(e.idx); return c ? [[e.key, c] as [string, CounterStats]] : []; });
     }
     snap.cycles = watch.nodes.filter(k => k >= 0 && k < N).map(k => [k, sim.lightCycles(k)]);
@@ -187,6 +192,7 @@ function vehicleDetail(sim: Sim, v: Vehicle): VehicleDetail {
     lane: e ? v.lane : null, lanes: e ? e.n : null,
     heading: v.dest.kind === "gateway" ? "leaving the plan" : v.dest.kind === "stop" ? `stop ${v.dest.stop.def.name}` : `${v.dest.edge.link.name || "a road"}`,
     wait: v.wait, trip: (sim.tick - v.bornT) * DT, jam: v.jam, laneChanges: v.laneChanges, reroutes: v.reroutes, a: v.a, b: v.b, pax: v.pax, cap: v.cap, aggressive: v.aggressive, pref: v.pref,
+    fuel: sim.stats.fuel ? { total: (v.fuel ?? 0) / 1000, idle: (v.fuelIdle ?? 0) / 1000, partial: v.bornT * DT < sim.stats.fuel.since } : null,
     nextTurn: nt ? { node: nt.node.def.id, turn: nt.move.turn, lo: nt.move.lo, hi: nt.move.hi } : null,
     route: sim.routeAhead(v, 800),
   };
@@ -223,6 +229,7 @@ export class SimMirror {
   vehicle: VehicleDetail | null = null;
   private snap: Snapshot | null = null;
   private junctions: (JunctionStats | null)[] = [];
+  private fuel = new Map<number, JunctionFuel>();
   private cycles = new Map<number, LightCycles>();
   private reserved: Float32Array[] = [];
 
@@ -252,6 +259,7 @@ export class SimMirror {
     if (s.exited) this.exited = new Map(s.exited);
     if (s.gateRates) this.gateRates = new Map(s.gateRates.map(([id, a, b]) => [id, [a, b]]));
     if (s.counters) this.counters = new Map(s.counters);
+    if (s.fuel) this.fuel = new Map(s.fuel);
     if (s.flows) this.flows = new Map(s.flows);
     if (s.zoneFlows) this.zoneFlows = new Map(s.zoneFlows);
     if (s.tests) this.tests = s.tests;
@@ -292,6 +300,9 @@ export class SimMirror {
   junctionStats(nodeIdx: number): JunctionStats {
     return this.junctions[nodeIdx] ?? { through: 0, perMin: 0, waiting: 0, approaches: [] };
   }
+
+  /** fuel measured at a junction (null = not measured, or no reading yet) */
+  junctionFuel(nodeIdx: number): JunctionFuel | null { return this.fuel.get(nodeIdx) ?? null; }
 
   /** light cycles of a junction the page watches (empty until the next snapshot after it asked) */
   lightCycles(nodeIdx: number): LightCycles { return this.cycles.get(nodeIdx) ?? []; }

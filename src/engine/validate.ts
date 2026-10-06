@@ -76,6 +76,7 @@ export function sanitizeNetwork(input: unknown): Network {
       ...(paintOf(n.paint) ?? {}),
       ...(n.laneLines === true ? { laneLines: true } : {}),
       ...(n.align === true ? { align: true } : {}),
+      ...(n.fuel === true ? { fuel: true } : {}),
       ...(typeof n.peds === "number" && isFinite(n.peds) && n.peds > 0 ? { peds: Math.round(Math.min(3000, n.peds)) } : {}),
       signal: {
         green: num(s.green, 3, 180, DEFAULT_SIGNAL.green), yellow: num(s.yellow, 1, 10, DEFAULT_SIGNAL.yellow),
@@ -307,6 +308,7 @@ export function sanitizeSettings(input: unknown): PlanSettings {
     ...(typeof s.through === "number" && isFinite(s.through) ? { through: Math.min(1, Math.max(0, s.through)) } : {}),
     ...(params ? { params } : {}),
     ...(revHold(s.revHold) ?? {}),
+    ...(s.fuel === true ? { fuel: true } : {}),
   };
 }
 function revHold(v: unknown): { revHold: Record<string, "closed" | "1" | "2"> } | null {

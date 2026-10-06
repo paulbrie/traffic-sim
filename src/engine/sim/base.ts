@@ -66,6 +66,8 @@ export interface Vehicle {
   goal: Dest | null;
   /** turning-proportion decisions already drawn, by edge index */
   splits?: Map<number, Edge>;
+  /** fuel burnt so far (mL), and of it standing still in traffic, while the whole plan's fuel is measured */
+  fuel?: number; fuelIdle?: number;
 }
 
 /** a reversible corridor's middle lane: closed, open to direction 1, closing (clearing) from direction 1, open to 2, closing from 2 */
@@ -157,7 +159,33 @@ export interface Stats {
   avgSpeed: number; stopped: number; tripsPerMin: number;
   trips: number; towed: number; boarded: number; laneChanges: number;
   history: { t: number; speed: number; stopped: number }[];
+  /** the whole plan's fuel use (PlanSettings.fuel on), see FuelStats */
+  fuel?: FuelStats;
 }
+
+/**
+ * Fuel burnt across the plan since it was switched on (litres): all of it, the part standing still
+ * in traffic (waiting at lights, queuing), the distance driven (km) and vehicle-seconds standing
+ * still; trips started and finished while it was on, and their fuel; when it was switched on (s).
+ */
+export interface FuelStats { total: number; idle: number; km: number; idleTime: number; trips: number; tripFuel: number; since: number }
+
+/** fuel measured at one junction since `since` (s): what vehicles burnt on its approaches and in it (see NodeDef.fuel) */
+export interface JunctionFuel {
+  /** litres in all, of it standing still, of it inside the junction; vehicle-seconds standing still on the approaches */
+  total: number; idle: number; inside: number; idleTime: number;
+  /** vehicles that crossed while it was measured */
+  crossed: number;
+  since: number;
+  /** per road leading in (in the order of junctionStats().approaches): litres, and of it standing still */
+  approaches: { total: number; idle: number }[];
+}
+
+/** fuel per junction is measured on this much of each road leading in (m before the stop line) */
+export const FUEL_APPROACH = 300;
+
+/** a junction's fuel tallies (mL; idle time in s); `since` = tick measuring began, -1 = not measured */
+export interface NodeFuel { since: number; through0: number; inside: number; idleTime: number }
 
 export const KIND_PARAMS = (kind: Kind, r: () => number, P: SimParams = resolveParams()) =>
   kind === "car"
@@ -269,6 +297,12 @@ export abstract class SimBase {
   /** vehicles that crossed each node so far, and the ticks of recent crossings (last minute) */
   protected nodeThrough: number[] = [];
   protected nodeRecent: number[][] = [];
+  // fuel (see ./fuel and Sim.burnFuel): per edge burnt on its last FUEL_APPROACH m (mL), of it standing still; per node tallies
+  protected edgeFuel: Float64Array;
+  protected edgeIdle: Float64Array;
+  protected nodeFuel: NodeFuel[];
+  /** whether the whole plan was measured on the previous tick (to notice it being switched) */
+  protected fuelAll = false;
   /** reversible corridors, parallel to net.corridors */
   protected revs: RevState[] = [];
   /** a reversible middle lane open to edge `e`'s direction: vehicles may change into it */
@@ -319,6 +353,9 @@ export abstract class SimBase {
     this.flowState = this.net.flows.map(() => ({ sent: 0, arrived: 0, diverted: 0, towed: 0, travelSum: 0, backlog: 0, noRoute: 0 }));
     this.zoneFlowState = this.net.zoneFlows.map(() => ({ sent: 0, arrived: 0, diverted: 0, towed: 0, travelSum: 0, backlog: 0, noRoute: 0 }));
     this.counters = this.net.edges.map(e => (e.link.counter ? { total: 0, cars: 0, trucks: 0, buses: 0, speedSum: 0, recent: [] } : null));
+    this.edgeFuel = new Float64Array(this.net.edges.length);
+    this.edgeIdle = new Float64Array(this.net.edges.length);
+    this.nodeFuel = this.net.nodes.map(() => ({ since: -1, through0: 0, inside: 0, idleTime: 0 }));
     this.revs = this.net.corridors.map(c => {
       const d = c.def, first: RevStateCode = d.mode === "timer" ? (d.open1 > 0 ? 1 : d.open2 > 0 ? 3 : 0) : d.mode === "manual" ? (d.initial === "1" ? 1 : d.initial === "2" ? 3 : 0) : 0;
       return { state: first, since: 0, hold: null, last: first === 3 ? 2 : first === 1 ? 1 : 2, inside: 0, density: [0, 0] };
@@ -452,6 +489,9 @@ export abstract class SimBase {
       t.time = (this.tick - v.bornT) * DT;
     }
     if (why === "exit" || why === "arrived") { this.stats.trips++; this.tripLog.push(this.tick); }
+    // (a trip's fuel counts when the whole trip was measured)
+    const F = this.stats.fuel;
+    if (F && (why === "exit" || why === "arrived") && v.bornT * DT >= F.since) { F.trips++; F.tripFuel += (v.fuel ?? 0) / 1000; }
     else if (why === "towed") this.stats.towed++;
     if (v.flow >= 0) {
       const f = this.flowState[v.flow], to = this.net.flows[v.flow].to;

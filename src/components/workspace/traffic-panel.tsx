@@ -17,6 +17,7 @@ import { EventLogPanel } from "./event-log";
 import { FlowsTable } from "./flows";
 import { RouteTracer } from "./route-tracer";
 import { SimSettingsButton } from "./sim-settings";
+import { PlanFuelSection, fmtFuel } from "./fuel";
 import { ZonesSection } from "./zones";
 import { NumberField, Section, compass } from "./fields";
 
@@ -89,6 +90,7 @@ export function TrafficPanel() {
           </>
         ) : <p className="text-sm text-muted-foreground">Press play to run traffic on this plan.</p>}
       </Section>
+      <PlanFuelSection />
       <RouteTracer />
       <FlowsTable />
       <ZonesSection />
@@ -199,7 +201,9 @@ function JunctionTable() {
   const sim = simController.sim, c = simController.compiled;
   const refs = junctionRefs(c);
   if (!refs.size) return null;
-  const rows = c.nodes.filter(n => refs.has(n.def.id)).map(n => ({ n, ref: refs.get(n.def.id)!, st: sim ? sim.junctionStats(n.idx) : null }));
+  const rows = c.nodes.filter(n => refs.has(n.def.id)).map(n => ({ n, ref: refs.get(n.def.id)!, st: sim ? sim.junctionStats(n.idx) : null, fuel: sim ? sim.junctionFuel(n.idx) : null }));
+  // (a column for fuel burnt standing still, when some junction is measured)
+  const fuel = rows.some(r => r.fuel);
   if (sim) rows.sort((a, b) => b.st!.waiting - a.st!.waiting);
   const ctl = { priority: "priority", free: "free", stop: "all-way stop", lights: "lights", roundabout: "roundabout" } as const;
   return (
@@ -207,10 +211,10 @@ function JunctionTable() {
       <div className="overflow-hidden rounded-md border text-xs">
         <table className="w-full">
           <thead className="bg-muted/50 text-left text-[10px] text-muted-foreground">
-            <tr><th className="px-2 py-1 font-medium">Ref</th><th className="px-2 py-1 font-medium">Control</th><th className="px-2 py-1 text-right font-medium">/min</th><th className="px-2 py-1 text-right font-medium">Waiting</th></tr>
+            <tr><th className="px-2 py-1 font-medium">Ref</th><th className="px-2 py-1 font-medium">Control</th><th className="px-2 py-1 text-right font-medium">/min</th><th className="px-2 py-1 text-right font-medium">Waiting</th>{fuel && <th className="px-2 py-1 text-right font-medium" title="Fuel burnt standing still on the roads leading in">Idle fuel</th>}</tr>
           </thead>
           <tbody>
-            {rows.map(({ n, ref, st }) => (
+            {rows.map(({ n, ref, st, fuel: jf }) => (
               <tr
                 key={n.def.id} className="cursor-pointer border-t hover:bg-muted/50"
                 onClick={() => { select({ kind: "node", id: n.def.id }); sendView("focus", n.pos.x, n.pos.y); ui.getValue().panel = "inspect"; }}
@@ -219,6 +223,7 @@ function JunctionTable() {
                 <td className="px-2 py-1 text-muted-foreground">{ctl[n.def.control]}</td>
                 <td className="px-2 py-1 text-right font-mono tabular">{st ? st.perMin.toFixed(0) : "–"}</td>
                 <td className={"px-2 py-1 text-right font-mono tabular" + (st && st.waiting >= 12 ? " font-semibold text-destructive" : "")}>{st ? st.waiting : "–"}</td>
+                {fuel && <td className="px-2 py-1 text-right font-mono tabular">{jf ? fmtFuel(jf.idle) : "–"}</td>}
               </tr>
             ))}
           </tbody>
