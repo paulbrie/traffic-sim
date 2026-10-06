@@ -79,6 +79,8 @@ export interface UiState {
   tableLayer: LayerId;
   /** the data table under the map */
   dataview: boolean;
+  /** the simulation's console under the map: vehicles towed or taken off, vehicles overlapping */
+  console: boolean;
   /** opened with view-only access: edits are blocked and nothing is saved */
   readOnly: boolean;
   /** junction editor: the junction whose outline is being edited, and a painted area being drawn */
@@ -117,6 +119,7 @@ export const ui = new DeepSubject<UiState>(
     layers: LAYERS.map(l => l.id),
     tableLayer: "roads",
     dataview: false,
+    console: false,
     readOnly: false,
     shape: { edit: null, paint: null },
     connectFrom: null,

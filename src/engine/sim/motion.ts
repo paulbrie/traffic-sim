@@ -2,6 +2,7 @@ import type { CLine, CNode, Conn, Edge, LanePiece, Piece } from "../compile";
 import { laneAllowed } from "../compile";
 import { DT, LOOK, NO_PIECES, type Dest, type Vehicle } from "./base";
 import { SimJunctions } from "./junctions";
+import { accessLen } from "../parking";
 
 /** Driving: each vehicle's acceleration against what lies ahead (IDM), lane changes (MOBIL-style), moving along pieces, buses at their stops. */
 export abstract class SimMotion extends SimJunctions {
@@ -16,11 +17,12 @@ export abstract class SimMotion extends SimJunctions {
     }
     v.lcCool -= DT;
     if (v.lcT > 0) v.lcT = Math.max(0, v.lcT - DT / 1.4);
+    if (v.blendT) v.blendT = Math.max(0, v.blendT - DT);
     if (v.bayMove) { this.bayThink(v); return; }
     if (v.dwell > 0) { v.state = "boarding"; v.acc = 0; v.leader = null; v.gap = Infinity; return; }
 
     let acc = -v.s, gap = Infinity, lv = 0, leader: Vehicle | null = null;
-    let stopD = Infinity, stopKind: "junction" | "stop" | null = null, brake = Infinity;
+    let stopD = Infinity, stopKind: "junction" | "stop" | null = null, brake = Infinity, tailGap = Infinity, tailV = 0;
     let pendConn: Conn | null = null, pendD = 0;
     // the next junction, when it is not the end of the road the vehicle is on (a short road after the
     // junction it is crossing or let into, or a joint between road segments): it may ask early
@@ -75,6 +77,14 @@ export abstract class SimMotion extends SimJunctions {
             if (pick) { lv = pick.v; leader = pick; }
           }
         }
+        // (the rear of one whose front has gone on into the junction at the end of this road, or through it:
+        // followed as a leader would be, though it isn't the vehicle's leader — in the junction's eyes it is
+        // the one ahead — and on a road only: in a junction, who goes where is the junction's to settle)
+        if (p.kind === "lane") for (const z of this.tails.get(p.id) ?? []) {
+          if (z.v === v || (first && p.len <= v.s)) continue;
+          const gg = acc + z.s0;
+          if (gg < tailGap) { tailGap = gg; tailV = z.v.v; }
+        }
         const vp = v.piece;
         const mergingHere = vp.kind === "conn" && vp.role === "entry" && p.kind === "ring" && vp.node === p.node && ringOf(p.node, vp.ringLane)[vp.arm].between === p;
         if (p.kind === "ring" && p.part === "between" && !first && !mergingHere) {
@@ -117,15 +127,29 @@ export abstract class SimMotion extends SimJunctions {
         if (d > -0.5 && d < stopD) { stopD = d; stopKind = "stop"; }
       }
       // a car on a bay's path (going in, or coming out): keep off the stretch it sweeps, if there is room to stop
-      // (not in a junction, nor on the road into one it has been let through: it would stop in the junction or hold
-      // its path there, keeping others waiting — a car only pulls out when those are clear of it; nor once its
-      // front is well into the stretch: it carries on through)
-      if (this.bayHolds.size && !v.bayMove && v.piece.kind === "lane" && !(p.kind === "lane" && (v.granted || v.early?.granted))) for (const z of this.bayHolds.get(p.id) ?? []) {
+      // (not in a junction: it would stop in there, keeping others waiting — a car only pulls out when those are
+      // clear of it; nor once its front is well into the stretch: it carries on through. One let through the
+      // junction ahead stops only for a car already on its way in or out: for one only waiting to go, it would
+      // stop short of the junction holding its path there)
+      if (this.bayHolds.size && !v.bayMove && v.piece.kind === "lane") for (const z of this.bayHolds.get(p.id) ?? []) {
+        if (p.kind === "lane" && (v.granted || v.early?.granted) && !(z.v.bayMove?.way === "in" || z.v.bayMove?.go)) continue;
         // (one only waiting to pull out can't go while anything is in its way: a car at its stretch already drives on
         // through; one on its way is stopped for unless well into the stretch)
-        if (z.v === v || (first && v.s > z.z0 + (z.v.bayMove?.way === "in" || z.v.bayMove?.go ? 0.5 : -0.3))) continue;
+        if (z.v === v) continue;
+        const moving = z.v.bayMove?.way === "in" || !!z.v.bayMove?.go;
+        if (first && v.s > z.z0 + (moving ? 0.5 : -0.3)) {
+          // (well into the stretch already: it stops behind the car coming out ahead of it, if it is ahead)
+          const sp = moving ? this.bodyAlong(z.v, p as LanePiece) : null;
+          if (sp && sp[0] > v.s - 0.5) { const d = Math.max(0.05, acc + sp[0] - 0.5); if (d < stopD) { stopD = d; stopKind = "stop"; } }
+          continue;
+        }
         const d = Math.max(0.05, acc + z.z0 - 0.5);
-        if (d < (v.v * v.v) / (2 * v.b) * 0.8) continue;
+        if (d < (v.v * v.v) / (2 * v.b) * 0.8) {
+          // (too close to stop short of the stretch comfortably: short of the car on it, whatever it takes)
+          const sp = moving ? this.bodyAlong(z.v, p as LanePiece) : null;
+          if (sp) { const db = Math.max(0.05, acc + sp[0] - 0.5); if (db < stopD) { stopD = db; stopKind = "stop"; } }
+          continue;
+        }
         if (d < stopD) { stopD = d; stopKind = "stop"; }
       }
       // a crossing drawn by hand that pedestrians are on, or waiting at (unless too close to stop for
@@ -184,6 +208,7 @@ export abstract class SimMotion extends SimJunctions {
       const a2 = v.a * (free - q2 * q2);
       if (a2 < a) a = a2;
     }
+    if (tailGap < gap) a = Math.min(a, this.idm(v, Math.max(0.1, tailGap), tailV, curLim));
     if (brake < a) a = brake;
     // a lane that ends: wait at its end (behind the taper) until there is room in the lane beside
     if (v.piece.kind === "lane" && v.lane === v.piece.edge.dropLane) {
@@ -271,7 +296,7 @@ export abstract class SimMotion extends SimJunctions {
           this.ev(node, v, "grant", `gap in the roundabout · ${this.mv(m, v.lane)}`, this.md(m, v.lane));
         }
         v.state = v.v < 0.6 && pendD < 8 ? "yielding" : leader && gap < 30 ? "following" : "free";
-        if (v.wait > this.P.towAfter && !(leader && leader.piece === v.piece && gap < 12)) { this.ev(node, v, "towed", `stuck ${this.P.towAfter} s waiting to enter the roundabout`); this.kill(v, "towed"); }
+        if (v.wait > this.P.towAfter && !(leader && leader.piece === v.piece && gap < 12)) this.reportStuck(v, () => `waiting ${v.wait.toFixed(0)} s to enter roundabout ${this.nodeName(node)}`);
         return;
       }
       const stopFirst = this.mustStop(node, e);
@@ -301,9 +326,15 @@ export abstract class SimMotion extends SimJunctions {
     else if (leader && gap < 30) v.state = "following";
     else v.state = "free";
 
-    // towing clears a vehicle that is itself stuck; one waiting in a queue behind others is left alone
-    const inQueue = !!leader && leader.piece === v.piece && gap < 12;
-    if (v.wait > this.P.towAfter && !inQueue) { if (pendConn) this.ev(pendConn.node, v, "towed", `stuck ${this.P.towAfter} s waiting for ${this.mv(pendConn)}`); this.kill(v, "towed"); }
+    // a vehicle that hasn't moved for long (the tow time) is never taken off: the console is told, every so
+    // often while it lasts, about the one at the head of a queue (what it waits for, and behind whom), so a
+    // road jammed for good — or locked — shows there to be put right
+    if (v.wait > this.P.towAfter) {
+      const told = this.denyWhy.get(v.id);
+      if (!(leader && leader.piece === v.piece && gap < 12 && !leader.broken)) this.reportStuck(v, () => pendConn
+        ? `waiting ${v.wait.toFixed(0)} s at junction ${this.nodeName(pendConn.node)} for ${this.mv(pendConn)}${told ? ` — last told: ${told}` : ""}`
+        : `waiting ${v.wait.toFixed(0)} s (${v.state}${leader ? `, behind #${leader.id}: ${leader.state}, ${this.placeOf(leader)}` : ""})`);
+    }
     else if (v.wait > this.P.rerouteAfter && pendConn && v.rerouteAt !== pendConn.inEdge && v.kind !== "bus" && !v.splits?.has(pendConn.inEdge.idx)) {
       v.rerouteAt = pendConn.inEdge;
       const e = pendConn.inEdge, node = pendConn.node;
@@ -408,6 +439,8 @@ export abstract class SimMotion extends SimJunctions {
     let best: Vehicle | null = null, gap = Infinity;
     const list = this.index.get(piece.id);
     if (list) for (const u of list) { if (u === v || u.s <= s) continue; const gg = u.s - u.len - s; if (gg < gap) { gap = gg; best = u; } }
+    // (and a long vehicle gone on out of the lane, its body still over its end)
+    for (const z of this.tails.get(piece.id) ?? []) { if (z.v === v || piece.len <= s - v.len) continue; const gg = z.s0 - s; if (gg < gap) { gap = gg; best = z.v; } }
     return { u: best, gap, v: best ? best.v : 0 };
   }
   protected laneFollower(v: Vehicle, c: number) {
@@ -416,12 +449,20 @@ export abstract class SimMotion extends SimJunctions {
     let best: Vehicle | null = null, gap = Infinity;
     const list = this.index.get(piece.id);
     if (list) for (const u of list) { if (u === v || u.s > s) continue; const gg = s - v.len - u.s; if (gg < gap) { gap = gg; best = u; } }
+    // (and one still in the junction behind, coming into that lane)
+    if (s - v.len < 30) for (const u of this.vehicles) {
+      const cp = u.piece;
+      if (u === v || u.dead || cp.kind !== "conn" || cp.outEdge !== e || cp.outLane !== c) continue;
+      const gg = s - v.len - (u.s - cp.len);
+      if (gg < gap) { gap = gg; best = u; }
+    }
     return { u: best, gap };
   }
   protected considerLaneChange(v: Vehicle) {
     if (v.dwell > 0 || v.bayMove || v.lcCool > 0 || v.piece.kind !== "lane") return;
     const p = v.piece, e = p.edge;
-    if (e.n <= 1 || v.s < 2 || v.s > p.len - (v.v < 1 ? 0.3 : 3) || v.granted) return;
+    // (not before all of it is on the road: its rear is still on its way out of the junction behind)
+    if (e.n <= 1 || v.s < Math.min(v.len + 0.5, p.len / 2) || v.s > p.len - (v.v < 1 ? 0.3 : 3) || v.granted) return;
     const need = this.neededLanes(v), a = v.lane;
     // stuck behind a broken-down vehicle in this lane: any lane beside will do to get round it
     // (back to the one it needs once past)
@@ -439,10 +480,15 @@ export abstract class SimMotion extends SimJunctions {
       const mandatory = dir !== 0 && Math.sign(c - a) === dir;
       if (dir !== 0 && !mandatory) continue;
       if (!mandatory && !blocked && (c < need.lo || c > need.hi)) continue;
-      // never into a stretch a car going into or out of a bay is passing over
+      // not into the start of a lane a vehicle at the junction behind is waiting to drive into for room (a truck
+      // needs its length free there: cars changing in would take every gap)
+      { const tp = e.lanes[c], w = this.exitWanted.get(tp.id); if (w !== undefined && this.tick - w < 10 && v.s * (tp.len / p.len) < 25) continue; }
+      // never into a stretch a car going into or out of a bay is passing over, nor just short of one it is on
+      // its way over (too close to stop for it in the new lane)
       if (this.bayHolds.size) {
-        const tp = e.lanes[c], sc = v.s * (tp.len / p.len);
-        if ((this.bayHolds.get(tp.id) ?? []).some(z => z.v !== v && z.z0 < sc + 2 && z.z1 > sc - v.len - 1)) continue;
+        const tp = e.lanes[c], sc = v.s * (tp.len / p.len), stop = (v.v * v.v) / (2 * v.b) + 2;
+        if ((this.bayHolds.get(tp.id) ?? []).some(z => z.v !== v && z.z1 > sc - v.len - 1 &&
+          (z.z0 < sc + 2 || ((z.v.bayMove?.way === "in" || !!z.v.bayMove?.go) && z.z0 < sc + stop)))) continue;
       }
       const L = this.laneLeader(v, c), F = this.laneFollower(v, c);
       // never into a lane only to stop behind a broken-down vehicle there
@@ -476,6 +522,9 @@ export abstract class SimMotion extends SimJunctions {
     // (the road event above already records it for a logged vehicle)
     if (e.to.controlled && p.len - v.s < 150 && this.logging(e.to)) this.ev(e.to, v, "lane", `lane ${v.lane + 1} → ${best + 1} ${(p.len - v.s).toFixed(0)} m before the junction${this.neededLanes(v).lo !== 0 || this.neededLanes(v).hi !== e.n - 1 ? ` (needs lanes ${this.neededLanes(v).lo + 1}-${this.neededLanes(v).hi + 1})` : ""}`);
     v.piece = np; v.lane = best;
+    // (in its new lane's index at once: another vehicle changing into it this same step sees it there — the
+    // old lane keeps it until the index is built again, which only makes changes into that one more careful)
+    this.index.add(np.id, v);
     if (v.reqFor && v.reqFor.inEdge === e) { v.reqFor = null; }
   }
   // ------------------------------------------------------------ movement
@@ -497,10 +546,10 @@ export abstract class SimMotion extends SimJunctions {
         if (!next) {
           this.recordEma(v, e);
           if (v.dest.kind === "gateway" && e.to === v.dest.node) { this.kill(v, "exit"); return; }
-          this.kill(v, "removed"); return;
+          this.kill(v, "removed", "its route ended here, short of where it was going"); return;
         }
         const cross = this.crossingFor(v, v.ri, v.lane);
-        if (!cross) { this.kill(v, "removed"); return; }
+        if (!cross) { this.kill(v, "removed", `no way on from lane ${v.lane + 1} at junction ${this.nodeName(e.to)} to ${next.link.name || next.link.id}`); return; }
         if (e.to.controlled && (!v.granted || v.conn !== cross[0]) && !this.drivesThrough(cross[0])) { v.s = p.len - 0.01; v.v = 0; return; }
         this.recordEma(v, e);
         this.evRoad(e, v, "leave-road", `into ${this.nodeName(e.to)}: ${cross[0].kind === "conn" ? this.mv(cross[0]) : "the junction"} at ${(v.v * 3.6).toFixed(0)} km/h, ${((this.tick - v.enterT) * DT).toFixed(0)} s on this road`);
@@ -535,7 +584,7 @@ export abstract class SimMotion extends SimJunctions {
           const nt = this.nextTurn(v);
           this.evRoad(np.edge, v, "enter-road", `from ${this.nodeName(p.node)} at ${(v.v * 3.6).toFixed(0)} km/h${nt ? `; next: ${this.mv(nt.move)} at ${this.nodeName(nt.node)} (lanes ${nt.move.lo + 1}-${nt.move.hi + 1})` : "; ends on this road"}`);
         }
-      } else { this.kill(v, "removed"); return; }
+      } else { this.kill(v, "removed", "no road after the junction path it was on"); return; }
     }
     // destinations along an edge
     if (v.piece.kind === "lane" && v.ri === v.route.length - 1) {
@@ -545,8 +594,15 @@ export abstract class SimMotion extends SimJunctions {
         // (parking: it stops in the lane and manoeuvres in)
         // (it turns in once the lanes it crosses to the bay, a bus lane, are clear; until then it waits there)
         if (v.park) {
-          if (this.sweepClear(v, v.park.row, v.park.bay, "in", false)) { v.parkWait = false; v.v = Math.min(v.v, 1); v.bayMove = { row: v.park.row, bay: v.park.bay, way: "in", s: 0, inLane: true, go: true }; }
-          else { v.parkWait = true; v.v = 0; v.s = Math.min(v.s, v.dest.s * f); }
+          // (from the bay's lane, once across into it: the way in starts there)
+          if (v.lane === this.net.parking[v.park.row].lane && v.lcT <= 0.05 && this.sweepClear(v, v.park.row, v.park.bay, "in", false)) { v.parkWait = false; v.v = Math.min(v.v, 1); v.bayMove = { row: v.park.row, bay: v.park.bay, way: "in", s: 0, inLane: true, go: true }; }
+          else {
+            if (!v.parkWait) v.parkSince = this.tick;
+            v.parkWait = true; v.v = 0; v.s = Math.min(v.s, v.dest.s * f);
+            // (by its bay in another lane, with no way across to the bay's for a while: it drives on, as a
+            // driver who can't get across would, and leaves the plan)
+            if (v.lane !== this.net.parking[v.park.row].lane && this.tick - (v.parkSince ?? this.tick) > 200) this.giveUpBay(v);
+          }
         }
         else this.kill(v, "arrived");
       }
@@ -562,15 +618,18 @@ export abstract class SimMotion extends SimJunctions {
    * it stops just short of the lane until there is a gap in the lane's traffic (it gives way, as at a junction).
    */
   protected bayThink(v: Vehicle) {
-    const bm = v.bayMove!, acc = this.net.parking[bm.row].access[bm.bay], path = bm.way === "in" ? acc.inPath : acc.outPath;
-    const vmax = SimMotion.BAY_V, rem = path.len - bm.s;
-    // (up to its speed; into the bay, easing down so it rolls in at walking pace)
-    const vt = bm.way === "in" ? Math.min(vmax, Math.sqrt(0.25 + 2 * Math.max(0, rem - 0.3))) : vmax;
+    const bm = v.bayMove!, acc = this.net.parking[bm.row].access[bm.bay], L = accessLen(acc, bm.way);
+    const vmax = SimMotion.BAY_V, rem = L - bm.s, turn = bm.way === "out" && acc.fwd ? acc.outPath.len : 0;
+    // (up to its speed; into the bay, easing down so it rolls in at walking pace; backing out before driving
+    // forwards, easing to a stop where it turns about)
+    const vt = bm.way === "in" ? Math.min(vmax, Math.sqrt(0.25 + 2 * Math.max(0, rem - 0.3)))
+      : bm.s < turn ? Math.min(vmax, Math.sqrt(0.25 + 2 * Math.max(0, turn - bm.s - 0.1))) : vmax;
     let a = v.v < vt ? Math.min(1.2, (vt - v.v) / DT) : Math.max(-3, (vt - v.v) / DT);
     if (bm.way === "out" && !bm.go) {
       if (this.mergeGap(v)) bm.go = true;
       else {
-        const d = path.len - (v.len + SimMotion.BAY_WAIT) - bm.s;
+        // (in its bay when it has to back out across the lanes)
+        const d = (acc.fwd ? 0 : L - (v.len + SimMotion.BAY_WAIT)) - bm.s;
         a = d <= 0.05 ? -v.v / DT : Math.min(a, -(v.v * v.v) / (2 * d));
       }
     }
@@ -602,7 +661,19 @@ export abstract class SimMotion extends SimJunctions {
    */
   protected sweepClear(v: Vehicle, row: number, bay: number, way: "in" | "out", giveWay: boolean, skip?: Piece): boolean {
     const coming = (u: Vehicle, d: number) => (giveWay ? d < Math.max(12, u.v * 4.5) : u.v > 0.5 && d < (u.v * u.v) / (2 * u.b) + 1);
-    for (const sp of this.sweeps[row]?.[bay]?.[way] ?? []) {
+    const spans = this.sweeps[row]?.[bay]?.[way] ?? [];
+    // (a long vehicle whose front has gone on, its body still over the stretch: a truck through a junction)
+    for (const u of this.vehicles) {
+      if (u === v || u.dead || u.bayMove || u.s >= u.len) continue;
+      let rest = u.len - u.s;
+      for (const pc of u.trail) {
+        const sp = spans.find(z => z.piece === pc);
+        if (sp && sp.piece !== skip && !(way === "in" && pc === v.piece) && pc.len - rest < sp.s1) return false;
+        rest -= pc.len;
+        if (rest <= 0) break;
+      }
+    }
+    for (const sp of spans) {
       if (sp.piece === skip) continue;
       const z0 = sp.s0, z1 = sp.s1;
       for (const u of this.index.get(sp.piece.id) ?? []) {
@@ -613,8 +684,15 @@ export abstract class SimMotion extends SimJunctions {
         if (u.s <= z0 && (coming(u, z0 - u.s) || ((u.granted || u.early?.granted) && z0 - u.s < Math.max(15, u.v * 4)))) return false;
       }
       for (const o of this.bayHolds.get(sp.piece.id) ?? []) if (o.v !== v && (o.v.bayMove?.way === "in" || o.v.bayMove?.go) && o.z0 < z1 && o.z1 > z0) return false;
+      // (and one that has set off since: two neighbours pulling out at the same moment)
+      for (const o of this.bayMovers) {
+        const ob = o.bayMove;
+        if (o === v || o.dead || !ob || !(ob.way === "in" || ob.go)) continue;
+        for (const os of this.sweeps[ob.row]?.[ob.bay]?.[ob.way] ?? []) if (os.piece === sp.piece && os.s0 < z1 && os.s1 > z0) return false;
+      }
       // (a stretch near a lane's start: those about to come onto it, out of the junction or along the road before)
-      if (sp.piece.kind === "lane" && z0 < 60) {
+      // (going in, not its own lane: what comes along it is behind it, and stops for it)
+      if (sp.piece.kind === "lane" && z0 < 60 && !(way === "in" && sp.piece === v.piece)) {
         const lane = sp.piece, e = lane.edge;
         for (const u of this.vehicles) {
           if (u === v || u.dead || u.bayMove) continue;
@@ -630,6 +708,39 @@ export abstract class SimMotion extends SimJunctions {
     }
     return true;
   }
+  /** the stretch of a lane (from, to: m along it) that a car on a bay's path is over, if any */
+  protected bodyAlong(u: Vehicle, lane: LanePiece): [number, number] | null {
+    const q = this.pose(u), reach = lane.edge.lw / 2 + u.width / 2;
+    let lo = Infinity, hi = -Infinity;
+    for (let k = 0; k <= 4; k++) {
+      const pr = lane.poly.project(q.rx + ((q.fx - q.rx) * k) / 4, q.ry + ((q.fy - q.ry) * k) / 4);
+      if (pr.d < reach) { lo = Math.min(lo, pr.s); hi = Math.max(hi, pr.s); }
+    }
+    return lo <= hi ? [lo, hi] : null;
+  }
+  /** tell the console a vehicle has stood still for long (at most once per tow time while it lasts); it stays */
+  protected reportStuck(v: Vehicle, detail: () => string) {
+    if (v.stuckAt !== undefined && this.tick - v.stuckAt <= this.P.towAfter / DT) return;
+    v.stuckAt = this.tick;
+    const at = v.piece.poly.at(Math.min(v.piece.len, Math.max(0, v.s)));
+    this.problem({ kind: "stuck", veh: v.id, vkind: v.kind, x: at.x, y: at.y, at: this.placeOf(v), detail: detail() });
+  }
+  /** a car that couldn't get to its bay: the bay is free again, and it drives to the nearest exit it can reach */
+  protected giveUpBay(v: Vehicle) {
+    const e = (v.piece as LanePiece).edge, park = v.park!, st = this.parks[park.row];
+    let best: Edge[] | null = null, gate: CNode | null = null, len = Infinity;
+    for (const g of this.gateways) {
+      if ((g.def.exitWeight ?? 1) <= 0) continue;
+      const r = e.to === g ? [] : this.plan(e, { kind: "gateway", node: g });
+      const l = r ? r.reduce((a, x) => a + x.length, 0) : Infinity;
+      if (r && l < len) { best = r; gate = g; len = l; }
+    }
+    if (!best || !gate) return;
+    if (st.until[park.bay] === -1) st.until[park.bay] = 0;
+    v.park = null; v.parkWait = false;
+    v.dest = { kind: "gateway", node: gate }; v.goal = v.dest;
+    v.route = [...v.route.slice(0, v.ri + 1), ...best];
+  }
   /** where a vehicle's front and rear are (see Sim.pose) */
   abstract pose(v: Vehicle): { fx: number; fy: number; rx: number; ry: number };
   /** is any part of a car on a bay's path (front, middle, rear) within the width of its lane */
@@ -640,13 +751,16 @@ export abstract class SimMotion extends SimJunctions {
   }
   /** along the bay's path: into the bay (the lane left behind once its rear is clear), or out and into the lane */
   protected bayMoveOn(v: Vehicle) {
-    const bm = v.bayMove!, row = this.net.parking[bm.row], acc = row.access[bm.bay], path = bm.way === "in" ? acc.inPath : acc.outPath;
+    const bm = v.bayMove!, row = this.net.parking[bm.row], acc = row.access[bm.bay], L = accessLen(acc, bm.way);
     v.v = Math.max(0, v.v + v.acc * DT);
-    bm.s = Math.min(path.len, bm.s + v.v * DT);
+    const s0 = bm.s;
+    bm.s = Math.min(L, bm.s + v.v * DT);
+    // (backed out: it stops, and drives forwards from there)
+    if (bm.way === "out" && acc.fwd && s0 < acc.outPath.len && bm.s >= acc.outPath.len) { bm.s = acc.outPath.len; v.v = 0; }
     if (bm.way === "in") {
       // (the lane is left behind once no part of the car is in it any more)
       if (bm.inLane && bm.s > 1 && !this.bodyInLane(v)) bm.inLane = false;
-      if (bm.s >= path.len - 0.05) {
+      if (bm.s >= L - 0.05) {
         // parked: in the bay until its stay is over
         const st = this.parks[bm.row];
         st.until[bm.bay] = this.tick + this.stayTicks(row.def.stay); st.parked++;
@@ -656,10 +770,15 @@ export abstract class SimMotion extends SimJunctions {
     }
     // (in the lane's traffic once it has its gap and comes into the lane: waiting, it is still in its bay)
     if (!bm.inLane && bm.go && this.bodyInLane(v)) bm.inLane = true;
-    if (bm.s >= path.len) {
+    if (bm.s >= L) {
       // in the lane: the bay is free, and it drives on (from a standstill after backing out)
       this.parks[bm.row].until[bm.bay] = 0;
-      v.bayMove = null; if (acc.reverse) v.v = 0;
+      // (where the way out left it, eased over a second into where it is in the lane: a way out cut short by the
+      // road's end leaves it at an angle)
+      const was = this.pose(v);
+      v.bayMove = null; if (acc.reverse && !acc.fwd) v.v = 0;
+      const now = this.pose(v);
+      v.blend = { fx: was.fx - now.fx, fy: was.fy - now.fy, rx: was.rx - now.rx, ry: was.ry - now.ry }; v.blendT = 1;
     }
   }
   protected busArrive(v: Vehicle) {
@@ -697,7 +816,7 @@ export abstract class SimMotion extends SimJunctions {
       if (r && len < bestLen) { best = r; bestG = g; bestLen = len; }
     }
     if (best && bestG) { v.dest = { kind: "gateway", node: bestG }; v.route = [...v.route.slice(0, v.ri + 1), ...best]; v.line = null; v.state = "end of line"; return; }
-    this.kill(v, "removed");
+    this.kill(v, "removed", "a bus at the end of its line with no way to an exit point");
   }
   /** first stop index from which the line can carry on (used when placing new buses) */
   protected lineStart(line: CLine, k: number): number {

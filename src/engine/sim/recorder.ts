@@ -157,7 +157,7 @@ export class Recorder {
       stats: { ...sim.stats, history: sim.stats.history.slice(), count: n, cars, trucks, buses, avgSpeed: n ? (sp / n) * 3.6 : 0, stopped: n ? stopped / n : 0 },
       ids: outIds, kinds, tints, states, stateNames: this.stateNames.slice(), geo,
       phase: Int16Array.from(ph), stage: Int8Array.from(sg), stageT: new Float32Array(N), occupied: new Int16Array(N), cycleAt: new Float32Array(N).fill(NaN),
-      waiting: Float32Array.from(sim.net.stops, s => s.waiting), events: [], resetEvents: false, peds: [],
+      waiting: Float32Array.from(sim.net.stops, s => s.waiting), events: [], resetEvents: false, problems: [], resetProblems: false, peds: [],
       ...(C ? { rev } : {}),
       ...(parked ? { parked } : {}), ...(crossPeds ? { crossPeds } : {}),
     };

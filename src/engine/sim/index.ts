@@ -19,6 +19,7 @@ import { SimDemand } from "./demand";
 import { DT, FUEL_APPROACH, type JunctionFuel } from "./base";
 import { FUEL_STILL, fuelRate, hasStopStart } from "../fuel";
 import { isJunction } from "../refs";
+import { bodyOnPath } from "../parking";
 
 export { DT, FUEL_APPROACH, REV_STATES, type Kind, type Dest, type Vehicle, type JunctionEvent, type Stats, type FuelStats, type JunctionFuel } from "./base";
 
@@ -60,10 +61,52 @@ export class Sim extends SimDemand {
       if (fuel) this.burnFuel(v, v1, p, s);
     }
     if (this.P.breakdownsPerHour > 0 && this.rng() < (this.P.breakdownsPerHour * DT) / 3600) this.randomBreakdown();
-    if (this.tick % 10 === 0) this.sample();
+    if (this.tick % 10 === 0) { this.sample(); this.checkOverlaps(); }
     if (this.tick % 50 === 0) this.housekeeping();
   }
   run(n: number) { for (let k = 0; k < n; k++) this.step(); }
+  /** pairs of vehicles last seen overlapping (key "a-b"), and when: told again only after a while */
+  private overlapSeen = new Map<string, number>();
+  /**
+   * Vehicles overlapping (their outlines more than 15 cm into each other), looked for once a second: a problem
+   * for the console. On a 15 m grid, so it costs little even with many vehicles.
+   */
+  private checkOverlaps() {
+    const CELL = 15, grid = new Map<number, number[]>(), boxes: { v: Vehicle; cx: number; cy: number; ux: number; uy: number; hl: number; hw: number }[] = [];
+    for (const v of this.vehicles) {
+      if (v.dead) continue;
+      const q = this.pose(v), dx = q.fx - q.rx, dy = q.fy - q.ry, m = Math.hypot(dx, dy) || 1;
+      const b = { v, cx: (q.fx + q.rx) / 2, cy: (q.fy + q.ry) / 2, ux: dx / m, uy: dy / m, hl: m / 2, hw: v.width / 2 };
+      const k = Math.floor(b.cx / CELL) * 100003 + Math.floor(b.cy / CELL);
+      const l = grid.get(k); if (l) l.push(boxes.length); else grid.set(k, [boxes.length]);
+      boxes.push(b);
+    }
+    type B = (typeof boxes)[number];
+    const depth = (a: B, b: B) => {
+      let m = Infinity;
+      for (const p of [a, b]) for (const [ax, ay] of [[p.ux, p.uy], [-p.uy, p.ux]]) {
+        const r = (o: B) => Math.abs(o.ux * ax + o.uy * ay) * o.hl + Math.abs(-o.uy * ax + o.ux * ay) * o.hw;
+        m = Math.min(m, r(a) + r(b) - Math.abs((b.cx - a.cx) * ax + (b.cy - a.cy) * ay));
+        if (m <= 0) return m;
+      }
+      return m;
+    };
+    for (const a of boxes) {
+      const gx = Math.floor(a.cx / CELL), gy = Math.floor(a.cy / CELL);
+      for (let i = gx - 1; i <= gx + 1; i++) for (let j = gy - 1; j <= gy + 1; j++) for (const k of grid.get(i * 100003 + j) ?? []) {
+        const b = boxes[k];
+        if (b.v.id <= a.v.id) continue;
+        const d = depth(a, b);
+        if (d <= 0.15) continue;
+        const key = `${a.v.id}-${b.v.id}`, last = this.overlapSeen.get(key);
+        if (last !== undefined && this.tick - last < 300) continue;
+        this.overlapSeen.set(key, this.tick);
+        this.problem({ kind: "overlap", veh: a.v.id, vkind: a.v.kind, other: b.v.id, x: (a.cx + b.cx) / 2, y: (a.cy + b.cy) / 2, at: this.placeOf(a.v),
+          detail: `#${a.v.id} (${a.v.kind}, ${a.v.state}${a.v.bayMove ? ", at a bay" : ""}) and #${b.v.id} (${b.v.kind}, ${b.v.state}${b.v.bayMove ? ", at a bay" : ""}, ${this.placeOf(b.v)}) ${d.toFixed(2)} m into each other` });
+      }
+    }
+    if (this.overlapSeen.size > 2000) for (const [k, t] of this.overlapSeen) if (this.tick - t > 300) this.overlapSeen.delete(k);
+  }
   /**
    * These vehicles break down (engine failure) or are wrecked (war mode): each stays in its lane as an
    * obstacle until towed. A junction it had booked but not entered is given back. How many there were.
@@ -286,11 +329,7 @@ export class Sim extends SimDemand {
     if (bm) {
       const acc = this.net.parking[bm.row]?.access[bm.bay];
       if (acc) {
-        const path = bm.way === "in" ? acc.inPath : acc.outPath, d = bm.s, lead = path.at(d), t = path.tangent(d);
-        // (backing out: the rear leads, the car facing the other way)
-        if (bm.way === "out" && acc.reverse) return { rx: lead.x, ry: lead.y, fx: lead.x - t.x * v.len, fy: lead.y - t.y * v.len };
-        const t0 = path.tangent(0), p0 = path.at(0), r = d >= v.len ? path.at(d - v.len) : { x: p0.x - t0.x * (v.len - d), y: p0.y - t0.y * (v.len - d) };
-        return { fx: lead.x, fy: lead.y, rx: r.x, ry: r.y };
+        return bodyOnPath(acc, bm.way, bm.s, v.len);
       }
     }
     const f = v.piece.poly.at(v.s);
@@ -305,6 +344,10 @@ export class Sim extends SimDemand {
     if (v.lcT > 0) {
       const e = v.lcT * v.lcT * (3 - 2 * v.lcT), sh = v.lcOff * e, nx = -dy / m, ny = dx / m;
       f.x += nx * sh; f.y += ny * sh; r.x += nx * sh * 0.85; r.y += ny * sh * 0.85;
+    }
+    if (v.blendT && v.blend) {
+      const e = v.blendT * v.blendT * (3 - 2 * v.blendT), b = v.blend;
+      f.x += b.fx * e; f.y += b.fy * e; r.x += b.rx * e; r.y += b.ry * e;
     }
     return { fx: f.x, fy: f.y, rx: r.x, ry: r.y };
   }

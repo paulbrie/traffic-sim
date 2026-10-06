@@ -9,7 +9,7 @@
 import { pieceLevel, pieceZ, type CNode, type Compiled } from "../compile";
 import { isJunction } from "../refs";
 import { signalAspect, type Aspect } from "../signals";
-import { DT, type ParkingStats, type JunctionEvent, type JunctionFuel, type Kind, type RevStateCode, type Stats, type TestTrip, type Vehicle } from "./base";
+import { DT, type ParkingStats, type JunctionEvent, type SimProblem, type JunctionFuel, type Kind, type RevStateCode, type Stats, type TestTrip, type Vehicle } from "./base";
 
 /** a pedestrian crossing right now: its arm, people waiting, people crossing and how far across (0..1) */
 export interface PedView { arm: number; waiting: number; crossing: number; progress: number }
@@ -66,6 +66,8 @@ export interface Snapshot {
   waiting: Float32Array;
   /** junction events since the previous snapshot; `resetEvents` = replace the list instead */
   events: JunctionEvent[]; resetEvents: boolean;
+  /** problems (see SimProblem) since the previous snapshot; `resetProblems` = replace the list instead */
+  problems: SimProblem[]; resetProblems: boolean;
   /** sent every half second or so (absent = unchanged) */
   junctions?: (JunctionStats | null)[];
   cycles?: [number, LightCycles][];
@@ -111,6 +113,7 @@ export interface RevView { state: RevStateCode; t: number; inside: number; densi
 /** remembers what was sent already, to send only what is new */
 export class SnapshotWriter {
   private lastEvent: JunctionEvent | null = null;
+  private lastProblem: SimProblem | null = null;
   private periodicAt = -Infinity;
 
   write(sim: Sim, watch: Watch, now: number): { snap: Snapshot; transfer: ArrayBuffer[] } {
@@ -143,10 +146,19 @@ export class SnapshotWriter {
     } else resetEvents = true;
     const events = all.slice(from);
     this.lastEvent = all.length ? all[all.length - 1] : null;
+    // (the same for problems)
+    const ps = sim.problems;
+    let pFrom = 0, resetProblems = false;
+    if (this.lastProblem) {
+      const at = ps.lastIndexOf(this.lastProblem);
+      if (at >= 0) pFrom = at + 1; else resetProblems = true;
+    } else resetProblems = true;
+    const problems = ps.slice(pFrom);
+    this.lastProblem = ps.length ? ps[ps.length - 1] : null;
 
     const snap: Snapshot = {
       tick: sim.tick, stats: { ...sim.stats, history: sim.stats.history.slice() },
-      ids, kinds, tints, states, stateNames, geo, phase, stage, stageT, occupied, cycleAt, waiting, events, resetEvents,
+      ids, kinds, tints, states, stateNames, geo, phase, stage, stageT, occupied, cycleAt, waiting, events, resetEvents, problems, resetProblems,
       peds: sim.net.nodes.filter(n => n.peds > 0).map(n => [n.idx, sim.pedView(n.idx)] as [number, PedView[]]),
       ...(sim.net.corridors.length ? { rev: sim.net.corridors.map(c => sim.reversibleState(c.idx)!) } : {}),
     };
@@ -195,7 +207,7 @@ export class SnapshotWriter {
   }
 
   /** forget what was sent (a new simulation, or the log was cleared) */
-  reset() { this.lastEvent = null; this.periodicAt = -Infinity; }
+  reset() { this.lastEvent = null; this.lastProblem = null; this.periodicAt = -Infinity; }
 }
 
 function vehicleDetail(sim: Sim, v: Vehicle): VehicleDetail {
@@ -230,6 +242,8 @@ export class SimMirror {
   stats: Stats = { count: 0, cars: 0, trucks: 0, buses: 0, avgSpeed: 0, stopped: 0, tripsPerMin: 0, trips: 0, towed: 0, boarded: 0, laneChanges: 0, history: [] };
   vehicles: VehicleView[] = [];
   events: JunctionEvent[] = [];
+  /** what went wrong so far (see SimProblem) */
+  problems: SimProblem[] = [];
   turnCounts = new Map<string, number>();
   entered = new Map<string, number>();
   exited = new Map<string, number>();
@@ -270,6 +284,8 @@ export class SimMirror {
       v.level = s.geo[o + 9]; v.z = s.geo[o + 10];
     }
     this.net.stops.forEach((st, i) => { st.waiting = s.waiting[i] ?? st.waiting; });
+    if (s.resetProblems) this.problems = [];
+    if (s.problems?.length) { this.problems.push(...s.problems); if (this.problems.length > 5000) this.problems.splice(0, this.problems.length - 4000); }
     if (s.resetEvents) this.events = [];
     if (s.events.length) { this.events.push(...s.events); if (this.events.length > 60000) this.events.splice(0, this.events.length - 50000); }
     if (s.junctions) this.junctions = s.junctions;

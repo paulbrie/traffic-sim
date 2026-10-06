@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, ChevronDown, Pentagon, Footprints, SquareParking, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, Keyboard, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, ChevronDown, Pentagon, Footprints, SquareParking, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, SquareTerminal, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, Keyboard, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -50,6 +50,7 @@ import { Compass } from "./compass";
 import { HistoryButton } from "./history-dialog";
 import { OptimizeButton } from "./optimize-dialog";
 import { Dataview } from "./dataview";
+import { ProblemConsole, useProblemCount } from "./problem-console";
 
 const View3D = dynamic(() => import("./view-3d").then(m => m.View3D), { ssr: false, loading: () => <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading 3D…</div> });
 
@@ -69,6 +70,7 @@ export function Workspace({ plan, user, prefs }: { plan: WorkspacePlan; user: Me
   const [view] = useDeepSubject(ui, "view");
   const [panel, setPanel] = useDeepSubject(ui, "panel");
   const [dataview] = useDeepSubject(ui, "dataview");
+  const [consoleOpen] = useDeepSubject(ui, "console");
 
   return (
     <TooltipProvider>
@@ -89,6 +91,7 @@ export function Workspace({ plan, user, prefs }: { plan: WorkspacePlan; user: Me
               <StatusBar />
             </div>
             {dataview && <Dataview />}
+            {consoleOpen && <ProblemConsole />}
           </div>
           <aside className="flex w-80 shrink-0 flex-col border-l bg-background" aria-label="Plan details">
             <Tabs value={panel} onValueChange={v => setPanel(v as typeof panel)} className="min-h-0 flex-1 gap-0">
@@ -243,7 +246,22 @@ function LayerPicker() {
       <Tip label={dataview ? "Hide the data table" : "Data table"}>
         <Button size="icon-sm" variant={dataview ? "secondary" : "ghost"} aria-pressed={dataview} aria-label="Data table" onClick={() => setDataview(!dataview)}><Table2 /></Button>
       </Tip>
+      <ConsoleButton />
     </div>
+  );
+}
+
+/** opens the simulation's console; the number is how many problems it has (vehicles towed or taken off, overlapping) */
+function ConsoleButton() {
+  const [open, setOpen] = useDeepSubject(ui, "console");
+  const n = useProblemCount();
+  return (
+    <Tip label={open ? "Hide the console" : n ? `Console: ${n} problem${n === 1 ? "" : "s"} in the simulation` : "Console (simulation problems)"}>
+      <Button size="icon-sm" variant={open ? "secondary" : "ghost"} aria-pressed={open} aria-label={`Console${n ? `, ${n} problems` : ""}`} className="relative" onClick={() => setOpen(!open)}>
+        <SquareTerminal />
+        {n > 0 && <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-red-600 px-1 text-[10px] leading-4 font-semibold text-white tabular">{n > 99 ? "99+" : n}</span>}
+      </Button>
+    </Tip>
   );
 }
 

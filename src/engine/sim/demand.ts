@@ -17,7 +17,7 @@ export abstract class SimDemand extends SimMotion {
       route: [], ri: 0, piece: this.net.pieces[0], s: 0, v: 0, acc: 0, lane: 0, queue: [], trail: [],
       conn: null, granted: false, dest: { kind: "gateway", node: this.net.nodes[0] }, state: "free", wait: 0,
       enterT: this.tick, bornT: this.tick, jam: 0, broken: 0, brokenAt: 0, gap: Infinity, leader: null, v0: 10,
-      reroutes: 0, laneChanges: 0, lcCool: 0, lcOff: 0, lcT: 0,
+      reroutes: 0, laneChanges: 0, lcCool: 0, lcOff: 0, lcT: 0, blendT: 0, stuckAt: undefined, parkSince: undefined,
       reqAt: 0, reqFor: null, stoppedAt: null, fixedAt: null, rerouteAt: null,
       line: null, stopIdx: 0, pax: 0, cap: 50, dwell: 0, dead: false, metered: false, flow: -1, zflow: -1, goal: null,
       test: undefined, logState: undefined, splits: undefined, xm: [emptyXMemo(), emptyXMemo()], xmNext: 0,
@@ -372,7 +372,7 @@ export abstract class SimDemand extends SimMotion {
     if (this.tick % 20 === 0) for (const line of this.net.lines) {
       const have = busesPerLine.get(line) || 0;
       if (have < line.def.buses) this.spawnBus(line, Math.floor((have * line.stops.length) / Math.max(1, line.def.buses)));
-      else if (have > line.def.buses) { const b = this.vehicles.find(v => !v.dead && v.line === line); if (b) this.kill(b, "removed"); }
+      else if (have > line.def.buses) { const b = this.vehicles.find(v => !v.dead && v.line === line); if (b) this.kill(b, "removed", false); }
     }
     if (this.tick % 10 === 0) for (const s of this.net.stops) if (this.rng() < 0.12) s.waiting = Math.min(80, s.waiting + 1);
   }

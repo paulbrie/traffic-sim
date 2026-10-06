@@ -6,7 +6,7 @@ import { resolveParams, type SimParams } from "../params";
 import { isJunction, junctionRefs } from "../refs";
 import { crossingSpan } from "../crossings";
 import { PARKING } from "../types";
-import { CAR_LEN, bodyOnPath } from "../parking";
+import { CAR_LEN, accessLen, bodyOnPath } from "../parking";
 import { exitLanesOf, laneAllowed } from "../compile";
 
 export const DT = 0.1;
@@ -54,6 +54,8 @@ export interface Vehicle {
   /** an aggressive driver: wants to go over the limit (see SimParams.aggressiveShare) */
   aggressive: boolean;
   reroutes: number; laneChanges: number; lcCool: number; lcOff: number; lcT: number;
+  /** just out of a bay: how far its front and rear were from where they are now, eased away as blendT runs down (1 → 0, over a second) */
+  blend?: { fx: number; fy: number; rx: number; ry: number }; blendT?: number;
   reqAt: number; reqFor: Conn | null; stoppedAt: Conn | null; fixedAt: Edge | null; rerouteAt: Edge | null;
   line: CLine | null; stopIdx: number; pax: number; cap: number; dwell: number;
   dead: boolean;
@@ -74,6 +76,10 @@ export interface Vehicle {
   fuel?: number; fuelIdle?: number;
   /** driving to park: the row (index into net.parking) and the bay kept for it; `parkWait`: by it, waiting to turn in */
   park?: { row: number; bay: number } | null; parkWait?: boolean;
+  /** when it started waiting by its bay (tick) */
+  parkSince?: number;
+  /** when the console was last told it has waited very long in a jam (tick) */
+  stuckAt?: number;
   /**
    * On a bay's path (see BayAccess), like a connector: in or out, how far along it (m); `inLane`: part of the
    * car is in the lane (it is in the lane's traffic only then); `go`: pulling out, it has its gap in the lane.
@@ -92,6 +98,15 @@ export interface ParkingStats { bays: number; taken: number; coming: number; par
 
 /** where a lane or a path through a junction runs over a crossing drawn by hand (arc length on that piece) */
 export interface CrossOn { k: number; piece: Piece; s0: number; s1: number }
+/**
+ * Something that shouldn't happen in traffic, kept for the console to debug with: a vehicle taken off the
+ * plan (towed after being stuck, a breakdown towed, a wreck cleared, one with no way on), one waiting very long
+ * in a jam (left where it is), or two vehicles overlapping. `x`, `y` where (world m), `at` on what (a road or a junction).
+ */
+export interface SimProblem {
+  t: number; kind: "towed" | "breakdown" | "wreck" | "removed" | "overlap" | "stuck";
+  veh: number; vkind: Vehicle["kind"]; other?: number; x: number; y: number; at: string; detail: string;
+}
 /** a stretch (from s0 to s1, m along it) of a lane or junction path that a car's body sweeps on a bay's path */
 export interface SweepSpan { piece: Piece; s0: number; s1: number }
 /** a crossing drawn by hand as the simulation sees it: its pedestrians, what runs over it, and the lights it follows */
@@ -137,6 +152,8 @@ export interface NodeState {
   occ: Occ[];
   req: Map<number, Req>;
   phase: number; stage: 0 | 1 | 2; t: number;
+  /** the phase before this one (-1: none yet) */
+  prev: number;
   demand: number[];
   /** per arm: vehicles through during the current green, when it started, and past cycles */
   cyc: { count: number; greenAt: number; hist: { n: number; green: number; at: number }[] }[];
@@ -345,6 +362,10 @@ export abstract class SimBase {
   protected sweeps: { in: SweepSpan[]; out: SweepSpan[] }[][] = [];
   /** stretches kept clear by piece id, for cars on a bay's path (going in, or coming out: waiting with priority, or on their way) */
   protected bayHolds = new Map<number, { v: Vehicle; z0: number; z1: number }[]>();
+  /** by piece id: vehicles whose front has gone on but whose body is still over it (from `s0` to its end) */
+  protected tails = new Map<number, { v: Vehicle; s0: number }[]>();
+  /** cars on a bay's path (as of the last index; whether they have set off is read as it is now) */
+  protected bayMovers: Vehicle[] = [];
   /** a reversible middle lane open to edge `e`'s direction: vehicles may change into it */
   protected revOpenFor(e: Edge) { return e.corr >= 0 && this.revs[e.corr].state === (e.cdir === 1 ? 1 : 3); }
   /** open or clearing in edge `e`'s direction: vehicles already in the lane carry on */
@@ -357,7 +378,13 @@ export abstract class SimBase {
   logAll = false;
   /** recorded events, oldest first (capped) */
   events: JunctionEvent[] = [];
+  /** what went wrong (see SimProblem), oldest first, the latest 5000 */
+  problems: SimProblem[] = [];
   protected lastDeny = new Map<number, string>();
+  /** lanes (by piece id) a vehicle at the junction before is waiting to drive into, for room: when it last asked */
+  protected exitWanted = new Map<number, number>();
+  /** why the junction ahead last said no, for every vehicle (logged or not): told in the console when one is towed */
+  protected denyWhy = new Map<number, string>();
   /** vehicles that took each movement so far, keyed "inEdgeIdx>outEdgeIdx" */
   turnCounts = new Map<string, number>();
   /** vehicles that entered through each entry point so far (by node id) */
@@ -374,7 +401,7 @@ export abstract class SimBase {
     this.rng = mulberry32(settings.seed || 7);
     this.ema = new Float64Array(this.net.edges.length);
     this.ns = this.net.nodes.map(node => {
-      return { node, occ: [], req: new Map(), phase: 0, stage: 0, t: 0, demand: node.phases.map(() => -1e9), cyc: node.arms.map(() => ({ count: 0, greenAt: 0, hist: [] })) };
+      return { node, occ: [], req: new Map(), phase: 0, stage: 0, t: 0, prev: -1, demand: node.phases.map(() => -1e9), cyc: node.arms.map(() => ({ count: 0, greenAt: 0, hist: [] })) };
     });
     this.peds = this.net.nodes.map(n => (n.peds > 0 ? (n.degree === 2 ? [n.arms[0]] : n.arms).map(() => ({ waiting: 0, since: 0, crossing: 0, from: 0, until: 0, redSince: -1, claim: false, crossed: 0, waitSum: 0 })) : []));
     this.pedRng = mulberry32(((settings.seed || 7) * 7919) ^ 0x9ed5);
@@ -435,8 +462,8 @@ export abstract class SimBase {
     const W = 0.95;
     this.sweeps = this.net.parking.map(row => row.access.map(acc => {
       const sweep = (way: "in" | "out"): SweepSpan[] => {
-        const path = way === "in" ? acc.inPath : acc.outPath, spans = new Map<Piece, [number, number]>();
-        for (let d = 0; ; d = Math.min(path.len, d + 0.4)) {
+        const L = accessLen(acc, way), spans = new Map<Piece, [number, number]>();
+        for (let d = 0; ; d = Math.min(L, d + 0.4)) {
           const b = bodyOnPath(acc, way, d, CAR_LEN), ux = b.fx - b.rx, uy = b.fy - b.ry, m = Math.hypot(ux, uy) || 1, nx = -uy / m, ny = ux / m;
           for (const f of [0, 0.5, 1]) for (const side of [-W, 0, W]) {
             const x = b.rx + ux * f + nx * side, y = b.ry + uy * f + ny * side;
@@ -449,7 +476,7 @@ export abstract class SimBase {
               }
             });
           }
-          if (d >= path.len) break;
+          if (d >= L) break;
         }
         return [...spans].map(([piece, [a, b]]) => ({ piece, s0: Math.max(0, a - 0.8), s1: Math.min(piece.len, b + 0.8) }));
       };
@@ -572,11 +599,25 @@ export abstract class SimBase {
     this.index.clear(); this.groupIndex.clear(); this.ringClaims.clear();
     // (a car on a bay's path is in its lane's traffic only while part of it is in the lane)
     for (const v of this.vehicles) if (!v.dead && !(v.bayMove && !v.bayMove.inLane)) this.addToIndex(v);
+    // (the part of a long vehicle still on the pieces behind its front: from where along each it starts)
+    this.tails.clear();
+    for (const v of this.vehicles) {
+      if (v.dead || v.bayMove || v.s >= v.len) continue;
+      let rest = v.len - v.s;
+      for (const pc of v.trail) {
+        const z = { v, s0: Math.max(0, pc.len - rest) }, l = this.tails.get(pc.id);
+        if (l) l.push(z); else this.tails.set(pc.id, [z]);
+        rest -= pc.len;
+        if (rest <= 0) break;
+      }
+    }
     // cars about to pull out of a bay with priority: the lane's traffic keeps their stretch clear
     // cars on a bay's path: what their body sweeps (going in, or coming out: committed, or waiting with priority)
     // is kept clear — every lane and junction path it passes over, trucks and all keep off it
     if (this.bayHolds.size) this.bayHolds.clear();
+    this.bayMovers.length = 0;
     if (this.parks.length) for (const v of this.vehicles) {
+      if (!v.dead && v.bayMove) this.bayMovers.push(v);
       // (by its bay, waiting to turn in across other lanes: traffic there lets it in, as it would a car pulling out)
       if (!v.dead && v.park && v.parkWait && !v.bayMove) {
         for (const sp of this.sweeps[v.park.row]?.[v.park.bay]?.in ?? []) {
@@ -623,7 +664,9 @@ export abstract class SimBase {
   /** a node as the log names it: the junction reference shown on the map ("J12"), else what it is and its id */
   protected nodeName(n: CNode) {
     this.refs ??= junctionRefs(this.net);
-    return this.refs.get(n.def.id) ?? `${n.gateway ? "entry/exit" : n.degree === 2 ? "joint" : "node"} ${n.def.id}`;
+    // (a point of a junction drawn by hand: the junction)
+    const j = n.lead ?? n;
+    return this.refs.get(j.def.id) ?? `${n.gateway ? "entry/exit" : n.degree === 2 ? "joint" : "node"} ${n.def.id}`;
   }
   /** describe a movement for the log: "S lane 2→1 (road NE→SW)" */
   protected mv(c: Conn | Movement, lane?: number) {
@@ -658,8 +701,26 @@ export abstract class SimBase {
     return [...this.gateRecent].map(([id, r]) => [id, rate(r.in), rate(r.out)]);
   }
   /** destroyed: a wreck (war mode) towed away (counted with the towed ones in the flows: gone from the plan) */
-  protected kill(v: Vehicle, why: "exit" | "arrived" | "towed" | "removed" | "destroyed") {
+  /** where a vehicle is, in words: the road (by name) or the junction */
+  protected placeOf(v: Vehicle): string {
+    const p = v.piece;
+    if (p.kind === "lane") return `road ${p.edge.link.name || p.edge.link.id} (lane ${v.lane + 1})`;
+    return `junction ${this.nodeName(p.node)}`;
+  }
+  protected problem(p: Omit<SimProblem, "t">) {
+    this.problems.push({ t: Math.round(this.tick) / 10, ...p });
+    if (this.problems.length > 5000) this.problems.splice(0, this.problems.length - 4000);
+  }
+  /** `detail`: why, for the console (`false`: not a problem — a bus no longer needed on its line) */
+  protected kill(v: Vehicle, why: "exit" | "arrived" | "towed" | "removed" | "destroyed", detail?: string | false) {
     if (v.dead) return;
+    this.denyWhy.delete(v.id);
+    if ((why === "towed" || why === "removed" || why === "destroyed") && detail !== false) {
+      const at = v.piece.poly.at(Math.min(v.piece.len, Math.max(0, v.s)));
+      const kind = why === "destroyed" ? "wreck" : why === "removed" ? "removed" : v.broken ? "breakdown" : "towed";
+      this.problem({ kind, veh: v.id, vkind: v.kind, x: at.x, y: at.y, at: this.placeOf(v),
+        detail: detail || (v.broken ? `broke down ${((this.tick - v.brokenAt) * DT).toFixed(0)} s before` : `stuck ${v.wait.toFixed(0)} s (${v.state})`) });
+    }
     if (why === "exit" && v.piece.kind === "lane") this.countGate(v.piece.edge.to.def.id, "out");
     if (v.piece.kind === "lane") this.evRoad(v.piece.edge, v, why === "exit" ? "exit" : why === "arrived" ? "arrive" : why === "towed" ? "towed" : "leave-road",
       why === "exit" ? "leaves the plan" : why === "arrived" ? "reached its destination" : why === "towed" ? (v.broken ? `towed away, ${((this.tick - v.brokenAt) * DT).toFixed(0)} s after breaking down` : `removed after ${v.wait.toFixed(0)} s stuck (${v.state})`) : why === "destroyed" ? `wreck towed away, ${((this.tick - v.brokenAt) * DT).toFixed(0)} s after it was destroyed` : "removed (no way on)");

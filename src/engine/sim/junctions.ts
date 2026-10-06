@@ -82,7 +82,12 @@ export abstract class SimJunctions extends SimReversible {
       if (this.pedRng() < (def.peds / 3600) * DT) { if (!p.waiting) p.since = this.tick; p.waiting++; }
       if (p.crossing && this.tick >= p.until) p.crossing = 0;
       const lights = !!info.lit && info.through.length > 0;
-      const red = lights && info.through.every(x => this.connSignal(x) === "red");
+      // (red for the traffic over it, in a green stage of the junction: not in the yellow and all-red between
+      // phases; and not while a turn that waited through the last green clears the junction over it)
+      const ctl = lights ? this.ns[(info.lit!.lead ?? info.lit!).idx] : null;
+      const turnClears = !!ctl && ctl.stage === 0 && ctl.t < 4 && [...ctl.req.values()].some(r => this.clearing(ctl, r)
+        && [r.conn, r.conn.outEdge.lanes[r.conn.outLane]].some(pc => (this.crossOn.get(pc.id) ?? []).some(o => o.k === k && (pc === r.conn || o.s0 < 15))));
+      const red = !!ctl && ctl.stage === 0 && !turnClears && info.through.every(x => this.connSignal(x) === "red");
       if (lights) { if (!red) p.redSince = -1; else if (p.redSince < 0) p.redSince = this.tick; }
       if (!p.waiting || p.crossing) { p.claim = false; return; }
       const allowed = lights ? red && (this.tick - p.redSince) * DT < this.P.pedWalk : this.tick >= p.until + this.P.pedYield / DT;
@@ -92,6 +97,14 @@ export abstract class SimJunctions extends SimReversible {
       p.crossed += p.waiting; p.waitSum += p.waiting * (this.tick - p.since) * DT;
       p.waiting = 0; p.claim = false;
     });
+  }
+  /**
+   * A permissive turn (left or U) that waited at the line through its green, in the first seconds of the next
+   * phase: it clears the junction then, ahead of the traffic the new green lets go (see arbitrate)
+   */
+  protected clearing(st: NodeState, r: Req): boolean {
+    return st.stage === 0 && st.t < 4 && st.prev >= 0 && (r.conn.move.turn === "L" || r.conn.move.turn === "U")
+      && this.connSignal(r.conn) !== "green" && this.greenIn(r.conn, st.prev) && r.at < this.tick - st.t / DT;
   }
   /** a vehicle is on the crossing, too close to stop before it, or let through a junction over it */
   protected crossingBusy(info: CrossInfo): boolean {
@@ -266,7 +279,10 @@ export abstract class SimJunctions extends SimReversible {
     // go, like a zip), then the rest by distance; one still on its way can't jump the waiting ones
     const free = n.def.control === "free";
     const atLine = (r: Req) => r.d < this.P.freeQueue;
-    if (lights) reqs.sort((a, b) => (a.conn.move.turn === "L" ? 1 : 0) - (b.conn.move.turn === "L" ? 1 : 0) || a.at - b.at || a.v.id - b.v.id);
+    // (at lights left turns go last — they give way — but one clearing from the phase before (waited through its
+    // green: see sneak below) first, ahead of the traffic the new green lets go)
+    const clearing = (r: Req) => lights && this.clearing(st, r);
+    if (lights) reqs.sort((a, b) => +clearing(b) - +clearing(a) || (a.conn.move.turn === "L" ? 1 : 0) - (b.conn.move.turn === "L" ? 1 : 0) || a.at - b.at || a.v.id - b.v.id);
     else if (free) reqs.sort((a, b) => +!atLine(a) - +!atLine(b) || (atLine(a) ? a.at - b.at : a.d - b.d) || a.v.id - b.v.id);
     else reqs.sort((a, b) => a.at - b.at || a.v.id - b.v.id);
     // priority junction with signed approaches: majors go first, minors wait for a gap
@@ -276,6 +292,7 @@ export abstract class SimJunctions extends SimReversible {
     const blockers: Conn[] = [];
     const log = this.logging(n);
     const deny = (v: Vehicle, why: string) => {
+      this.denyWhy.set(v.id, why);
       if ((!log && !this.vehLogged(v)) || this.lastDeny.get(v.id) === why) return;
       this.lastDeny.set(v.id, why);
       const code = why.startsWith("path") ? "conflict" : why.startsWith("crosses") ? "queue-conflict" : why.startsWith("gives") ? "give-way" : why.startsWith("no room") ? "exit-full" : why.includes("light") ? "signal" : "other";
@@ -289,31 +306,34 @@ export abstract class SimJunctions extends SimReversible {
       if (lights) {
         const sig = this.connSignal(c);
         // a permissive turn waiting at the line for oncoming traffic clears on the yellow / all-red
-        // of its own phase, once oncoming traffic has stopped (the conflict checks below still apply)
-        sneak = sig !== "green" && this.greenIn(c, st.phase) && (c.move.turn === "L" || c.move.turn === "U")
+        // of its own phase, once oncoming traffic has stopped — or, having waited through that green, in
+        // the first seconds of the next phase, ahead of the traffic it lets go (as one waiting in the
+        // junction clears it when the lights change); the conflict checks below still apply
+        sneak = sig !== "green" && ((st.stage !== 0 && this.greenIn(c, st.phase)) || clearing(r)) && (c.move.turn === "L" || c.move.turn === "U")
           && r.d < 4 && r.v.v < 1 && this.tick - r.at > 30;
         if (sig !== "green" && !sneak && !this.mustGoOnSignal(r.v, r.d, sig)) { deny(r.v, `${sig} light`); continue; }
       }
       // pedestrians on (or about to step onto) the crossing it would drive over
       if (this.pedBlocks(n, c)) { deny(r.v, "waits for pedestrians on the crossing"); continue; }
       let ok = true, why = "", yielded = false;
-      for (const o of held) if (conflicts(c, o.conn) && !this.pastConflict(o, c, r)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : ""; break; }
-      if (ok) for (const b of blockers) if (conflicts(c, b)) { ok = false; why = log ? `crosses the path of a vehicle ahead in the queue (${this.mv(b)})` : ""; break; }
+      for (const o of held) if (conflicts(c, o.conn) && !this.pastConflict(o, c, r)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : `path crosses #${o.v.id}`; break; }
+      if (ok) for (const b of blockers) if (conflicts(c, b)) { ok = false; why = log ? `crosses the path of a vehicle ahead in the queue (${this.mv(b)})` : "crosses the path of a vehicle ahead in the queue"; break; }
       if (ok && signed && this.minor(n, c.inEdge)) {
         // giving way means not crossing *or* joining the lane in front of priority traffic
         // (traffic in another lane of the road it joins doesn't matter)
         const clash = (b: Conn) => conflicts(c, b) || (b.outEdge === c.outEdge && b.outLane === c.outLane);
-        for (const b of major) if (clash(b)) { ok = false; yielded = true; why = log ? `gives way to priority traffic (${this.mv(b)})` : ""; break; }
-        if (ok) for (const o of held) if (!o.conn.inEdge.sign && clash(o.conn)) { ok = false; yielded = true; why = log ? `gives way to #${o.v.id} (${this.mv(o.conn)})` : ""; break; }
+        for (const b of major) if (clash(b)) { ok = false; yielded = true; why = log ? `gives way to priority traffic (${this.mv(b)})` : "gives way to priority traffic"; break; }
+        if (ok) for (const o of held) if (!o.conn.inEdge.sign && clash(o.conn)) { ok = false; yielded = true; why = log ? `gives way to #${o.v.id} (${this.mv(o.conn)})` : `gives way to #${o.v.id}`; break; }
       }
       // a vehicle that can't go because its exit is full, or because it gives way, does not hold up
       // the others behind it in arrival order (keep the junction moving: "don't block the box")
       let holdsQueue = !yielded;
-      if (ok && !this.exitRoom(st, c, r.v)) { ok = false; holdsQueue = false; why = log ? `no room on the exit (${c.outEdge.link.name || c.outEdge.link.id} lane ${c.outLane + 1})` : ""; }
+      if (ok && !this.exitRoom(st, c, r.v)) { ok = false; holdsQueue = false; this.exitWanted.set(c.outEdge.lanes[c.outLane].id, this.tick); why = log ? `no room on the exit (${c.outEdge.link.name || c.outEdge.link.id} lane ${c.outLane + 1})` : `no room on the exit (lane ${c.outLane + 1})`; }
       if (ok) {
         if (r.early) { if (r.v.early?.conn !== c) continue; r.v.early.granted = true; } else { r.v.conn = c; r.v.granted = true; }
         const occ: Occ = { v: r.v, conn: c, entered: false, sneak };
         st.occ.push(occ); if (held !== st.occ) held.push(occ);
+        this.denyWhy.delete(r.v.id);
         if (log || this.vehLogged(r.v)) { this.lastDeny.delete(r.v.id); this.ev(n, r.v, "grant", `${this.mv(c)} · ${r.d.toFixed(0)} m from the line, waited ${((this.tick - r.at) / 10).toFixed(1)} s${sneak ? " · clears on the change (oncoming stopped)" : ""}`, this.md(c.move, c.inLane, c.outLane)); }
       } else { if ((!free || atLine(r)) && holdsQueue) blockers.push(c); deny(r.v, why); }
     }

@@ -34,7 +34,7 @@ export function setLaneMap(net: Network, nodeId: string, key: string, lanes: Lan
  */
 export function remapEdgeKeys(net: Network, nodeId: string, f: (key: string) => string | null): Network {
   const n = nodeById(net, nodeId);
-  if (!n || !(n.connectors || n.closed || n.laneMap || n.connShape)) return net;
+  if (!n || !(n.connectors || n.closed || n.laneMap || n.connShape || n.phases?.some(p => p.conns?.length))) return net;
   const g = (k: string) => f(k);
   const patch: Partial<NodeDef> = {};
   if (n.connectors) patch.connectors = n.connectors.flatMap(c => { const i = g(c.in), o = g(c.out); return i && o ? [{ ...c, in: i, out: o }] : []; });
@@ -52,18 +52,31 @@ export function remapEdgeKeys(net: Network, nodeId: string, f: (key: string) => 
     }
     patch.connShape = Object.keys(m).length ? m : undefined;
   }
+  // (lights per connector: the connectors each phase lists)
+  if (n.phases?.some(p => p.conns?.length)) patch.phases = n.phases.map(p => {
+    if (!p.conns) return p;
+    const conns = p.conns.flatMap(k => {
+      const [x, y] = k.split(">"), [ka, la] = x.split("|"), [kb, lb] = y.split("|"), a = g(ka), b = g(kb);
+      return a && b ? [`${a}|${la}>${b}|${lb}`] : [];
+    });
+    return { ...p, conns };
+  });
   return updateNode(net, nodeId, patch);
 }
 /** the same at both ends of link `id`, for keys of that link (`f` gets the node and the direction) */
 function remapLink(net: Network, id: string, f: (node: string, dir: 1 | -1) => string | null, ends?: [string, string]): Network {
   const l = linkById(net, id);
   const [A, B] = ends ?? (l ? [l.from, l.to] : ["", ""]);
-  for (const node of new Set([A, B])) {
-    if (!node) continue;
-    net = remapEdgeKeys(net, node, k => {
-      const [lid, d] = k.split(":");
-      return lid === id ? f(node, Number(d) as 1 | -1) : k;
-    });
+  for (const end of new Set([A, B])) {
+    if (!end) continue;
+    // (a junction drawn by hand keeps its connectors and phases on any of its points, the lights on its lead)
+    const j = net.junctions?.find(x => x.nodes.includes(end));
+    for (const node of j ? j.nodes : [end]) {
+      net = remapEdgeKeys(net, node, k => {
+        const [lid, d] = k.split(":");
+        return lid === id ? f(end, Number(d) as 1 | -1) : k;
+      });
+    }
   }
   return net;
 }
