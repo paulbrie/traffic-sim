@@ -1321,7 +1321,8 @@ export function exitLane(move: Movement, a: number, isBus: boolean): number {
   let b: number;
   if (move.turn === "U") b = 0;
   else if (move.turn === "L" || move.merge === "left") b = Math.min(Math.max(0, a - move.lo), nOut - 1);
-  else if (move.turn === "R" || move.merge === "right") b = Math.max(0, nOut - 1 - (move.hi - a));
+  // (a vehicle can ask from a lane right of the turn's lanes, e.g. early, still on the junction before: the kerb lane then)
+  else if (move.turn === "R" || move.merge === "right") b = Math.min(nOut - 1, Math.max(0, nOut - 1 - (move.hi - a)));
   else b = Math.max(0, Math.min(a - move.in.left - ra - (move.in.dropLane === move.in.left ? 1 : 0) - (move.skip ?? 0) + (move.shift ?? 0), nOut - 1));
   if (out.bus) {
     if (isBus && move.in.bus && a === move.in.kerb) b = nOut - 1;
