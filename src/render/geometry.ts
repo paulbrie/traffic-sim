@@ -1,6 +1,7 @@
 /** Static road geometry derived from the compiled network, shared by 2D and 3D renderers. */
 import { CURB, LEVEL_H, armEnd, connectorPreview, exitLane, isRev, laneAllowed, linkCenter, linkZ, throughConns, type Arm, type CNode, type Movement, type Compiled, type Edge } from "@/engine/compile";
 import { Poly, normAngle } from "@/engine/geom";
+import { bayOutline } from "@/engine/parking";
 import type { LinkDef, MedianKind, Network, Vec } from "@/engine/types";
 
 export interface Strip { left: Poly; right: Poly }
@@ -18,8 +19,12 @@ export interface RoadGeo {
   medians: { linkId: string; kind: MedianKind; strip: Strip; on: On }[];
   /** kerbed islands between slip lanes and the junction corner they cut off */
   islands: { pts: Vec[]; on: On }[];
-  /** zebra crossings at traffic lights: one polygon per stripe */
+  /** zebra crossings (at traffic lights, and those drawn by hand): one polygon per stripe */
   zebras: { pts: Vec[]; on: On }[];
+  /** parking bays: each bay's outline (opening along the kerb first), and whether it is parallel to the kerb */
+  bays: { pts: Vec[]; parallel: boolean; on: On }[];
+  /** each bay's connector to its lane: the way cars drive in */
+  bayPaths: { poly: Poly; on: On }[];
   /** ring: centre and radius of a roundabout's (outer) circulating lane; `r2` the inner lane of a two-lane one */
   junctions: { nodeId: string; polygon: Vec[]; surface: Vec[]; ring: { c: Vec; r: number; r2?: number } | null; deadEnd: DeadEnd | null; on: On }[];
   busBands: (Strip & { on: On })[];
@@ -195,7 +200,7 @@ function clipHalf(poly: Vec[], f: (p: Vec) => number): Vec[] {
 }
 
 export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
-  const geo: RoadGeo = { surfaces: [], medians: [], islands: [], zebras: [], junctions: [], busBands: [], lines: [], stopLines: [], arrows: [], signals: [], stops: [], levels: [], gantries: [] };
+  const geo: RoadGeo = { surfaces: [], medians: [], islands: [], zebras: [], bays: [], bayPaths: [], junctions: [], busBands: [], lines: [], stopLines: [], arrows: [], signals: [], stops: [], levels: [], gantries: [] };
   const byLink = edgesByLink(c);
   const onL = (l: LinkDef): On => ({ lv: l.level ?? 0, link: l.id }), onN = (n: CNode): On => ({ lv: n.level, node: n.def.id });
   for (const link of net.links) {
@@ -285,7 +290,8 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
           continue;
         }
         // the last metres before a junction's stop line are solid (no changing lanes there)
-        const solid = e.to.controlled && !e.to.ringR && e.to.degree >= 2 && ec.len > 30 ? Math.min(20, ec.len * 0.3) : 0;
+        // (a junction drawn by hand's road ends have one road each, and are a junction all the same)
+        const solid = e.to.controlled && !e.to.ringR && (e.to.degree >= 2 || !!e.to.lead) && ec.len > 30 ? Math.min(20, ec.len * 0.3) : 0;
         const cut = Math.max(from, ec.len - solid);
         if (busSep || !solid) geo.lines.push({ poly: (from > 0 ? ec.slice(from, ec.len) : ec).offset(off), dashed: !busSep, kind: busSep ? "bus" : "lane", on });
         else {
@@ -300,8 +306,8 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
         const end = ec.at(ec.len), t = ec.tangent(ec.len), r = { x: -t.y, y: t.x };
         const ctl = node.signals.def.control;
         const kind = node.ringR > 0 ? "yield"
-          : ctl === "stop" && node.degree >= 2 ? "stop"
-            : ctl === "lights" && node.degree >= 2 ? "signal"
+          : ctl === "stop" && (node.degree >= 2 || !!node.lead) ? "stop"
+            : ctl === "lights" && (node.degree >= 2 || !!node.lead) ? "signal"
               : ctl === "priority" && e.sign === "stop" ? "stop"
                 : ctl === "priority" && e.sign === "yield" ? "yield" : "priority";
         const signed = ctl === "priority" && !!e.sign;
@@ -476,6 +482,13 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
         });
       }
     });
+  }
+  // zebra crossings drawn by hand: stripes along the traffic, from kerb to kerb (a → b)
+  for (const x of c.crossings) zebra(geo.zebras, { lv: 0 }, x.def.a, { x: x.u.y, y: -x.u.x }, 0, x.len, -x.def.width / 2, x.def.width / 2);
+  // rows of parking bays
+  for (const p of c.parking) {
+    const on = onL(p.edge.link);
+    for (let i = 0; i < p.bays.length; i++) { geo.bays.push({ pts: bayOutline(p, i), parallel: p.alpha === 0, on }); geo.bayPaths.push({ poly: p.access[i].inPath, on }); }
   }
   return geo;
 }

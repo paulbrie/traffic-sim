@@ -128,7 +128,8 @@ export abstract class SimRouting extends SimBase {
       return [several[0], fit ?? several[0]];
     }
     const b0 = exitLane(m, a, isBus);
-    if (m.turn === "U" || (isBus && m.out.bus)) return [b0, b0];
+    // (a lane connected by hand to one lane of the exit: that one, whatever the next turn)
+    if (m.turn === "U" || (isBus && m.out.bus) || m.map) return [b0, b0];
     const out = m.out;
     const usable = out.bus && !isBus ? out.thru - 1 : out.thru;
     const k = m.hi - m.lo + 1, j = Math.min(k - 1, Math.max(0, a - m.lo));

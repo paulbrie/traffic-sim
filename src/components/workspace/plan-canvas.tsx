@@ -8,7 +8,7 @@ import { MARKER_HEAD, buildPaths, connectorsOf, drawScene, toScreen, toWorld, un
 import { readPalette, type Palette } from "@/render/palette";
 import { connShapeKey, connectorHandles, connectorId, linkExtent, LW, type CNode, type Edge, type LanePiece } from "@/engine/compile";
 import { pointInPoly } from "@/engine/buildings";
-import type { Network, Vec } from "@/engine/types";
+import type { CrossingDef, Network, ParkingDef, Vec } from "@/engine/types";
 import { commit, endGesture, highlightedLayers, network$, select, selectMany, selectedAll, toggleSelect, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { noteDraw } from "@/state/perf";
@@ -19,6 +19,10 @@ import { worldToImage, type Underlay } from "@/lib/underlay";
 import { unproject } from "@/lib/osm/area";
 import { routeBetween, routeShape } from "@/engine/route";
 import * as ops from "@/state/ops";
+import { canJoin, createJunction } from "@/state/junctions";
+import { onCrossing } from "@/engine/crossings";
+import { bayOutline, rowEnds } from "@/engine/parking";
+import { toast } from "sonner";
 
 type Snap = { p: Vec; nodeId?: string; link?: { id: string; t: number } };
 type Drag =
@@ -30,6 +34,10 @@ type Drag =
   | { mode: "connNew"; from: string; sx: number; sy: number; moved: boolean }
   | { mode: "box"; a: Vec; b: Vec }
   | { mode: "marker"; id: string; moved: boolean; sx: number; sy: number }
+  /** a row of parking bays: moved whole (`part` "move"; along its kerb, or anywhere when free-standing), or stretched by an end */
+  | { mode: "parking"; id: string; part: "move" | "a" | "b"; start: Vec; orig: ParkingDef; moved: boolean; sx: number; sy: number }
+  /** a zebra crossing drawn by hand: moved whole, or one kerb end */
+  | { mode: "crossing"; id: string; part: "move" | "a" | "b"; start: Vec; orig: CrossingDef; moved: boolean; sx: number; sy: number }
   | { mode: "outline"; node: string; idx: number }
   | { mode: "ul-move"; start: Vec; x0: number; y0: number }
   | { mode: "ul-rotate"; a0: number; rot0: number }
@@ -223,6 +231,74 @@ export function PlanCanvas() {
       ui.getValue().connectFrom = from;
       markDirty();
     }
+    /**
+     * Where a free-standing row of bays from a to b is reached from: the road nearest its middle (within
+     * 80 m), the direction whose lanes are on its side, and the side of a → b away from that road (its bays
+     * open toward the road).
+     */
+    function accessFor(a: Vec, b: Vec): { link: string; dir: 1 | -1; side: 1 | -1 } | null {
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      let best: { link: (typeof net.links)[number]; t: number; pt: Vec; d: number } | null = null;
+      for (const link of net.links) {
+        const A = ops.nodeById(net, link.from), B = ops.nodeById(net, link.to);
+        if (!A || !B) continue;
+        const r = ops.nearestT(link, A, B, mid);
+        if (r.d < 80 && (!best || r.d < best.d)) best = { link, t: r.t, pt: r.pt, d: r.d };
+      }
+      if (!best) return null;
+      const A = ops.nodeById(net, best.link.from)!, B = ops.nodeById(net, best.link.to)!;
+      const t0 = ops.linkPoint(best.link, A, B, Math.max(0, best.t - 0.01)), t1 = ops.linkPoint(best.link, A, B, Math.min(1, best.t + 0.01));
+      let dir: 1 | -1 = (mid.x - best.pt.x) * -(t1.y - t0.y) + (mid.y - best.pt.y) * (t1.x - t0.x) > 0 ? 1 : -1;
+      if (dir === 1 && best.link.lanesF === 0) dir = -1;
+      if (dir === -1 && best.link.lanesB === 0) dir = 1;
+      const tx = b.x - a.x, ty = b.y - a.y, side: 1 | -1 = (mid.x - best.pt.x) * -ty + (mid.y - best.pt.y) * tx > 0 ? 1 : -1;
+      return { link: best.link.id, dir, side };
+    }
+    /** the selected row of parking bays' end under the pointer (to stretch it) */
+    function hitParkingEnd(sx: number, sy: number): { id: string; which: "a" | "b" } | null {
+      const sel = u.selection;
+      if (sel?.kind !== "parking") return null;
+      const p = simController.compiled.parking.find(x => x.def.id === sel.id);
+      if (!p) return null;
+      const [a, b] = rowEnds(p);
+      for (const [q, which] of [[a, "a"], [b, "b"]] as const) { const s = toScreen(cam, q.x, q.y); if (Math.hypot(s.x - sx, s.y - sy) < HIT_HANDLE) return { id: sel.id, which }; }
+      return null;
+    }
+    /** the selected zebra crossing's kerb end under the pointer (to move just that end) */
+    function hitCrossingEnd(sx: number, sy: number): { id: string; which: "a" | "b" } | null {
+      const sel = u.selection;
+      if (sel?.kind !== "crossing") return null;
+      const x = net.crossings?.find(c => c.id === sel.id);
+      if (!x) return null;
+      for (const [q, which] of [[x.a, "a"], [x.b, "b"]] as const) { const s = toScreen(cam, q.x, q.y); if (Math.hypot(s.x - sx, s.y - sy) < HIT_HANDLE) return { id: x.id, which }; }
+      return null;
+    }
+    /** a zebra crossing dragged: moved whole, or one kerb end, to the pointer `w` (Shift: off the grid) */
+    function dragCrossing(d: Extract<Drag, { mode: "crossing" }>, w: Vec): Partial<CrossingDef> {
+      const o = d.orig, p = shift ? w : gridSnap(w), r = (q: Vec) => ({ x: ops.round(q.x), y: ops.round(q.y) });
+      if (d.part === "a") return { a: r(p) };
+      if (d.part === "b") return { b: r(p) };
+      const dx = w.x - d.start.x, dy = w.y - d.start.y;
+      return { a: r({ x: o.a.x + dx, y: o.a.y + dy }), b: r({ x: o.b.x + dx, y: o.b.y + dy }) };
+    }
+    /** a row of parking bays dragged: moved whole, or one end, to the pointer `w` */
+    function dragParking(d: Extract<Drag, { mode: "parking" }>, w: Vec): ParkingDef {
+      const o = d.orig;
+      if (o.line) {
+        if (d.part === "a") return { ...o, line: { ...o.line, a: { x: ops.round(w.x), y: ops.round(w.y) } } };
+        if (d.part === "b") return { ...o, line: { ...o.line, b: { x: ops.round(w.x), y: ops.round(w.y) } } };
+        const dx = w.x - d.start.x, dy = w.y - d.start.y;
+        return { ...o, line: { ...o.line, a: { x: ops.round(o.line.a.x + dx), y: ops.round(o.line.a.y + dy) }, b: { x: ops.round(o.line.b.x + dx), y: ops.round(o.line.b.y + dy) } } };
+      }
+      // along its kerb: by how far along the road the pointer went
+      const link = ops.linkById(net, o.link), A = link && ops.nodeById(net, link.from), B = link && ops.nodeById(net, link.to);
+      if (!link || !A || !B) return o;
+      const t = ops.nearestT(link, A, B, w).t;
+      if (d.part === "a") return { ...o, from: Math.min(t, o.to - 0.002), to: o.to };
+      if (d.part === "b") return { ...o, to: Math.max(t, o.from + 0.002) };
+      const dt = Math.min(1 - o.to, Math.max(-o.from, t - ops.nearestT(link, A, B, d.start).t));
+      return { ...o, from: o.from + dt, to: o.to + dt };
+    }
     /** index of the outline point (of the junction whose outline is being edited) under the pointer, or -1 */
     function hitOutlinePoint(sx: number, sy: number): number {
       const id = ui.getValue().shape.edit, nd = id ? ops.nodeById(net, id) : null;
@@ -326,16 +402,24 @@ export function PlanCanvas() {
     function pickInLayers(layers: readonly LayerId[], sx: number, sy: number, w: Vec): Selection | null {
       const c = simController.compiled, on = (l: LayerId) => layers.includes(l);
       // (with roads on, every point of the drawing: road ends and joints too)
-      const nodeOk = (n: CNode) => (on("junctions") && n.controlled && n.degree >= 2)
+      const nodeOk = (n: CNode) => (on("junctions") && n.controlled && (n.degree >= 2 || !!n.lead))
         || (on("signals") && n.controlled && n.def.control === "lights") || ((on("entries") || on("zones")) && n.gateway);
       const nodeId = hitNode(sx, sy, undefined, id => { if (on("roads")) return true; const n = c.nodeById.get(id); return !!n && nodeOk(n); });
       if (nodeId) return { kind: "node", id: nodeId };
       if (on("stops")) { const id = hitStop(w); if (id) return { kind: "stop", id }; }
+      // zebra crossings drawn by hand, rows of parking bays (a click on one of their bays)
+      if (on("crossings")) for (const x of c.crossings) if (onCrossing(x, w.x, w.y, 0.5)) return { kind: "crossing", id: x.def.id };
+      if (on("parking")) for (const p of c.parking) for (let i = 0; i < p.bays.length; i++) if (pointInPoly(bayOutline(p, i), w.x, w.y)) return { kind: "parking", id: p.def.id };
       if (on("vehicles")) { const v = simController.sim?.vehicleNear(w.x, w.y, Math.max(3, pxToM(10))); if (v) return { kind: "vehicle", id: String(v.id) }; }
       // (connectors are only drawn when highlighted or switched on in the display options)
       if (on("connectors")) {
         const all = u.display.connectors || highlightedLayers(layers).includes("connectors"), focus = focusNodes();
         if (all || focus.length) { const id = hitConnector(w, all ? undefined : new Set(focus)); if (id) return { kind: "connector", id }; }
+      }
+      // inside a junction drawn by hand: the junction (held by its leading node)
+      if (on("junctions") || on("roads")) for (const j of net.junctions ?? []) {
+        const n = c.nodeById.get(j.nodes[0]);
+        if (n && n.polygon.length >= 3 && pointInPoly(n.polygon, w.x, w.y)) return { kind: "node", id: n.def.id };
       }
       // lanes before their road once a lane is wide enough on screen to aim at (about 12 px)
       if (on("lanes") && cam.scale * 3.2 >= 12) { const id = hitLane(w); if (id) return { kind: "lane", id }; }
@@ -379,11 +463,12 @@ export function PlanCanvas() {
       return { x: ops.round(from.x + Math.cos(a) * L), y: ops.round(from.y + Math.sin(a) * L) };
     }
     function snapAt(sx: number, sy: number, from?: Vec, exclude?: string): Snap {
+      // (junctions drawn by hand: a road only carries on from a loose end, never makes a junction by joining)
       const nodeId = hitNode(sx, sy, exclude);
-      if (nodeId) { const n = ops.nodeById(net, nodeId)!; return { p: { x: n.x, y: n.y }, nodeId }; }
+      if (nodeId && canJoin(net, nodeId)) { const n = ops.nodeById(net, nodeId)!; return { p: { x: n.x, y: n.y }, nodeId }; }
       const w = toWorld(cam, sx, sy);
       if (from && shift) return { p: angleSnap(from, w) };
-      const l = hitLink(w);
+      const l = net.manualJunctions ? null : hitLink(w);
       if (l && l.t > 0.02 && l.t < 0.98) return { p: { x: ops.round(l.pt.x), y: ops.round(l.pt.y) }, link: { id: l.id, t: l.t } };
       return { p: gridSnap(w) };
     }
@@ -442,7 +527,56 @@ export function PlanCanvas() {
       }
       // junction editor: clicks add points to the painted area being drawn, or pick outline points
       const sh = ui.getValue().shape;
+      // a zebra crossing: the second click is its other kerb
+      if (sh.paint?.kind === "crossing") {
+        const a = sh.paint.pts[0];
+        sh.paint = null;
+        if (Math.hypot(w.x - a.x, w.y - a.y) < 1) { markDirty(); return; }
+        const [n2, x] = ops.addCrossing(net, a, w);
+        commit(n2); select({ kind: "crossing", id: x.id }); markDirty();
+        return;
+      }
+      // a row of parking bays: the second click, on the same side of the same road, is where it ends
+      if (sh.paint?.kind === "parking" && sh.paint.node === "free") {
+        // a row standing on its own (a → here): reached from the road nearest it, from the side it is on;
+        // its bays open toward that road
+        const a = sh.paint.pts[0], b = { x: ops.round(w.x), y: ops.round(w.y) };
+        sh.paint = null;
+        if (Math.hypot(b.x - a.x, b.y - a.y) < 1) { markDirty(); return; }
+        const acc = accessFor(a, b);
+        if (!acc) { toast.error("Draw the bays within 80 m of a road: cars reach them from the nearest one."); markDirty(); return; }
+        const [n2, p] = ops.addFreeParking(net, acc.link, acc.dir, a, b, acc.side);
+        commit(n2); select({ kind: "parking", id: p.id }); markDirty();
+        return;
+      }
+      if (sh.paint?.kind === "parking") {
+        const [lid, dir, t0] = sh.paint.node.split("|"), l = hitLink(w);
+        sh.paint = null;
+        if (!l || l.id !== lid) { toast.error("End the row of bays on the same road it starts on."); markDirty(); return; }
+        const [n2, p] = ops.addParking(net, lid, Number(dir) as 1 | -1, Number(t0), l.t);
+        commit(n2); select({ kind: "parking", id: p.id }); markDirty();
+        return;
+      }
       if (sh.paint) { const pp = sh.paint; sh.paint = { ...pp, pts: [...pp.pts, { x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
+      // Zebra crossing tool: the first kerb
+      if (tool === "crossing") { sh.edit = null; sh.paint = { node: "", kind: "crossing", pts: [{ x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
+      // Parking tool: where a row of bays starts, on the side of the road clicked (the kerb of the traffic on that side)
+      if (tool === "parking") {
+        const l = hitLink(w);
+        // (off the road: a row standing on its own, from here to the next click)
+        if (!l) { sh.edit = null; sh.paint = { node: "free", kind: "parking", pts: [{ x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
+        const link = ops.linkById(net, l.id)!, A = ops.nodeById(net, link.from)!, B = ops.nodeById(net, link.to)!;
+        const t0 = ops.linkPoint(link, A, B, Math.max(0, l.t - 0.01)), t1 = ops.linkPoint(link, A, B, Math.min(1, l.t + 0.01));
+        const right = (w.x - l.pt.x) * -(t1.y - t0.y) + (w.y - l.pt.y) * (t1.x - t0.x) > 0;
+        let dir: 1 | -1 = right ? 1 : -1;
+        if (dir === 1 && link.lanesF === 0) dir = -1;
+        if (dir === -1 && link.lanesB === 0) dir = 1;
+        sh.edit = null; sh.paint = { node: `${link.id}|${dir}|${l.t}`, kind: "parking", pts: [{ x: l.pt.x, y: l.pt.y }] };
+        markDirty();
+        return;
+      }
+      // Junction tool: the first corner of a new junction's outline
+      if (tool === "junction") { sh.edit = null; sh.paint = { node: "", kind: "junction", pts: [{ x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
       if (sh.edit) {
         const k = hitOutlinePoint(sx, sy);
         if (k >= 0) {
@@ -548,6 +682,11 @@ export function PlanCanvas() {
         return;
       }
 
+      // the selected row of parking bays' ends: stretch it
+      const xEnd = tool === "select" ? hitCrossingEnd(sx, sy) : null;
+      if (xEnd) { const o = net.crossings?.find(c => c.id === xEnd.id); if (o) { drag = { mode: "crossing", id: xEnd.id, part: xEnd.which, start: w, orig: o, moved: false, sx, sy }; return; } }
+      const pkEnd = tool === "select" ? hitParkingEnd(sx, sy) : null;
+      if (pkEnd) { const o = net.parking?.find(x => x.id === pkEnd.id); if (o) { drag = { mode: "parking", id: pkEnd.id, part: pkEnd.which, start: w, orig: o, moved: false, sx, sy }; return; } }
       // the selected lane connector's curve handles (any layer)
       const ce = hitConnEnd(sx, sy);
       if (ce) { drag = { mode: "connEnd", id: ce.id, which: ce.which }; return; }
@@ -565,6 +704,8 @@ export function PlanCanvas() {
         if (e.shiftKey) { toggleSelect(pick); if (pick.kind === "node") return; } else select(pick);
         // junctions and points can be dragged; buildings, lanes and connectors cover so much of the map that a drag from them pans
         if (pick.kind === "node") drag = { mode: "node", id: pick.id, moved: false, sx, sy };
+        else if (pick.kind === "crossing" && !e.shiftKey && tool === "select") { const o = net.crossings?.find(x => x.id === pick.id); if (o) drag = { mode: "crossing", id: pick.id, part: "move", start: w, orig: o, moved: false, sx, sy }; }
+        else if (pick.kind === "parking" && !e.shiftKey && tool === "select") { const o = net.parking?.find(x => x.id === pick.id); if (o) drag = { mode: "parking", id: pick.id, part: "move", start: w, orig: o, moved: false, sx, sy }; }
         else if (pick.kind === "building" || pick.kind === "lane" || pick.kind === "connector") drag = { mode: "pan", sx, sy, cx: cam.cx, cy: cam.cy, moved: false, clickSel: false };
         return;
       }
@@ -628,6 +769,18 @@ export function PlanCanvas() {
         if (!drag.moved && Math.hypot(sx - drag.sx, sy - drag.sy) < 3) return;
         drag.moved = true;
         commit(ops.updateMarker(net, drag.id, { x: w.x, y: w.y }), `marker:${drag.id}`);
+        return;
+      }
+      if (drag?.mode === "crossing") {
+        if (!drag.moved && Math.hypot(sx - drag.sx, sy - drag.sy) < 3) return;
+        drag.moved = true;
+        commit(ops.updateCrossing(net, drag.id, dragCrossing(drag, w)), `crossing:${drag.id}`);
+        return;
+      }
+      if (drag?.mode === "parking") {
+        if (!drag.moved && Math.hypot(sx - drag.sx, sy - drag.sy) < 3) return;
+        drag.moved = true;
+        commit(ops.updateParking(net, drag.id, dragParking(drag, w)), `parking:${drag.id}`);
         return;
       }
       if (drag?.mode === "node") {
@@ -747,11 +900,16 @@ export function PlanCanvas() {
         const { sx, sy } = local(e), g = unproject(net.geo, toWorld(cam, sx, sy));
         setMenu({ x: Math.max(0, Math.min(sx, cam.w - 216)), y: Math.max(0, Math.min(sy, cam.h - 72)), lat: g.lat, lon: g.lon });
       }
+      // a free-standing row moved: reached from the road nearest it now (the same step to undo)
+      if (drag?.mode === "parking" && drag.moved) {
+        const id = drag.id, p = net.parking?.find(x => x.id === id);
+        if (p?.line) { const acc = accessFor(p.line.a, p.line.b); if (acc && (acc.link !== p.link || acc.dir !== p.dir)) commit(ops.updateParking(net, p.id, { link: acc.link, dir: acc.dir }), `parking:${p.id}`); }
+      }
       if (drag?.mode === "node" && drag.moved) {
         // dropped onto another node: merge them
         const { sx, sy } = local(e);
         const other = hitNode(sx, sy, drag.id);
-        if (other) commit(ops.mergeNodes(net, other, drag.id));
+        if (other && canJoin(net, other, drag.id)) commit(ops.mergeNodes(net, other, drag.id));
       }
       if (drag && drag.mode !== "pan") endGesture();
       drag = null;
@@ -822,8 +980,13 @@ export function PlanCanvas() {
       const nd = ops.nodeById(net, p.node);
       // (a double-click also clicked twice: drop points on top of the one before)
       const pts = p.pts.filter((q, i) => i === 0 || Math.hypot(q.x - p.pts[i - 1].x, q.y - p.pts[i - 1].y) > 0.3);
-      if (nd && pts.length >= 3) commit(ops.addPaint(net, nd.id, p.kind, pts.map(q => ({ x: q.x - nd.x, y: q.y - nd.y }))));
       sh.paint = null;
+      if (p.kind === "junction") {
+        // a junction drawn by hand: cut the roads at it, then show it in the inspector
+        const r = pts.length >= 3 ? createJunction(net, pts) : { error: "Draw at least three corners." };
+        if ("error" in r) toast.error(r.error);
+        else { commit(r.net); ui.getValue().tool = "select"; select({ kind: "node", id: r.junction.nodes[0] }); ui.getValue().panel = "inspect"; }
+      } else if (nd && pts.length >= 3 && (p.kind === "hatch" || p.kind === "island")) commit(ops.addPaint(net, nd.id, p.kind, pts.map(q => ({ x: q.x - nd.x, y: q.y - nd.y }))));
       markDirty();
     }
     const onLeave = () => { cursorWorld = null; hover = null; ui.getValue().cursor.inside = false; markDirty(); };

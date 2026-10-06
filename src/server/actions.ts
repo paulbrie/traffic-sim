@@ -331,6 +331,25 @@ export async function deletePlan(id: string) {
 
 export type SaveResult = { ok: true; revision: number; savedAt: string } | { ok: false; reason: "conflict" | "missing" | "forbidden"; revision?: number };
 
+/**
+ * The plan as it is now, for an open page that heard it changed (see /api/plans/[planId]/live): its
+ * revision, contents, and who saved it last (with that save's note).
+ */
+export async function fetchPlanState(id: string): Promise<{ revision: number; savedAt: string; network: Network; settings: PlanSettings; underlay: Underlay | null; by: string | null; note: string } | null> {
+  const me = await assertUser();
+  assertId(id);
+  try { await assertPlan(me, id, "read"); } catch { return null; }
+  const [p] = await db.select({ revision: schema.plans.revision, updatedAt: schema.plans.updatedAt, network: schema.plans.network, settings: schema.plans.settings, underlay: schema.plans.underlay }).from(schema.plans).where(eq(schema.plans.id, id));
+  if (!p) return null;
+  const [v] = await db.select({ note: schema.planVersions.note, name: schema.users.name, email: schema.users.email })
+    .from(schema.planVersions).leftJoin(schema.users, eq(schema.users.id, schema.planVersions.userId))
+    .where(eq(schema.planVersions.planId, id)).orderBy(desc(schema.planVersions.updatedAt)).limit(1);
+  return {
+    revision: p.revision, savedAt: p.updatedAt.toISOString(), network: sanitizeNetwork(p.network), settings: sanitizeSettings(p.settings), underlay: sanitizeUnderlay(p.underlay),
+    by: v ? v.name || v.email || null : null, note: v?.note ?? "",
+  };
+}
+
 /** Saves the plan if nobody else saved in between (optimistic concurrency on `revision`), and records it in the history. */
 /**
  * Saves the open plan. With `keepBuildings` the client left the (unchanged) buildings out of

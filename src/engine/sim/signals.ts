@@ -32,6 +32,7 @@ export abstract class SimSignals extends SimRouting {
       }
     }
     const newGreen = stage === 0 && !(st.stage === 0 && st.phase === phase);
+    if (phase !== st.phase) st.prev = st.phase;
     st.phase = phase; st.stage = stage;
     if (newGreen) {
       if (this.logging(n)) this.ev(n, null, "signal", `green for ${n.phases[phase].map(a => n.arms[a].inEdge?.link.name || n.arms[a].link.id).join(" + ") || "nobody (all red)"}${n.coord ? ` (${n.coord.groupName})` : ""}`);
@@ -65,7 +66,7 @@ export abstract class SimSignals extends SimRouting {
       const ctl = st.node.signals;
       if (ctl === st.node) continue;
       const s = this.ns[ctl.idx];
-      st.phase = s.phase; st.stage = s.stage; st.t = s.t;
+      st.phase = s.phase; st.stage = s.stage; st.t = s.t; st.prev = s.prev;
     }
   }
   /** lights at this node (its own, or run by its junction's controller) */

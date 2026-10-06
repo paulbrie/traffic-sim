@@ -59,6 +59,8 @@ export function writeOut(net: Network, c: Compiled, nodeId: string): Network {
 const reachable = (ein: Edge, a: number, eout: Edge, b: number) => {
   const p = ein.lanes[a], q = eout.lanes[b];
   if (!p || !q || eout.from.ringR > 0 || ein.to.ringR > 0 || (eout.link.level ?? 0) !== (ein.link.level ?? 0) || eout.link === ein.link) return false;
+  // (across a junction drawn by hand: any of its road ends, however far)
+  if (ein.to.hand && eout.from.hand === ein.to.hand) return true;
   // (not back where its own road started, nor behind the end of the lane: ahead or beside it)
   if (eout.from === ein.from) return false;
   const P = p.poly.at(p.len), t = p.poly.tangent(p.len), Q = q.poly.at(0);

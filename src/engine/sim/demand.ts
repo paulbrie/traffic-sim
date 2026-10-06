@@ -1,6 +1,7 @@
 import type { CFlow, CLine, CNode, CZone, CZoneFlow, Edge } from "../compile";
 import { mulberry32 } from "../geom";
-import { DT, KIND_PARAMS, emptyXMemo, type Kind, type Dest, type Vehicle } from "./base";
+import { DT, KIND_PARAMS, emptyXMemo, type Kind, type Dest, type ParkingStats, type Vehicle } from "./base";
+import { PARKING } from "../types";
 import { SimMotion } from "./motion";
 
 /** Demand: vehicles entering the plan (at entry points, buildings or along roads) and buses on their lines. */
@@ -16,7 +17,7 @@ export abstract class SimDemand extends SimMotion {
       route: [], ri: 0, piece: this.net.pieces[0], s: 0, v: 0, acc: 0, lane: 0, queue: [], trail: [],
       conn: null, granted: false, dest: { kind: "gateway", node: this.net.nodes[0] }, state: "free", wait: 0,
       enterT: this.tick, bornT: this.tick, jam: 0, broken: 0, brokenAt: 0, gap: Infinity, leader: null, v0: 10,
-      reroutes: 0, laneChanges: 0, lcCool: 0, lcOff: 0, lcT: 0,
+      reroutes: 0, laneChanges: 0, lcCool: 0, lcOff: 0, lcT: 0, blendT: 0, stuckAt: undefined, parkSince: undefined,
       reqAt: 0, reqFor: null, stoppedAt: null, fixedAt: null, rerouteAt: null,
       line: null, stopIdx: 0, pax: 0, cap: 50, dwell: 0, dead: false, metered: false, flow: -1, zflow: -1, goal: null,
       test: undefined, logState: undefined, splits: undefined, xm: [emptyXMemo(), emptyXMemo()], xmNext: 0,
@@ -149,6 +150,8 @@ export abstract class SimDemand extends SimMotion {
     let edge: Edge | null = null, s = 0, v0 = 0;
     const auto = this.gateways.filter(g => g.def.inflow == null);
     const fromGate = !!gate || (auto.length > 0 && r() < this.throughShare(false));
+    // (every trip through entry points: none starts along a road, even with no entry point free to use)
+    if (!fromGate && this.throughShare(false) >= 1) return false;
     if (fromGate) {
       const g = gate ?? this.pick(auto);
       edge = g.arms[0].outEdge;
@@ -169,6 +172,8 @@ export abstract class SimDemand extends SimMotion {
     if (flow) dest = { kind: "gateway", node: flow.to };
     else if (exits.length && r() < this.throughShare(true)) dest = { kind: "gateway", node: this.pickWeighted(exits, g => g.def.exitWeight ?? 1) };
     else {
+      // (every trip through entry points: none ends along a road either)
+      if (this.throughShare(true) >= 1) return false;
       const at = this.randomPlace(); if (!at || at.edge.length < 8 || at.edge.busOnly) return false;
       dest = { kind: "edge", edge: at.edge, s: at.s };
     }
@@ -228,7 +233,132 @@ export abstract class SimDemand extends SimMotion {
     this.vehicles.push(v); this.addToIndex(v); this.logAppear(v);
     return true;
   }
+  // ------------------------------------------------------------ parking
+  /**
+   * Rows of parking bays: cars set off for a row at its rate (its usual share of bays taken over the
+   * average stay, so it stays about that full), each with a free bay kept for it (none free: it doesn't
+   * come); cars whose stay is over pull out when the lane by the bay is clear. Own random numbers.
+   */
+  protected parkingStep() {
+    this.net.parking.forEach((row, r) => {
+      const st = this.parks[r], occ = row.def.occupancy ?? PARKING.occupancy, stay = (row.def.stay ?? PARKING.stay) * 60;
+      if (this.parkRng() < ((occ * row.bays.length) / stay) * DT) st.queue = Math.min(20, st.queue + 1);
+      if (st.queue > 0 && this.vehicles.length < 30000) {
+        const free: number[] = [];
+        for (let i = 0; i < st.until.length; i++) if (st.until[i] === 0) free.push(i);
+        if (!free.length) { st.full++; st.queue--; }
+        else if (this.spawnParker(r, free[(this.parkRng() * free.length) | 0])) st.queue--;
+      }
+      // (one car pulls out per row and tick)
+      for (let i = 0; i < st.until.length; i++) if (st.until[i] > 0 && this.tick >= st.until[i]) { if (this.spawnLeaver(r, i)) break; }
+    });
+  }
+  /** where a parking trip starts or ends: an entry point (by the plan's through share) or a place inside the plan, by the row's own random numbers */
+  protected parkEnd(): { gate: CNode } | { at: { edge: Edge; s: number } } | null {
+    const r = this.parkRng, gates = this.gateways.filter(g => (g.def.exitWeight ?? 1) > 0);
+    if (gates.length && r() < this.throughShare(false)) return { gate: gates[(r() * gates.length) | 0] };
+    // (every trip through entry points: parking trips too)
+    if (this.throughShare(false) >= 1) return null;
+    const n = this.placeCum.length, total = n ? this.placeCum[n - 1] : 0;
+    if (total > 0) {
+      const x = r() * total;
+      let lo = 0, hi = n - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (this.placeCum[mid] < x) lo = mid + 1; else hi = mid; }
+      const opts = this.net.places[lo].opts;
+      return { at: opts[(r() * opts.length) | 0] };
+    }
+    if (this.totalLen <= 0) return gates.length ? { gate: gates[(r() * gates.length) | 0] } : null;
+    let x = r() * this.totalLen;
+    for (let i = 0; i < this.net.edges.length; i++) {
+      x -= this.edgeWeights[i];
+      if (x <= 0) { const e = this.net.edges[i]; return e.length < 8 || e.busOnly ? null : { at: { edge: e, s: e.length * (0.2 + r() * 0.6) } }; }
+    }
+    return null;
+  }
+  /** a car (made with the parking random numbers, so the rest of the run goes on as it would) */
+  protected parkCar(): Vehicle {
+    const rng = this.rng;
+    this.rng = this.parkRng;
+    const v = this.makeVehicle("car");
+    this.rng = rng;
+    v.metered = true;
+    return v;
+  }
+  /** a car setting off to park in bay `bay` of row `r` (kept for it) */
+  protected spawnParker(r: number, bay: number): boolean {
+    const row = this.net.parking[r], o = this.parkEnd();
+    if (!o) return false;
+    let edge: Edge | null, s = 0, v0 = 0;
+    if ("gate" in o) { edge = o.gate.arms[0].outEdge; v0 = edge ? Math.min(9, edge.speed) : 0; }
+    else { edge = o.at.edge; s = o.at.s; }
+    if (!edge || edge.busOnly || edge.length < 8) return false;
+    const [lo, hi] = entryLanes(edge, "car"), lane = lo + ((this.parkRng() * (hi - lo + 1)) | 0), piece = edge.lanes[lane];
+    const sOnLane = s * (piece.len / Math.max(1e-6, edge.length));
+    if (!this.laneClear(piece, sOnLane, "gate" in o ? 14 : 12)) return false;
+    // (it drives to where its path into the bay leaves the lane)
+    const dest: Dest = { kind: "edge", edge: row.edge, s: row.access[bay].sIn };
+    let route: Edge[];
+    if (row.edge === edge && dest.s > sOnLane + 10) route = [edge];
+    else {
+      const rest = this.plan(edge, dest);
+      if (!rest) return false;
+      route = [edge, ...rest];
+    }
+    const { ln, pc, sl } = this.startLane(edge, route, lane, lo, hi, s, "gate" in o ? 14 : 12);
+    const v = this.parkCar();
+    v.route = route; v.ri = 0; v.piece = pc; v.s = sl; v.v = v0; v.lane = ln; v.dest = dest; v.goal = dest;
+    v.park = { row: r, bay }; this.parks[r].until[bay] = -1;
+    this.vehicles.push(v); this.addToIndex(v); this.logAppear(v);
+    if ("gate" in o) this.countGate(edge.from.def.id, "in");
+    return true;
+  }
+  /** the car in bay `bay` of row `r` pulls out (the lane by the bay clear) and drives off; the bay is free */
+  protected spawnLeaver(r: number, bay: number): boolean {
+    const row = this.net.parking[r], e = row.edge, st = this.parks[r];
+    // (it ends its way out with its front here, in the lane its way out leads to; it waits for its gap in its bay)
+    const acc = row.access[bay], lane = acc.outLane, piece = e.lanes[lane], s = acc.sOut * (piece.len / Math.max(1e-6, e.length));
+    // where it drives off to: a trip end as any (an entry / exit point, by the plan's through share), else the
+    // first exit it can reach (the one at the end of its own road at least); none at all: it stays parked a
+    // minute more and tries again (a parked car never just vanishes)
+    const routeTo = (dest: Dest): Edge[] | null => {
+      if (dest.kind === "edge" && dest.edge === e && dest.s > acc.sOut + 10) return [e];
+      const rest = this.plan(e, dest);
+      return rest ? [e, ...rest] : null;
+    };
+    let dest: Dest | null = null, route: Edge[] | null = null;
+    const d = this.parkEnd();
+    if (d) { dest = "gate" in d ? { kind: "gateway", node: d.gate } : { kind: "edge", edge: d.at.edge, s: d.at.s }; route = routeTo(dest); }
+    if (!route) {
+      const exits = this.gateways.filter(g => (g.def.exitWeight ?? 1) > 0), start = (this.parkRng() * Math.max(1, exits.length)) | 0;
+      for (let k = 0; k < exits.length && !route; k++) { dest = { kind: "gateway", node: exits[(start + k) % exits.length] }; route = routeTo(dest); }
+    }
+    if (!route || !dest) { st.until[bay] = this.tick + 600; return false; }
+    st.left++;
+    // (the bay stays taken until the car is out of it)
+    st.until[bay] = -2;
+    const v = this.parkCar();
+    v.route = route; v.ri = 0; v.piece = piece; v.s = s; v.v = 0; v.lane = lane; v.dest = dest; v.goal = dest;
+    v.bayMove = { row: r, bay, way: "out", s: 0, inLane: false, go: false };
+    this.vehicles.push(v); this.addToIndex(v); this.logAppear(v);
+    return true;
+  }
+  /** per bay of every row (rows in order): 1 where a car is parked */
+  parkedFlags(): Uint8Array {
+    const out = new Uint8Array(this.parks.reduce((n, st) => n + st.until.length, 0));
+    let k = 0;
+    for (const st of this.parks) for (const u of st.until) out[k++] = u > 0 ? 1 : 0;
+    return out;
+  }
+  /** a row of parking bays' numbers (null = no such row) */
+  parkingStats(r: number): ParkingStats | null {
+    const st = this.parks[r];
+    if (!st) return null;
+    let taken = 0, coming = 0;
+    for (const u of st.until) { if (u > 0 || u === -2) taken++; else if (u === -1) coming++; }
+    return { bays: st.until.length, taken, coming, parked: st.parked, left: st.left, full: st.full };
+  }
   protected spawnLoop() {
+    if (this.parks.length) this.parkingStep();
     let cars = 0, trucks = 0;
     const busesPerLine = new Map<CLine, number>();
     this.meteredSpawns();
@@ -242,7 +372,7 @@ export abstract class SimDemand extends SimMotion {
     if (this.tick % 20 === 0) for (const line of this.net.lines) {
       const have = busesPerLine.get(line) || 0;
       if (have < line.def.buses) this.spawnBus(line, Math.floor((have * line.stops.length) / Math.max(1, line.def.buses)));
-      else if (have > line.def.buses) { const b = this.vehicles.find(v => !v.dead && v.line === line); if (b) this.kill(b, "removed"); }
+      else if (have > line.def.buses) { const b = this.vehicles.find(v => !v.dead && v.line === line); if (b) this.kill(b, "removed", false); }
     }
     if (this.tick % 10 === 0) for (const s of this.net.stops) if (this.rng() < 0.12) s.waiting = Math.min(80, s.waiting + 1);
   }

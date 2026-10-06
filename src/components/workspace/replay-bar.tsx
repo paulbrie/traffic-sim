@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSubject } from "subjecto/react";
-import { Pause, Play, Radio, SkipBack, SkipForward } from "lucide-react";
+import { ClipboardCopy, Pause, Play, Radio, SkipBack, SkipForward } from "lucide-react";
+import { toast } from "sonner";
+import { replayMomentText } from "@/state/replay-copy";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { stats$, ui } from "@/state/store";
@@ -55,6 +57,15 @@ export function ReplayBar() {
       <span className="w-32 text-right font-mono tabular text-muted-foreground" title={`step ${cur} · ${rec.frames} steps kept (${Math.round(rec.bytes / 1048576)} MB)`}>
         {clock(cur / 10)} / {clock(rec.to / 10)}
       </span>
+      <Button size="icon-sm" variant="ghost" aria-label="Copy this moment's data" title="Copy this moment's data (vehicles, lights, parking and events in view) to paste into a conversation"
+        onClick={async () => {
+          const text = replayMomentText();
+          if (!text) return;
+          try { await navigator.clipboard.writeText(text); toast.success("Replay data copied", { description: `${Math.round(text.length / 1024)} kB: paste it into the conversation.` }); }
+          catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
+        }}>
+        <ClipboardCopy />
+      </Button>
       <Button size="sm" variant={rp ? "default" : "secondary"} className="h-7" disabled={!rp} onClick={() => { setPlaying(false); simController.goLive(); }} title="Back to the running simulation">
         <Radio /> Live
       </Button>

@@ -1,5 +1,7 @@
 /** Canvas 2D renderer for the plan view (world units = metres). */
 import { connectorHandles, connectorId, connectorPreview, type Compiled, type ConnectorView, type Piece } from "@/engine/compile";
+import { bayOutline, bayPose, rowEnds } from "@/engine/parking";
+import { pedestrianSpots, type PedSpot } from "./pedestrians";
 import { DEFAULT_MARKER_COLOR } from "@/engine/markers";
 import type { Poly } from "@/engine/geom";
 import type { SimMirror as Sim, VehicleView as Vehicle } from "@/engine/sim/mirror";
@@ -21,6 +23,8 @@ export interface LayerPaths {
   shadow: Path2D;
   /** roads (layer "roads"): surface, kerb, islands and medians, centre lines and hatching */
   curb: Path2D; asphalt: Path2D; island: Path2D; islandEdge: Path2D; centerDash: Path2D; centerSolid: Path2D; hatch: Path2D;
+  /** parking bays' lines (their asphalt is in `asphalt`), and each bay's connector to its lane */
+  bays: Path2D; bayPaths: Path2D;
   /** lanes (layer "lanes"): lane lines, bus lanes, lane arrows */
   bus: Path2D; laneDash: Path2D; laneSolid: Path2D; arrows: Path2D;
   /** junctions (layer "junctions"): their area, roundabout islands, zebras, stop and give-way lines, turn guides */
@@ -59,15 +63,36 @@ const stripPath = (p: Path2D, s: Strip) => {
   p.closePath();
 };
 
+/**
+ * A lane arrow, painted as on the road: a stem with straight on at its tip, and each turn a branch leaving
+ * the stem further back and heading off to its side, with its own head, so heads never sit on each other;
+ * a U-turn is a hook bending back. `d` = the lane's direction; local f forward, s to the right (m).
+ */
 function arrowGlyph(p: Path2D, at: Vec, d: Vec, turns: string) {
-  // local frame: forward = d, right = r
   const r = { x: -d.y, y: d.x };
   const P = (f: number, s: number) => ({ x: at.x + d.x * f + r.x * s, y: at.y + d.y * f + r.y * s });
   const seg = (pts: [number, number][]) => { const a = P(...pts[0]); p.moveTo(a.x, a.y); for (const q of pts.slice(1)) { const b = P(...q); p.lineTo(b.x, b.y); } };
-  seg([[-2.2, 0], [0.4, 0]]);
-  if (turns.includes("S")) { seg([[0.4, 0], [2.2, 0]]); seg([[1.3, -0.55], [2.2, 0], [1.3, 0.55]]); }
-  if (turns.includes("L") || turns.includes("U")) { seg([[0.4, 0], [1.3, -0.9]]); seg([[0.55, -1.0], [1.3, -0.9], [1.25, -0.2]]); }
-  if (turns.includes("R")) { seg([[0.4, 0], [1.3, 0.9]]); seg([[0.55, 1.0], [1.3, 0.9], [1.25, 0.2]]); }
+  // an arrowhead at (f, s) pointing along (df, ds)
+  const head = (f: number, s: number, df: number, ds: number) => {
+    const m = Math.hypot(df, ds), uf = df / m, us = ds / m, L = 0.75, c = Math.cos(0.5), sn = Math.sin(0.5);
+    seg([[f - L * (uf * c - us * sn), s - L * (us * c + uf * sn)], [f, s], [f - L * (uf * c + us * sn), s - L * (us * c - uf * sn)]]);
+  };
+  const S = turns.includes("S"), Lt = turns.includes("L"), Rt = turns.includes("R"), U = turns.includes("U");
+  // (the branches leave the stem here; with straight on as well, a little further back, clear of its head)
+  const fb = S ? -0.2 : 0.3, tip = S ? 2.3 : fb;
+  seg([[-2.3, 0], [tip, 0]]);
+  if (S) head(2.3, 0, 1, 0);
+  for (const [on, side] of [[Lt, -1], [Rt, 1]] as const) {
+    if (!on) continue;
+    const tf = fb + 1.0, ts = side * 1.05;
+    seg([[fb, 0], [fb + 0.35, side * 0.15], [tf, ts]]);
+    head(tf, ts, 1.0 - 0.35, side * 0.9);
+  }
+  if (U) {
+    // (a hook to the left and back the way it came)
+    seg([[fb, 0], [fb + 0.55, -0.25], [fb + 0.6, -0.85], [fb + 0.15, -1.2], [fb - 0.7, -1.2]]);
+    head(fb - 0.7, -1.2, -1, 0);
+  }
 }
 
 export function buildPaths(geo: RoadGeo): PathCache {
@@ -76,7 +101,7 @@ export function buildPaths(geo: RoadGeo): PathCache {
     let c = byLevel.get(on.lv);
     if (!c) byLevel.set(on.lv, (c = {
       level: on.lv, shadow: new Path2D(), curb: new Path2D(), asphalt: new Path2D(), island: new Path2D(), islandEdge: new Path2D(), bus: new Path2D(),
-      laneDash: new Path2D(), laneSolid: new Path2D(), centerDash: new Path2D(), centerSolid: new Path2D(), hatch: new Path2D(), guide: new Path2D(), zebra: new Path2D(),
+      laneDash: new Path2D(), laneSolid: new Path2D(), centerDash: new Path2D(), centerSolid: new Path2D(), hatch: new Path2D(), guide: new Path2D(), zebra: new Path2D(), bays: new Path2D(), bayPaths: new Path2D(),
       stopLine: new Path2D(), yieldLine: new Path2D(), arrows: new Path2D(), jCurb: new Path2D(), jAsphalt: new Path2D(), jIsland: new Path2D(), jIslandEdge: new Path2D(),
     }));
     return c;
@@ -110,6 +135,16 @@ export function buildPaths(geo: RoadGeo): PathCache {
   for (const m of geo.medians) if (m.kind === "raised") { const c = L(m.on); stripPath(c.island, m.strip); stripPath(c.islandEdge, m.strip); }
   for (const isl of geo.islands) { const c = L(isl.on); poly(c.island, isl.pts); poly(c.islandEdge, isl.pts); }
   for (const z of geo.zebras) poly(L(z.on).zebra, z.pts);
+  // parking bays: asphalt under each, and its lines (the sides; a parallel bay is also closed at the back)
+  for (const b of geo.bayPaths) polyPath(L(b.on).bayPaths, b.poly);
+  for (const b of geo.bays) {
+    const c = L(b.on), [a, q, r, d] = b.pts;
+    poly(c.asphalt, b.pts);
+    c.bays.moveTo(a.x, a.y); c.bays.lineTo(d.x, d.y);
+    if (b.parallel) c.bays.lineTo(r.x, r.y);
+    else c.bays.moveTo(r.x, r.y);
+    c.bays.lineTo(q.x, q.y);
+  }
   for (const l of geo.lines) { const c = L(l.on); polyPath(l.kind === "guide" ? c.guide : l.kind === "hatch" ? c.hatch : l.kind === "center" ? (l.dashed ? c.centerDash : c.centerSolid) : l.dashed ? c.laneDash : c.laneSolid, l.poly); }
   for (const s of geo.stopLines) { const c = L(s.on), p = s.kind === "yield" ? c.yieldLine : c.stopLine; p.moveTo(s.a.x, s.a.y); p.lineTo(s.b.x, s.b.y); }
   for (const a of geo.arrows) arrowGlyph(L(a.on).arrows, a.p, a.dir, a.turns);
@@ -341,6 +376,9 @@ function paintLevel(ctx: CanvasRenderingContext2D, c: LayerPaths, pal: Palette, 
     ctx.strokeStyle = pal.divider; ctx.lineWidth = Math.max(0.15, px * 1); ctx.setLineDash([3, 4]); ctx.stroke(c.centerDash);
     ctx.setLineDash([]); ctx.stroke(c.centerSolid);
     ctx.strokeStyle = pal.mark; ctx.globalAlpha = 0.75 * a0; ctx.lineWidth = Math.max(0.12, px * 0.8); ctx.stroke(c.hatch); ctx.globalAlpha = a0;
+    ctx.strokeStyle = pal.mark; ctx.lineWidth = Math.max(0.12, px * 0.9); ctx.stroke(c.bays);
+    // (the way into each bay, faint and dashed, once zoomed in)
+    if (scale > 1.2) { ctx.globalAlpha = 0.45 * a0; ctx.lineWidth = Math.max(0.1, px * 0.8); ctx.setLineDash([0.8, 1.2]); ctx.stroke(c.bayPaths); ctx.setLineDash([]); ctx.globalAlpha = a0; }
   }
   if (J) {
     if (scale > 1.2) {
@@ -421,6 +459,7 @@ export function drawScene(
       prev = c.level;
     });
     if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo, 1, view); }
+    if (sim && showVehicles && compiled.parking.length) drawParked(ctx, pal, compiled, sim, px);
   }
 
   const allConnectors = ov.connectors || ov.highlight.includes("connectors");
@@ -523,24 +562,8 @@ export function drawScene(
     }
   }
 
-  // pedestrians: walking across the zebra, or waiting at the kerb
-  if (showVehicles && sim && scale > 1.2) for (const n of compiled.nodes) {
-    if (!n.peds) continue;
-    for (const p of sim.pedView(n.idx)) {
-      const a = n.degree === 2 ? n.arms[0] : n.arms[p.arm];
-      if (!a) continue;
-      const base = n.degree === 2 ? { x: n.pos.x, y: n.pos.y } : { x: a.mouth.x - a.mu.x * 2.1, y: a.mouth.y - a.mu.y * 2.1 };
-      const u = n.degree === 2 ? a.u : a.mu, r = { x: -u.y, y: u.x };
-      const at = (along: number, across: number) => ({ x: base.x + u.x * along + r.x * across, y: base.y + u.y * along + r.y * across });
-      const dots: Vec[] = [];
-      for (let i = 0; i < Math.min(p.crossing, 8); i++) dots.push(at(((i % 3) - 1) * 0.7, a.lo + 0.6 + p.progress * (a.hi - a.lo - 1.2) - Math.floor(i / 3) * 0.7));
-      for (let i = 0; i < Math.min(p.waiting, 8); i++) dots.push(at(((i % 3) - 1) * 0.7, a.hi + 0.9 + Math.floor(i / 3) * 0.7));
-      for (const d of dots) {
-        ctx.beginPath(); ctx.arc(d.x, d.y, 0.34, 0, Math.PI * 2);
-        ctx.fillStyle = "#f8fafc"; ctx.fill(); ctx.strokeStyle = "#334155"; ctx.lineWidth = Math.max(0.08, px); ctx.stroke();
-      }
-    }
-  }
+  // pedestrians: walking across the zebras, or waiting at the kerb
+  if (showVehicles && sim && scale > 1.2) drawPeople(ctx, pedestrianSpots(compiled, sim), px);
 
   // signals & stop signs
   if (on("signals")) for (const s of geo.signals) {
@@ -602,7 +625,7 @@ export function drawScene(
   if (hl("junctions") || hl("signals") || hl("entries")) {
     ctx.strokeStyle = pal.primary; ctx.lineWidth = 2;
     for (const n of compiled.nodes) {
-      const on = (hl("entries") && n.gateway) || (hl("signals") && n.controlled && n.def.control === "lights") || (hl("junctions") && n.controlled && n.degree >= 2);
+      const on = (hl("entries") && n.gateway) || (hl("signals") && n.controlled && n.def.control === "lights") || (hl("junctions") && n.controlled && (n.degree >= 2 || !!n.lead));
       if (!on) continue;
       const q = toScreen(cam, n.pos.x, n.pos.y);
       ctx.beginPath(); ctx.arc(q.x, q.y, 11, 0, Math.PI * 2); ctx.stroke();
@@ -626,7 +649,7 @@ export function drawScene(
       const selected = sel?.kind === "node" && sel.id === n.id, hovered = ov.hover?.kind === "node" && ov.hover.id === n.id;
       const cn = compiled.nodeById.get(n.id);
       // (road ends and joints with the roads; junctions and entry points with their own layers)
-      if (!selected && !on("roads") && !(cn && ((on("junctions") && cn.controlled && cn.degree >= 2) || (on("entries") && cn.gateway)))) continue;
+      if (!selected && !on("roads") && !(cn && ((on("junctions") && cn.controlled && (cn.degree >= 2 || !!cn.lead)) || (on("entries") && cn.gateway)))) continue;
       const r = selected || hovered ? 6 : 4.5;
       ctx.lineWidth = 1.5;
       ctx.fillStyle = selected ? pal.select : pal.bg;
@@ -678,6 +701,23 @@ export function drawScene(
     ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); if (cur && pts.length) ctx.lineTo(cur.x, cur.y); if (pts.length >= 2) ctx.lineTo(pts[0].x, pts[0].y); ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle = pal.select;
     for (const q of pts) { ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, Math.PI * 2); ctx.fill(); }
+  }
+  // a selected zebra crossing (its outline), or row of parking bays (every bay)
+  if (sel?.kind === "crossing" || sel?.kind === "parking") {
+    const shapes = sel.kind === "crossing"
+      ? compiled.crossings.filter(x => x.def.id === sel.id).map(x => x.corners)
+      : compiled.parking.filter(p => p.def.id === sel.id).flatMap(p => p.bays.map((_, i) => bayOutline(p, i)));
+    ctx.strokeStyle = pal.select; ctx.lineWidth = 2;
+    for (const q of shapes) { const pts = q.map(p => toScreen(cam, p.x, p.y)); ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); ctx.stroke(); }
+    // a row's ends: drag one to stretch the row (drag a bay to move it all)
+    // (a crossing's two kerb ends, a row's two ends)
+    const row = sel.kind === "parking" ? compiled.parking.find(p => p.def.id === sel.id) : null;
+    const zx = sel.kind === "crossing" ? compiled.crossings.find(x => x.def.id === sel.id) : null;
+    const ends = row ? rowEnds(row) : zx ? [zx.def.a, zx.def.b] : [];
+    if (ends.length) {
+      ctx.fillStyle = pal.bg; ctx.lineWidth = 2;
+      for (const e of ends) { const q = toScreen(cam, e.x, e.y); ctx.beginPath(); ctx.rect(q.x - 4.5, q.y - 4.5, 9, 9); ctx.fill(); ctx.stroke(); }
+    }
   }
   // a selected lane connector: its two curve handles, each sliding along its lane's direction
   if (sel?.kind === "connector") {
@@ -1091,6 +1131,31 @@ function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, byS
     if (++inBatch >= 64) flush();
   }
   flush();
+}
+
+/**
+ * Pedestrians: yellow ovals with a black border, longer across the way they face (their shoulders), a
+ * bit larger than life so they read next to the cars (and look nothing like the map's round markers).
+ */
+function drawPeople(ctx: CanvasRenderingContext2D, at: readonly PedSpot[], px: number) {
+  ctx.fillStyle = "#facc15"; ctx.strokeStyle = "#111111"; ctx.lineWidth = Math.max(0.07, px);
+  for (const p of at) {
+    ctx.beginPath(); ctx.ellipse(p.x, p.y, 0.3, 0.45, Math.atan2(p.dy, p.dx), 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+}
+
+/** cars standing in the parking bays (a muted car colour, so moving traffic stands out) */
+function drawParked(ctx: CanvasRenderingContext2D, pal: Palette, c: Compiled, sim: Sim, px: number) {
+  const body = new Path2D(), win = new Path2D();
+  for (const p of c.parking) for (let i = 0; i < p.bays.length; i++) {
+    if (!sim.parked(p.idx, i)) continue;
+    const q = bayPose(p, i), hl = 2.25, hw = Math.max(0.9, px * 1.5), ux = q.hx, uy = q.hy;
+    const P = (x: number, y: number): [number, number] => [q.x + ux * x - uy * y, q.y + uy * x + ux * y];
+    body.moveTo(...P(hl, -hw)); body.lineTo(...P(hl, hw)); body.lineTo(...P(-hl, hw)); body.lineTo(...P(-hl, -hw)); body.closePath();
+    win.moveTo(...P(hl * 0.2, -hw * 0.75)); win.lineTo(...P(hl * 0.2, hw * 0.75)); win.lineTo(...P(hl * 0.6, hw * 0.75)); win.lineTo(...P(hl * 0.6, -hw * 0.75)); win.closePath();
+  }
+  ctx.globalAlpha = 0.8; ctx.fillStyle = pal.car; ctx.fill(body);
+  ctx.globalAlpha = 1; ctx.fillStyle = "rgba(20,28,34,0.55)"; ctx.fill(win);
 }
 
 /** true if the piece is part of the given link (for hit testing vehicles on a road) */

@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, ChevronDown, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, Keyboard, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, ChevronDown, Pentagon, Footprints, SquareParking, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, SquareTerminal, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, Keyboard, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -17,10 +17,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { HeliKeysDialog } from "./heli-keys-dialog";
 import { Kbd } from "@/components/ui/kbd";
-import { savePlan, saveWarMode } from "@/server/actions";
+import { fetchPlanState, savePlan, saveWarMode } from "@/server/actions";
+import { basePath } from "@/lib/base-path";
 import { MAX_LANES, type Network, type PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
-import { allLayersOn, commit, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll } from "@/state/store";
+import { allLayersOn, applyRemote, commit, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, markSynced, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll } from "@/state/store";
 import { DELETABLE, deleteSelected } from "@/state/bulk";
 import { simController } from "@/state/sim-controller";
 import { heliKeys$ } from "@/state/heli-keys";
@@ -49,6 +50,8 @@ import { Compass } from "./compass";
 import { HistoryButton } from "./history-dialog";
 import { OptimizeButton } from "./optimize-dialog";
 import { Dataview } from "./dataview";
+import { ProblemConsole, useProblemCount } from "./problem-console";
+import { deleteJunction } from "@/state/junctions";
 
 const View3D = dynamic(() => import("./view-3d").then(m => m.View3D), { ssr: false, loading: () => <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading 3D…</div> });
 
@@ -63,10 +66,12 @@ export function Workspace({ plan, user, prefs }: { plan: WorkspacePlan; user: Me
   // load once per mount (the component is keyed by plan id) before children read the stores
   useState(() => { heliKeys$.next(prefs.heliKeys); simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read"); ui.getValue().warMode = prefs.warMode; setSavedBuildings(plan.network.buildings); startUnderlayImage(); return plan.id; });
   useAutosave(plan.id);
+  useLive(plan.id);
   useShortcuts();
   const [view] = useDeepSubject(ui, "view");
   const [panel, setPanel] = useDeepSubject(ui, "panel");
   const [dataview] = useDeepSubject(ui, "dataview");
+  const [consoleOpen] = useDeepSubject(ui, "console");
 
   return (
     <TooltipProvider>
@@ -87,6 +92,7 @@ export function Workspace({ plan, user, prefs }: { plan: WorkspacePlan; user: Me
               <StatusBar />
             </div>
             {dataview && <Dataview />}
+            {consoleOpen && <ProblemConsole />}
           </div>
           <aside className="flex w-80 shrink-0 flex-col border-l bg-background" aria-label="Plan details">
             <Tabs value={panel} onValueChange={v => setPanel(v as typeof panel)} className="min-h-0 flex-1 gap-0">
@@ -241,7 +247,22 @@ function LayerPicker() {
       <Tip label={dataview ? "Hide the data table" : "Data table"}>
         <Button size="icon-sm" variant={dataview ? "secondary" : "ghost"} aria-pressed={dataview} aria-label="Data table" onClick={() => setDataview(!dataview)}><Table2 /></Button>
       </Tip>
+      <ConsoleButton />
     </div>
+  );
+}
+
+/** opens the simulation's console; the number is how many problems it has (vehicles towed or taken off, overlapping) */
+function ConsoleButton() {
+  const [open, setOpen] = useDeepSubject(ui, "console");
+  const n = useProblemCount();
+  return (
+    <Tip label={open ? "Hide the console" : n ? `Console: ${n} problem${n === 1 ? "" : "s"} in the simulation` : "Console (simulation problems)"}>
+      <Button size="icon-sm" variant={open ? "secondary" : "ghost"} aria-pressed={open} aria-label={`Console${n ? `, ${n} problems` : ""}`} className="relative" onClick={() => setOpen(!open)}>
+        <SquareTerminal />
+        {n > 0 && <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-red-600 px-1 text-[10px] leading-4 font-semibold text-white tabular">{n > 99 ? "99+" : n}</span>}
+      </Button>
+    </Tip>
   );
 }
 
@@ -295,6 +316,9 @@ const TOOLS: { id: Tool; label: string; key: string; icon: React.ReactNode }[] =
   { id: "road", label: "Draw roads", key: "R", icon: <Route /> },
   { id: "stop", label: "Place bus stops", key: "B", icon: <Bus /> },
   { id: "marker", label: "Place markers", key: "K", icon: <MapPin /> },
+  { id: "junction", label: "Draw junctions", key: "J", icon: <Pentagon /> },
+  { id: "crossing", label: "Draw zebra crossings", key: "X", icon: <Footprints /> },
+  { id: "parking", label: "Draw parking bays", key: "G", icon: <SquareParking /> },
   { id: "image", label: "Move reference image", key: "I", icon: <ImageIcon /> },
   { id: "pan", label: "Pan", key: "H", icon: <Hand /> },
 ];
@@ -305,7 +329,9 @@ function ToolRail() {
   const [history] = useDeepSubject(ui, "history");
   const [readOnly] = useDeepSubject(ui, "readOnly");
   const editDisabled = view === "3d";
-  const tools = readOnly ? TOOLS.filter(t => t.id === "select" || t.id === "pan") : TOOLS;
+  const [net] = useSubject(network$);
+  // (junctions are drawn by hand only in plans set up for it)
+  const tools = readOnly ? TOOLS.filter(t => t.id === "select" || t.id === "pan") : TOOLS.filter(t => t.id !== "junction" || net.manualJunctions);
   return (
     <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-background py-2" aria-label="Tools">
       {tools.map(t => (
@@ -475,13 +501,18 @@ function StatusBar() {
   const [tool] = useDeepSubject(ui, "tool");
   const [calib] = useDeepSubject(ui, "calib");
   const [pickExit] = useDeepSubject(ui, "pickExit");
+  const [hintNet] = useSubject(network$);
+  const manualJ = !!hintNet.manualJunctions;
   const hint = pickExit && view === "2d" ? "Click an exit point (marked with a target) to send the transit flow there · Esc to cancel"
     : calib.active && view === "2d" ? "Calibrating: click two points on the image whose real distance you know · Esc to cancel"
     : view === "3d"
     ? "Drag to orbit · right-drag to pan · scroll to zoom · click to select"
-    : tool === "road" ? "Click to place points · C toggles curved · click a road to join it · Shift for 15° · Esc to finish"
+    : tool === "road" ? (manualJ ? "Click to place points · C toggles curved · carry on from a road's loose end · junctions are drawn with the Junction tool (J) · Esc to finish" : "Click to place points · C toggles curved · click a road to join it · Shift for 15° · Esc to finish")
       : tool === "stop" ? "Click the side of a road where buses should stop"
         : tool === "marker" ? "Click to place a marker (on a building: on its roof in 3D) · drag a marker to move it"
+        : tool === "crossing" ? "Click one kerb, then the other: the zebra runs between them (4 m wide; set it in the inspector) · Esc to cancel"
+        : tool === "parking" ? "Along a kerb: click the road on the side the bays are, where they start, then where they end · anywhere else: click both ends of a row of bays (reached from the nearest road) · Esc to cancel"
+        : tool === "junction" ? "Click the junction's corners · double-click or Enter to finish · Esc to cancel. Roads crossing it are cut there; road ends up to 6 m outside move onto it"
         : tool === "image" ? "Drag the image to move · corners scale · round handle rotates (Shift: 15°)"
         : "Double-click a road to add a bend point · scroll to pan · ⌘/Ctrl + scroll to zoom";
   return (
@@ -517,19 +548,27 @@ async function doSave(planId: string, force = false) {
   const s = ui.getValue().save;
   s.status = "saving";
   try {
-    const net = network$.getValue();
+    const net = network$.getValue(), settings = settings$.getValue(), underlay = underlay$.getValue();
     // after a conflict ("keep mine") everything is sent, so their building edits can't survive
     const keepBuildings = !force && !!net.buildings?.length && net.buildings === savedBuildings;
     const res = await savePlan(planId, {
       network: keepBuildings ? { ...net, buildings: undefined } : net, keepBuildings,
-      settings: settings$.getValue(), underlay: underlay$.getValue(), revision: s.revision, force,
+      settings, underlay, revision: s.revision, force,
     });
     if (res.ok) {
-      savedBuildings = net.buildings;
+      savedBuildings = net.buildings; markSynced(net, settings, underlay); mergeTries = 0;
       s.revision = res.revision; s.savedAt = res.savedAt; s.message = "";
-      s.status = again ? "dirty" : "saved";
+      // (changed again while saving: still to save)
+      s.status = again || network$.getValue() !== net || settings$.getValue() !== settings || underlay$.getValue() !== underlay ? "dirty" : "saved";
     } else if (res.reason === "forbidden") {
       s.status = "error"; s.message = "You no longer have edit access";
+    } else if (res.reason === "conflict" && mergeTries < 3) {
+      // saved elsewhere meanwhile: take that in (merged with these changes) and save the result
+      mergeTries++;
+      s.status = "dirty";
+      saving = false;
+      await pullRemote(planId);
+      again = true;
     } else if (res.reason === "conflict") {
       s.status = "conflict";
       toast.warning("Someone else saved this plan in the meantime (another person, tab or window).", { description: "Choose whose version to keep. Theirs stays in the history either way." });
@@ -538,8 +577,59 @@ async function doSave(planId: string, force = false) {
     s.status = "error"; s.message = "Couldn't save — check the database or sign in again";
   } finally {
     saving = false;
+    if (pullAfterSave) { pullAfterSave = false; await pullRemote(planId); }
     if (again) { again = false; queueSave(planId); }
   }
+}
+
+/** saves in a row that met a newer version and merged it (after a few, the person chooses instead) */
+let mergeTries = 0;
+/** a newer revision was announced while saving: fetch it once the save is done */
+let pullAfterSave = false;
+
+/**
+ * Take in the plan's newest version (saved elsewhere: another person, tab or window, or written to the
+ * database directly), merged with this page's unsaved changes, and say who changed it.
+ */
+async function pullRemote(planId: string) {
+  if (saving) { pullAfterSave = true; return; }
+  const latest = await fetchPlanState(planId).catch(() => null);
+  const s = ui.getValue().save;
+  if (!latest || latest.revision <= s.revision || ui.getValue().planId !== planId) return;
+  applyRemote(latest.revision, latest.savedAt, latest);
+  setSavedBuildings(latest.network.buildings);
+  toast.info(`Plan updated${latest.by ? ` by ${latest.by}` : ""}`, { description: latest.note || `Revision ${latest.revision}${s.status === "dirty" ? " · merged with your unsaved changes" : ""}`, id: "live-update" });
+}
+
+/**
+ * Live updates: the server says when the plan's revision changes (Server-Sent Events; polling where the
+ * stream doesn't come through), and the newer version is taken in (see pullRemote).
+ */
+function useLive(planId: string) {
+  useEffect(() => {
+    let es: EventSource | null = null, poll: ReturnType<typeof setInterval> | null = null, fallback: ReturnType<typeof setTimeout> | null = null;
+    let heard = false, stopped = false;
+    const url = `${basePath}/api/plans/${planId}/live`;
+    const seen = (rev: number) => { heard = true; if (rev > ui.getValue().save.revision) void pullRemote(planId); };
+    const startPolling = () => {
+      if (poll || stopped) return;
+      es?.close(); es = null;
+      poll = setInterval(async () => {
+        if (document.hidden) return;
+        const r = await fetch(`${url}?once=1`, { cache: "no-store" }).then(x => (x.ok ? x.json() : null)).catch(() => null);
+        if (r && typeof r.revision === "number") seen(r.revision);
+      }, 2500);
+    };
+    if (typeof EventSource === "undefined") startPolling();
+    else {
+      es = new EventSource(url);
+      es.addEventListener("revision", e => { try { seen(JSON.parse((e as MessageEvent).data).revision); } catch { /* not for us */ } });
+      es.addEventListener("gone", () => { es?.close(); es = null; });
+      // (nothing heard in a while, e.g. a proxy holding the stream back: ask now and then instead)
+      fallback = setTimeout(() => { if (!heard) startPolling(); }, 6000);
+    }
+    return () => { stopped = true; es?.close(); if (poll) clearInterval(poll); if (fallback) clearTimeout(fallback); };
+  }, [planId]);
 }
 
 /** (re)start the countdown to the next save; each change pushes it back, up to MAX_WAIT after the first */
@@ -601,6 +691,9 @@ function useShortcuts() {
       else if (k === "r" && u.view === "2d" && !u.readOnly) setTool("road");
       else if (k === "b" && u.view === "2d" && !u.readOnly) setTool("stop");
       else if (k === "k" && u.view === "2d" && !u.readOnly) setTool("marker");
+      else if (k === "j" && u.view === "2d" && !u.readOnly && network$.getValue().manualJunctions) setTool("junction");
+      else if (k === "x" && u.view === "2d" && !u.readOnly) setTool("crossing");
+      else if (k === "g" && u.view === "2d" && !u.readOnly) setTool("parking");
       else if (k === "i" && u.view === "2d" && !u.readOnly) { setTool("image"); u.panel = "image"; }
       else if (k === "c" && u.tool === "road") u.draft.curved = !u.draft.curved;
       else if (k === "h") setTool("pan");
@@ -619,10 +712,16 @@ function useShortcuts() {
         // several selected (Shift+click, Shift+drag): all of them go, in one step
         const all = selectedAll(u);
         if (all.length > 1) { commit(deleteSelected(net, all.filter(x => DELETABLE.has(x.kind)))); select(null); return; }
-        if (sel.kind === "node") commit(ops.deleteNode(net, sel.id));
+        // (a junction drawn by hand, selected — its first road end stands for it: the junction goes, as with its
+        // inspector's delete, leaving the roads' ends loose)
+        const hand = sel.kind === "node" ? net.junctions?.find(j => j.nodes[0] === sel.id) : undefined;
+        if (hand) { commit(deleteJunction(net, hand.id)); select(null); }
+        else if (sel.kind === "node") commit(ops.deleteNode(net, sel.id));
         else if (sel.kind === "link") commit(ops.deleteLink(net, sel.id));
         else if (sel.kind === "stop") commit(ops.deleteStop(net, sel.id));
         else if (sel.kind === "marker") commit(ops.deleteMarker(net, sel.id));
+        else if (sel.kind === "crossing") commit(ops.deleteCrossing(net, sel.id));
+        else if (sel.kind === "parking") commit(ops.deleteParking(net, sel.id));
         else if (sel.kind === "line") commit(ops.deleteLine(net, sel.id));
         else if (sel.kind === "building") commit(ops.deleteBuilding(net, sel.id));
         else if (sel.kind === "connector") {

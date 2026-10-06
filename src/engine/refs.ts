@@ -8,6 +8,7 @@ export const isJunction = (n: CNode) => n.controlled && (n.degree >= 2 || n.clus
 export function junctionRefs(c: Compiled): Map<string, string> {
   const out = new Map<string, string>();
   let k = 0;
-  for (const n of c.nodes) if (isJunction(n)) out.set(n.def.id, `J${++k}`);
+  // (a junction drawn by hand has one, on its leading node)
+  for (const n of c.nodes) if (isJunction(n) && (!n.lead || n.lead === n)) out.set(n.def.id, `J${++k}`);
   return out;
 }

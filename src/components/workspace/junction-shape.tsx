@@ -69,7 +69,7 @@ export function JunctionShapeSection({ net, node }: { net: Network; node: NodeDe
           <div className="flex items-center gap-2">
             <Button size="sm" disabled={drawing.pts.length < 3} onClick={() => {
               const s = ui.getValue().shape, p = s.paint!;
-              commit(ops.addPaint(net, node.id, p.kind, p.pts.map(q => ({ x: q.x - node.x, y: q.y - node.y }))));
+              if (p.kind === "hatch" || p.kind === "island") commit(ops.addPaint(net, node.id, p.kind, p.pts.map(q => ({ x: q.x - node.x, y: q.y - node.y }))));
               s.paint = null;
             }}><Check /> Finish</Button>
             <Button size="sm" variant="ghost" onClick={() => { ui.getValue().shape.paint = null; }}>Cancel</Button>

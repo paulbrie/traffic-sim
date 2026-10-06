@@ -9,7 +9,7 @@
 import { pieceLevel, pieceZ, type CNode, type Compiled } from "../compile";
 import { isJunction } from "../refs";
 import { signalAspect, type Aspect } from "../signals";
-import { DT, type JunctionEvent, type JunctionFuel, type Kind, type RevStateCode, type Stats, type TestTrip, type Vehicle } from "./base";
+import { DT, type ParkingStats, type JunctionEvent, type SimProblem, type JunctionFuel, type Kind, type RevStateCode, type Stats, type TestTrip, type Vehicle } from "./base";
 
 /** a pedestrian crossing right now: its arm, people waiting, people crossing and how far across (0..1) */
 export interface PedView { arm: number; waiting: number; crossing: number; progress: number }
@@ -66,6 +66,8 @@ export interface Snapshot {
   waiting: Float32Array;
   /** junction events since the previous snapshot; `resetEvents` = replace the list instead */
   events: JunctionEvent[]; resetEvents: boolean;
+  /** problems (see SimProblem) since the previous snapshot; `resetProblems` = replace the list instead */
+  problems: SimProblem[]; resetProblems: boolean;
   /** sent every half second or so (absent = unchanged) */
   junctions?: (JunctionStats | null)[];
   cycles?: [number, LightCycles][];
@@ -74,6 +76,13 @@ export interface Snapshot {
   exited?: [string, number][];
   /** per entry / exit point: vehicles per hour in and out (last 5 minutes) */
   gateRates?: [string, number, number][];
+  /** cars in the parking bays: per bay of every row, 1 = taken (with rows of bays) */
+  parked?: Uint8Array;
+  /** crossings drawn by hand: per crossing pedestrians waiting, crossing, how far across (0..1) */
+  crossPeds?: Float32Array;
+  /** sent every half second or so: each row of bays' numbers, and each crossing's pedestrians so far (crossed, average wait in s) */
+  parking?: ParkingStats[];
+  crossTotals?: [number, number][];
   /** fuel at the junctions being measured, by node index */
   fuel?: [number, JunctionFuel][];
   /** traffic counters by edge key ("linkId:dir") */
@@ -104,6 +113,7 @@ export interface RevView { state: RevStateCode; t: number; inside: number; densi
 /** remembers what was sent already, to send only what is new */
 export class SnapshotWriter {
   private lastEvent: JunctionEvent | null = null;
+  private lastProblem: SimProblem | null = null;
   private periodicAt = -Infinity;
 
   write(sim: Sim, watch: Watch, now: number): { snap: Snapshot; transfer: ArrayBuffer[] } {
@@ -136,14 +146,29 @@ export class SnapshotWriter {
     } else resetEvents = true;
     const events = all.slice(from);
     this.lastEvent = all.length ? all[all.length - 1] : null;
+    // (the same for problems)
+    const ps = sim.problems;
+    let pFrom = 0, resetProblems = false;
+    if (this.lastProblem) {
+      const at = ps.lastIndexOf(this.lastProblem);
+      if (at >= 0) pFrom = at + 1; else resetProblems = true;
+    } else resetProblems = true;
+    const problems = ps.slice(pFrom);
+    this.lastProblem = ps.length ? ps[ps.length - 1] : null;
 
     const snap: Snapshot = {
       tick: sim.tick, stats: { ...sim.stats, history: sim.stats.history.slice() },
-      ids, kinds, tints, states, stateNames, geo, phase, stage, stageT, occupied, cycleAt, waiting, events, resetEvents,
+      ids, kinds, tints, states, stateNames, geo, phase, stage, stageT, occupied, cycleAt, waiting, events, resetEvents, problems, resetProblems,
       peds: sim.net.nodes.filter(n => n.peds > 0).map(n => [n.idx, sim.pedView(n.idx)] as [number, PedView[]]),
       ...(sim.net.corridors.length ? { rev: sim.net.corridors.map(c => sim.reversibleState(c.idx)!) } : {}),
     };
     const transfer = [ids.buffer, kinds.buffer, tints.buffer, states.buffer, geo.buffer, phase.buffer, stage.buffer, stageT.buffer, occupied.buffer, cycleAt.buffer, waiting.buffer] as ArrayBuffer[];
+    if (sim.net.parking.length) { snap.parked = sim.parkedFlags(); transfer.push(snap.parked.buffer as ArrayBuffer); }
+    if (sim.net.crossings.length) {
+      const cp = new Float32Array(sim.net.crossings.length * 3);
+      sim.net.crossings.forEach((_, k) => { const x = sim.crossingStats(k); if (x) { cp[k * 3] = x.waiting; cp[k * 3 + 1] = x.crossing; cp[k * 3 + 2] = x.progress; } });
+      snap.crossPeds = cp; transfer.push(cp.buffer as ArrayBuffer);
+    }
 
     if (now - this.periodicAt > 450) {
       this.periodicAt = now;
@@ -164,6 +189,8 @@ export class SnapshotWriter {
       for (let i = 0; i < nl; i++) if (lanes[i * 2]) lanes[i * 2 + 1] /= lanes[i * 2];
       snap.lanes = lanes;
       transfer.push(lanes.buffer as ArrayBuffer);
+      snap.parking = sim.net.parking.map(p => sim.parkingStats(p.idx)!);
+      snap.crossTotals = sim.net.crossings.map((_, k) => { const x = sim.crossingStats(k); return [x?.crossed ?? 0, x?.avgWait ?? 0]; });
       snap.fuel = sim.net.nodes.flatMap(nd => { const f = isJunction(nd) ? sim.junctionFuel(nd.idx) : null; return f ? [[nd.idx, f] as [number, JunctionFuel]] : []; });
       snap.counters = sim.net.edges.flatMap(e => { const c = sim.counterStats(e.idx); return c ? [[e.key, c] as [string, CounterStats]] : []; });
     }
@@ -180,7 +207,7 @@ export class SnapshotWriter {
   }
 
   /** forget what was sent (a new simulation, or the log was cleared) */
-  reset() { this.lastEvent = null; this.periodicAt = -Infinity; }
+  reset() { this.lastEvent = null; this.lastProblem = null; this.periodicAt = -Infinity; }
 }
 
 function vehicleDetail(sim: Sim, v: Vehicle): VehicleDetail {
@@ -215,6 +242,8 @@ export class SimMirror {
   stats: Stats = { count: 0, cars: 0, trucks: 0, buses: 0, avgSpeed: 0, stopped: 0, tripsPerMin: 0, trips: 0, towed: 0, boarded: 0, laneChanges: 0, history: [] };
   vehicles: VehicleView[] = [];
   events: JunctionEvent[] = [];
+  /** what went wrong so far (see SimProblem) */
+  problems: SimProblem[] = [];
   turnCounts = new Map<string, number>();
   entered = new Map<string, number>();
   exited = new Map<string, number>();
@@ -230,6 +259,10 @@ export class SimMirror {
   private snap: Snapshot | null = null;
   private junctions: (JunctionStats | null)[] = [];
   private fuel = new Map<number, JunctionFuel>();
+  private parkedNow: Uint8Array = new Uint8Array(0);
+  private crossNow: Float32Array = new Float32Array(0);
+  private parkTotals: ParkingStats[] = [];
+  private crossSoFar: [number, number][] = [];
   private cycles = new Map<number, LightCycles>();
   private reserved: Float32Array[] = [];
 
@@ -251,6 +284,8 @@ export class SimMirror {
       v.level = s.geo[o + 9]; v.z = s.geo[o + 10];
     }
     this.net.stops.forEach((st, i) => { st.waiting = s.waiting[i] ?? st.waiting; });
+    if (s.resetProblems) this.problems = [];
+    if (s.problems?.length) { this.problems.push(...s.problems); if (this.problems.length > 5000) this.problems.splice(0, this.problems.length - 4000); }
     if (s.resetEvents) this.events = [];
     if (s.events.length) { this.events.push(...s.events); if (this.events.length > 60000) this.events.splice(0, this.events.length - 50000); }
     if (s.junctions) this.junctions = s.junctions;
@@ -260,6 +295,10 @@ export class SimMirror {
     if (s.gateRates) this.gateRates = new Map(s.gateRates.map(([id, a, b]) => [id, [a, b]]));
     if (s.counters) this.counters = new Map(s.counters);
     if (s.fuel) this.fuel = new Map(s.fuel);
+    this.parkedNow = s.parked ?? new Uint8Array(0);
+    this.crossNow = s.crossPeds ?? new Float32Array(0);
+    if (s.parking) this.parkTotals = s.parking;
+    if (s.crossTotals) this.crossSoFar = s.crossTotals;
     if (s.flows) this.flows = new Map(s.flows);
     if (s.zoneFlows) this.zoneFlows = new Map(s.zoneFlows);
     if (s.tests) this.tests = s.tests;
@@ -301,6 +340,20 @@ export class SimMirror {
     return this.junctions[nodeIdx] ?? { through: 0, perMin: 0, waiting: 0, approaches: [] };
   }
 
+  /** is a car parked in bay `bay` of row `row` (index into net.parking) */
+  parked(row: number, bay: number): boolean {
+    let k = bay;
+    for (let r = 0; r < row; r++) k += this.net.parking[r]?.bays.length ?? 0;
+    return this.parkedNow[k] === 1;
+  }
+  /** a row of parking bays' numbers (null before the first reading) */
+  parkingStats(row: number): ParkingStats | null { return this.parkTotals[row] ?? null; }
+  /** pedestrians at a crossing drawn by hand (index into net.crossings): now, and so far */
+  crossingStats(k: number): { waiting: number; crossing: number; progress: number; crossed: number; avgWait: number } | null {
+    if (k * 3 + 2 >= this.crossNow.length) return null;
+    const t = this.crossSoFar[k] ?? [0, 0];
+    return { waiting: this.crossNow[k * 3], crossing: this.crossNow[k * 3 + 1], progress: this.crossNow[k * 3 + 2], crossed: t[0], avgWait: t[1] };
+  }
   /** fuel measured at a junction (null = not measured, or no reading yet) */
   junctionFuel(nodeIdx: number): JunctionFuel | null { return this.fuel.get(nodeIdx) ?? null; }
 

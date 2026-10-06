@@ -17,7 +17,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { commit, network$, select, stats$, ui } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import * as ops from "@/state/ops";
-import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, lanesAtLine, type Bays, type BuildingDef, type BuildingUse, type Control, type LinkDef, type Network, type NodeDef } from "@/engine/types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, lanesAtLine, type Bays, type BuildingDef, type BuildingUse, type Control, type JunctionDef, type LinkDef, type Network, type NodeDef } from "@/engine/types";
 import { FLOOR_HEIGHT, USE_LABEL, polyArea, tripWeight } from "@/engine/buildings";
 import { IdChip, NumberField, Section, Stepper, compass } from "./fields";
 import { SignalGroupSection } from "./signal-groups";
@@ -39,6 +39,8 @@ import { CarriagewaysSection } from "./carriageways";
 import { MultiSelection } from "./multi-selection";
 import { MarkerInspector } from "./marker-inspector";
 import { JunctionFuelSection, fmtFuel } from "./fuel";
+import { CrossingInspector, ParkingInspector } from "./crossing-parking";
+import { deleteJunction, junctionOf, setJunctionControl } from "@/state/junctions";
 import { deleteSelected } from "@/state/bulk";
 import { resetApproach } from "@/state/connections";
 
@@ -60,6 +62,8 @@ export function Inspector() {
   if (sel.kind === "lane") return <LaneInspector id={sel.id} />;
   if (sel.kind === "zone") return <ZonesSection />;
   if (sel.kind === "connector") return <ConnectorInspector id={sel.id} />;
+  if (sel.kind === "crossing") { const x = net.crossings?.find(c => c.id === sel.id); return x ? <CrossingInspector net={net} x={x} /> : <PlanSummary net={net} />; }
+  if (sel.kind === "parking") { const p = net.parking?.find(c => c.id === sel.id); return p ? <ParkingInspector net={net} p={p} /> : <PlanSummary net={net} />; }
   if (sel.kind === "marker") { const m = net.markers?.find(x => x.id === sel.id); return m ? <MarkerInspector net={net} m={m} /> : <PlanSummary net={net} />; }
   return <PlanSummary net={net} />;
 }
@@ -102,6 +106,15 @@ function PlanSummary({ net }: { net: Network }) {
           <dt className="text-muted-foreground">Bus stops</dt><dd className="text-right tabular">{net.stops.length}</dd>
           {!!net.buildings?.length && <><dt className="text-muted-foreground">Buildings</dt><dd className="text-right tabular">{net.buildings.length}</dd></>}
         </dl>
+        <label className="flex items-center justify-between gap-2 text-sm">
+          <span>Junctions drawn by hand</span>
+          <Switch checked={!!net.manualJunctions} onCheckedChange={v => commit({ ...net, manualJunctions: v || undefined })} aria-label="Junctions drawn by hand" />
+        </label>
+        <p className="text-xs text-muted-foreground">
+          {net.manualJunctions
+            ? <>Roads drawn to meet no longer make a junction by themselves. Draw each junction&apos;s outline with the Junction tool (<Kbd>J</Kbd>): roads crossing it are cut there, and their lanes are joined by connectors you drag between the lane ends on its border.</>
+            : "Junctions are made where roads meet, shaped from their lanes."}
+        </p>
       </Section>
       {c.warnings.length > 0 && (
         <Section title="Check">
@@ -127,6 +140,59 @@ function PlanSummary({ net }: { net: Network }) {
 
 // ---------------------------------------------------------------- node
 function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
+  // (a road end on a junction drawn by hand: the junction, as its leading node holds it)
+  const hand = junctionOf(net, node.id);
+  if (hand) return <HandJunctionInspector net={net} j={hand} />;
+  return <PointInspector net={net} node={node} />;
+}
+
+/** a junction drawn by hand: its control, outline, connectors across it and live numbers (held by its first road end) */
+function HandJunctionInspector({ net, j }: { net: Network; j: JunctionDef }) {
+  const lead = ops.nodeById(net, j.nodes[0])!, c = simController.compiled, cn = c.nodeById.get(lead.id);
+  const ref = cn ? junctionRefs(c).get(lead.id) : undefined;
+  const set = (patch: Partial<NodeDef>, key?: string) => commit(ops.updateNode(net, lead.id, patch), key);
+  const sig = lead.signal;
+  return (
+    <div>
+      <Header kind={`${ref ? `${ref} · ` : ""}Junction drawn by hand`} id={lead.id} title={`${j.nodes.length} roads meet here`} onDelete={() => { commit(deleteJunction(net, j.id)); select(null); }} />
+      <Section title="Control">
+        <Select value={lead.control === "roundabout" ? "priority" : lead.control} onValueChange={v => commit(setJunctionControl(net, j, v as Control))}>
+          <SelectTrigger className="w-full" aria-label="Junction control"><SelectValue /></SelectTrigger>
+          <SelectContent>{(Object.keys(CONTROL_LABEL) as Control[]).filter(k => k !== "roundabout").map(k => <SelectItem key={k} value={k}>{CONTROL_LABEL[k]}</SelectItem>)}</SelectContent>
+        </Select>
+        {lead.control === "lights" && (
+          <div className="grid gap-3">
+            <p className="text-xs text-muted-foreground">Phases connector by connector (below), first worked out as if the roads met at one point. Yellow and all-red apply between every phase.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField id="sy" label="Yellow" unit="s" value={sig.yellow} min={1} max={10} step={0.5} digits={1} onCommit={v => set({ signal: { ...sig, yellow: v } }, `sy:${lead.id}`)} />
+              <NumberField id="sr" label="All red" unit="s" value={sig.allRed} min={0} max={10} step={0.5} digits={1} onCommit={v => set({ signal: { ...sig, allRed: v } }, `sr:${lead.id}`)} />
+            </div>
+            <label className="flex items-center justify-between gap-2 text-sm">
+              <span>Actuated <span className="text-muted-foreground">(end idle greens early)</span></span>
+              <Switch checked={sig.actuated} onCheckedChange={v => set({ signal: { ...sig, actuated: v } })} />
+            </label>
+          </div>
+        )}
+        {lead.control === "stop" && <p className="text-xs text-muted-foreground">Every approach stops at the line, then vehicles go in arrival order.</p>}
+        {lead.control === "free" && <p className="text-xs text-muted-foreground">No signs, no queue order: any vehicle enters as soon as its path through the junction and its exit are clear, closest first.</p>}
+        {lead.control === "priority" && <p className="text-xs text-muted-foreground">Vehicles reserve their path through the junction first come, first served, whichever road they come from.</p>}
+      </Section>
+      {lead.control === "lights" && cn && cn.controlled && <PhaseEditor net={net} node={lead} cn={cn} />}
+      <JunctionShapeSection net={net} node={lead} />
+      <LaneConnectionsSection net={net} node={lead} />
+      {ref && cn && <JunctionLive net={net} nodeIdx={cn.idx} />}
+      {ref && cn && <JunctionFuelSection net={net} node={lead} nodeIdx={cn.idx} />}
+      {ref && cn && <Section title="Event log"><JunctionEventLog nodeId={lead.id} refName={ref} /></Section>}
+      <Section>
+        <p className="text-[11px] text-muted-foreground">
+          Deleting the junction (bin, top right) keeps the roads as they are, cut at its outline: their ends become entry points again.
+        </p>
+      </Section>
+    </div>
+  );
+}
+
+function PointInspector({ net, node }: { net: Network; node: NodeDef }) {
   const cn = simController.compiled.nodeById.get(node.id);
   const degree = net.links.filter(l => l.from === node.id || l.to === node.id).length;
   const set = (patch: Partial<NodeDef>, key?: string) => commit(ops.updateNode(net, node.id, patch), key);
@@ -326,8 +392,9 @@ function JunctionLive({ net, nodeIdx }: { net: Network; nodeIdx: number }) {
       </div>
       <div className="grid gap-1.5">
         {st.approaches.map((a, i) => {
-          const e = n.arms.filter(x => x.inEdge)[i]?.inEdge;
-          const moves = e ? n.moves.get(e.idx) ?? [] : [];
+          // (a junction drawn by hand: the roads into all its road ends, as junctionStats lists them)
+          const e = (n.lead === n ? n.cluster.filter(k => k.lead === n) : [n]).flatMap(k => k.arms).filter(x => x.inEdge)[i]?.inEdge;
+          const moves = e ? e.to.moves.get(e.idx) ?? [] : [];
           const counts = moves.map(m => sim.turnCounts.get(`${m.in.idx}>${m.out.idx}`) ?? 0);
           const total = counts.reduce((x, y) => x + y, 0);
           return (

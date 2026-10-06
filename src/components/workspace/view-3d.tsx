@@ -31,6 +31,8 @@ import { HoverInfo, type Hovered } from "./hover-info";
 import { heliKeys$ } from "@/state/heli-keys";
 import { actionOf, keyLabel, type HeliAction } from "@/lib/heli-keys";
 import { BreakdownButton } from "./inspector";
+import { pedestrianSpots } from "@/render/pedestrians";
+import { bayPose } from "@/engine/parking";
 
 const CAR3D = ["#ffffff", "#f1f2ee", "#e2e5e1", "#cdd1cd"];
 
@@ -184,6 +186,11 @@ export function View3D() {
     const lampGeo = new THREE.BoxGeometry(0.28, 0.22, 0.2);
     const lamps = new THREE.InstancedMesh(lampGeo, new THREE.MeshBasicMaterial({ color: 0xffab1a }), 16000);
     lamps.frustumCulled = false; lamps.count = 0; scene.add(lamps);
+    // pedestrians at the zebras: a yellow body (as on the plan) and a head
+    const MAXP = 4000, pedBodyGeo = new THREE.CylinderGeometry(0.2, 0.26, 1.25, 10); pedBodyGeo.translate(0, 0.625, 0);
+    const pedBody = new THREE.InstancedMesh(pedBodyGeo, new THREE.MeshLambertMaterial({ color: 0xfacc15 }), MAXP);
+    const pedHead = new THREE.InstancedMesh(new THREE.SphereGeometry(0.14, 10, 8), new THREE.MeshLambertMaterial({ color: 0xe8c4a0 }), MAXP);
+    for (const m of [pedBody, pedHead]) { m.castShadow = true; m.frustumCulled = false; m.count = 0; scene.add(m); }
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 48), new THREE.MeshBasicMaterial({ color: pal.select, side: THREE.DoubleSide }));
     ring.rotation.x = -Math.PI / 2; ring.visible = false; scene.add(ring);
     const hl = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: pal.select, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }));
@@ -898,6 +905,16 @@ export function View3D() {
           else { const b = v.len * 0.07; dummy.position.set(mx - ux * b, 1.27 + y0, mz - uz * b); dummy.scale.set(v.len * 0.5, 0.55, v.width * 0.86); }
           dummy.updateMatrix(); glass.setMatrixAt(ng++, dummy.matrix);
         }
+        // cars parked in the bays (where the cars that drove in stopped)
+        if (vsim) for (const p of simController.compiled.parking) for (let i = 0; i < p.bays.length; i++) {
+          if (n + 1 >= MAXV || !vsim.parked(p.idx, i)) continue;
+          const q = bayPose(p, i), a = Math.atan2(-q.hy, q.hx), L = 4.6, W = 1.9;
+          dummy.rotation.set(0, a, 0);
+          dummy.position.set(q.x, 0.28, q.y); dummy.scale.set(L, 1.0, W); dummy.updateMatrix();
+          body.setMatrixAt(n, dummy.matrix); col.set(CAR3D[(p.idx * 7 + i) % 4]); body.setColorAt(n++, col);
+          const b = L * 0.07; dummy.position.set(q.x - q.hx * b, 1.27, q.y - q.hy * b); dummy.scale.set(L * 0.5, 0.55, W * 0.86); dummy.updateMatrix();
+          glass.setMatrixAt(ng++, dummy.matrix);
+        }
         // blinkers
         let nl = 0;
         if (vsim && Math.floor(now / 380) % 2 === 0) for (const v of vsim.vehicles) {
@@ -916,6 +933,17 @@ export function View3D() {
           }
         }
         lamps.count = nl; lamps.instanceMatrix.needsUpdate = true;
+        // pedestrians
+        let np = 0;
+        if (vsim) for (const p of pedestrianSpots(simController.compiled, vsim)) {
+          if (np >= MAXP) break;
+          const y0 = p.lv * LEVEL_H;
+          dummy.rotation.set(0, Math.atan2(-p.dy, p.dx), 0); dummy.scale.set(0.8, 1, 1.15);
+          dummy.position.set(p.x, y0, p.y); dummy.updateMatrix(); pedBody.setMatrixAt(np, dummy.matrix);
+          dummy.scale.set(1, 1, 1); dummy.position.set(p.x, y0 + 1.42, p.y); dummy.updateMatrix(); pedHead.setMatrixAt(np, dummy.matrix);
+          np++;
+        }
+        pedBody.count = np; pedHead.count = np; pedBody.instanceMatrix.needsUpdate = true; pedHead.instanceMatrix.needsUpdate = true;
         body.count = n; glass.count = ng;
         body.instanceMatrix.needsUpdate = true; glass.instanceMatrix.needsUpdate = true;
         if (body.instanceColor) body.instanceColor.needsUpdate = true;
