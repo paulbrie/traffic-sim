@@ -3,10 +3,14 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { and, count, eq, isNull, ne, or, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { name } from "@gdp-ts/core";
 import { db, schema } from "@/db";
 import { assertUser, createSession, destroySession, getCurrentUser, signupOpen } from "./auth";
-import { generatePassword, hashPassword, passwordProblem, verifyPassword } from "./password";
+import { hashPassword, passwordProblem, verifyPassword } from "./password";
+import { UserId } from "@/lib/ids";
+import { userIsAdmin } from "./proofs/user-is-admin";
+import * as users from "./data/users";
 import { diagnoseDbError } from "./db-status";
 
 export type FormState = { error?: string; ok?: string; email?: string; name?: string } | undefined;
@@ -14,6 +18,8 @@ export type FormState = { error?: string; ok?: string; email?: string; name?: st
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const text = (v: FormDataEntryValue | null, max = 200) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+/** a form field as typed (passwords: not trimmed) */
+const raw = (v: FormDataEntryValue | null) => (typeof v === "string" ? v : "");
 
 // --- sign-in throttling: 8 failures per email+IP per 10 minutes (in memory, per server process)
 const failures = new Map<string, { n: number; until: number }>();
@@ -32,7 +38,7 @@ const safeNext = (v: string) => (v.startsWith("/") && !v.startsWith("//") && !v.
 
 export async function login(_: FormState, form: FormData): Promise<FormState> {
   const email = text(form.get("email")).toLowerCase();
-  const password = typeof form.get("password") === "string" ? (form.get("password") as string) : "";
+  const password = raw(form.get("password"));
   const next = safeNext(text(form.get("next"), 500));
   if (!email || !password) return { error: "Enter your email and password." };
   const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
@@ -71,8 +77,8 @@ export async function signup(_: FormState, form: FormData): Promise<FormState> {
   if (!signupOpen()) return { error: "Sign-up is closed. Ask an admin for an account." };
   const name = text(form.get("name"), 120);
   const email = text(form.get("email")).toLowerCase();
-  const password = typeof form.get("password") === "string" ? (form.get("password") as string) : "";
-  const confirm = typeof form.get("confirm") === "string" ? (form.get("confirm") as string) : "";
+  const password = raw(form.get("password"));
+  const confirm = raw(form.get("confirm"));
   const keep = { email, name };
   if (!EMAIL.test(email)) return { error: "Enter a valid email address.", ...keep };
   const problem = passwordProblem(password);
@@ -108,9 +114,9 @@ export async function logout() {
 export async function changePassword(_: FormState, form: FormData): Promise<FormState> {
   const me = await getCurrentUser();
   if (!me) redirect("/login");
-  const current = (form.get("current") as string) ?? "";
-  const next = (form.get("password") as string) ?? "";
-  const confirm = (form.get("confirm") as string) ?? "";
+  const current = raw(form.get("current"));
+  const next = raw(form.get("password"));
+  const confirm = raw(form.get("confirm"));
   const [row] = await db.select({ hash: schema.users.passwordHash }).from(schema.users).where(eq(schema.users.id, me.id));
   if (!row || !(await verifyPassword(current, row.hash))) return { error: "Your current password is incorrect." };
   const problem = passwordProblem(next);
@@ -126,64 +132,61 @@ export async function changePassword(_: FormState, form: FormData): Promise<Form
 }
 
 // ---------------------------------------------------------------- user management (admins)
+// Each names the signed-in user and proves they are an admin (src/server/proofs/user-is-admin): the account
+// functions (src/server/data/users) take nothing else.
 
-async function adminCount() {
-  const [r] = await db.select({ n: count() }).from(schema.users).where(eq(schema.users.role, "admin"));
-  return r.n;
-}
+type AdminResult<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 
 /** Creates a user with a generated temporary password (shown once to the admin). */
-export async function createUser(input: { email: string; name: string; role: "admin" | "user" }): Promise<{ ok: true; password: string } | { ok: false; error: string }> {
-  await assertUser("admin");
+export async function createUser(input: { email: string; name: string; role: "admin" | "user" }): Promise<AdminResult<{ password: string }>> {
+  const me = await assertUser();
   const email = input.email.trim().toLowerCase().slice(0, 200);
-  if (!EMAIL.test(email)) return { ok: false, error: "Enter a valid email address." };
-  const role = input.role === "admin" ? "admin" : "user";
-  const [exists] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, email));
-  if (exists) return { ok: false, error: "A user with this email already exists." };
-  const password = generatePassword();
-  await db.insert(schema.users).values({ email, name: input.name.trim().slice(0, 120), role, passwordHash: await hashPassword(password), mustChangePassword: true });
-  revalidatePath("/admin/users");
-  return { ok: true, password };
+  const res = await name(me.id, async user => {
+    const admin = await userIsAdmin(user);
+    if (!admin) throw new Error("Admins only");
+    if (!EMAIL.test(email)) return { ok: false as const, error: "Enter a valid email address." };
+    return users.createUser({ email, name: input.name.trim().slice(0, 120), role: input.role === "admin" ? "admin" : "user" }, admin);
+  });
+  if (res.ok) revalidatePath("/admin/users");
+  return res;
 }
 
-export async function updateUser(id: string, input: { name?: string; role?: "admin" | "user" }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const me = await assertUser("admin");
-  if (!UUID.test(id)) return { ok: false, error: "Invalid user." };
-  const patch: Partial<schema.User> = { updatedAt: new Date() };
-  if (typeof input.name === "string") patch.name = input.name.trim().slice(0, 120);
-  if (input.role === "admin" || input.role === "user") {
-    if (id === me.id && input.role !== "admin") return { ok: false, error: "You can't remove your own admin role." };
-    patch.role = input.role;
-  }
-  await db.update(schema.users).set(patch).where(eq(schema.users.id, id));
-  revalidatePath("/admin/users");
-  return { ok: true };
+export async function updateUser(id: string, input: { name?: string; role?: "admin" | "user" }): Promise<AdminResult> {
+  const me = await assertUser();
+  const res = await name(me.id, async user => {
+    const admin = await userIsAdmin(user);
+    if (!admin) throw new Error("Admins only");
+    if (!UUID.test(id)) return { ok: false as const, error: "Invalid user." };
+    const patch: { name?: string; role?: "admin" | "user" } = {};
+    if (typeof input.name === "string") patch.name = input.name.trim().slice(0, 120);
+    if (input.role === "admin" || input.role === "user") patch.role = input.role;
+    return users.updateUser(UserId(id), user, patch, admin);
+  });
+  if (res.ok) revalidatePath("/admin/users");
+  return res;
 }
 
 /** Sets a new temporary password (shown once) and signs the user out everywhere. */
-export async function resetUserPassword(id: string): Promise<{ ok: true; password: string } | { ok: false; error: string }> {
-  await assertUser("admin");
-  if (!UUID.test(id)) return { ok: false, error: "Invalid user." };
-  const password = generatePassword();
-  await db.update(schema.users).set({ passwordHash: await hashPassword(password), mustChangePassword: true, updatedAt: new Date() }).where(eq(schema.users.id, id));
-  await db.delete(schema.sessions).where(eq(schema.sessions.userId, id));
-  revalidatePath("/admin/users");
-  return { ok: true, password };
+export async function resetUserPassword(id: string): Promise<AdminResult<{ password: string }>> {
+  const me = await assertUser();
+  const res = await name(me.id, async user => {
+    const admin = await userIsAdmin(user);
+    if (!admin) throw new Error("Admins only");
+    if (!UUID.test(id)) return { ok: false as const, error: "Invalid user." };
+    return users.resetUserPassword(UserId(id), admin);
+  });
+  if (res.ok) revalidatePath("/admin/users");
+  return res;
 }
 
-export async function deleteUser(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  const me = await assertUser("admin");
-  if (!UUID.test(id)) return { ok: false, error: "Invalid user." };
-  if (id === me.id) return { ok: false, error: "You can't delete your own account." };
-  const [target] = await db.select({ role: schema.users.role }).from(schema.users).where(eq(schema.users.id, id));
-  if (target?.role === "admin" && (await adminCount()) <= 1) return { ok: false, error: "Keep at least one admin." };
-  await db.transaction(async tx => {
-    // their maps go to the admin who removes them (nothing is lost; hand them on from Admin → Maps)
-    await tx.execute(sql`delete from city_shares where user_id = ${me.id} and city_id in (select id from cities where owner_id = ${id})`);
-    await tx.update(schema.cities).set({ ownerId: me.id }).where(or(eq(schema.cities.ownerId, id), isNull(schema.cities.ownerId)));
-    await tx.delete(schema.users).where(and(eq(schema.users.id, id), ne(schema.users.id, me.id)));
+export async function deleteUser(id: string): Promise<AdminResult> {
+  const me = await assertUser();
+  const res = await name(me.id, async user => {
+    const admin = await userIsAdmin(user);
+    if (!admin) throw new Error("Admins only");
+    if (!UUID.test(id)) return { ok: false as const, error: "Invalid user." };
+    return users.deleteUser(UserId(id), user, admin);
   });
-  revalidatePath("/admin/users");
-  revalidatePath("/admin/maps");
-  return { ok: true };
+  if (res.ok) { revalidatePath("/admin/users"); revalidatePath("/admin/maps"); }
+  return res;
 }

@@ -181,25 +181,24 @@ export function sanitizeNetwork(input: unknown): Network {
     id: str(j.id, "", 64),
     nodes: (Array.isArray(j.nodes) ? j.nodes : []).filter((x: unknown): x is string => typeof x === "string" && ends.has(x) && !inJunction.has(x) && (inJunction.add(x), true)),
   })).filter(j => j.nodes.length);
-  // zebra crossings drawn by hand (anywhere), and rows of parking bays (on existing roads)
+  // zebra crossings drawn by hand (anywhere), and rows of parking bays (reached from existing roads)
   const crossings = arr("crossings").filter(x => typeof x.id === "string" && x.id && vec(x.a) && vec(x.b)).slice(0, 2000).map((x): CrossingDef => ({
     id: str(x.id, "", 64), a: vec(x.a)!, b: vec(x.b)!, width: Math.round(num(x.width, 1.5, 12, 4) * 10) / 10, peds: Math.round(num(x.peds, 0, 5000, 300)),
   })).filter(x => Math.hypot(x.b.x - x.a.x, x.b.y - x.a.y) >= 1);
-  const parking = arr("parking").filter(x => typeof x.id === "string" && x.id && linkIds.has(x.link as string)).slice(0, 5000).map((x): ParkingDef => {
+  // (only rows standing on their own: one along a kerb, without a line of its own, is left out)
+  const parking = arr("parking").filter(x => typeof x.id === "string" && x.id && linkIds.has(x.link as string) && lineOf(x.line)).slice(0, 5000).map((x): ParkingDef => {
     const kind: ParkingKind = x.kind === "parallel" || x.kind === "angled" ? x.kind : "perpendicular";
-    const from = num(x.from, 0, 1, 0), to = num(x.to, 0, 1, 1);
     return {
-      id: str(x.id, "", 64), link: str(x.link), dir: x.dir === -1 ? -1 : 1, from: Math.min(from, to), to: Math.max(from, to), kind,
-      ...(lineOf(x.line) ?? {}),
+      id: str(x.id, "", 64), link: str(x.link), dir: x.dir === -1 ? -1 : 1, kind,
+      ...lineOf(x.line)!,
       ...(kind === "angled" ? { angle: Math.round(num(x.angle, 20, 80, PARKING.angle)) } : {}),
       ...(typeof x.bayW === "number" ? { bayW: Math.round(num(x.bayW, 1.8, 4, BAY_SIZE[kind].w) * 10) / 10 } : {}),
       ...(typeof x.bayL === "number" ? { bayL: Math.round(num(x.bayL, 3.5, 9, BAY_SIZE[kind].l) * 10) / 10 } : {}),
-      ...(typeof x.gap === "number" && x.gap !== 0 ? { gap: Math.round(num(x.gap, -2, 30, 0) * 10) / 10 } : {}),
       ...(typeof x.occupancy === "number" ? { occupancy: num(x.occupancy, 0, 1, PARKING.occupancy) } : {}),
       ...(typeof x.stay === "number" ? { stay: num(x.stay, 1, 1440, PARKING.stay) } : {}),
       ...(x.giveWay === true ? { giveWay: true } : {}),
     };
-  }).filter(x => x.line || x.to - x.from > 0.001);
+  });
   return { version: 1, nodes, links, stops, lines, ...(crossings.length ? { crossings } : {}), ...(parking.length ? { parking } : {}), ...(src.manualJunctions === true ? { manualJunctions: true } : {}), ...(junctions.length ? { junctions } : {}), ...(markers.length ? { markers } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(zones.length ? { zones } : {}), ...(zoneFlows.length ? { zoneFlows } : {}), ...(reversibles.length ? { reversibles } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
 }
 

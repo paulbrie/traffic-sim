@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { and, eq, gt } from "drizzle-orm";
 import { db, schema } from "@/db";
+import type { ViewerId } from "@/lib/ids";
 
 export const SESSION_COOKIE = "gl_session";
 
@@ -12,7 +13,8 @@ export const SESSION_COOKIE = "gl_session";
 export const signupOpen = () => process.env.ALLOW_SIGNUP !== "false";
 const SESSION_DAYS = 30;
 
-export type CurrentUser = Pick<schema.User, "id" | "email" | "name" | "role" | "mustChangePassword">;
+/** the signed-in user; `id` is a ViewerId, made here and nowhere else (see src/lib/ids.ts) */
+export type CurrentUser = Pick<schema.User, "email" | "name" | "role" | "mustChangePassword"> & { id: ViewerId };
 
 const digest = (token: string) => createHash("sha256").update(token).digest("hex");
 
@@ -41,7 +43,8 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     .from(schema.sessions)
     .innerJoin(schema.users, eq(schema.sessions.userId, schema.users.id))
     .where(and(eq(schema.sessions.id, digest(token)), gt(schema.sessions.expiresAt, new Date())));
-  return row ?? null;
+  // (the one place a ViewerId is made: from the session just checked)
+  return row ? { ...row, id: row.id as ViewerId } : null;
 });
 
 /** For pages: redirects to sign-in (or to the password change the account still owes). */

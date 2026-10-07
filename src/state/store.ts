@@ -81,11 +81,13 @@ export interface UiState {
   dataview: boolean;
   /** the simulation's console under the map: vehicles towed or taken off, vehicles overlapping */
   console: boolean;
+  /** the search bar over the map (Cmd/Ctrl+K) */
+  search: boolean;
   /** opened with view-only access: edits are blocked and nothing is saved */
   readOnly: boolean;
   /** junction editor: the junction whose outline is being edited, and a painted area being drawn */
   /** `paint` of kind "junction": the outline of a junction drawn by hand (Junction tool; `node` unused) */
-  /** `paint` also holds a zebra crossing being drawn (its first end) and a row of parking bays (`node`: "linkId|dir|t" where it starts) */
+  /** `paint` also holds a zebra crossing being drawn (its first end) and a row of parking bays (its first end) */
   shape: { edit: string | null; paint: { node: string; kind: "hatch" | "island" | "junction" | "crossing" | "parking"; pts: Vec[] } | null };
   /** drawing a lane connector: the lane it starts from ("linkId|dir|lane"); the next lane clicked on the map ends it */
   connectFrom: string | null;
@@ -120,6 +122,7 @@ export const ui = new DeepSubject<UiState>(
     tableLayer: "roads",
     dataview: false,
     console: false,
+    search: false,
     readOnly: false,
     shape: { edit: null, paint: null },
     connectFrom: null,
@@ -155,6 +158,12 @@ function markDirty() {
 }
 
 /**
+ * Actions taken since the plan was last saved (an undo step each: a drag or a typed value counts once; undo and
+ * redo count too). The plan saves after a few (see useAutosave).
+ */
+export const edits = { n: 0 };
+
+/**
  * Apply a change to the network. Edits sharing a `key` within 800 ms (e.g. a
  * node drag, typing in a field) collapse into one undo step.
  */
@@ -166,6 +175,7 @@ export function commit(next: Network, key?: string) {
   if (!(key && key === coalesceKey && now - coalesceAt < 800)) {
     past.push(prev);
     if (past.length > MAX_HISTORY) past.shift();
+    edits.n++;
   }
   coalesceKey = key ?? null;
   coalesceAt = now;
@@ -183,6 +193,7 @@ export function undo() {
   if (!prev) return;
   future.push(network$.getValue());
   coalesceKey = null;
+  edits.n++;
   network$.next(prev);
   pruneSelection(prev);
   markDirty();
@@ -194,6 +205,7 @@ export function redo() {
   if (!next) return;
   past.push(network$.getValue());
   coalesceKey = null;
+  edits.n++;
   network$.next(next);
   pruneSelection(next);
   markDirty();

@@ -1,13 +1,15 @@
 import type { NextRequest } from "next/server";
-import { eq } from "drizzle-orm";
-import { db, schema } from "@/db";
+import { name } from "@gdp-ts/core";
 import { UNDERLAY_MAX_BYTES } from "@/lib/underlay";
+import { PlanId } from "@/lib/ids";
 import { getCurrentUser } from "@/server/auth";
-import { allows, planAccess } from "@/server/access";
+import { planAccess } from "@/server/proofs/plan-access";
+import { canEditPlan } from "@/server/proofs/policy";
+import { deletePlanImage, getPlanImage, putPlanImage } from "@/server/data/plans";
 
 const unauthorized = () => Response.json({ error: "Sign in first" }, { status: 401 });
 
-// Reference image for a plan. Signed-in users only.
+// Reference image for a plan: seen by anyone who can see the plan, changed by those who can edit it.
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -24,16 +26,18 @@ export async function GET(_req: NextRequest, ctx: RouteContext<"/api/plans/[plan
   if (!me || me.mustChangePassword) return unauthorized();
   const { planId } = await ctx.params;
   if (!UUID.test(planId)) return new Response("Not found", { status: 404 });
-  if (!allows((await planAccess(me, planId))?.access, "read")) return new Response("Not found", { status: 404 });
-  const [row] = await db.select({ mime: schema.planImages.mime, data: schema.planImages.data }).from(schema.planImages).where(eq(schema.planImages.planId, planId));
-  if (!row) return new Response("Not found", { status: 404 });
-  return new Response(new Uint8Array(row.data), {
-    headers: {
-      "Content-Type": row.mime,
-      // URLs carry ?v=<version>, so a given URL never changes
-      "Cache-Control": "private, max-age=31536000, immutable",
-      "X-Content-Type-Options": "nosniff",
-    },
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const view = await planAccess(user, plan);
+    const row = view && (await getPlanImage(plan, view));
+    if (!row) return new Response("Not found", { status: 404 });
+    return new Response(new Uint8Array(row.data), {
+      headers: {
+        "Content-Type": row.mime,
+        // URLs carry ?v=<version>, so a given URL never changes
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
   });
 }
 
@@ -42,25 +46,23 @@ export async function PUT(req: NextRequest, ctx: RouteContext<"/api/plans/[planI
   if (!me || me.mustChangePassword) return unauthorized();
   const { planId } = await ctx.params;
   if (!UUID.test(planId)) return Response.json({ error: "Invalid plan" }, { status: 400 });
-  const pa = await planAccess(me, planId);
-  if (!pa?.access) return Response.json({ error: "Plan not found" }, { status: 404 });
-  if (!allows(pa.access, "write")) return Response.json({ error: "You can view this plan but not change it" }, { status: 403 });
-  const declared = Number(req.headers.get("content-length") ?? 0);
-  if (declared > UNDERLAY_MAX_BYTES) return Response.json({ error: "Image is larger than 25 MB" }, { status: 413 });
-  const buf = new Uint8Array(await req.arrayBuffer());
-  if (buf.byteLength === 0) return Response.json({ error: "Empty upload" }, { status: 400 });
-  if (buf.byteLength > UNDERLAY_MAX_BYTES) return Response.json({ error: "Image is larger than 25 MB" }, { status: 413 });
-  const mime = sniff(buf);
-  if (!mime) return Response.json({ error: "Use a PNG, JPEG or WebP image" }, { status: 415 });
-  const [plan] = await db.select({ id: schema.plans.id }).from(schema.plans).where(eq(schema.plans.id, planId));
-  if (!plan) return Response.json({ error: "Plan not found" }, { status: 404 });
-  const data = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
-  const now = new Date();
-  await db
-    .insert(schema.planImages)
-    .values({ planId, mime, data, bytes: buf.byteLength, updatedAt: now })
-    .onConflictDoUpdate({ target: schema.planImages.planId, set: { mime, data, bytes: buf.byteLength, updatedAt: now } });
-  return Response.json({ v: now.getTime(), bytes: buf.byteLength, mime });
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const a = await planAccess(user, plan);
+    if (!a) return Response.json({ error: "Plan not found" }, { status: 404 });
+    const edit = canEditPlan(a);
+    if (!edit) return Response.json({ error: "You can view this plan but not change it" }, { status: 403 });
+    const declared = Number(req.headers.get("content-length") ?? 0);
+    if (declared > UNDERLAY_MAX_BYTES) return Response.json({ error: "Image is larger than 25 MB" }, { status: 413 });
+    const buf = new Uint8Array(await req.arrayBuffer());
+    if (buf.byteLength === 0) return Response.json({ error: "Empty upload" }, { status: 400 });
+    if (buf.byteLength > UNDERLAY_MAX_BYTES) return Response.json({ error: "Image is larger than 25 MB" }, { status: 413 });
+    const mime = sniff(buf);
+    if (!mime) return Response.json({ error: "Use a PNG, JPEG or WebP image" }, { status: 415 });
+    const now = new Date();
+    const stored = await putPlanImage(plan, { mime, data: Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength), bytes: buf.byteLength, at: now }, edit);
+    if (!stored) return Response.json({ error: "Plan not found" }, { status: 404 });
+    return Response.json({ v: now.getTime(), bytes: buf.byteLength, mime });
+  });
 }
 
 export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/plans/[planId]/underlay">) {
@@ -68,7 +70,10 @@ export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/plans/[p
   if (!me || me.mustChangePassword) return unauthorized();
   const { planId } = await ctx.params;
   if (!UUID.test(planId)) return Response.json({ error: "Invalid plan" }, { status: 400 });
-  if (!allows((await planAccess(me, planId))?.access, "write")) return Response.json({ error: "You can view this plan but not change it" }, { status: 403 });
-  await db.delete(schema.planImages).where(eq(schema.planImages.planId, planId));
-  return new Response(null, { status: 204 });
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const edit = canEditPlan(await planAccess(user, plan));
+    if (!edit) return Response.json({ error: "You can view this plan but not change it" }, { status: 403 });
+    await deletePlanImage(plan, edit);
+    return new Response(null, { status: 204 });
+  });
 }

@@ -7,6 +7,7 @@ import { sanitizeUnderlay } from "@/lib/underlay";
 import { DbSetupNotice } from "@/components/db-setup-notice";
 import { tryDb } from "@/server/db-status";
 import { getCurrentUser, requireUser } from "@/server/auth";
+import { assistantEnabled } from "@/server/assistant";
 
 export async function generateMetadata({ params }: PageProps<"/plans/[planId]">): Promise<Metadata> {
   const { planId } = await params;
@@ -19,7 +20,7 @@ export async function generateMetadata({ params }: PageProps<"/plans/[planId]">)
 export default async function PlanPage({ params }: PageProps<"/plans/[planId]">) {
   const { planId } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(planId)) notFound();
-  const res = await tryDb(async () => { const user = await requireUser(); return { user, row: await getPlan(planId, user), prefs: await getUserPrefs(user.id) }; });
+  const res = await tryDb(async () => { const user = await requireUser(); return { user, row: await getPlan(planId, user), prefs: await getUserPrefs(user) }; });
   if (!res.ok) return <DbSetupNotice problem={res.problem} />;
   const { row, user, prefs } = res.data;
   if (!row) notFound();
@@ -33,6 +34,7 @@ export default async function PlanPage({ params }: PageProps<"/plans/[planId]">)
       }}
       user={{ email: user.email, name: user.name, role: user.role }}
       prefs={prefs}
+      assistant={user.role === "admin" && assistantEnabled()}
     />
   );
 }

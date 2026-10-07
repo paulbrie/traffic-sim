@@ -365,25 +365,20 @@ export interface CrossingDef { id: string; a: Vec; b: Vec; width: number; peds: 
 
 export type ParkingKind = "parallel" | "perpendicular" | "angled";
 /**
- * A row of parking bays along the kerb of one direction of a road (on the right of its traffic), from
- * `from` to `to` (0..1 along the road). Cars driving there park in a free bay (stopping in the kerb lane
- * to manoeuvre in), stay a while and pull out again.
- * With `line` the row stands on its own, anywhere (a car park, bays beside a junction): its bays open
- * along the line from `a` to `b`, on its right (`side` 1) or left (-1), and cars reach it from the kerb
- * lane of `link` / `dir` (the road nearest it), turning in and out there.
+ * A row of parking bays standing on its own, anywhere (along a street, a car park, bays beside a junction):
+ * its bays open along the line from `a` to `b`, on its right (`side` 1) or left (-1). Cars reach it from the
+ * kerb lane of `link` / `dir` (the road nearest it), turning in and out there; they park in a free bay, stay
+ * a while and pull out again.
  */
 export interface ParkingDef {
   id: string;
   link: string; dir: 1 | -1;
-  from: number; to: number;
-  line?: { a: Vec; b: Vec; side: 1 | -1 } | null;
+  line: { a: Vec; b: Vec; side: 1 | -1 };
   kind: ParkingKind;
   /** angled bays: the angle to the kerb (degrees) */
   angle?: number;
   /** bay size (m): across, and along its own axis; defaults by kind */
   bayW?: number; bayL?: number;
-  /** distance from the edge of the kerb lane to the bays (m) */
-  gap?: number;
   /** share of bays taken on average (0..1), and how long a car stays (minutes, on average) */
   occupancy?: number; stay?: number;
   /** cars pulling out give way to the lane's traffic (default: they have priority, traffic lets them out) */
