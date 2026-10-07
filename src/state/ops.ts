@@ -155,7 +155,8 @@ export function deleteLink(net: Network, id: string): Network {
 export function reverseLink(net: Network, id: string): Network {
   // (its directions swap names: "id:1" is now the other way)
   net = remapLink(net, id, (_, d) => `${id}:${-d}`);
-  if (net.parking?.some(p => p.link === id)) net = { ...net, parking: net.parking.map(p => (p.link === id ? { ...p, dir: (p.dir === 1 ? -1 : 1) as 1 | -1, from: 1 - p.to, to: 1 - p.from } : p)) };
+  // (rows of bays reached from it: still from the same traffic, now the other direction by name)
+  if (net.parking?.some(p => p.link === id)) net = { ...net, parking: net.parking.map(p => (p.link === id ? { ...p, dir: (p.dir === 1 ? -1 : 1) as 1 | -1 } : p)) };
   return updateLinkWith(net, id, l => ({ ...l, from: l.to, to: l.from, c1: l.c2, c2: l.c1, lanesF: l.lanesB, lanesB: l.lanesF, busF: l.busB, busB: l.busF, turnsF: l.turnsB ?? null, turnsB: l.turnsF ?? null, signF: l.signB ?? null, signB: l.signF ?? null, splitF: l.splitB ?? null, splitB: l.splitF ?? null, greenF: l.greenB ?? null, greenB: l.greenF ?? null, baysF: l.baysB ?? null, baysB: l.baysF ?? null, dropF: l.dropB ?? null, dropB: l.dropF ?? null }), true);
 }
 
@@ -192,15 +193,11 @@ export function splitLink(net: Network, id: string, t: number, at: Vec): [Networ
   });
   // the junctions at its ends now meet the piece on their side
   net = remapLink(net, id, (end, d) => `${end === l.from ? first.id : second.id}:${d}`, [l.from, l.to]);
-  // rows of parking bays: the part on each piece (a row across the split becomes two)
-  const parking = net.parking?.flatMap(p => {
-    if (p.link !== id) return [p];
-    // (a row standing on its own stays whole, reached from the piece nearer it)
-    if (p.line) { const mid = { x: (p.line.a.x + p.line.b.x) / 2, y: (p.line.a.y + p.line.b.y) / 2 }; return [{ ...p, link: nearestT(l, A, B, mid).t < t ? first.id : second.id }]; }
-    const out: ParkingDef[] = [];
-    if (p.from < t) out.push({ ...p, link: first.id, from: p.from / t, to: Math.min(p.to, t) / t });
-    if (p.to > t) out.push({ ...p, id: p.from < t ? newId("pk") : p.id, link: second.id, from: (Math.max(p.from, t) - t) / (1 - t), to: (p.to - t) / (1 - t) });
-    return out;
+  // rows of parking bays reached from it: from the piece nearer them
+  const parking = net.parking?.map(p => {
+    if (p.link !== id) return p;
+    const mid = { x: (p.line.a.x + p.line.b.x) / 2, y: (p.line.a.y + p.line.b.y) / 2 };
+    return { ...p, link: nearestT(l, A, B, mid).t < t ? first.id : second.id };
   });
   return [{ ...net, nodes: [...net.nodes, node], links: [...net.links.filter(x => x.id !== id), first, second], stops, ...(parking ? { parking } : {}) }, node];
 }
@@ -230,12 +227,7 @@ export function deleteCrossing(net: Network, id: string): Network {
 }
 /** a row of bays standing on its own: opening along a → b, bays on `side` of it, reached from direction `dir` of road `link` */
 export function addFreeParking(net: Network, link: string, dir: 1 | -1, a: Vec, b: Vec, side: 1 | -1, kind: ParkingDef["kind"] = "perpendicular"): [Network, ParkingDef] {
-  const p: ParkingDef = { id: newId("pk"), link, dir, from: 0, to: 1, kind, line: { a: { x: round(a.x), y: round(a.y) }, b: { x: round(b.x), y: round(b.y) }, side } };
-  return [{ ...net, parking: [...(net.parking ?? []), p] }, p];
-}
-/** a row of bays along the kerb of direction `dir` of a road, between `from` and `to` (0..1 along it) */
-export function addParking(net: Network, link: string, dir: 1 | -1, from: number, to: number, kind: ParkingDef["kind"] = "perpendicular"): [Network, ParkingDef] {
-  const p: ParkingDef = { id: newId("pk"), link, dir, from: Math.min(from, to), to: Math.max(from, to), kind };
+  const p: ParkingDef = { id: newId("pk"), link, dir, kind, line: { a: { x: round(a.x), y: round(a.y) }, b: { x: round(b.x), y: round(b.y) }, side } };
   return [{ ...net, parking: [...(net.parking ?? []), p] }, p];
 }
 export function updateParking(net: Network, id: string, patch: Partial<ParkingDef>): Network {

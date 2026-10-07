@@ -34,7 +34,7 @@ type Drag =
   | { mode: "connNew"; from: string; sx: number; sy: number; moved: boolean }
   | { mode: "box"; a: Vec; b: Vec }
   | { mode: "marker"; id: string; moved: boolean; sx: number; sy: number }
-  /** a row of parking bays: moved whole (`part` "move"; along its kerb, or anywhere when free-standing), or stretched by an end */
+  /** a row of parking bays: moved whole (`part` "move"), or stretched by an end */
   | { mode: "parking"; id: string; part: "move" | "a" | "b"; start: Vec; orig: ParkingDef; moved: boolean; sx: number; sy: number }
   /** a zebra crossing drawn by hand: moved whole, or one kerb end */
   | { mode: "crossing"; id: string; part: "move" | "a" | "b"; start: Vec; orig: CrossingDef; moved: boolean; sx: number; sy: number }
@@ -93,6 +93,11 @@ export function PlanCanvas() {
         else if (c.cmd === "zoomIn") zoomAt(cam.w / 2, cam.h / 2, 1.4);
         else if (c.cmd === "zoomOut") zoomAt(cam.w / 2, cam.h / 2, 1 / 1.4);
         else if (c.cmd === "focus" && c.x !== undefined && c.y !== undefined) { cam.cx = c.x; cam.cy = c.y!; markDirty(); }
+        else if (c.cmd === "frame" && c.x !== undefined && c.y !== undefined) {
+          const w = Math.max(40, c.w ?? 0), h = Math.max(40, c.h ?? 0);
+          cam.scale = Math.min(40, Math.max(0.05, Math.min(cam.w / (w * 1.5), cam.h / (h * 1.5))));
+          cam.cx = c.x; cam.cy = c.y; markDirty();
+        }
       }),
     ];
     const mq = matchMedia("(prefers-color-scheme: dark)");
@@ -283,21 +288,11 @@ export function PlanCanvas() {
     }
     /** a row of parking bays dragged: moved whole, or one end, to the pointer `w` */
     function dragParking(d: Extract<Drag, { mode: "parking" }>, w: Vec): ParkingDef {
-      const o = d.orig;
-      if (o.line) {
-        if (d.part === "a") return { ...o, line: { ...o.line, a: { x: ops.round(w.x), y: ops.round(w.y) } } };
-        if (d.part === "b") return { ...o, line: { ...o.line, b: { x: ops.round(w.x), y: ops.round(w.y) } } };
-        const dx = w.x - d.start.x, dy = w.y - d.start.y;
-        return { ...o, line: { ...o.line, a: { x: ops.round(o.line.a.x + dx), y: ops.round(o.line.a.y + dy) }, b: { x: ops.round(o.line.b.x + dx), y: ops.round(o.line.b.y + dy) } } };
-      }
-      // along its kerb: by how far along the road the pointer went
-      const link = ops.linkById(net, o.link), A = link && ops.nodeById(net, link.from), B = link && ops.nodeById(net, link.to);
-      if (!link || !A || !B) return o;
-      const t = ops.nearestT(link, A, B, w).t;
-      if (d.part === "a") return { ...o, from: Math.min(t, o.to - 0.002), to: o.to };
-      if (d.part === "b") return { ...o, to: Math.max(t, o.from + 0.002) };
-      const dt = Math.min(1 - o.to, Math.max(-o.from, t - ops.nearestT(link, A, B, d.start).t));
-      return { ...o, from: o.from + dt, to: o.to + dt };
+      const o = d.orig, at = (p: Vec) => ({ x: ops.round(p.x), y: ops.round(p.y) });
+      if (d.part === "a") return { ...o, line: { ...o.line, a: at(w) } };
+      if (d.part === "b") return { ...o, line: { ...o.line, b: at(w) } };
+      const dx = w.x - d.start.x, dy = w.y - d.start.y;
+      return { ...o, line: { ...o.line, a: at({ x: o.line.a.x + dx, y: o.line.a.y + dy }), b: at({ x: o.line.b.x + dx, y: o.line.b.y + dy }) } };
     }
     /** index of the outline point (of the junction whose outline is being edited) under the pointer, or -1 */
     function hitOutlinePoint(sx: number, sy: number): number {
@@ -536,8 +531,8 @@ export function PlanCanvas() {
         commit(n2); select({ kind: "crossing", id: x.id }); markDirty();
         return;
       }
-      // a row of parking bays: the second click, on the same side of the same road, is where it ends
-      if (sh.paint?.kind === "parking" && sh.paint.node === "free") {
+      // a row of parking bays: the second click is where it ends
+      if (sh.paint?.kind === "parking") {
         // a row standing on its own (a → here): reached from the road nearest it, from the side it is on;
         // its bays open toward that road
         const a = sh.paint.pts[0], b = { x: ops.round(w.x), y: ops.round(w.y) };
@@ -549,32 +544,11 @@ export function PlanCanvas() {
         commit(n2); select({ kind: "parking", id: p.id }); markDirty();
         return;
       }
-      if (sh.paint?.kind === "parking") {
-        const [lid, dir, t0] = sh.paint.node.split("|"), l = hitLink(w);
-        sh.paint = null;
-        if (!l || l.id !== lid) { toast.error("End the row of bays on the same road it starts on."); markDirty(); return; }
-        const [n2, p] = ops.addParking(net, lid, Number(dir) as 1 | -1, Number(t0), l.t);
-        commit(n2); select({ kind: "parking", id: p.id }); markDirty();
-        return;
-      }
       if (sh.paint) { const pp = sh.paint; sh.paint = { ...pp, pts: [...pp.pts, { x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
       // Zebra crossing tool: the first kerb
       if (tool === "crossing") { sh.edit = null; sh.paint = { node: "", kind: "crossing", pts: [{ x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
-      // Parking tool: where a row of bays starts, on the side of the road clicked (the kerb of the traffic on that side)
-      if (tool === "parking") {
-        const l = hitLink(w);
-        // (off the road: a row standing on its own, from here to the next click)
-        if (!l) { sh.edit = null; sh.paint = { node: "free", kind: "parking", pts: [{ x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
-        const link = ops.linkById(net, l.id)!, A = ops.nodeById(net, link.from)!, B = ops.nodeById(net, link.to)!;
-        const t0 = ops.linkPoint(link, A, B, Math.max(0, l.t - 0.01)), t1 = ops.linkPoint(link, A, B, Math.min(1, l.t + 0.01));
-        const right = (w.x - l.pt.x) * -(t1.y - t0.y) + (w.y - l.pt.y) * (t1.x - t0.x) > 0;
-        let dir: 1 | -1 = right ? 1 : -1;
-        if (dir === 1 && link.lanesF === 0) dir = -1;
-        if (dir === -1 && link.lanesB === 0) dir = 1;
-        sh.edit = null; sh.paint = { node: `${link.id}|${dir}|${l.t}`, kind: "parking", pts: [{ x: l.pt.x, y: l.pt.y }] };
-        markDirty();
-        return;
-      }
+      // Parking tool: where a row of bays starts (anywhere; it ends at the next click)
+      if (tool === "parking") { sh.edit = null; sh.paint = { node: "free", kind: "parking", pts: [{ x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
       // Junction tool: the first corner of a new junction's outline
       if (tool === "junction") { sh.edit = null; sh.paint = { node: "", kind: "junction", pts: [{ x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
       if (sh.edit) {
@@ -903,7 +877,7 @@ export function PlanCanvas() {
       // a free-standing row moved: reached from the road nearest it now (the same step to undo)
       if (drag?.mode === "parking" && drag.moved) {
         const id = drag.id, p = net.parking?.find(x => x.id === id);
-        if (p?.line) { const acc = accessFor(p.line.a, p.line.b); if (acc && (acc.link !== p.link || acc.dir !== p.dir)) commit(ops.updateParking(net, p.id, { link: acc.link, dir: acc.dir }), `parking:${p.id}`); }
+        if (p) { const acc = accessFor(p.line.a, p.line.b); if (acc && (acc.link !== p.link || acc.dir !== p.dir)) commit(ops.updateParking(net, p.id, { link: acc.link, dir: acc.dir }), `parking:${p.id}`); }
       }
       if (drag?.mode === "node" && drag.moved) {
         // dropped onto another node: merge them

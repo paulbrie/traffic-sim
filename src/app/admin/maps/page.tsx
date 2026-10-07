@@ -1,26 +1,22 @@
 import type { Metadata } from "next";
-import { asc } from "drizzle-orm";
+import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
 import { AdminNav } from "@/components/admin/admin-nav";
 import { MapsAdmin } from "@/components/admin/maps-admin";
 import { DbSetupNotice } from "@/components/db-setup-notice";
-import { db, schema } from "@/db";
 import { requireAdmin } from "@/server/auth";
 import { tryDb } from "@/server/db-status";
-import { listAllCities } from "@/server/queries";
+import { adminMaps } from "@/server/queries";
 
 export const metadata: Metadata = { title: "Maps — Admin — Gridlock" };
 
 export default async function AdminMapsPage() {
   const res = await tryDb(async () => {
-    await requireAdmin();
-    const [maps, users] = await Promise.all([
-      listAllCities(),
-      db.select({ id: schema.users.id, email: schema.users.email }).from(schema.users).orderBy(asc(schema.users.email)),
-    ]);
-    return { maps, users };
+    // (requireAdmin sends anyone else away; adminMaps proves it again from the database)
+    return adminMaps(await requireAdmin());
   });
   if (!res.ok) return <DbSetupNotice problem={res.problem} />;
+  if (!res.data) redirect("/");
   const { maps, users } = res.data;
   return (
     <>

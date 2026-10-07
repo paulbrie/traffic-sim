@@ -12,6 +12,7 @@ import type { SimMirror } from "@/engine/sim/mirror";
 import { select, settings$, stats$, ui } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { sendView } from "@/state/commands";
+import { LinkedText } from "./linked-text";
 
 const LABEL: Record<SimProblem["kind"], string> = { towed: "Towed", breakdown: "Breakdown", wreck: "Wreck", removed: "Removed", overlap: "Overlap", stuck: "Stuck" };
 const TONE: Record<SimProblem["kind"], string> = {
@@ -25,7 +26,7 @@ const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60))
 export function useProblemCount() {
   useSubject(stats$);
   const sim = simController.sim;
-  return sim ? shown(sim).length : 0;
+  return (sim ? shown(sim).length : 0) + simController.compiled.warnings.length;
 }
 // (cleared from view: the problems up to this moment of each run — a new run starts with none cleared)
 const clearedAt = new WeakMap<object, number>();
@@ -62,6 +63,8 @@ export function ProblemConsole() {
   useEffect(() => { const el = list.current; if (el && stick.current) el.scrollTop = el.scrollHeight; }, [rows.length]);
 
   const rec = simController.rec;
+  // (what's wrong with the plan itself, found as it compiles: problems in the run often come from these)
+  const warnings = simController.compiled.warnings;
   const go = (p: SimProblem) => {
     if (p.veh != null && sim?.vehicles.some(v => v.id === p.veh && !v.dead)) select({ kind: "vehicle", id: String(p.veh) });
     sendView("focus", p.x, p.y);
@@ -69,7 +72,7 @@ export function ProblemConsole() {
   const replay = (p: SimProblem) => { simController.replayAt(Math.max(rec.from, Math.round(p.t * 10) - 50)); sendView("focus", p.x, p.y); };
   const copy = () => {
     const u = ui.getValue();
-    const text = `Simulation console · plan ${u.planId} rev ${u.save.revision} · ${rows.length} problem${rows.length === 1 ? "" : "s"}\n\`\`\`json\n${JSON.stringify({ plan: u.planId, revision: u.save.revision, settings: settings$.getValue(), problems: rows })}\n\`\`\`\n`;
+    const text = `Simulation console · plan ${u.planId} rev ${u.save.revision} · ${rows.length} problem${rows.length === 1 ? "" : "s"}${warnings.length ? `, ${warnings.length} plan warning${warnings.length === 1 ? "" : "s"}` : ""}\n\`\`\`json\n${JSON.stringify({ plan: u.planId, revision: u.save.revision, settings: settings$.getValue(), warnings, problems: rows })}\n\`\`\`\n`;
     navigator.clipboard.writeText(text).then(() => toast.success(`Copied ${rows.length} line${rows.length === 1 ? "" : "s"}`), () => toast.error("Couldn't copy"));
   };
 
@@ -94,13 +97,20 @@ export function ProblemConsole() {
         <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Close the console" onClick={() => { ui.getValue().console = false; }}><X /></Button>
       </div>
       <div ref={list} className="min-h-0 flex-1 overflow-y-auto font-mono text-xs" onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24; }}>
+        {warnings.map((w, i) => (
+          <div key={`w${i}`} className="flex items-start gap-2 border-b border-border/50 bg-amber-500/5 px-3 py-1">
+            <span className="w-10 shrink-0" />
+            <span className={`w-[72px] shrink-0 rounded px-1 text-center font-sans text-[11px] font-medium ${TONE.overlap}`}>Plan</span>
+            <span className="min-w-0 flex-1 font-sans"><LinkedText text={w} /></span>
+          </div>
+        ))}
         {rows.length ? rows.map((p, i) => (
           <div key={i} className="group flex cursor-pointer items-start gap-2 border-b border-border/50 px-3 py-1 hover:bg-muted/60" onClick={() => go(p)} title="Select the vehicle and go to it">
             <span className="w-10 shrink-0 text-right text-muted-foreground tabular">{clock(p.t)}</span>
             <span className={`w-[72px] shrink-0 rounded px-1 text-center font-sans text-[11px] font-medium ${TONE[p.kind]}`}>{LABEL[p.kind]}</span>
             <span className="w-24 shrink-0 tabular">#{p.veh} {p.vkind}{p.other != null ? ` · #${p.other}` : ""}</span>
-            <span className="w-56 shrink-0 truncate text-muted-foreground" title={p.at}>{p.at}</span>
-            <span className="min-w-0 flex-1 font-sans">{p.detail}</span>
+            <span className="w-56 shrink-0 truncate text-muted-foreground" title={p.at}><LinkedText text={p.at} /></span>
+            <span className="min-w-0 flex-1 font-sans"><LinkedText text={p.detail} /></span>
             {rec.frames > 1 && p.t * 10 >= rec.from && p.t * 10 <= rec.to && (
               <Button variant="ghost" size="icon-sm" className="size-6 opacity-0 group-hover:opacity-100" aria-label="Replay from just before" title="Replay from 5 s before"
                 onClick={e => { e.stopPropagation(); replay(p); }}><History /></Button>

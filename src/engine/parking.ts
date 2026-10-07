@@ -1,7 +1,6 @@
 /**
- * Rows of parking bays (ParkingDef) laid out along the kerb of a road, or standing on their own anywhere
- * (reached from the road nearest them): where each bay is, as the renderers draw it and the simulation
- * parks cars in it. Framework-free.
+ * Rows of parking bays (ParkingDef), standing on their own anywhere and reached from the road nearest them:
+ * where each bay is, as the renderers draw it and the simulation parks cars in it. Framework-free.
  */
 import type { Edge } from "./compile";
 import { Poly, connectorPoints, cubicPoints } from "./geom";
@@ -20,8 +19,6 @@ export interface CParking {
   frames: BayFrame[];
   /** bay size across and deep (m), angle to the row (rad; 0 = parallel), spacing along it (m) */
   w: number; l: number; alpha: number; pitch: number;
-  /** a row standing on its own (not along the kerb): cars turn in and out of it */
-  free: boolean;
   /** each bay's way in from its lane and out to it */
   access: BayAccess[];
 }
@@ -59,31 +56,15 @@ export function compileParking(net: Network, edgeByKey: Map<string, Edge>): CPar
     const pitch = def.kind === "parallel" ? l : w / Math.sin(alpha);
     // (the bays line the kerb; cars reach them from `lane`)
     const lane = edge.bus ? edge.kerb - 1 : edge.kerb, lp = edge.lanes[edge.kerb], toEdge = edge.length / Math.max(1e-6, lp.len);
-    let bays: number[], frames: BayFrame[];
-    if (def.line) {
-      // standing on its own: bays along the line, each reached from the nearest point of the kerb lane
-      const { a, b, side } = def.line, L = Math.hypot(b.x - a.x, b.y - a.y), t = { x: (b.x - a.x) / L, y: (b.y - a.y) / L };
-      const n = { x: -t.y * side, y: t.x * side }, count = Math.floor(L / pitch + 1e-6);
-      if (count <= 0) continue;
-      const start = (L - count * pitch) / 2;
-      frames = Array.from({ length: count }, (_, i) => ({ k: { x: a.x + t.x * (start + pitch * (i + 0.5)), y: a.y + t.y * (start + pitch * (i + 0.5)) }, t, n }));
-      bays = frames.map(f => Math.min(edge.length - 0.5, Math.max(0.5, lp.poly.project(f.k.x, f.k.y).s * toEdge)));
-    } else {
-      // from..to is along the road as drawn (from → to); this direction may run the other way
-      const full = edge.center.len, at = (t: number) => (edge.dir === 1 ? t : 1 - t) * full - edge.trimA;
-      const s0 = Math.max(0, Math.min(at(def.from), at(def.to))), s1 = Math.min(edge.length, Math.max(at(def.from), at(def.to)));
-      const count = Math.floor((s1 - s0) / pitch + 1e-6);
-      if (count <= 0) continue;
-      const start = s0 + (s1 - s0 - count * pitch) / 2;
-      bays = Array.from({ length: count }, (_, i) => start + pitch * (i + 0.5));
-      frames = bays.map(s => {
-        const sl = s / toEdge, c = lp.poly.at(sl), t = lp.poly.tangent(sl);
-        // (the kerb is on the right of the traffic: y runs south, so right of (x, y) is (−y, x))
-        const n = { x: -t.y, y: t.x }, off = edge.lw / 2 + (def.gap ?? 0);
-        return { k: { x: c.x + n.x * off, y: c.y + n.y * off }, t, n };
-      });
-    }
-    out.push({ idx: out.length, def, edge, lane, bays, frames, w, l, alpha, pitch, free: !!def.line, access: [] });
+    // bays along the line, each reached from the nearest point of the kerb lane
+    const { a, b, side } = def.line, L = Math.hypot(b.x - a.x, b.y - a.y);
+    if (L < 1e-6) continue;
+    const t = { x: (b.x - a.x) / L, y: (b.y - a.y) / L }, n = { x: -t.y * side, y: t.x * side }, count = Math.floor(L / pitch + 1e-6);
+    if (count <= 0) continue;
+    const start = (L - count * pitch) / 2;
+    const frames: BayFrame[] = Array.from({ length: count }, (_, i) => ({ k: { x: a.x + t.x * (start + pitch * (i + 0.5)), y: a.y + t.y * (start + pitch * (i + 0.5)) }, t, n }));
+    const bays = frames.map(f => Math.min(edge.length - 0.5, Math.max(0.5, lp.poly.project(f.k.x, f.k.y).s * toEdge)));
+    out.push({ idx: out.length, def, edge, lane, bays, frames, w, l, alpha, pitch, access: [] });
   }
   // (the cars that may be parked around each bay, of every row: by 20 m cell)
   const CELL = 20, grid = new Map<string, { x: number; y: number; hx: number; hy: number; row: number; bay: number }[]>();
@@ -136,16 +117,9 @@ export function bayPose(p: CParking, i: number): { x: number; y: number; hx: num
   return { x, y, hx: h.x, hy: h.y };
 }
 
-/**
- * A row's two ends (the handles that stretch it): a free-standing row's line ends; along a kerb, the ends
- * of its bays, the first one at `from` and the second at `to` (along the road as drawn).
- */
+/** A row's two ends (the handles that stretch it): its line's. */
 export function rowEnds(p: CParking): [Vec, Vec] {
-  if (p.def.line) return [p.def.line.a, p.def.line.b];
-  const f0 = p.frames[0], f1 = p.frames[p.frames.length - 1], h = p.pitch / 2;
-  const lo = { x: f0.k.x - f0.t.x * h, y: f0.k.y - f0.t.y * h }, hi = { x: f1.k.x + f1.t.x * h, y: f1.k.y + f1.t.y * h };
-  // (bays run along the traffic: from → to the other way when it drives against the road's drawing direction)
-  return p.edge.dir === 1 ? [lo, hi] : [hi, lo];
+  return [p.def.line.a, p.def.line.b];
 }
 
 /** a bay's way in and out (see BayAccess): smooth curves between the kerb lane and the bay */

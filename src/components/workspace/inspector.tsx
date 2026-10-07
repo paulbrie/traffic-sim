@@ -24,6 +24,7 @@ import { SignalGroupSection } from "./signal-groups";
 import { PhaseEditor } from "./phase-editor";
 import { FlowsSection } from "./flows";
 import { ConnectorInspector, LaneInspector } from "./object-inspectors";
+import { LinkedText } from "./linked-text";
 import { ZonePicker, ZonesSection } from "./zones";
 import { LaneArrowsEditor, SignPicker } from "./lane-arrows";
 import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
@@ -119,7 +120,7 @@ function PlanSummary({ net }: { net: Network }) {
       {c.warnings.length > 0 && (
         <Section title="Check">
           <ul className="grid gap-2 text-sm">
-            {c.warnings.slice(0, 8).map((w, i) => <li key={i} className="flex gap-2"><TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" />{w}</li>)}
+            {c.warnings.slice(0, 8).map((w, i) => <li key={i} className="flex gap-2"><TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" /><span><LinkedText text={w} /></span></li>)}
           </ul>
         </Section>
       )}
@@ -270,7 +271,7 @@ function PointInspector({ net, node }: { net: Network; node: NodeDef }) {
         </Section>
       )}
       {(degree >= 3 || crossing) && node.control === "lights" && cn && cn.controlled && <PhaseEditor net={net} node={node} cn={cn} />}
-      {degree >= 3 && node.control === "priority" && cn && <ApproachSignsSection net={net} node={node} />}
+      {(degree >= 3 || (cn?.cluster.length ?? 1) > 1) && node.control === "priority" && cn && <ApproachSignsSection net={net} node={node} />}
       {(degree >= 3 || crossing) && node.control !== "roundabout" && cn && <PedestriansSection node={node} nodeIdx={cn.idx} set={set} />}
       {degree >= 3 && node.control !== "roundabout" && cn && <SlipLanesSection net={net} node={node} />}
       {(degree >= 3 || crossing) && <SignalGroupSection net={net} node={node} />}
@@ -535,12 +536,14 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
   const approach = (d: 1 | -1) => {
     let e = compiled.edges.find(x => x.link.id === link.id && x.dir === d);
     let hops = 0;
-    while (e && !(e.to.controlled && e.to.degree >= 3) && e.to.degree === 2 && hops++ < 60) {
+    // (a junction: three roads or more, or points joined by connectors into one — a road's loose end included)
+    const junctionAt = (n: NonNullable<typeof e>["to"]) => n.controlled && (n.degree >= 3 || n.cluster.length > 1);
+    while (e && !junctionAt(e.to) && e.to.degree === 2 && hops++ < 60) {
       const cur: typeof e = e;
       const nextArm = cur.to.arms.find(a => a.link.id !== cur.link.id);
       e = nextArm?.outEdge ?? undefined;
     }
-    return e && e.to.controlled && e.to.degree >= 3 ? { e, hops } : null;
+    return e && junctionAt(e.to) ? { e, hops } : null;
   };
   const refs = junctionRefs(compiled);
   const laneArrows = ([1, -1] as const).flatMap(d => {
@@ -711,7 +714,8 @@ function PedestriansSection({ node, nodeIdx, set }: { node: NodeDef; nodeIdx: nu
 /** give-way / stop signs on each road arriving at a priority junction */
 function ApproachSignsSection({ net, node }: { net: Network; node: NodeDef }) {
   const cn = simController.compiled.nodeById.get(node.id);
-  const arriving = cn?.arms.filter(a => a.inEdge) ?? [];
+  // (every road arriving at the junction: at this point, and at the others connectors join it with)
+  const arriving = cn ? cn.cluster.flatMap(k => k.arms.filter(a => a.inEdge)) : [];
   if (!arriving.length) return null;
   return (
     <Section title="Signs">

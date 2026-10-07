@@ -1207,6 +1207,25 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   if (!ok) process.exit(1);
 }
 
+/**
+ * Rows written the way they used to be — along the kerb of direction `dir` of their road, from `from` to `to`
+ * (0..1 along it as drawn) — as rows standing on their own in that very place (the only kind there is now):
+ * their line runs along the kerb lane's outer edge, with the traffic.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function alongKerb(input: any): any {
+  const roads = compile(sanitizeNetwork({ ...input, parking: undefined }));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return { ...input, parking: input.parking.map((p: any) => {
+    if (p.line) return p;
+    const e = roads.edgeByKey.get(`${p.link}:${p.dir}`)!, lp = e.lanes[e.kerb], toEdge = e.length / lp.len, full = e.center.len;
+    const at = (t: number) => (e.dir === 1 ? t : 1 - t) * full - e.trimA;
+    const s0 = Math.max(0, Math.min(at(p.from), at(p.to))), s1 = Math.min(e.length, Math.max(at(p.from), at(p.to)));
+    const pt = (sE: number) => { const sl = sE / toEdge, c = lp.poly.at(sl), t = lp.poly.tangent(sl), off = e.lw / 2; return { x: c.x - t.y * off, y: c.y + t.x * off }; };
+    return { ...p, line: { a: pt(s0), b: pt(s1), side: 1 } };
+  }) };
+}
+
 // zebra crossings drawn by hand (on a plain road, and at a lit junction's mouth) and rows of parking bays
 {
   // a plain road: pedestrians cross, traffic stops for them, nobody stuck
@@ -1234,12 +1253,13 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   s2.run(6000);
   // (the town's busy give-way corner, a right turn from Strada Dacia into Strada Parcului, gets a car or three
   // towed whatever the crossing does: vehicles queue behind the rear of one turning in rather than into it)
-  const litOk = s2.through > 0 && s2.starts > 5 && s2.onGreen === 0 && s2.stats.towed <= 3;
+  // (five groups or more in the ten minutes: pedestrians wait while a vehicle is on the paths over the crossing)
+  const litOk = s2.through > 0 && s2.starts >= 5 && s2.onGreen === 0 && s2.stats.towed <= 3;
   // parking: cars park (stopping in the lane to manoeuvre), stay, pull out; the row stays about as full as set
-  const pk = sanitizeNetwork({ version: 1, nodes: [w0, e0], links: [road], stops: [], lines: [],
+  const pk = sanitizeNetwork(alongKerb({ version: 1, nodes: [w0, e0], links: [road], stops: [], lines: [],
     parking: [{ id: "p1", link: road.id, dir: 1, from: 0.3, to: 0.5, kind: "perpendicular", stay: 10, occupancy: 0.6 }, { id: "p2", link: road.id, dir: -1, from: 0.55, to: 0.7, kind: "parallel", stay: 5 },
       // standing on its own, 12 m off the road (a car park), reached from the eastbound lanes
-      { id: "p3", link: road.id, dir: 1, from: 0, to: 1, kind: "angled", angle: 60, stay: 5, line: { a: { x: 150, y: 15 }, b: { x: 180, y: 15 }, side: 1 } }] });
+      { id: "p3", link: road.id, dir: 1, from: 0, to: 1, kind: "angled", angle: 60, stay: 5, line: { a: { x: 150, y: 15 }, b: { x: 180, y: 15 }, side: 1 } }] }));
   const cp = compile(pk), s3 = new Sim(cp, { cars: 50, trucks: 0, seed: 7 });
   let manoeuvring = 0, takenSum = 0, samples = 0;
   // (every car that leaves a bay drives out of it: rows facing one exit only included)
@@ -1252,16 +1272,17 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   }
   const p0 = s3.parkingStats(0)!, p1 = s3.parkingStats(1)!, p2 = s3.parkingStats(2)!, share = takenSum / samples;
   // (the free row: its bays where drawn, 15 m below the road's centre, cars stopping by them on the road)
-  const fr = cp.parking[2], frOk = fr.free && fr.bays.length === 10 && bayOutline(fr, 0).every(q => q.y >= 14.9) && fr.bays.every(s => s > 440 && s < 490) && p2.parked > 12 && p2.left > 12;
-  // (a row's end handles: the first at `from`, along the road as drawn, on either side of it; a free row's are its line's ends)
-  const endsOk = [cp.parking[0], cp.parking[1]].every(p => { const [ea, eb] = rowEnds(p); return ea.x < eb.x; }) && rowEnds(fr)[0].x === 150 && rowEnds(fr)[1].x === 180;
+  const fr = cp.parking[2], frOk = fr.bays.length === 10 && bayOutline(fr, 0).every(q => q.y >= 14.9) && fr.bays.every(s => s > 440 && s < 490) && p2.parked > 12 && p2.left > 12;
+  // (a row's end handles are its line's ends; a row written along a kerb, without a line of its own, is left out)
+  const endsOk = cp.parking.every(p => { const [ea, eb] = rowEnds(p); return ea === p.def.line.a && eb === p.def.line.b; }) && rowEnds(fr)[0].x === 150 && rowEnds(fr)[1].x === 180
+    && !sanitizeNetwork({ version: 1, nodes: [w0, e0], links: [road], stops: [], lines: [], parking: [{ id: "k", link: road.id, dir: 1, from: 0.3, to: 0.5, kind: "perpendicular" }] }).parking;
   const noVanish = cameOut.size >= p0.left + p1.left + p2.left;
   const parkOk = noVanish && endsOk && cp.parking[0].bays.length === 48 && cp.parking[1].bays.length === 15 && p0.parked > 20 && p0.left > 20 && p1.parked > 20 && frOk && manoeuvring > 0 && share > 0.35 && share < 0.85 && s3.stats.towed === 0;
-  // editing the road keeps the bays where they are: reversed, and split (in two rows)
+  // editing the road keeps the bays where they are: reversed, and split (each row reached from the piece nearer it)
   const pose = (net: Network) => compile(net).parking.flatMap(p => p.bays.map((_, i) => bayOutline(p, i)[0])).map(q => `${q.x.toFixed(1)},${q.y.toFixed(1)}`).sort().join(" ");
   const before = pose(pk), rev = pose(reverseLink(pk, road.id));
   const [sp] = splitLink(pk, road.id, 0.4, linkPoint(road, w0, e0, 0.4));
-  const editOk = before === rev && sp.parking!.length === 4 && compile(sp).parking.reduce((n, p) => n + p.bays.length, 0) >= 70;
+  const editOk = before === rev && sp.parking!.length === 3 && pose(sp) === before;
   // replay: each kept step has its parked cars and its pedestrians, as they were then
   const rp = new Sim(compile(sanitizeNetwork({ ...pk, crossings: plain.crossings })), { cars: 50, trucks: 0, seed: 7 }), rec = new Recorder(), truth = new Map<number, { parked: string; peds: string }>();
   const pedsOf = (x: { waiting: number; crossing: number } | null) => `${x?.waiting ?? 0}/${x?.crossing ?? 0}`;
@@ -1304,8 +1325,8 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   j.control = "lights"; j.gateway = false;
   const r1 = makeLink(e0, j, 1, 1), links = [makeLink(w0, j, 1, 1), r1, makeLink(n0, j, 1, 1), makeLink(s0, j, 1, 1)];
   const run = (giveWay: boolean) => {
-    const net = sanitizeNetwork({ version: 1, nodes: [w0, j, e0, n0, s0], links, stops: [], lines: [],
-      parking: [{ id: "p", link: r1.id, dir: 1, from: 0.55, to: 0.85, kind: "perpendicular", stay: 3, occupancy: 0.7, ...(giveWay ? { giveWay: true } : {}) }] });
+    const net = sanitizeNetwork(alongKerb({ version: 1, nodes: [w0, j, e0, n0, s0], links, stops: [], lines: [],
+      parking: [{ id: "p", link: r1.id, dir: 1, from: 0.55, to: 0.85, kind: "perpendicular", stay: 3, occupancy: 0.7, ...(giveWay ? { giveWay: true } : {}) }] }));
     const sim = new Sim(compile(net), { cars: 160, trucks: 0, seed: 7, through: 1 });
     let waiting = 0, n = 0;
     for (let t = 0; t < 6000; t++) { sim.step(); if (t % 50 === 0) { waiting += sim.vehicles.filter(v => !v.dead && v.state === "waiting to pull out").length; n++; } }
@@ -1325,9 +1346,9 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   j.control = "lights"; j.gateway = false;
   const r1 = makeLink(e0, j, 1, 1), links = [makeLink(w0, j, 1, 1), r1, makeLink(n0, j, 1, 1), makeLink(s0, j, 1, 1)];
   for (const giveWay of [false, true]) {
-    const net = sanitizeNetwork({ version: 1, nodes: [w0, j, e0, n0, s0], links, stops: [], lines: [], parking: [
+    const net = sanitizeNetwork(alongKerb({ version: 1, nodes: [w0, j, e0, n0, s0], links, stops: [], lines: [], parking: [
       { id: "a", link: r1.id, dir: 1, from: 0.4, to: 0.8, kind: "parallel", stay: 2, occupancy: 0.7, ...(giveWay ? { giveWay: true } : {}) },
-      { id: "b", link: r1.id, dir: -1, from: 0.4, to: 0.8, kind: "parallel", stay: 2, occupancy: 0.7, ...(giveWay ? { giveWay: true } : {}) }] });
+      { id: "b", link: r1.id, dir: -1, from: 0.4, to: 0.8, kind: "parallel", stay: 2, occupancy: 0.7, ...(giveWay ? { giveWay: true } : {}) }] }));
     const sim = new Sim(compile(net), { cars: 100, trucks: 40, seed: 7, through: 1 });
     let overlaps = 0, samples = 0;
     for (let t = 0; t < 9000; t++) {
@@ -1359,9 +1380,9 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
 {
   const w0 = makeNode(-300, 0), e0 = makeNode(300, 0), road = makeLink(w0, e0, 3, 2, { busF: true });
   // (with buses running in the bus lane, both ways along the road)
-  const net = sanitizeNetwork({ version: 1, nodes: [w0, e0], links: [road], lines: [{ id: "bl", name: "B", color: "#2f6fb5", stops: ["s1", "s2"], buses: 4 }],
+  const net = sanitizeNetwork(alongKerb({ version: 1, nodes: [w0, e0], links: [road], lines: [{ id: "bl", name: "B", color: "#2f6fb5", stops: ["s1", "s2"], buses: 4 }],
     stops: [{ id: "s1", name: "West", link: road.id, dir: 1, pos: 0.1 }, { id: "s2", name: "East", link: road.id, dir: 1, pos: 0.95 }],
-    parking: [{ id: "p", link: road.id, dir: 1, from: 0.3, to: 0.6, kind: "perpendicular", stay: 3 }] });
+    parking: [{ id: "p", link: road.id, dir: 1, from: 0.3, to: 0.6, kind: "perpendicular", stay: 3 }] }));
   const c = compile(net), row = c.parking[0], e = row.edge, sim = new Sim(c, { cars: 60, trucks: 0, seed: 7 });
   let inBusLane = 0, intoBus = 0;
   for (let t = 0; t < 6000; t++) {

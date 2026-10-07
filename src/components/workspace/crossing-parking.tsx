@@ -76,7 +76,7 @@ export function ParkingInspector({ net, p }: { net: Network; p: ParkingDef }) {
   const set = (patch: Partial<ParkingDef>, key?: string) => commit(ops.updateParking(net, p.id, patch), key);
   const c = simController.compiled.parking.find(x => x.def.id === p.id), size = BAY_SIZE[p.kind];
   const link = ops.linkById(net, p.link), other = p.dir === 1 ? -1 : 1, otherLanes = link ? (other === 1 ? link.lanesF : link.lanesB) : 0;
-  const live = c ? simController.sim?.parkingStats(c.idx) : null, line = p.line ?? null;
+  const live = c ? simController.sim?.parkingStats(c.idx) : null, line = p.line;
   return (
     <div>
       <Header kind="Parking bays" id={p.id} title={c ? `${c.bays.length} bay${c.bays.length === 1 ? "" : "s"} on ${link?.name || "a road"}` : "No room for a bay here"} onDelete={() => { commit(ops.deleteParking(net, p.id)); select(null); }} />
@@ -89,29 +89,17 @@ export function ParkingInspector({ net, p }: { net: Network; p: ParkingDef }) {
           {p.kind === "angled" && <NumberField id="pa" label="Angle to the kerb" unit="°" value={p.angle ?? PARKING.angle} min={20} max={80} step={5} digits={0} onCommit={v => set({ angle: Math.round(v) }, `pa:${p.id}`)} />}
           <NumberField id="pw" label={p.kind === "parallel" ? "Bay width (across)" : "Bay width"} unit="m" value={p.bayW ?? size.w} min={1.8} max={4} step={0.1} digits={1} onCommit={v => set({ bayW: v }, `pw:${p.id}`)} />
           <NumberField id="pl" label={p.kind === "parallel" ? "Bay length" : "Bay depth"} unit="m" value={p.bayL ?? size.l} min={3.5} max={9} step={0.1} digits={1} onCommit={v => set({ bayL: v }, `pl:${p.id}`)} />
-          {line ? (
-            <>
-              <NumberField id="pax" label="One end: X (east)" unit="m" value={line.a.x} onCommit={v => set({ line: { ...line, a: { ...line.a, x: v } } }, `pla:${p.id}`)} />
-              <NumberField id="pay" label="Y (south)" unit="m" value={line.a.y} onCommit={v => set({ line: { ...line, a: { ...line.a, y: v } } }, `pla:${p.id}`)} />
-              <NumberField id="pbx" label="Other end: X (east)" unit="m" value={line.b.x} onCommit={v => set({ line: { ...line, b: { ...line.b, x: v } } }, `plb:${p.id}`)} />
-              <NumberField id="pby" label="Y (south)" unit="m" value={line.b.y} onCommit={v => set({ line: { ...line, b: { ...line.b, y: v } } }, `plb:${p.id}`)} />
-            </>
-          ) : (
-            <>
-              <NumberField id="pg" label="From the lane's edge" unit="m" value={p.gap ?? 0} min={-2} max={30} step={0.1} digits={1} onCommit={v => set({ gap: v || undefined }, `pg:${p.id}`)} />
-              <NumberField id="pf" label="Starts at" unit="%" value={p.from * 100} min={0} max={100} step={1} digits={1} onCommit={v => set({ from: Math.min(v / 100, p.to) }, `pf:${p.id}`)} />
-              <NumberField id="pt" label="Ends at" unit="%" value={p.to * 100} min={0} max={100} step={1} digits={1} onCommit={v => set({ to: Math.max(v / 100, p.from) }, `pt:${p.id}`)} />
-            </>
-          )}
+          <NumberField id="pax" label="One end: X (east)" unit="m" value={line.a.x} onCommit={v => set({ line: { ...line, a: { ...line.a, x: v } } }, `pla:${p.id}`)} />
+          <NumberField id="pay" label="Y (south)" unit="m" value={line.a.y} onCommit={v => set({ line: { ...line, a: { ...line.a, y: v } } }, `pla:${p.id}`)} />
+          <NumberField id="pbx" label="Other end: X (east)" unit="m" value={line.b.x} onCommit={v => set({ line: { ...line, b: { ...line.b, x: v } } }, `plb:${p.id}`)} />
+          <NumberField id="pby" label="Y (south)" unit="m" value={line.b.y} onCommit={v => set({ line: { ...line, b: { ...line.b, y: v } } }, `plb:${p.id}`)} />
         </div>
         <div className="flex flex-wrap gap-2">
-          {line && <Button size="sm" variant="outline" onClick={() => set({ line: { ...line, side: line.side === 1 ? -1 : 1 } })}><ArrowLeftRight /> Bays on the other side</Button>}
-          {otherLanes > 0 && <Button size="sm" variant="outline" onClick={() => set({ dir: other as 1 | -1 })}><ArrowLeftRight /> {line ? "Reached from the other lanes" : "Other side of the road"}</Button>}
+          <Button size="sm" variant="outline" onClick={() => set({ line: { ...line, side: line.side === 1 ? -1 : 1 } })}><ArrowLeftRight /> Bays on the other side</Button>
+          {otherLanes > 0 && <Button size="sm" variant="outline" onClick={() => set({ dir: other as 1 | -1 })}><ArrowLeftRight /> Reached from the other lanes</Button>}
         </div>
         <p className="text-xs text-muted-foreground">
-          {line
-            ? `Standing on its own, reached from ${link?.name || "the nearest road"}: cars stop in its kerb lane to turn in (a few seconds), and wait for a gap to pull out. Draw more rows for a car park; a short row holds a single bay.`
-            : "Along the kerb of the traffic on this side; start and end are along the road as drawn (0% = its first point). Cars stop in the kerb lane to park, blocking it while they manoeuvre, and wait for a gap to pull out."}
+          {`Standing on its own: drag it anywhere, or drag an end to stretch it. Cars reach it from ${link?.name || "the nearest road"}: they stop in its kerb lane to turn in (a few seconds), and wait for a gap to pull out. Draw more rows for a car park; a short row holds a single bay.`}
         </p>
       </Section>
       <Section title="Use">

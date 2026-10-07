@@ -17,7 +17,7 @@ export abstract class SimDemand extends SimMotion {
       route: [], ri: 0, piece: this.net.pieces[0], s: 0, v: 0, acc: 0, lane: 0, queue: [], trail: [],
       conn: null, granted: false, dest: { kind: "gateway", node: this.net.nodes[0] }, state: "free", wait: 0,
       enterT: this.tick, bornT: this.tick, jam: 0, broken: 0, brokenAt: 0, gap: Infinity, leader: null, v0: 10,
-      reroutes: 0, laneChanges: 0, lcCool: 0, lcOff: 0, lcT: 0, blendT: 0, stuckAt: undefined, parkSince: undefined,
+      reroutes: 0, laneChanges: 0, lcCool: 0, lcOff: 0, lcT: 0, lcBy: undefined, blendT: 0, stuckAt: undefined, parkSince: undefined,
       reqAt: 0, reqFor: null, stoppedAt: null, fixedAt: null, rerouteAt: null,
       line: null, stopIdx: 0, pax: 0, cap: 50, dwell: 0, dead: false, metered: false, flow: -1, zflow: -1, goal: null,
       test: undefined, logState: undefined, splits: undefined, xm: [emptyXMemo(), emptyXMemo()], xmNext: 0,
@@ -66,14 +66,14 @@ export abstract class SimDemand extends SimMotion {
    * The lane a new vehicle starts in: the one picked, unless that lane can't take its first turn and a
    * lane that can (the nearest) has room at the same spot (no extra random draws, so runs stay as they were).
    */
-  protected startLane(edge: Edge, route: Edge[], lane: number, lo: number, hi: number, s: number, room: number) {
+  protected startLane(edge: Edge, route: Edge[], lane: number, lo: number, hi: number, s: number, room: number, len = 4.6) {
     let ln = lane, pc = edge.lanes[lane], sl = s * (pc.len / Math.max(1e-6, edge.length));
     const m0 = route[1] ? this.moveOf(edge, route[1]) : undefined;
     if (m0 && (ln < m0.lo || ln > m0.hi)) {
       const want = Math.min(Math.max(ln, Math.max(lo, m0.lo)), Math.min(hi, m0.hi));
       if (want !== ln && want >= lo && want <= hi) {
         const wp = edge.lanes[want], ws = s * (wp.len / Math.max(1e-6, edge.length));
-        if (this.laneClear(wp, ws, room)) { ln = want; pc = wp; sl = ws; }
+        if (this.laneClear(wp, ws, room, len)) { ln = want; pc = wp; sl = ws; }
       }
     }
     return { ln, pc, sl };
@@ -166,7 +166,8 @@ export abstract class SimDemand extends SimMotion {
     const lane = lo + ((r() * (hi - lo + 1)) | 0);
     const piece = edge.lanes[lane];
     const sOnLane = s * (piece.len / Math.max(1e-6, edge.length));
-    if (!this.laneClear(piece, sOnLane, fromGate ? 14 : 12)) return false;
+    const len = kind === "car" ? 4.6 : 12;
+    if (!this.laneClear(piece, sOnLane, fromGate ? 14 : 12, len)) return false;
     let dest: Dest;
     const exits = flow ? [] : this.gateways.filter(g => g !== edge!.from && (g.def.exitWeight ?? 1) > 0);
     if (flow) dest = { kind: "gateway", node: flow.to };
@@ -184,7 +185,7 @@ export abstract class SimDemand extends SimMotion {
       if (!rest) { if (flow) this.flowState[flow.idx].noRoute++; return false; }
       route = [edge, ...rest];
     }
-    const { ln, pc, sl } = this.startLane(edge, route, lane, lo, hi, s, fromGate ? 14 : 12);
+    const { ln, pc, sl } = this.startLane(edge, route, lane, lo, hi, s, fromGate ? 14 : 12, len);
     const v = this.makeVehicle(kind);
     v.route = route; v.ri = 0; v.piece = pc; v.s = sl; v.v = v0; v.lane = ln; v.dest = dest;
     v.metered = !!gate;

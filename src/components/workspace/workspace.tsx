@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, ChevronDown, Pentagon, Footprints, SquareParking, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, SquareTerminal, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, Keyboard, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, ChevronDown, Pentagon, Footprints, SquareParking, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, SquareTerminal, Search, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, Keyboard, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,7 @@ import { fetchPlanState, savePlan, saveWarMode } from "@/server/actions";
 import { basePath } from "@/lib/base-path";
 import { MAX_LANES, type Network, type PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
-import { allLayersOn, applyRemote, commit, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, markSynced, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll } from "@/state/store";
+import { allLayersOn, applyRemote, commit, edits, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, markSynced, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll } from "@/state/store";
 import { DELETABLE, deleteSelected } from "@/state/bulk";
 import { simController } from "@/state/sim-controller";
 import { heliKeys$ } from "@/state/heli-keys";
@@ -51,6 +51,8 @@ import { HistoryButton } from "./history-dialog";
 import { OptimizeButton } from "./optimize-dialog";
 import { Dataview } from "./dataview";
 import { ProblemConsole, useProblemCount } from "./problem-console";
+import { SearchPalette } from "./search-palette";
+import { AssistantChat } from "./assistant-chat";
 import { deleteJunction } from "@/state/junctions";
 
 const View3D = dynamic(() => import("./view-3d").then(m => m.View3D), { ssr: false, loading: () => <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading 3D…</div> });
@@ -62,7 +64,8 @@ export interface WorkspacePlan {
   access: "owner" | "write" | "read";
 }
 
-export function Workspace({ plan, user, prefs }: { plan: WorkspacePlan; user: MenuUser; prefs: UserPrefs }) {
+/** `assistant`: the chat bubble with Claude Code on the dev server (admins, where it is switched on) */
+export function Workspace({ plan, user, prefs, assistant = false }: { plan: WorkspacePlan; user: MenuUser; prefs: UserPrefs; assistant?: boolean }) {
   // load once per mount (the component is keyed by plan id) before children read the stores
   useState(() => { heliKeys$.next(prefs.heliKeys); simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read"); ui.getValue().warMode = prefs.warMode; setSavedBuildings(plan.network.buildings); startUnderlayImage(); return plan.id; });
   useAutosave(plan.id);
@@ -90,6 +93,8 @@ export function Workspace({ plan, user, prefs }: { plan: WorkspacePlan; user: Me
               <PerfPanel />
               {view === "2d" && <ReplayBar />}
               <StatusBar />
+              <SearchPalette />
+              {assistant && <AssistantChat planName={plan.name} />}
             </div>
             {dataview && <Dataview />}
             {consoleOpen && <ProblemConsole />}
@@ -174,7 +179,10 @@ function SaveIndicator({ planId }: { planId: string }) {
   }[save.status];
   return (
     <div className="flex items-center gap-2">
-      <span className={cn("flex items-center gap-1.5 rounded-md px-2 py-1 text-xs", save.status === "error" || save.status === "conflict" ? "bg-destructive/10 text-destructive" : "text-muted-foreground")} role="status">{content}</span>
+      <span className={cn("flex items-center gap-1.5 rounded-md px-2 py-1 text-xs", save.status === "error" || save.status === "conflict" ? "bg-destructive/10 text-destructive" : "text-muted-foreground")} role="status">
+        {content}
+        <span className="font-mono tabular opacity-80" title="The plan's revision on the server (each save adds one)">· rev {save.revision}</span>
+      </span>
       {save.status === "conflict" && (
         <>
           <Button size="sm" variant="outline" className="h-7" onClick={() => location.reload()}>Load theirs</Button>
@@ -192,9 +200,15 @@ export function toggleLayer(id: LayerId, only = false) {
   u.layers = only ? [id] : cur.includes(id) ? cur.filter(l => l !== id) : LAYERS.map(l => l.id).filter(l => l === id || cur.includes(l));
 }
 /** all layers on, or (when they all are) all off (Shift+A) */
+/**
+ * Everything back (every layer on, and the road surfaces drawn) when anything is hidden; with everything already
+ * shown, every layer off.
+ */
 export function toggleAllLayers() {
   const u = ui.getValue();
-  u.layers = allLayersOn(u.layers) ? [] : LAYERS.map(l => l.id);
+  if (allLayersOn(u.layers) && !u.display.maskRoads) { u.layers = []; return; }
+  u.layers = LAYERS.map(l => l.id);
+  if (u.display.maskRoads) u.display.maskRoads = false;
 }
 
 /** which kinds of object the map shows and selects (any combination; highlighted once narrowed to a few), and the data table */
@@ -218,7 +232,7 @@ function LayerPicker() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-64">
-          <DropdownMenuCheckboxItem checked={all} onCheckedChange={toggleAllLayers} onSelect={keep}>
+          <DropdownMenuCheckboxItem checked={all && !display.maskRoads} onCheckedChange={toggleAllLayers} onSelect={keep}>
             All layers<Kbd className="ml-auto">⇧A</Kbd>
           </DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
@@ -246,6 +260,9 @@ function LayerPicker() {
       </DropdownMenu>
       <Tip label={dataview ? "Hide the data table" : "Data table"}>
         <Button size="icon-sm" variant={dataview ? "secondary" : "ghost"} aria-pressed={dataview} aria-label="Data table" onClick={() => setDataview(!dataview)}><Table2 /></Button>
+      </Tip>
+      <Tip label="Search the plan (⌘K / Ctrl+K)">
+        <Button size="icon-sm" variant="ghost" aria-label="Search the plan" onClick={() => { ui.getValue().search = true; }}><Search /></Button>
       </Tip>
       <ConsoleButton />
     </div>
@@ -511,7 +528,7 @@ function StatusBar() {
       : tool === "stop" ? "Click the side of a road where buses should stop"
         : tool === "marker" ? "Click to place a marker (on a building: on its roof in 3D) · drag a marker to move it"
         : tool === "crossing" ? "Click one kerb, then the other: the zebra runs between them (4 m wide; set it in the inspector) · Esc to cancel"
-        : tool === "parking" ? "Along a kerb: click the road on the side the bays are, where they start, then where they end · anywhere else: click both ends of a row of bays (reached from the nearest road) · Esc to cancel"
+        : tool === "parking" ? "Click both ends of a row of bays, anywhere (cars reach it from the nearest road, within 80 m) · drag a row to move it, an end to stretch it · Esc to cancel"
         : tool === "junction" ? "Click the junction's corners · double-click or Enter to finish · Esc to cancel. Roads crossing it are cut there; road ends up to 6 m outside move onto it"
         : tool === "image" ? "Drag the image to move · corners scale · round handle rotates (Shift: 15°)"
         : "Double-click a road to add a bend point · scroll to pan · ⌘/Ctrl + scroll to zoom";
@@ -535,16 +552,15 @@ let dirtySince = 0;
 let savedBuildings: Network["buildings"] = undefined;
 export const setSavedBuildings = (b: Network["buildings"]) => { savedBuildings = b; };
 
-const MAX_WAIT = 30_000;
-function saveDelay() {
-  const n = network$.getValue();
-  return (n.buildings?.length ?? 0) > 2000 || n.links.length > 1500 ? 4000 : 900;
-}
+/** the plan saves after this many actions (see `edits`), and in any case this long after the first unsaved one */
+const SAVE_EVERY = 10, MAX_WAIT = 120_000;
+/** `edits.n` when the last save started */
+let editsAtSave = 0;
 
 async function doSave(planId: string, force = false) {
   if (saving) { again = true; return; }
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-  saving = true; dirtySince = 0;
+  saving = true; dirtySince = 0; editsAtSave = edits.n;
   const s = ui.getValue().save;
   s.status = "saving";
   try {
@@ -632,18 +648,30 @@ function useLive(planId: string) {
   }, [planId]);
 }
 
-/** (re)start the countdown to the next save; each change pushes it back, up to MAX_WAIT after the first */
+/**
+ * After every SAVE_EVERY actions the plan saves (a drag, a typed value: one each); fewer than that are saved
+ * MAX_WAIT after the first, when the tab is left, or with Ctrl/Cmd+S — so nothing is lost in between.
+ */
 function queueSave(planId: string) {
+  if (edits.n - editsAtSave >= SAVE_EVERY) { void doSave(planId); return; }
   if (!dirtySince) dirtySince = Date.now();
-  if (saveTimer) clearTimeout(saveTimer);
-  const wait = Math.max(0, Math.min(saveDelay(), dirtySince + MAX_WAIT - Date.now()));
-  saveTimer = setTimeout(() => { saveTimer = null; doSave(planId); }, wait);
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => { saveTimer = null; void doSave(planId); }, Math.max(0, dirtySince + MAX_WAIT - Date.now()));
 }
 
 function useAutosave(planId: string) {
   useEffect(() => {
     const onChange = () => { if (ui.getValue().save.status === "dirty") queueSave(planId); };
-    const subs = [ui.subscribe("save/status", onChange), network$.subscribe(onChange), settings$.subscribe(onChange), underlay$.subscribe(onChange)];
+    // (settings and the reference image change outside the undo history: a change counts as an action too,
+    // changes within 800 ms of each other as one — a slider dragged)
+    let lastOther = 0;
+    const onOther = () => {
+      const now = performance.now();
+      if (ui.getValue().save.status === "dirty" && now - lastOther > 800) edits.n++;
+      lastOther = now;
+      onChange();
+    };
+    const subs = [ui.subscribe("save/status", onChange), network$.subscribe(onChange), settings$.subscribe(onOther), underlay$.subscribe(onOther)];
     const hide = () => { if (document.hidden && ui.getValue().save.status === "dirty") doSave(planId); };
     const unload = (e: BeforeUnloadEvent) => { const st = ui.getValue().save.status; if (st === "dirty" || st === "saving") { e.preventDefault(); } };
     // Cmd/Ctrl+S: save now (even with nothing changed), from anywhere on the page

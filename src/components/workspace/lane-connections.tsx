@@ -132,7 +132,8 @@ function AddConnector({ net, members }: { net: Network; members: CNode[] }) {
   const arms = members.flatMap(k => k.arms);
   const ins = arms.flatMap(a => (a.inEdge ? [{ a, e: a.inEdge }] : [])), outs = arms.flatMap(a => (a.outEdge ? [{ a, e: a.outEdge }] : []));
   const [from, setFrom] = useState(""), [to, setTo] = useState("");
-  if (!ins.length || !outs.length) return null;
+  // (a road's end with nothing leaving it: lanes starting at other nodes nearby can still be joined)
+  if (!ins.length) return null;
   const label = (x: { a: CNode["arms"][number]; e: Edge }) => `${x.e.link.name || x.e.link.id} (${compass(x.a.u.x, x.a.u.y).name})`;
   const opts = (list: typeof ins) => list.flatMap(x => Array.from({ length: x.e.n }, (_, k) => ({ value: `${x.e.key}|${k}`, text: `${label(x)} · lane ${k + 1}` })));
   // from a lane picked: the lanes leaving here, and those starting at other nodes nearby (one junction with them then)

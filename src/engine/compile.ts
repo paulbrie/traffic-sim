@@ -16,7 +16,13 @@ export const CURB = 0.6;        // kerb / shoulder beyond the outer lane (m)
 export type Turn = "L" | "S" | "R" | "U";
 
 export interface PieceBase { id: number; poly: Poly; len: number; vmax: number }
-export interface LanePiece extends PieceBase { kind: "lane"; edge: Edge; lane: number; offset: number }
+export interface LanePiece extends PieceBase {
+  kind: "lane"; edge: Edge; lane: number; offset: number;
+  /** a path through the junction ahead runs along the lane's last stretch from here (m along it): its traffic waits here for the junction, not at the end */
+  mergeAt?: number;
+}
+/** a stretch where a junction's path runs along a lane of another road: from c0 to c1 along the path, l0 to l1 along the lane */
+export interface Overlay { lane: LanePiece; c0: number; c1: number; l0: number; l1: number }
 export interface Conn extends PieceBase {
   kind: "conn"; node: CNode; move: Movement;
   /** turn = whole junction crossing; entry/exit = joining/leaving a roundabout ring */
@@ -27,6 +33,14 @@ export interface Conn extends PieceBase {
   arm: number;
   /** roundabout entries and exits: the circulating lane they join or leave (1 = inner) */
   ringLane?: 0 | 1;
+  /**
+   * straight on where two roads meet with lanes not in line (a lane added, the kerb moving out): how far the
+   * path's end is beside its lane's start (m, + to the left of the traffic); vehicles glide over in the lane
+   * after, as in a lane change, rather than swerving across at the joint
+   */
+  shift?: number;
+  /** the stretches where it runs along lanes of other roads (see Overlay) */
+  over?: Overlay[];
 }
 /** a stretch of a roundabout's circulating lane */
 /** a stretch of a roundabout's circulating lane (`lane` 1 = the inner lane of a two-lane ring) */
@@ -99,6 +113,8 @@ export interface Movement {
   map?: number[];
   /** ...and every outgoing lane it may take, when some lane has several */
   multi?: number[][];
+  /** where its paths run along lanes of other roads, by inLane * 8 + outLane (see Overlay) */
+  over?: (Overlay[] | undefined)[];
   /** connectors and crossings built for this movement, by inLane * 8 + outLane (filled lazily) */
   conns?: (Conn | undefined)[];
   crossings?: (readonly Piece[] | undefined)[];
@@ -751,6 +767,9 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       });
       if (next.length !== list.length) n.moves.set(k, next);
     }
+    // (a point between two roads whose paths join or cross — a U-turn, two lanes into one, lanes swapping sides;
+    // set by hand or not — is a junction: traffic through it takes turns, as at any other)
+    if (n.degree === 2 && !n.controlled && !n.gateway && !n.ringR && pathsMeet(n)) n.controlled = true;
     // (a junction drawn by hand: worked out once all its road ends have their turns, below)
     if (!n.handNodes) shapeOf(n);
     // (a junction drawn by hand is drawn once, by its leading node)
@@ -876,6 +895,60 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       k.phaseMinGreen = defs.map(d => d.minGreen ?? n.def.signal.minGreen);
     }
     if (dark.length) warnings.push(`Traffic lights at ${n.def.id}: ${dark.length} lane connector${dark.length > 1 ? "s" : ""} never get${dark.length > 1 ? "" : "s"} green; set ${dark.length > 1 ? "them" : "it"} in the junction's phases.`);
+  }
+
+  // ---- connectors into a road starting at another node that run along other roads' lanes (a slip road
+  // joining a road some way before the node it was drawn to, or leaving it some way after): the stretch they
+  // share (see Overlay). Traffic on either keeps clear of the other there, and traffic on a lane into the
+  // junction such a connector belongs to waits for it where the connector joins the lane, not at its end.
+  {
+    // (each road direction's lanes' bounds, worked out on first need: only roads near a path are looked at)
+    const boxes = new Map<Edge, [number, number, number, number]>();
+    const boxOf = (e: Edge) => {
+      let b = boxes.get(e);
+      if (!b) {
+        b = [Infinity, Infinity, -Infinity, -Infinity];
+        for (const l of e.lanes) for (let k = 0; k < l.poly.pts.length; k += 2) { const x = l.poly.pts[k], y = l.poly.pts[k + 1]; b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); }
+        boxes.set(e, b);
+      }
+      return b;
+    };
+    for (const n of nodes) for (const m of [...n.moves.values()].flat()) {
+      if (m.out.from === n || n.ringR > 0) continue;
+      for (let a = 0; a < m.in.n; a++) {
+        if (!laneAllowed(m, a)) continue;
+        for (const b of exitLanesOf(m, a)) {
+          if (!m.in.lanes[a] || !m.out.lanes[b]) continue;
+          // (the path as the simulation will build it)
+          const path = buildConn(n, m, a, b, -1).poly;
+          let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+          for (let k = 0; k < path.pts.length; k += 2) { x0 = Math.min(x0, path.pts[k]); y0 = Math.min(y0, path.pts[k + 1]); x1 = Math.max(x1, path.pts[k]); y1 = Math.max(y1, path.pts[k + 1]); }
+          const near = edges.filter(e => { if (e === m.in || e === m.out) return false; const bx = boxOf(e), r = e.lw; return bx[0] - r <= x1 && bx[2] + r >= x0 && bx[1] - r <= y1 && bx[3] + r >= y0; });
+          // per lane: the run of the path over it (along the path, and along the lane)
+          const runs = new Map<LanePiece, { c0: number; c1: number; l0: number; l1: number }>();
+          for (let d = 0; d <= path.len; d += 0.5) {
+            const p = path.at(d);
+            for (const e of near) for (const l of e.lanes) {
+              const pr = l.poly.project(p.x, p.y);
+              if (!(pr.d < e.lw / 2 && pr.s > 0.5 && pr.s < l.len - 0.5)) continue;
+              const r = runs.get(l);
+              // (only the first stretch over a lane: a path crossing it again later isn't running along it)
+              if (!r) runs.set(l, { c0: d, c1: d, l0: pr.s, l1: pr.s });
+              else if (d - r.c1 <= 1) { r.c1 = d; r.l1 = pr.s; }
+            }
+          }
+          const over: Overlay[] = [];
+          for (const [lane, r] of runs) {
+            // (along it, the way its traffic goes: not just across it)
+            if (r.c1 - r.c0 < 3 || r.l1 - r.l0 < 0.5 * (r.c1 - r.c0)) continue;
+            over.push({ lane, ...r });
+            // traffic on a lane into this junction waits where the path joins it
+            if (lane.edge.to.cluster.includes(n) || (n.lead && lane.edge.to.lead === n.lead)) lane.mergeAt = Math.min(lane.mergeAt ?? Infinity, Math.max(0, r.l0 - 0.5));
+          }
+          if (over.length) (m.over ??= [])[a * 8 + b] = over;
+        }
+      }
+    }
   }
 
   // ---- stops & lines ----
@@ -1011,6 +1084,8 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       let c = cache[k];
       if (c) return c;
       c = buildConn(move.node, move, a, b, pieces.length);
+      const over = move.over?.[k];
+      if (over) c.over = over;
       pieces.push(c); cache[k] = c;
       move.node.conns.set(1_000_000_000 + c.id, c); // (keys ≥ 1e9: plain crossings, < 0: roundabout pieces)
       return c;
@@ -1070,6 +1145,23 @@ function markMerges(n: CNode) {
     const sorted = ms.slice().sort((a, b) => side(a) - side(b));
     sorted[0].merge = "left"; sorted[sorted.length - 1].merge = "right";
   }
+}
+
+/** some of the paths through a node join (into one lane), cross (lanes swapping sides) or turn back (a U-turn) */
+function pathsMeet(n: CNode): boolean {
+  const into = new Set<string>();
+  for (const list of n.moves.values()) for (const m of list) {
+    if (m.turn === "U") return true;
+    const pairs: [number, number][] = [];
+    for (let a = 0; a < m.in.n; a++) if (laneAllowed(m, a)) for (const b of exitLanesOf(m, a)) pairs.push([a, b]);
+    for (const [a, b] of pairs) {
+      const k = `${m.out.key}|${b}`;
+      if (into.has(k)) return true;
+      into.add(k);
+      if (pairs.some(([a2, b2]) => a2 > a && b2 < b)) return true;
+    }
+  }
+  return false;
 }
 
 /** how far a connector may reach from the end of its lane to the start of a lane at another node (m) */
@@ -1132,7 +1224,7 @@ function buildConn(n: CNode, move: Movement, a: number, b: number, id: number): 
   const P = lin.poly.at(lin.len), tp = lin.poly.tangent(lin.len);
   const Q = lout.poly.at(0), tq = lout.poly.tangent(0);
   let pts: number[];
-  let ring = false, mask = 0;
+  let ring = false, mask = 0, shift: number | undefined;
   if (n.ringR > 0) {
     ring = true;
     const C = n.pos, R = n.ringR;
@@ -1164,7 +1256,13 @@ function buildConn(n: CNode, move: Movement, a: number, b: number, id: number): 
     }
   } else {
     const shape = n.shapes.get(connShapeKey(move, a, b));
-    pts = shape && !Array.isArray(shape)
+    const nq = { x: -tq.y, y: tq.x }, off = (P.x - Q.x) * nq.x + (P.y - Q.y) * nq.y;
+    if (!shape && n.degree === 2 && move.turn === "S" && Math.abs(off) > 0.5) {
+      // (straight on, lanes not in line: on along the lane it comes from, beside the next one's start)
+      const X = { x: Q.x + nq.x * off, y: Q.y + nq.y * off };
+      pts = connectorPoints(P, tp, X, tq, 14);
+      shift = off;
+    } else pts = shape && !Array.isArray(shape)
       ? cubicPoints(P, { x: n.pos.x + shape.c1.x, y: n.pos.y + shape.c1.y }, { x: n.pos.x + shape.c2.x, y: n.pos.y + shape.c2.y }, Q, 14)
       : connectorPoints(P, tp, Q, tq, 14, shape);
   }
@@ -1175,7 +1273,7 @@ function buildConn(n: CNode, move: Movement, a: number, b: number, id: number): 
   if (ring) vmax = Math.min(vmax, 6.5);
   return {
     id, kind: "conn", role: "turn", node: n, move, inEdge: move.in, inLane: a, outEdge: move.out, outLane: b,
-    poly, len: poly.len, vmax, ring, mask, entryKey: move.in.idx * 8 + a, arm: -1,
+    poly, len: poly.len, vmax, ring, mask, entryKey: move.in.idx * 8 + a, arm: -1, ...(shift ? { shift } : {}),
   };
 }
 
@@ -1243,7 +1341,10 @@ export function throughConns(c: Compiled, n: CNode): Set<Conn> {
     const cs: Conn[] = [];
     for (let a = 0; a < m.in.n; a++) {
       if (!laneAllowed(m, a)) continue;
-      for (const b of new Set([...exitLanesOf(m, a), exitLane(m, a, true)])) cs.push(c.getConn(m, a, b));
+      // (a lane set by hand goes where it is set; otherwise a vehicle may take any lane of the road it turns into,
+      // the one that suits its next turn: every one is a path that may meet another)
+      const outs = m.map ? [...exitLanesOf(m, a), exitLane(m, a, true)] : Array.from({ length: m.out.n }, (_, b) => b);
+      for (const b of new Set(outs)) cs.push(c.getConn(m, a, b));
     }
     all.push({ m, cs });
   }
@@ -1455,6 +1556,12 @@ export function zipFrom(A: Conn, B: Conn): number {
   zipCache.set(key, at);
   return at;
 }
+/**
+ * Two junction crossings into the same exit lane that merge like a zip (see zipFrom) rather than wait for each
+ * other to leave the junction: at a free junction, or from two lanes of the same road (lanes merging).
+ */
+export const ZIPT = { same: true, moving: true };
+export const zips = (A: Conn, B: Conn) => A.node.def.control === "free" || (ZIPT.same && A.inEdge === B.inEdge);
 export const clearConflictCache = () => { confCache.clear(); confEndCache.clear(); zipCache.clear(); };
 
 /**

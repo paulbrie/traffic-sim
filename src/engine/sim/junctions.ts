@@ -1,4 +1,4 @@
-import { conflicts, conflictEnd, throughConns, zipFrom, type CNode, type Conn, type Edge, type Piece } from "../compile";
+import { conflicts, conflictEnd, throughConns, zipFrom, zips, ZIPT, type CNode, type Conn, type Edge, type Piece } from "../compile";
 import { DT, type Vehicle, type Occ, type NodeState, type PedCross, type Req, type CrossInfo } from "./base";
 import { SimReversible } from "./reversible";
 
@@ -7,7 +7,10 @@ import { SimReversible } from "./reversible";
 export abstract class SimJunctions extends SimReversible {
   /** a crossing nothing else at its junction crosses or joins: driven through without stopping or asking */
   protected drivesThrough(p: Piece): boolean {
-    return p.kind === "conn" && p.role === "turn" && throughConns(this.net, p.node).has(p);
+    if (p.kind !== "conn" || p.role !== "turn" || !throughConns(this.net, p.node).has(p)) return false;
+    // (not while a vehicle let in holds a path that meets it — one turning from a lane its turn isn't marked
+    // for: a path the junction couldn't foresee)
+    return !this.occOf(this.ns[p.node.idx]).some(o => o.conn !== p && conflicts(o.conn, p));
   }
   /** the reservations held at a junction: at its node, or over all the nodes it spans (see CNode.cluster) */
   protected occOf(st: NodeState): Occ[] {
@@ -232,16 +235,18 @@ export abstract class SimJunctions extends SimReversible {
         if (ahead) { this.ev(st.node, v, "revoke", "a vehicle cut in ahead in the same lane"); v.granted = false; v.conn = null; return false; }
       }
       if (v.piece === o.conn) { o.entered = true; return true; }
+      // (a grant for a path from a lane it is no longer in — it got there another way: it asks again for the
+      // lane it is in, rather than waiting behind its own old grant)
+      if (!o.entered && v.piece.kind === "lane" && v.piece.edge === o.conn.inEdge && v.lane !== o.conn.inLane) {
+        this.ev(st.node, v, "revoke", `granted from lane ${o.conn.inLane + 1}, now in lane ${v.lane + 1}`);
+        if (v.conn === o.conn) { v.granted = false; v.conn = null; }
+        if (v.early?.conn === o.conn) v.early = null;
+        return false;
+      }
       if (!o.entered) return (v.conn === o.conn && v.granted) || (v.early?.conn === o.conn && v.early.granted);
       return v.piece.kind === "lane" && v.piece.edge === o.conn.outEdge && v.trail[0] === o.conn && v.s <= v.len + 1;
     });
-    // a grant not yet used: how far the vehicle is from the line (on the road into the junction, or
-    // asked early from before it), and taking it back
-    const toLine = (o: Occ) => {
-      const v = o.v;
-      if (v.piece.kind === "lane" && v.piece.edge === o.conn.inEdge) return v.piece.len - v.s;
-      return v.early?.conn === o.conn ? v.early.d : null;
-    };
+    const toLine = (o: Occ) => this.toLine(o);
     const takeBack = (o: Occ) => { if (o.v.early?.conn === o.conn) o.v.early.granted = false; else { o.v.granted = false; o.v.conn = null; } };
     // at traffic lights a green-light grant is only a promise: if the light changes before the
     // vehicle reaches the stop line, it must stop unless it is too close to do so safely
@@ -299,6 +304,13 @@ export abstract class SimJunctions extends SimReversible {
       this.ev(n, v, "deny", why, { code });
     };
     const held = this.occOf(st);
+    // vehicles driving through it on paths that take no booking (see throughConns), there now
+    const throughOn: { v: Vehicle; conn: Conn }[] = [];
+    const through = { has: (c: Conn) => throughConns(this.net, c.node).has(c) };
+    for (const k of st.node.cluster) {
+      const tc = throughConns(this.net, k);
+      if (tc.size) for (const x of tc) for (const u of this.index.get(x.id) ?? []) if (!u.dead) throughOn.push({ v: u, conn: x });
+    }
     const who = (c: Conn) => { const o = held.find(x => x.conn === c); return o ? `#${o.v.id} (${this.mv(c)})` : this.mv(c); };
     for (const r of reqs) {
       const c = r.conn;
@@ -316,7 +328,9 @@ export abstract class SimJunctions extends SimReversible {
       // pedestrians on (or about to step onto) the crossing it would drive over
       if (this.pedBlocks(n, c)) { deny(r.v, "waits for pedestrians on the crossing"); continue; }
       let ok = true, why = "", yielded = false;
-      for (const o of held) if (conflicts(c, o.conn) && !this.pastConflict(o, c, r)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : `path crosses #${o.v.id}`; break; }
+      // (a vehicle driving through on a path that meets this one, not booked: it is in the way until it is out)
+      if (!through.has(c)) for (const x of throughOn) if (x.conn !== c && conflicts(c, x.conn)) { ok = false; why = log ? `path crosses #${x.v.id} driving through` : `path crosses #${x.v.id}`; break; }
+      if (ok) for (const o of held) if (o.v !== r.v && conflicts(c, o.conn) && !this.pastConflict(o, c, r)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : `path crosses #${o.v.id}`; break; }
       if (ok) for (const b of blockers) if (conflicts(c, b)) { ok = false; why = log ? `crosses the path of a vehicle ahead in the queue (${this.mv(b)})` : "crosses the path of a vehicle ahead in the queue"; break; }
       if (ok && signed && this.minor(n, c.inEdge)) {
         // giving way means not crossing *or* joining the lane in front of priority traffic
@@ -339,20 +353,62 @@ export abstract class SimJunctions extends SimReversible {
     }
   }
   /**
+   * Zipping into the exit lane of `p` (see zips): the nearest vehicle let in ahead of `v` on another path into
+   * it that hasn't reached the junction yet (`mine`: how far v's front is from the end of p), and the gap to its
+   * rear as it will be at the merge.
+   */
+  protected followZip(v: Vehicle, p: Conn, mine: number): { u: Vehicle; gap: number } | null {
+    let best: { u: Vehicle; gap: number } | null = null;
+    for (const o of this.occOf(this.ns[(p.node.lead ?? p.node).idx])) {
+      if (o.v === v || o.entered || o.conn === p || o.conn.outEdge !== p.outEdge || o.conn.outLane !== p.outLane || !zips(o.conn, p)) continue;
+      if (o.v.piece === o.conn) continue; // (on it: found on the path itself)
+      const theirs = this.toPathEnd(o);
+      if (theirs === null || theirs > mine || (theirs === mine && o.v.id > v.id)) continue;
+      const gap = mine - theirs - o.v.len;
+      if (!best || gap < best.gap) best = { u: o.v, gap };
+    }
+    return best;
+  }
+  /** a grant not yet used: how far the vehicle is from the line (on the road into the junction, or asked early from before it) */
+  protected toLine(o: Occ): number | null {
+    const v = o.v;
+    if (v.piece.kind === "lane" && v.piece.edge === o.conn.inEdge) return v.piece.len - v.s;
+    return v.early?.conn === o.conn ? v.early.d : null;
+  }
+  /**
+   * How far the front of the vehicle holding `o` is from the end of its path through the junction (where it
+   * joins its exit lane), on its way to it or on it; null once it is out (or nowhere it can be told).
+   */
+  protected toPathEnd(o: Occ): number | null {
+    const v = o.v;
+    if (v.piece === o.conn) return o.conn.len - v.s;
+    if (o.entered) return null;
+    const d = this.toLine(o);
+    return d === null ? null : d + o.conn.len;
+  }
+  /**
    * The vehicle holding `o` has already driven past the part of its path that crosses `c` (its rear
    * is beyond it), so `c` is free as far as it is concerned: traffic on a green may go behind it
    * instead of waiting for it to leave the junction.
    */
   protected pastConflict(o: Occ, c: Conn, r?: Req): boolean {
-    if (!o.entered) return false;
     const v = o.v;
-    // free junction, both joining the same exit lane: follow it in (zip) once it is far enough
-    // ahead, counted in distance to the exit lane as the car-following does
-    if (r && c.node.def.control === "free" && isFinite(zipFrom(o.conn, c))) {
+    // both joining the same exit lane at a free junction, or from two lanes of the same road (lanes merging, at
+    // any junction): once it is ahead — its rear in front of this one's front, counted in distance to the exit
+    // lane as the car-following does — follow it in (zip), on the move: the car-following keeps the distance
+    // (see followZip). Not yet in the junction too: one that has to stop for it at the line would only hold up
+    // the lane behind. Closing in faster than it goes needs room to slow down to its speed.
+    if (r && !ZIPT.moving && o.entered && zips(o.conn, c) && isFinite(zipFrom(o.conn, c))) {
       const front = v.piece === o.conn ? v.s : v.trail[0] === o.conn ? o.conn.len + v.s : -Infinity;
-      const gap = c.len + r.d - (o.conn.len - front) - v.len;
-      return gap > 2 + this.P.zipHeadway * r.v.v;
+      return c.len + r.d - (o.conn.len - front) - v.len > 2 + this.P.zipHeadway * r.v.v;
     }
+    if (r && ZIPT.moving && zips(o.conn, c) && isFinite(zipFrom(o.conn, c))) {
+      const theirs = v.trail[0] === o.conn && v.piece !== o.conn ? -v.s : this.toPathEnd(o);
+      if (theirs === null) return false;
+      const gap = c.len + r.d - theirs - v.len;
+      return gap > 2 + this.P.zipHeadway * Math.max(0, r.v.v - v.v);
+    }
+    if (!o.entered) return false;
     const end = conflictEnd(o.conn, c);
     if (!isFinite(end)) return false;
     const front = v.piece === o.conn ? v.s : v.trail[0] === o.conn ? o.conn.len + v.s : -Infinity;

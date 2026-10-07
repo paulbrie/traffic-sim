@@ -54,6 +54,8 @@ export interface Vehicle {
   /** an aggressive driver: wants to go over the limit (see SimParams.aggressiveShare) */
   aggressive: boolean;
   reroutes: number; laneChanges: number; lcCool: number; lcOff: number; lcT: number;
+  /** the lane-change glide runs over this many metres (one through a joint whose lanes aren't in line), not over time */
+  lcBy?: number;
   /** just out of a bay: how far its front and rear were from where they are now, eased away as blendT runs down (1 → 0, over a second) */
   blend?: { fx: number; fy: number; rx: number; ry: number }; blendT?: number;
   reqAt: number; reqFor: Conn | null; stoppedAt: Conn | null; fixedAt: Edge | null; rerouteAt: Edge | null;
@@ -362,6 +364,11 @@ export abstract class SimBase {
   protected sweeps: { in: SweepSpan[]; out: SweepSpan[] }[][] = [];
   /** stretches kept clear by piece id, for cars on a bay's path (going in, or coming out: waiting with priority, or on their way) */
   protected bayHolds = new Map<number, { v: Vehicle; z0: number; z1: number }[]>();
+  /**
+   * by lane (piece id): vehicles of another lane of the same road partly in this one, changing lanes (or gliding
+   * over after a joint whose lanes aren't in line): traffic here keeps clear of them as of a vehicle ahead
+   */
+  protected ghosts = new Map<number, Vehicle[]>();
   /** by lane (piece id): vehicles on a path through the junction before it, coming into it */
   protected intoLane = new Map<number, Vehicle[]>();
   /** by piece id: vehicles whose front has gone on but whose body is still over it (from `s0` to its end) */
@@ -585,9 +592,17 @@ export abstract class SimBase {
     const q = ss / Math.max(gap, 0.2);
     return v.a * (free - q * q);
   }
-  protected laneClear(p: Piece, s: number, range: number) {
+  /**
+   * Room to place a vehicle `len` long with its front at `s` on piece `p`: `range` clear before the vehicle ahead,
+   * and behind it, `range` and as much as the vehicle there needs to stop (one coming up at speed can't stop
+   * short of a car appearing just ahead of it)
+   */
+  protected laneClear(p: Piece, s: number, range: number, len = 4.6) {
     const list = this.index.get(p.id);
-    if (list) for (const u of list) if (Math.abs(u.s - s) < range + u.len) return false;
+    if (list) for (const u of list) {
+      if (u.s > s) { if (u.s - u.len - s < range) return false; }
+      else if (s - len - u.s < range + (u.v * u.v) / 6) return false;
+    }
     return true;
   }
   protected addToIndex(v: Vehicle) {
@@ -601,6 +616,13 @@ export abstract class SimBase {
     this.index.clear(); this.groupIndex.clear(); this.ringClaims.clear();
     // (a car on a bay's path is in its lane's traffic only while part of it is in the lane)
     for (const v of this.vehicles) if (!v.dead && !(v.bayMove && !v.bayMove.inLane)) this.addToIndex(v);
+    // (vehicles changing lanes, by the other lane they are partly in)
+    this.ghosts.clear();
+    for (const v of this.vehicles) {
+      if (v.dead || v.lcT <= 0 || v.piece.kind !== "lane") continue;
+      const e = v.piece.edge, t = v.lcT, at = v.piece.offset + v.lcOff * t * t * (3 - 2 * t);
+      for (const l of e.lanes) if (l !== v.piece && Math.abs(at - l.offset) < e.lw * 0.75) { const g = this.ghosts.get(l.id); if (g) g.push(v); else this.ghosts.set(l.id, [v]); }
+    }
     // (vehicles on a path through a junction, by the lane it leads into)
     this.intoLane.clear();
     for (const v of this.vehicles) {

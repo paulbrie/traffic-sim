@@ -12,6 +12,7 @@
  *   the queries renderers use).
  */
 import type { LanePiece, Movement, Piece } from "../compile";
+import { pieceZ } from "../compile";
 import type { Poly } from "../geom";
 import type { PlanSettings } from "../types";
 import type { Vehicle } from "./base";
@@ -68,15 +69,15 @@ export class Sim extends SimDemand {
   /** pairs of vehicles last seen overlapping (key "a-b"), and when: told again only after a while */
   private overlapSeen = new Map<string, number>();
   /**
-   * Vehicles overlapping (their outlines more than 15 cm into each other), looked for once a second: a problem
+   * Vehicles overlapping (their outlines more than 15 cm into each other, at the same height), looked for once a second: a problem
    * for the console. On a 15 m grid, so it costs little even with many vehicles.
    */
   private checkOverlaps() {
-    const CELL = 15, grid = new Map<number, number[]>(), boxes: { v: Vehicle; cx: number; cy: number; ux: number; uy: number; hl: number; hw: number }[] = [];
+    const CELL = 15, grid = new Map<number, number[]>(), boxes: { v: Vehicle; cx: number; cy: number; ux: number; uy: number; hl: number; hw: number; z: number }[] = [];
     for (const v of this.vehicles) {
       if (v.dead) continue;
       const q = this.pose(v), dx = q.fx - q.rx, dy = q.fy - q.ry, m = Math.hypot(dx, dy) || 1;
-      const b = { v, cx: (q.fx + q.rx) / 2, cy: (q.fy + q.ry) / 2, ux: dx / m, uy: dy / m, hl: m / 2, hw: v.width / 2 };
+      const b = { v, cx: (q.fx + q.rx) / 2, cy: (q.fy + q.ry) / 2, ux: dx / m, uy: dy / m, hl: m / 2, hw: v.width / 2, z: pieceZ(this.net, v.piece, v.s) };
       const k = Math.floor(b.cx / CELL) * 100003 + Math.floor(b.cy / CELL);
       const l = grid.get(k); if (l) l.push(boxes.length); else grid.set(k, [boxes.length]);
       boxes.push(b);
@@ -95,7 +96,8 @@ export class Sim extends SimDemand {
       const gx = Math.floor(a.cx / CELL), gy = Math.floor(a.cy / CELL);
       for (let i = gx - 1; i <= gx + 1; i++) for (let j = gy - 1; j <= gy + 1; j++) for (const k of grid.get(i * 100003 + j) ?? []) {
         const b = boxes[k];
-        if (b.v.id <= a.v.id) continue;
+        // (one on a bridge, the other under it: not in each other's way)
+        if (b.v.id <= a.v.id || Math.abs(a.z - b.z) >= 0.5) continue;
         const d = depth(a, b);
         if (d <= 0.15) continue;
         const key = `${a.v.id}-${b.v.id}`, last = this.overlapSeen.get(key);
@@ -334,7 +336,10 @@ export class Sim extends SimDemand {
     }
     const f = v.piece.poly.at(v.s);
     let d = v.s - v.len, poly: Poly = v.piece.poly, k = 0;
-    while (d < 0 && k < v.trail.length) { poly = v.trail[k].poly; d += poly.len; k++; }
+    // (still on a path through a joint whose lanes aren't in line, or before it: it is where that path put it,
+    // in line with the lane it came from)
+    let rearPlaced = false;
+    while (d < 0 && k < v.trail.length) { const pc: Piece = v.trail[k]; if (pc.kind === "conn" && pc.shift) rearPlaced = true; poly = pc.poly; d += poly.len; k++; }
     const r = poly.at(Math.max(0, d));
     let dx = f.x - r.x, dy = f.y - r.y, m = Math.hypot(dx, dy);
     if (m < 0.2) {
@@ -342,8 +347,13 @@ export class Sim extends SimDemand {
       r.x = f.x - t.x * v.len; r.y = f.y - t.y * v.len; dx = t.x * v.len; dy = t.y * v.len; m = v.len;
     }
     if (v.lcT > 0) {
-      const e = v.lcT * v.lcT * (3 - 2 * v.lcT), sh = v.lcOff * e, nx = -dy / m, ny = dx / m;
-      f.x += nx * sh; f.y += ny * sh; r.x += nx * sh * 0.85; r.y += ny * sh * 0.85;
+      // (across the lane, not the car: the car may be at an angle to it. The rear follows the front's way across:
+      // still where it was until the car has driven its length, then over by the time the front is)
+      const lt = v.piece.poly.tangent(Math.min(v.piece.len, Math.max(0, v.s)));
+      const ease = (t: number) => t * t * (3 - 2 * t), sh = v.lcOff * ease(v.lcT), nx = -lt.y, ny = lt.x;
+      const lag = Math.min(0.8, v.lcBy ? v.len / v.lcBy : v.len / Math.max(1, v.v) / 1.4);
+      const shR = rearPlaced ? 0 : v.lcOff * ease(Math.min(1, v.lcT / (1 - lag)));
+      f.x += nx * sh; f.y += ny * sh; r.x += nx * shR; r.y += ny * shR;
     }
     if (v.blendT && v.blend) {
       const e = v.blendT * v.blendT * (3 - 2 * v.blendT), b = v.blend;
