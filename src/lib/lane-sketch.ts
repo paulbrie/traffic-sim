@@ -28,7 +28,7 @@ export interface SketchLane {
 }
 /** a place on a lane, `s` metres from its start */
 export interface LaneAt { lane: string; s: number }
-export interface SketchConnector { id: string; from: LaneAt; to: LaneAt; /** bend points it goes through, in order */ via?: Pt[] }
+export interface SketchConnector { id: string; from: LaneAt; to: LaneAt; /** bend points it goes through, in order */ via?: Pt[]; /** straight from end to end (through its bends, a corner at each), not curved to its lanes' directions */ straight?: true }
 /**
  * `align`: its lanes kept side by side, each `offset` metres beside the lead lane `ref` (to its left
  * as it runs, negative to its right), running the same way or the other (`reverse`).
@@ -301,12 +301,29 @@ export function connectorPts(sk: Sketch, c: SketchConnector): Pt[] | null {
   if (!la || !lb) return null;
   const k = curves.get(c);
   if (k && k.a === la && k.b === lb) return k.pts;
-  const pts = curveThrough(pointAt(la.shape, c.from.s), c.via ?? [], pointAt(lb.shape, c.to.s));
+  const a = pointAt(la.shape, c.from.s), b = pointAt(lb.shape, c.to.s);
+  const pts = c.straight ? [a.p, ...(c.via ?? []), b.p] : curveThrough(a, c.via ?? [], b);
   curves.set(c, { a: la, b: lb, pts });
   return pts;
 }
 
 // ---------------------------------------------------------------- editing (each returns a new sketch)
+
+/**
+ * Connectors made straight, end to end, or curved again to their lanes' directions (`straight` false); either
+ * way their bends taken out. Those already so are left as they are.
+ */
+export function straightenConnectors(sk: Sketch, ids: Iterable<string>, straight = true): Sketch {
+  const want = new Set(ids);
+  let changed = false;
+  const connectors = sk.connectors.map(c => {
+    if (!want.has(c.id) || (!!c.straight === straight && !c.via?.length)) return c;
+    changed = true;
+    const { via: _v, straight: _s, ...rest } = c;
+    return straight ? { ...rest, straight: true as const } : rest;
+  });
+  return changed ? { ...sk, connectors } : sk;
+}
 
 export function addLane(sk: Sketch, lane: SketchLane): Sketch {
   return { ...sk, lanes: [...sk.lanes, lane] };
@@ -407,7 +424,7 @@ export function pastePart(sk: Sketch, part: Sketch, dx: number, dy: number): { s
   const fresh = (k: keyof typeof ids) => { const id = nextId(k, ids[k]); ids[k].push(id); return id; };
   const t = translation(dx, dy), laneIds = new Map(part.lanes.map(l => [l.id, fresh("l")]));
   const lanes = part.lanes.map(l => ({ ...l, id: laneIds.get(l.id)!, shape: t.shape(l.shape) }));
-  const connectors = part.connectors.map(c => ({ id: fresh("c"), from: { ...c.from, lane: laneIds.get(c.from.lane)! }, to: { ...c.to, lane: laneIds.get(c.to.lane)! }, ...(c.via?.length ? { via: c.via.map(t.pt) } : {}) }));
+  const connectors = part.connectors.map(c => ({ id: fresh("c"), from: { ...c.from, lane: laneIds.get(c.from.lane)! }, to: { ...c.to, lane: laneIds.get(c.to.lane)! }, ...(c.via?.length ? { via: c.via.map(t.pt) } : {}), ...(c.straight ? { straight: true as const } : {}) }));
   const roads = part.roads.map(r => ({ id: fresh("r"), name: `${r.name} copy`, lanes: r.lanes.map(l => laneIds.get(l)!) }));
   const junctions = part.junctions.map(j => ({ id: fresh("j"), name: `${j.name} copy`, outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.lights ? { lights: { ...j.lights } } : {}) }));
   return {
@@ -1758,7 +1775,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   for (const c of Array.isArray(o.connectors) ? o.connectors : []) {
     const from = at(c?.from), to = at(c?.to), via = pts(c?.via, 1);
     if (!str(c?.id) || !from || !to || connectors.some(x => x.id === c.id)) continue;
-    connectors.push({ id: c.id, from, to, ...(via ? { via } : {}) });
+    connectors.push({ id: c.id, from, to, ...(via ? { via } : {}), ...(c.straight === true ? { straight: true as const } : {}) });
   }
   const roads: SketchRoad[] = [];
   for (const r of Array.isArray(o.roads) ? o.roads : []) {
