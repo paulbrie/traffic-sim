@@ -230,14 +230,16 @@ export async function transferCity(cityId: string, newOwnerId: string): Promise<
 }
 
 // ---------------------------------------------------------------- plans
-export async function createPlan(input: { cityId: string; name: string; description?: string; template: "blank" | "sample" }) {
+/** A new plan: on the V2 engine (the lane sketch; starts blank), or V1 (blank, or the sample district). */
+export async function createPlan(input: { cityId: string; name: string; description?: string; template: "blank" | "sample"; engine?: "v1" | "v2" }) {
   const me = await assertUser();
   assertId(input.cityId);
   const id = await name(me.id, CityId(input.cityId), async (user, city) => {
     const a = await cityAccess(user, city), edit = canEditCity(a);
     if (!edit) throw refusal(a, "edit", "map");
-    const network = input.template === "sample" ? sampleTown() : emptyNetwork();
-    return plans.createPlan(city, user, { name: clean(input.name) || "Untitled plan", description: clean(input.description, 500), network, note: "Created" }, edit);
+    const engine = input.engine === "v2" ? "v2" : "v1";
+    const network = engine === "v1" && input.template === "sample" ? sampleTown() : emptyNetwork();
+    return plans.createPlan(city, user, { name: clean(input.name) || "Untitled plan", description: clean(input.description, 500), network, note: "Created", engine }, edit);
   });
   revalidatePath(`/cities/${input.cityId}`);
   revalidatePath("/");

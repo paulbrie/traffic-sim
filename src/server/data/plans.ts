@@ -5,6 +5,7 @@ import "server-only";
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { Named } from "@gdp-ts/core";
 import { db, schema } from "@/db";
+import type { PlanEngine } from "@/db/schema";
 import { DEFAULT_SETTINGS, type Network, type PlanSettings } from "@/engine/types";
 import { sanitizeNetwork, sanitizeSettings } from "@/engine/validate";
 import { sanitizeUnderlay } from "@/lib/underlay";
@@ -27,13 +28,13 @@ export async function getPlan<U, P>(plan: Named<P, PlanId>, _proof: CanViewPlan<
 /** A new plan in a city, its first version by `author`. */
 export async function createPlan<U, C>(
   city: Named<C, CityId>, author: Named<U, ViewerId>,
-  input: { name: string; description: string; network: Network; settings?: PlanSettings; note: string },
+  input: { name: string; description: string; network: Network; settings?: PlanSettings; note: string; engine?: PlanEngine },
   _proof: CanEditCity<U, C>,
 ): Promise<string> {
   return db.transaction(async tx => {
     const [plan] = await tx
       .insert(schema.plans)
-      .values({ cityId: city.value, name: input.name, description: input.description, network: input.network, settings: input.settings ?? DEFAULT_SETTINGS })
+      .values({ cityId: city.value, name: input.name, description: input.description, network: input.network, settings: input.settings ?? DEFAULT_SETTINGS, engine: input.engine ?? "v1" })
       .returning();
     await recordVersion(tx, plan.id, author.value, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: null, sketch: null }, "create", input.note);
     await tx.update(schema.cities).set({ updatedAt: new Date() }).where(eq(schema.cities.id, city.value));
@@ -75,7 +76,7 @@ export async function duplicatePlan<U, P>(plan: Named<P, PlanId>, author: Named<
   const id = await db.transaction(async tx => {
     const [copy] = await tx
       .insert(schema.plans)
-      .values({ cityId: src.cityId, name: `${src.name} (copy)`.slice(0, 120), description: src.description, network: src.network, settings: src.settings, underlay: src.underlay, sketch: src.sketch })
+      .values({ cityId: src.cityId, name: `${src.name} (copy)`.slice(0, 120), description: src.description, network: src.network, settings: src.settings, underlay: src.underlay, sketch: src.sketch, engine: src.engine })
       .returning();
     await tx.execute(sql`insert into plan_images (plan_id, mime, data, bytes) select ${copy.id}, mime, data, bytes from plan_images where plan_id = ${plan.value}`);
     await recordVersion(tx, copy.id, author.value, { revision: copy.revision, network: copy.network, settings: copy.settings, underlay: copy.underlay, sketch: copy.sketch }, "create", `Copied from “${src.name}”`);

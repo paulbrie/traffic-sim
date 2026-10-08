@@ -904,7 +904,8 @@ export class SketchSim {
         // where its path meets another lane or connector
         for (const k of r.edge.conflicts) {
           const rel = ahead(k.at);
-          if (rel < -0.01 || rel > r.b - r.a) continue;
+          // (a crossing right at the edge's end, two connectors joining a lane at the same place, can be a hair past it)
+          if (rel < -0.01 || rel > r.b - r.a + 0.01) continue;
           const dMe = r.off + rel, zs = dMe - k.before;
           if (zs > 60) continue;
           zones.push({ s: zs, e: dMe + k.after });

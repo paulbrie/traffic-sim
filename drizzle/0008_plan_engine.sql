@@ -1,0 +1,1 @@
+ALTER TABLE "plans" ADD COLUMN "engine" text DEFAULT 'v1' NOT NULL;

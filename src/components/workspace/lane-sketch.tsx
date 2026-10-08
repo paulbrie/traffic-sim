@@ -138,7 +138,11 @@ function laneUnder(sk: Sketch, p: Pt, px: number) {
   return best;
 }
 
-export function LaneSketch() {
+/**
+ * The lane sketch editor: a window floating over a V1 plan, or (`page`) the whole page of a V2 plan,
+ * the sketch being the plan itself.
+ */
+export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const { panel, style, placed, start, reset } = useFloatingBox("laneSketch:box", 480, 320);
   const [sketch] = useSubject(laneSketch$);
   const [tool, setTool] = useState<Tool>("lane");
@@ -778,12 +782,14 @@ export function LaneSketch() {
   const empty = !sketch.lanes.length && !sketch.junctions.length;
 
   return (
-    <div ref={panel} style={style} role="dialog" aria-label="Lane sketch" tabIndex={-1} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
-      className={cn("absolute z-30 flex flex-col overflow-hidden rounded-lg border bg-background shadow-xl outline-none", !placed && "top-3 right-3 h-[min(640px,calc(100%-1.5rem))] w-[min(1280px,calc(100%-1.5rem))]")}>
-      <ResizeEdges start={start} />
-      <div className="flex cursor-move touch-none items-center gap-2 border-b px-3 py-1.5 select-none" title="Drag to move · double-click to put back"
-        onPointerDown={e => { if (!(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!(e.target as HTMLElement).closest("button")) reset(); }}>
-        <span className="text-sm font-medium">Lane sketch <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "saved with the plan"}</span></span>
+    <div ref={panel} style={page ? undefined : style} role={page ? "region" : "dialog"} aria-label={page ? "Plan editor" : "Lane sketch"} tabIndex={-1} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
+      className={page
+        ? "relative flex size-full flex-col overflow-hidden bg-background outline-none"
+        : cn("absolute z-30 flex flex-col overflow-hidden rounded-lg border bg-background shadow-xl outline-none", !placed && "top-3 right-3 h-[min(640px,calc(100%-1.5rem))] w-[min(1280px,calc(100%-1.5rem))]")}>
+      {!page && <ResizeEdges start={start} />}
+      <div className={cn("flex items-center gap-2 border-b px-3 py-1.5 select-none", !page && "cursor-move touch-none")} title={page ? undefined : "Drag to move · double-click to put back"}
+        onPointerDown={e => { if (!page && !(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!page && !(e.target as HTMLElement).closest("button")) reset(); }}>
+        {!page && <span className="text-sm font-medium">Lane sketch <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "saved with the plan"}</span></span>}
         <ToggleGroup type="single" value={tool} onValueChange={v => v && changeTool(v as Tool)} aria-label="Drawing tool" className="ml-2">
           {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={tip(t)} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
         </ToggleGroup>
@@ -813,7 +819,7 @@ export function LaneSketch() {
             </DropdownMenuContent>
           </DropdownMenu>
           <Button size="icon-sm" variant="ghost" aria-label="Fit to view" title="Fit the sketch in view (F)" onClick={fit}><Maximize /></Button>
-          <Button size="icon-sm" variant="ghost" aria-label="Close" title="Close (the sketch stays with the plan)" onClick={() => { ui.getValue().sketch = false; }}><X /></Button>
+          {!page && <Button size="icon-sm" variant="ghost" aria-label="Close" title="Close (the sketch stays with the plan)" onClick={() => { ui.getValue().sketch = false; }}><X /></Button>}
         </div>
       </div>
       <div className="flex min-h-0 flex-1">

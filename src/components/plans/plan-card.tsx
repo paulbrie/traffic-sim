@@ -1,5 +1,6 @@
 "use client";
 
+import type { Sketch } from "@/lib/lane-sketch";
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -71,10 +72,20 @@ export function PlanCardActions({ plan, canDelete = true }: { plan: { id: string
   );
 }
 
-export function PlanMeta({ nodes, links, stops, updatedAt }: { nodes: number; links: number; stops: number; updatedAt: Date }) {
+/** `sketch`: a V2 plan's lane sketch (its counts shown instead of the V1 network's) */
+/** which engine a plan is built on: V2 (the lane sketch) stands out, V1 is quieter */
+export function EngineBadge({ engine }: { engine: "v1" | "v2" }) {
+  return engine === "v2"
+    ? <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary" title="V2 engine: lanes, connectors and junctions drawn freely">V2</span>
+    : <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground" title="V1 engine (classic)">V1</span>;
+}
+
+export function PlanMeta({ nodes, links, stops, updatedAt, sketch }: { nodes: number; links: number; stops: number; updatedAt: Date; sketch?: Sketch | null }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground tabular">
-      <span>{links} roads</span><span>{nodes} nodes</span><span>{stops} stops</span>
+      {sketch !== undefined
+        ? <><span>{sketch?.roads.length ?? 0} roads</span><span>{sketch?.lanes.length ?? 0} lanes</span><span>{sketch?.junctions.length ?? 0} junctions</span></>
+        : <><span>{links} roads</span><span>{nodes} nodes</span><span>{stops} stops</span></>}
       <span className="ml-auto">Edited {timeAgo(new Date(updatedAt))}</span>
     </div>
   );

@@ -4,7 +4,7 @@ import { AppHeader } from "@/components/app-header";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { NewPlanDialog } from "@/components/plans/new-plan-dialog";
-import { PlanCardActions, PlanLink, PlanMeta } from "@/components/plans/plan-card";
+import { EngineBadge, PlanCardActions, PlanLink, PlanMeta } from "@/components/plans/plan-card";
 import { PlanThumb } from "@/components/plans/plan-thumb";
 import { AccessBadge } from "@/components/cities/city-card";
 import { ShareButton } from "@/components/cities/share-button";
@@ -58,15 +58,18 @@ export default async function CityPage({ params }: PageProps<"/cities/[cityId]">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {plans.map(p => (
               <Card key={p.id} className="relative gap-3 py-4 transition-shadow hover:shadow-md">
-                <div className="px-4"><PlanThumb network={p.network} className="aspect-[16/10]" /></div>
+                <div className="px-4"><PlanThumb network={p.network} sketch={p.engine === "v2" ? p.sketch : undefined} className="aspect-[16/10]" /></div>
                 <div className="flex items-start gap-2 px-4">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium"><PlanLink id={p.id}>{p.name}</PlanLink></div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="truncate font-medium"><PlanLink id={p.id}>{p.name}</PlanLink></div>
+                      <EngineBadge engine={p.engine} />
+                    </div>
                     <p className="line-clamp-1 min-h-5 text-sm text-muted-foreground">{p.description || " "}</p>
                   </div>
                   {canEdit && <div className="relative z-10"><PlanCardActions plan={p} canDelete={access === "owner"} /></div>}
                 </div>
-                <div className="px-4"><PlanMeta nodes={p.nodes} links={p.links} stops={p.stops} updatedAt={p.updatedAt} /></div>
+                <div className="px-4"><PlanMeta nodes={p.nodes} links={p.links} stops={p.stops} updatedAt={p.updatedAt} sketch={p.engine === "v2" ? p.sketch : undefined} /></div>
               </Card>
             ))}
           </div>

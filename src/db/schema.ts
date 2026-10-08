@@ -34,6 +34,9 @@ export const cityShares = pgTable(
   (t) => [primaryKey({ columns: [t.cityId, t.userId] }), index("city_shares_user_idx").on(t.userId)],
 );
 
+/** the engine a plan is built on (see `plans.engine`) */
+export type PlanEngine = "v1" | "v2";
+
 export const plans = pgTable(
   "plans",
   {
@@ -47,6 +50,11 @@ export const plans = pgTable(
     underlay: jsonb("underlay").$type<Underlay>(),
     /** the lane sketch (lanes, connectors, roads, junctions drawn freely, and its traffic settings) */
     sketch: jsonb("sketch").$type<Sketch>(),
+    /**
+     * the engine the plan is built on: "v1" (its `network`, the original editor and simulation) or
+     * "v2" (its `sketch`, the lane sketch's editor and simulation; `network` stays empty)
+     */
+    engine: text("engine").$type<PlanEngine>().notNull().default("v1"),
     /** incremented on every save, used to detect concurrent edits */
     revision: integer("revision").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
