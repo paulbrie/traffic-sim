@@ -1,5 +1,5 @@
 import { settle, type Pt, type Sketch } from "@/lib/lane-sketch";
-import type { SketchSim } from "@/lib/lane-sketch-sim";
+import type { SketchSimClient } from "./sketch-sim-client";
 import { laneSketch$, sketchReplaced } from "./store";
 
 /** the lane sketch's own undo history (apart from the plan's) */
@@ -47,13 +47,14 @@ export const sketchClip = () => clip;
 export function setSketchClip(c: SketchClip) { clip = c; }
 
 /** the cars on the sketch and what they did (kept while the page is open, the window closed or not) */
-let sim: SketchSim | null = null;
+let sim: SketchSimClient | null = null;
 export const sketchSim = () => sim;
-export function setSketchSim(s: SketchSim) { sim = s; }
+export function setSketchSim(s: SketchSimClient) { sim = s; }
 
 // another plan's sketch loaded, or one saved elsewhere merged in: this one's undo history no longer applies
 // (and with another plan, its cars go)
 sketchReplaced.add(why => {
   past.length = 0; future.length = 0;
-  if (why === "load") sim = null;
+  // (its worker stopped)
+  if (why === "load") { sim?.terminate(); sim = null; }
 });

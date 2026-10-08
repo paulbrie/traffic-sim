@@ -17,7 +17,8 @@ import {
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
   type Band, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
-import { DEFAULT_SIM, SketchSim, type ReplayCar, type SimParams, type SimStats } from "@/lib/lane-sketch-sim";
+import { DEFAULT_SIM, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
+import { SketchSimClient } from "@/state/sketch-sim-client";
 import { Slider } from "@/components/ui/slider";
 import { laneSketch$, ui, underlay$ } from "@/state/store";
 import { editSketch, recordSketch, redoSketch, setSketchClip, setSketchSim, sketchClip, sketchSim, undoSketch } from "@/state/lane-sketch";
@@ -183,7 +184,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const space = useRef(false);
   // cars on the sketch, to try it out (made when first run, kept with what they did when the window closes;
   // they follow the sketch as it is edited)
-  const sim = useRef<SketchSim | null>(sketchSim());
+  const sim = useRef<SketchSimClient | null>(sketchSim());
   const [running, setRunning] = useState(false);
   const [simSpeed, setSimSpeed] = useState(1);
   // (saved with the sketch: changing them isn't an undo step)
@@ -344,6 +345,25 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     shownBy.current = now;
     redraw(changed);
   });
+  /** the worker sent the cars as they are now (or a replay frame came): what is shown kept up with them */
+  const shownAt = useRef(0);
+  const onSimFrame = () => {
+    const s = sim.current;
+    if (!s) return;
+    // (the view kept on the car picked)
+    const id = live.current.selCar, c = live.current.follow && id !== null && live.current.replayT === null ? s.inspect(id) : null;
+    if (c) view.current = { ...view.current, cx: c.p.x, cy: c.p.y };
+    const now = performance.now();
+    // (while running, four times a second; paused, a frame is an answer: shown at once)
+    if (!running || now - shownAt.current > 250) {
+      shownAt.current = now;
+      setStats(s.stats()); setReplayRange(s.replayRange());
+      if (id !== null) setCarInfo(carInfoAt(id, live.current.replayT));
+    }
+    redraw(false);
+  };
+  // (the client kept between openings of the window: its frames come here)
+  useEffect(() => { if (sim.current) sim.current.onFrame = onSimFrame; });
   const changeTool = (t: Tool) => { draft.current = null; setTool(t); redraw(); };
   /** a car picked to inspect (null: none) */
   const setSelCar = (id: number | null) => { setSelCarId(id); setCarInfo(id !== null ? carInfoAt(id, live.current.replayT) : null); };
@@ -351,26 +371,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // ------------------------------------------------------------ cars
   useEffect(() => { sim.current?.setSketch(sketch); }, [sketch]);
   useEffect(() => { sim.current?.setParams(params); }, [params]);
-  useEffect(() => {
-    if (!running) return;
-    let raf = 0, last = performance.now(), shown = 0;
-    const tick = (now: number) => {
-      const s = sim.current!;
-      // (in steps of at most 0.1 s; a slow frame doesn't make a big jump)
-      let dt = Math.min(0.1, (now - last) / 1000) * simSpeed;
-      last = now;
-      while (dt > 1e-6) { const h = Math.min(0.1, dt); s.step(h); dt -= h; }
-      // (the view kept on the car picked)
-      const c = live.current.follow && live.current.selCar !== null ? s.inspect(live.current.selCar) : null;
-      if (c) view.current = { ...view.current, cx: c.p.x, cy: c.p.y };
-      if (now - shown > 250) { shown = now; setStats(s.stats()); setReplayRange(s.replayRange()); if (live.current.selCar !== null) setCarInfo(s.inspect(live.current.selCar)); }
-      redraw(false);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, simSpeed]);
+  // the cars run in the worker, at the speed picked (it sends a frame after each go: see onSimFrame)
+  useEffect(() => { sim.current?.run(running, simSpeed); }, [running, simSpeed]);
   // playing the replay (at the simulation speed picked), stopping at the end of what is kept
   useEffect(() => {
     if (!replayPlaying) return;
@@ -390,7 +392,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replayPlaying, simSpeed]);
   const play = () => {
-    if (!sim.current) { sim.current = new SketchSim(live.current.sketch, params); setSketchSim(sim.current); }
+    if (!sim.current) { sim.current = new SketchSimClient(live.current.sketch, params, onSimFrame); setSketchSim(sim.current); }
     // (running carries on from now: out of the replay)
     if (live.current.replayT !== null) goLive();
     setRunning(r => !r);
@@ -399,7 +401,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const copyRun = async () => {
     const s = sim.current;
     if (!s) return;
-    const r = s.report(), sk = live.current.sketch;
+    const r = await s.report(), sk = live.current.sketch;
     const text = `Lane sketch simulation at ${clock(r.time)} (${running ? "running" : "paused"}) · ${r.stats.vehicles} cars, ${r.stats.collisions} collisions, ${r.stats.jumps} jumps\n\`\`\`json\n${JSON.stringify({ sketch: exportSketch(sk, live.current.contents), ...r })}\n\`\`\`\n`;
     try { await navigator.clipboard.writeText(text); toast.success("Simulation data copied", { description: `${Math.round(text.length / 1024)} kB: the sketch, the cars now, the jumps, the last minute's events and the last 10 s of every car. Paste it into the conversation.` }); }
     catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
@@ -939,10 +941,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {selCar !== null && (
             <CarPanel info={carInfo} id={selCar} follow={follow} running={running} replayT={replayT}
               onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
-              onCopy={() => {
+              onCopy={async () => {
                 const s = sim.current, info = s?.inspect(selCar);
                 if (!s) return;
-                const text = `Lane sketch car ${selCar} at ${clock(s.t)}\n\`\`\`json\n${JSON.stringify({ car: info ? { ...info, route: undefined } : "left the sketch", frames: s.carFrames(selCar), events: s.log.filter(e => e.car === selCar || e.with === selCar).slice(-60) })}\n\`\`\`\n`;
+                const { frames, events } = await s.car(selCar);
+                const text = `Lane sketch car ${selCar} at ${clock(s.t)}\n\`\`\`json\n${JSON.stringify({ car: info ? { ...info, route: undefined } : "left the sketch", frames, events })}\n\`\`\`\n`;
                 void navigator.clipboard.writeText(text).then(() => toast.success(`Car ${selCar}'s data copied`, { description: "Its state, its last 10 s and what happened to it. Paste it into the conversation." }), () => toast.error("Couldn't copy"));
               }} />
           )}
