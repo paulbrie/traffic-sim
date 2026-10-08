@@ -20,7 +20,7 @@ noted), **todo**, or **n/a** (not needed in V2).
 | Thumbnails, counts and V1/V2 badges in lists | `plan-thumb.tsx`, `plan-card.tsx` | done |
 | Sharing (read / write) | `components/cities/share-*` | done (shared; view only respected) |
 | OSM import | `lib/osm/*`, `server/osm.ts`, `components/osm` | partial: import as V1, then "Convert to V2" |
-| Converting a V1 plan to V2 | `lib/v1-to-v2.ts`, `convertPlanToV2` (server action), plan card menu | done: lanes along V1's centrelines, roads, every lane-to-lane path as a connector, automatic junctions, signs (and all-way stops), lights with their phases (green per connector) and timings, roundabouts as ring lanes, place and reference image. Not converted: bus stops / lines, buildings, crossings, parking, demand, junction shapes drawn by hand (automatic surfaces instead) |
+| Converting a V1 plan to V2 | `lib/v1-to-v2.ts`, `convertPlanToV2` (server action), plan card menu | done: lanes along V1's centrelines, roads, every lane-to-lane path as a connector, automatic junctions, signs (and all-way stops), lights with their phases (green per connector) and timings, roundabouts as true circles, zebra crossings, place and reference image. Not converted: bus stops / lines, buildings, parking, demand, junction shapes drawn by hand (automatic surfaces instead) |
 | Sample district template | `server/actions.ts` (`sampleTown`) | todo (V2 starts blank) |
 | Walkthrough | `walkthrough.tsx`, `lib/walkthrough.ts` | todo |
 | Search palette | `search-palette.tsx` | todo (the structure tree covers part of it) |
@@ -45,7 +45,7 @@ noted), **todo**, or **n/a** (not needed in V2).
 | Signal optimizer | `engine/optimize.ts`, `optimize-dialog.tsx` | todo |
 | Reversible lanes | `engine/sim/reversible.ts`, `reversible-lane.tsx` | todo |
 | Bus stops and lines | `lines-panel.tsx`, engine `stops` / `lines` | todo |
-| Pedestrians, zebra crossings | `engine/crossings.ts`, `render/pedestrians.ts`, `crossing-parking.tsx` | todo |
+| Pedestrians, zebra crossings | `engine/crossings.ts`, `render/pedestrians.ts`, `crossing-parking.tsx` | done: X tool, pedestrians in the sim and the replay; converted from V1 (drawn crossings, and one across each road of a junction with pedestrians) |
 | Parking bays | `engine/parking.ts` | todo |
 | Markers | `engine/markers.ts`, `marker-inspector.tsx` | todo |
 | Copy / paste, placing, multi-select, bulk delete | `state/placing.ts`, `state/bulk.ts`, `multi-selection.tsx` | done (sketch copy / paste / duplicate, box select) |

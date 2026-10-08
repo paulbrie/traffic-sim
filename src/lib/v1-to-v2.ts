@@ -8,14 +8,15 @@
  *  - signs on the lanes they stand at (all-way stop: every way in), traffic lights with the junction's
  *    phases (green per connector, from the lanes green in each phase) and timings;
  *  - where the plan is on Earth.
- * Buildings, bus lines, crossings, parking and demand stay behind (see docs/v2-porting.md).
+ *  - zebra crossings: those drawn by hand, and one across each road of a junction with pedestrians.
+ * Buildings, bus lines, parking and demand stay behind (see docs/v2-porting.md).
  */
 import { compile, exitLanesOf, laneAllowed, type Compiled, type Edge } from "@/engine/compile";
 import type { Poly } from "@/engine/geom";
 import type { Network } from "@/engine/types";
 import {
   emptySketch, nearestOn, surfaceAround,
-  type JunctionLights, type LaneControl, type LightsPhase, type Pt, type Sketch, type SketchConnector, type SketchJunction, type SketchLane, type SketchRoad,
+  type JunctionLights, type LaneControl, type LightsPhase, type Pt, type Sketch, type SketchConnector, type SketchJunction, type SketchLane, type SketchCrossing, type SketchRoad,
 } from "./lane-sketch";
 
 const r2 = (x: number) => Math.round(x * 100) / 100;
@@ -53,7 +54,7 @@ function bends(pts: Pt[]): Pt[] {
   return out;
 }
 
-export interface ConvertReport { lanes: number; connectors: number; roads: number; junctions: number; roundabouts: number; lights: number; signs: number; skipped: string[] }
+export interface ConvertReport { lanes: number; connectors: number; roads: number; junctions: number; roundabouts: number; lights: number; signs: number; crossings: number; skipped: string[] }
 
 export function networkToSketch(net: Network): { sketch: Sketch; report: ConvertReport } {
   const c: Compiled = compile(net, { outlines: false });
@@ -168,8 +169,23 @@ export function networkToSketch(net: Network): { sketch: Sketch; report: Convert
     if (n.def.control === "free") skipped.push(`${j.name}: free-flowing (no control) kept as a plain junction`);
     sk.junctions.push(j);
   }
+  // zebra crossings: those drawn by hand as they are; and where a junction has pedestrians, one across each
+  // of its roads just inside its mouth (as V1 draws them: 0.6 to 3.6 m in), or across the road at a two-road one
+  const crossings: SketchCrossing[] = [];
+  const cross = (a: Pt, b: Pt, width: number, peds: number) => crossings.push({ id: `x${crossings.length + 1}`, a: { x: r2(a.x), y: r2(a.y) }, b: { x: r2(b.x), y: r2(b.y) }, width: r2(width), peds: Math.round(peds) });
+  for (const x of net.crossings ?? []) cross(x.a, x.b, x.width, x.peds);
+  for (const n of c.nodes) {
+    if (!n.controlled || n.ringR > 0 || !(n.peds > 0)) continue;
+    const across = (p: Pt, u: Pt, d: number, lo: number, hi: number) => {
+      const r = { x: -u.y, y: u.x }, P = (y: number) => ({ x: p.x + u.x * d + r.x * y, y: p.y + u.y * d + r.y * y });
+      cross(P(lo + 0.3), P(hi - 0.3), 3, n.peds);
+    };
+    if (n.degree === 2) { const a = n.arms[0]; across(n.pos, a.u, 0, a.lo, a.hi); continue; }
+    for (const a of n.arms) if (a.setback > 5) across(a.mouth, a.mu, -2.1, a.lo, a.hi);
+  }
+  if (crossings.length) sk.crossings = crossings;
   if (net.geo) sk.geo = { lat: net.geo.lat, lon: net.geo.lon };
   if (net.stops.length) skipped.push(`${net.stops.length} bus stops (and ${net.lines.length} lines): not in V2 yet`);
   if (net.buildings?.length) skipped.push(`${net.buildings.length} buildings: not in V2 yet`);
-  return { sketch: sk, report: { lanes: sk.lanes.length, connectors: sk.connectors.length, roads: sk.roads.length, junctions: sk.junctions.length, roundabouts, lights, signs, skipped } };
+  return { sketch: sk, report: { lanes: sk.lanes.length, connectors: sk.connectors.length, roads: sk.roads.length, junctions: sk.junctions.length, roundabouts, lights, signs, crossings: crossings.length, skipped } };
 }

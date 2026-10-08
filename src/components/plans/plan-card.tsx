@@ -40,7 +40,7 @@ export function PlanCardActions({ plan, canDelete = true }: { plan: { id: string
                   const { id, report: r } = await convertPlanToV2(plan.id);
                   toast.success("V2 plan made", {
                     id: t, duration: 12000,
-                    description: `${r.lanes} lanes, ${r.connectors} connectors, ${r.junctions} junctions (${r.lights} with lights, ${r.roundabouts} roundabouts), ${r.signs} signs.${r.skipped.length ? ` Not converted: ${r.skipped.join("; ")}.` : ""}`,
+                    description: `${r.lanes} lanes, ${r.connectors} connectors, ${r.junctions} junctions (${r.lights} with lights, ${r.roundabouts} roundabouts), ${r.signs} signs, ${r.crossings} zebra crossings.${r.skipped.length ? ` Not converted: ${r.skipped.join("; ")}.` : ""}`,
                     action: { label: "Open", onClick: () => router.push(`/plans/${id}`) },
                   });
                   router.refresh();
