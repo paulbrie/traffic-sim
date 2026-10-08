@@ -11,7 +11,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import {
-  LANE_WIDTH, addLane, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -24,12 +24,13 @@ import { editSketch, recordSketch, redoSketch, setSketchClip, setSketchSim, sket
 import { readPalette, speedColor } from "@/render/palette";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField } from "./fields";
+import { DemandPanel } from "@/components/v2/demand-panel";
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
 
 type Tool = "select" | "lane" | "arc" | "circle" | "connector" | "junction" | "slice";
 /** what can be shown on the sketch, or hidden (kept in the browser) */
-type Layer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names" | "satellite" | "image";
+type Layer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names" | "demand" | "satellite" | "image";
 type Layers = Record<Layer, boolean>;
 /** (`page`: only on a V2 plan's full-page editor) */
 const LAYERS: { id: Layer; label: string; hint: string; page?: boolean }[] = [
@@ -40,6 +41,7 @@ const LAYERS: { id: Layer; label: string; hint: string; page?: boolean }[] = [
   { id: "signs", label: "Stop and yield lines", hint: "The lines at the ends of lanes with a sign" },
   { id: "cars", label: "Cars", hint: "The cars, while the simulation is on" },
   { id: "names", label: "Names", hint: "Road and junction names" },
+  { id: "demand", label: "Ways in and out", hint: "Where traffic comes in (vehicles per hour) and leaves (share of trips)" },
   { id: "grid", label: "Grid", hint: "A line every metre close up, every 10 m stronger" },
   { id: "satellite", label: "Satellite imagery", hint: "The imagery where the plan is on the map (V2 plans placed on the map)", page: true },
   { id: "image", label: "Reference image", hint: "The plan's reference image (V2 plans)", page: true },
@@ -69,7 +71,7 @@ type Sel = Piece & { road: string | null; link?: string | null };
 const NO_SEL: Sel = { lanes: [], connectors: [], junctions: [], road: null };
 type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
-type Hover = Hit | { conns: string[] };
+type Hover = Hit | { conns: string[] } | { lanes: string[] };
 /** a point to drag: a lane's, a connector's bend or end (moved along its lane or onto another), a junction's corner */
 type Handle = { kind: "lane" | "bend" | "corner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" };
 
@@ -892,6 +894,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} />
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
+          <DemandPanel sketch={sketch} readOnly={readOnly} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
             <Button size="sm" variant="ghost" aria-label="Clear the sketch" title="Clear the sketch (undo brings it back)" disabled={empty}
@@ -929,7 +932,7 @@ function reasonOf(why: string | null, kmh: number): { text: string; car?: number
 /** a recorded car's details, in the shape of a live one (what wasn't kept left out: its place along, its desired speed, its route) */
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
-  return { id: c.id, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, changeTo: null, goal: null, why: c.why, still: 0, p: c.p, d: c.d, route: [] };
+  return { id: c.id, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, p: c.p, d: c.d, route: [] };
 }
 
 function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClose, onCopy }: {
@@ -962,6 +965,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
           {row("On", <span className="font-mono">{edgeName(info.edge)} · {info.pos.toFixed(1)}{info.ring ? "" : ` of ${info.len.toFixed(1)}`} m</span>)}
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h <span className="text-muted-foreground">of {info.desiredKmh.toFixed(0)}</span></span>)}
           {info.changeTo && row("Changing to", <span className="font-mono">{edgeName(info.changeTo)}</span>)}
+          {row("Heading for", info.dest ? `the exit at the end of lane ${info.dest}` : "anywhere (no exit it can reach)")}
           {row("Going", info.goal ? (info.goal.startsWith("end:") ? `off the end of ${edgeName(info.goal.slice(4))}` : edgeName(info.goal)) : info.leaves ? `off the end of ${edgeName(info.edge)}` : info.exit ? `${edgeName(info.exit)}, then ${edgeName(info.then ?? "")}` : info.then ? `onto ${edgeName(info.then)}` : "round the ring")}
           {row("Now", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
           {info.still >= 1 && row("Stopped for", <span className="font-mono tabular">{info.still.toFixed(0)} s</span>)}
@@ -1327,7 +1331,7 @@ function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats,
       <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Traffic</h3>
       <p className="text-[11px] text-muted-foreground">
         {entries
-          ? `Cars come in at the start of the ${entries === 1 ? "lane" : `${entries} lanes`} nothing joins near their start, take a connector at random, and leave at the end of a lane nothing leaves near its end. Joining cars give way; cars at a stop or yield line give way to those without one; elsewhere, where connectors cross, the first there goes first.`
+          ? `Cars come in at the start of the ${entries === 1 ? "lane" : `${entries} lanes`} nothing joins near their start (at each one's rate in Demand, or the one below), head for a lane end nothing leaves (by their shares of the trips) and take the shortest way there. Joining cars give way; cars at a stop or yield line give way to those without one; elsewhere, where connectors cross, the first there goes first.`
           : "Every lane has a connector joining it near its start (or is a ring), so no car can come in: draw a lane leading in."}
       </p>
       <div className="grid grid-cols-2 gap-2">
@@ -1402,22 +1406,23 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
       <ChevronRight className={cn("size-3 transition-transform", !closed.has(key) && "rotate-90")} /> <span className="flex-1">{text}</span> <span className="font-normal tabular-nums">{n}</span>
     </button>
   );
-  const laneRow = (id: string, depth: number) => {
+  // (`under`: what the row is listed under, for its key: a lane or connector may be on two junctions whose surfaces overlap)
+  const laneRow = (id: string, depth: number, under = "") => {
     const l = laneById(sketch, id);
     if (!l) return null;
     const next = sketch.connectors.filter(c => c.from.lane === id).map(c => c.to.lane);
     const sign = l.control === "stop" ? <span className="font-medium text-red-600 dark:text-red-400">stop</span> : l.control === "yield" ? <span className="font-medium text-amber-600 dark:text-amber-400">yield</span> : null;
     return row({
-      key: `lane:${id}`, depth, on: sel.lanes.includes(id) && !sel.road, hit: { lane: id }, sel: { ...NO_SEL, lanes: [id] }, zoom: piece({ lanes: [id] }),
+      key: `${under}lane:${id}`, depth, on: sel.lanes.includes(id) && !sel.road, hit: { lane: id }, sel: { ...NO_SEL, lanes: [id] }, zoom: piece({ lanes: [id] }),
       label: <>{id} {sign}</>, note: isFullCircle(l.shape) ? `ring · ${fmtM(laneLength(l.shape))}` : fmtM(laneLength(l.shape)),
       title: next.length ? `Leads on to ${[...new Set(next)].map(laneName).join(", ")}` : "Leads nowhere: cars drive off its end",
     });
   };
-  const connRow = (id: string, depth: number) => {
+  const connRow = (id: string, depth: number, under = "") => {
     const c = sketch.connectors.find(x => x.id === id);
     if (!c) return null;
     return row({
-      key: `conn:${id}`, depth, on: sel.connectors.includes(id), hit: { connector: id }, sel: { ...NO_SEL, connectors: [id] }, zoom: piece({ connectors: [id] }),
+      key: `${under}conn:${id}`, depth, on: sel.connectors.includes(id), hit: { connector: id }, sel: { ...NO_SEL, connectors: [id] }, zoom: piece({ connectors: [id] }),
       label: <>{id} <span className="text-muted-foreground">{c.from.lane} → {c.to.lane}</span></>, title: `From ${laneName(c.from.lane)} to ${laneName(c.to.lane)}`,
     });
   };
@@ -1461,8 +1466,8 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
               const r = sketch.roads.find(x => x.id === id)!;
               return row({ key: `${k}:road:${id}`, depth: 2, on: sel.road === id, sel: { ...NO_SEL, lanes: r.lanes, road: id }, zoom: piece({ lanes: r.lanes }), label: roadName(id), note: plural(r.lanes.length, "lane") });
             })),
-            ...group(`${k}:lanes`, "Lanes on it", c.lanes.length, c.lanes.map(id => laneRow(id, 2))),
-            ...group(`${k}:conns`, "Connectors", c.connectors.length, c.connectors.map(id => connRow(id, 2))),
+            ...group(`${k}:lanes`, "Lanes on it", c.lanes.length, c.lanes.map(id => laneRow(id, 2, `${k}:`))),
+            ...group(`${k}:conns`, "Connectors", c.connectors.length, c.connectors.map(id => connRow(id, 2, `${k}:`))),
           ] : []),
         ];
       }) : <p className="px-6 py-0.5 text-xs text-muted-foreground">None yet: draw one with J</p>)}
@@ -1474,7 +1479,7 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
             key: `link:${k.id}`, depth: 0, kids: true, on: sel.link === k.id, hit: { link: k.id }, sel: { ...NO_SEL, link: k.id }, zoom: piece({ connectors: k.conns }),
             label: <span className="font-medium">{roadName(k.a.road)} ↔ {roadName(k.b.road)}</span>, note: plural(k.conns.length, "connector"), title: `Joins ${roadName(k.a.road)} (its ${k.a.end}) to ${roadName(k.b.road)} (its ${k.b.end})`,
           }),
-          ...(open(`link:${k.id}`) ? k.conns.map(id => connRow(id, 1)) : []),
+          ...(open(`link:${k.id}`) ? k.conns.map(id => connRow(id, 1, `link:${k.id}:`)) : []),
         ])}
       </>}
 
@@ -1665,7 +1670,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   }
   // selection and hover halos under the lanes
   for (const l of sk.lanes) {
-    const on = selLanes.has(l.id), over = hv && "lane" in hv && hv.lane === l.id;
+    const on = selLanes.has(l.id), over = (hv && "lane" in hv && hv.lane === l.id) || (hv && "lanes" in hv && hv.lanes.includes(l.id));
     if (!on && !over) continue;
     path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath();
     ctx.strokeStyle = col.sel; ctx.globalAlpha = on ? 0.9 : 0.35; ctx.lineWidth = l.width + 5 * px; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
@@ -1936,11 +1941,27 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
 
   if (turning && cur) label(`${((turning.angle * 180) / Math.PI).toFixed(0)}°`, { x: cur.p.x, y: cur.p.y - 18 * px }, col.sel);
   // names: roads at the middle of their first lane, junctions at their top
-  for (const r of st.layers.names ? sk.roads : []) {
-    const l = laneById(sk, r.lanes[0]);
-    if (l) label(r.name, pointAt(l.shape, laneLength(l.shape) / 2).p, col.text);
+  // the ways in and out: the traffic coming in, the share of trips leaving
+  // (labels only once close enough to read them: ways in and out and road names from 1.5 px/m, junction names from 3)
+  if (st.layers.demand && v.scale >= 1.5) {
+    const { entries, exits } = demandWays(sk), lane = (id: string) => laneById(sk, id)!;
+    const sumW = exits.reduce((a, w) => a + w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0), 0);
+    const tag = (ids: string[], atEnd: boolean, text: string, color: string) => {
+      const l = lane(ids[0]), q = pointAt(l.shape, atEnd ? laneLength(l.shape) : 0), k = (atEnd ? 1 : -1) * 18 * px;
+      label(text, { x: q.p.x + q.d.x * k, y: q.p.y + q.d.y * k }, color);
+    };
+    for (const w of entries) tag(w.lanes, false, `→ ${Math.round(w.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0))}/h`, dark ? "#4ade80" : "#15803d");
+    for (const w of exits) { const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0); tag(w.lanes, true, ws === 0 ? "closed" : `${sumW ? Math.round((ws / sumW) * 100) : 0}% →`, dark ? "#93c5fd" : "#1d4ed8"); }
   }
-  for (const j of st.layers.names ? sk.junctions : []) {
+  // (a road's name once on the screen, a street cut into several roads named once)
+  const named = new Set<string>();
+  for (const r of st.layers.names && v.scale >= 1.5 ? sk.roads : []) {
+    const l = laneById(sk, r.lanes[0]), p = l && pointAt(l.shape, laneLength(l.shape) / 2).p;
+    if (!p || named.has(r.name) || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
+    named.add(r.name);
+    label(r.name, p, col.text);
+  }
+  for (const j of st.layers.names && v.scale >= 3 ? sk.junctions : []) {
     const top = j.outline.reduce((a, p) => (p.y < a.y ? p : a), j.outline[0]);
     if (top) label(j.name, { x: top.x, y: top.y - 14 * px }, col.jText);
   }

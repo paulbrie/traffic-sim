@@ -6,10 +6,10 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import type { Named } from "@gdp-ts/core";
 import { db, schema } from "@/db";
 import type { PlanEngine } from "@/db/schema";
-import { DEFAULT_SETTINGS, type Network, type PlanSettings } from "@/engine/types";
+import { DEFAULT_SETTINGS, emptyNetwork, type Network, type PlanSettings } from "@/engine/types";
 import { sanitizeNetwork, sanitizeSettings } from "@/engine/validate";
 import { sanitizeUnderlay } from "@/lib/underlay";
-import { sanitizeSketch } from "@/lib/lane-sketch";
+import { sanitizeSketch, type Sketch } from "@/lib/lane-sketch";
 import type { CityId, PlanId, VersionId, ViewerId } from "@/lib/ids";
 import type { CanEditCity, CanEditPlan, CanOwnPlan, CanViewPlan } from "../proofs/policy";
 import type { VersionOfPlan } from "../proofs/version-of-plan";
@@ -80,6 +80,29 @@ export async function duplicatePlan<U, P>(plan: Named<P, PlanId>, author: Named<
       .returning();
     await tx.execute(sql`insert into plan_images (plan_id, mime, data, bytes) select ${copy.id}, mime, data, bytes from plan_images where plan_id = ${plan.value}`);
     await recordVersion(tx, copy.id, author.value, { revision: copy.revision, network: copy.network, settings: copy.settings, underlay: copy.underlay, sketch: copy.sketch }, "create", `Copied from “${src.name}”`);
+    return copy.id;
+  });
+  return { id, cityId: src.cityId };
+}
+
+/**
+ * A V2 plan made from a V1 one (its network converted to a lane sketch by the caller), next to it in its
+ * city, with its settings, its reference image and placement. The V1 plan is left as it is. Its id and city.
+ */
+export async function createV2From<U, P>(
+  plan: Named<P, PlanId>, author: Named<U, ViewerId>, input: { sketch: Sketch; note: string },
+  _proof: CanEditPlan<U, P>,
+): Promise<{ id: string; cityId: string } | null> {
+  const [src] = await db.select().from(schema.plans).where(eq(schema.plans.id, plan.value));
+  if (!src) return null;
+  const id = await db.transaction(async tx => {
+    const [copy] = await tx
+      .insert(schema.plans)
+      .values({ cityId: src.cityId, name: `${src.name} (V2)`.slice(0, 120), description: src.description, network: emptyNetwork(), settings: src.settings, underlay: src.underlay, sketch: input.sketch, engine: "v2" })
+      .returning();
+    await tx.execute(sql`insert into plan_images (plan_id, mime, data, bytes) select ${copy.id}, mime, data, bytes from plan_images where plan_id = ${plan.value}`);
+    await recordVersion(tx, copy.id, author.value, { revision: copy.revision, network: copy.network, settings: copy.settings, underlay: copy.underlay, sketch: copy.sketch }, "create", input.note);
+    await tx.update(schema.cities).set({ updatedAt: new Date() }).where(eq(schema.cities.id, src.cityId));
     return copy.id;
   });
   return { id, cityId: src.cityId };

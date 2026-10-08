@@ -19,7 +19,8 @@ noted), **todo**, or **n/a** (not needed in V2).
 | Live collaboration | `api/plans/[planId]/live`, `state/merge.ts` | partial: the whole sketch, the newer side wins; to do: merge per lane / connector / road / junction |
 | Thumbnails, counts and V1/V2 badges in lists | `plan-thumb.tsx`, `plan-card.tsx` | done |
 | Sharing (read / write) | `components/cities/share-*` | done (shared; view only respected) |
-| OSM import | `lib/osm/*`, `server/osm.ts`, `components/osm` | todo (imports are V1) |
+| OSM import | `lib/osm/*`, `server/osm.ts`, `components/osm` | partial: import as V1, then "Convert to V2" |
+| Converting a V1 plan to V2 | `lib/v1-to-v2.ts`, `convertPlanToV2` (server action), plan card menu | done: lanes along V1's centrelines, roads, every lane-to-lane path as a connector, automatic junctions, signs (and all-way stops), lights with their phases (green per connector) and timings, roundabouts as ring lanes, place and reference image. Not converted: bus stops / lines, buildings, crossings, parking, demand, junction shapes drawn by hand (automatic surfaces instead) |
 | Sample district template | `server/actions.ts` (`sampleTown`) | todo (V2 starts blank) |
 | Walkthrough | `walkthrough.tsx`, `lib/walkthrough.ts` | todo |
 | Search palette | `search-palette.tsx` | todo (the structure tree covers part of it) |
@@ -56,8 +57,8 @@ noted), **todo**, or **n/a** (not needed in V2).
 |---|---|---|
 | Car following, priority, crossings, merges | `engine/sim/*` | done (lane sketch sim) |
 | Lane changes | `engine/sim/*` | done |
-| Demand: buildings, zones, OD flows | `engine/buildings.ts`, `engine/sim/demand.ts`, `zones.tsx`, `flows.tsx` | todo (V2: a rate per entry lane) |
-| Routing, route tracer | `engine/route.ts`, `engine/sim/routing.ts`, `route-tracer.tsx` | partial: cars pick destinations; to do: routes over the network, tracer |
+| Demand: buildings, zones, OD flows | `engine/buildings.ts`, `engine/sim/demand.ts`, `zones.tsx`, `flows.tsx` | partial: vehicles per hour per way in, a share of the trips per way out (Demand panel, "Ways in and out" layer); to do: OD flows between given ways, buildings / zones |
+| Routing, route tracer | `engine/route.ts`, `engine/sim/routing.ts`, `route-tracer.tsx` | partial: each car heads for an exit drawn by the shares and takes the shortest way (`RouteTable`; lane changes count 25 m); to do: route tracer, routes by time (congestion) |
 | Turning proportions per approach | `engine/types.ts` (`splitF` / `splitB`) | todo |
 | Simulation in a web worker | `state/sim.worker.ts`, `sim-controller.ts` | todo (V2 runs on the main thread) |
 | Speed, run / pause, restart | `workspace.tsx` | done (in the editor's header) |
@@ -77,7 +78,7 @@ noted), **todo**, or **n/a** (not needed in V2).
 ## Suggested order
 
 1. ~~Satellite / reference image under the sketch, with real scale~~ (done).
-2. Demand (where cars come from and go to) and routing over the network.
+2. ~~Demand (where cars come from and go to) and routing over the network~~ (done: rates, shares, shortest routes; OD flows next).
 3. Signal groups and green waves, then the optimizer.
 4. Buses, pedestrians and crossings, parking.
 5. Per-object live merge; simulation in a worker for large plans.

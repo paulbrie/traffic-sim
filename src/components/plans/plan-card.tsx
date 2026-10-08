@@ -4,7 +4,7 @@ import type { Sketch } from "@/lib/lane-sketch";
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Copy, MoreHorizontal, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -13,10 +13,10 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { deletePlan, duplicatePlan, updatePlanInfo } from "@/server/actions";
+import { convertPlanToV2, deletePlan, duplicatePlan, updatePlanInfo } from "@/server/actions";
 import { timeAgo } from "@/lib/time";
 
-export function PlanCardActions({ plan, canDelete = true }: { plan: { id: string; name: string; description: string }; canDelete?: boolean }) {
+export function PlanCardActions({ plan, canDelete = true }: { plan: { id: string; name: string; description: string; engine?: "v1" | "v2" }; canDelete?: boolean }) {
   const [edit, setEdit] = useState(false);
   const [del, setDel] = useState(false);
   const [pending, start] = useTransition();
@@ -32,6 +32,23 @@ export function PlanCardActions({ plan, canDelete = true }: { plan: { id: string
           <DropdownMenuItem onSelect={() => start(async () => { const id = await duplicatePlan(plan.id); toast.success("Plan duplicated", { action: { label: "Open", onClick: () => router.push(`/plans/${id}`) } }); router.refresh(); })}>
             <Copy /> Duplicate
           </DropdownMenuItem>
+          {plan.engine !== "v2" && (
+            <DropdownMenuItem disabled={pending} title="A new V2 plan next to this one, its roads, junctions, signs, lights and roundabouts as lanes and connectors (this plan stays as it is)"
+              onSelect={() => start(async () => {
+                const t = toast.loading("Converting to V2…");
+                try {
+                  const { id, report: r } = await convertPlanToV2(plan.id);
+                  toast.success("V2 plan made", {
+                    id: t, duration: 12000,
+                    description: `${r.lanes} lanes, ${r.connectors} connectors, ${r.junctions} junctions (${r.lights} with lights, ${r.roundabouts} roundabouts), ${r.signs} signs.${r.skipped.length ? ` Not converted: ${r.skipped.join("; ")}.` : ""}`,
+                    action: { label: "Open", onClick: () => router.push(`/plans/${id}`) },
+                  });
+                  router.refresh();
+                } catch (err) { toast.error(err instanceof Error ? err.message : "Could not convert", { id: t }); }
+              })}>
+              <Sparkles /> Convert to V2
+            </DropdownMenuItem>
+          )}
           {canDelete && <DropdownMenuSeparator />}
           {canDelete && <DropdownMenuItem variant="destructive" onSelect={() => setDel(true)}><Trash2 /> Delete</DropdownMenuItem>}
         </DropdownMenuContent>

@@ -7,6 +7,7 @@ import { emptyNetwork, type GeoRef, type Network, type PlanSettings } from "@/en
 import { sanitizeNetwork, sanitizeSettings } from "@/engine/validate";
 import type { Underlay } from "@/lib/underlay";
 import type { Sketch } from "@/lib/lane-sketch";
+import { networkToSketch, type ConvertReport } from "@/lib/v1-to-v2";
 import { CityId, PlanId, UserId, VersionId } from "@/lib/ids";
 import { bboxCenter, bboxProblem, bboxSize, ROAD_CLASSES, type BBox, type ImportOptions, type RoadClass } from "@/lib/osm/area";
 import { convertOsm, suggestSettings, type ImportStats } from "@/lib/osm/convert";
@@ -262,6 +263,28 @@ export async function createPlanFrom(sourceId: string, input: { name: string; de
   });
   revalidatePath(`/cities/${made.cityId}`);
   return made.id;
+}
+
+/**
+ * A V2 copy of a V1 plan: its network converted to a lane sketch (lanes, connectors, junctions, signs,
+ * lights, roundabouts; see lib/v1-to-v2), next to it in its city. Its id, and what was converted and left out.
+ */
+export async function convertPlanToV2(id: string): Promise<{ id: string; report: ConvertReport }> {
+  const me = await assertUser();
+  assertId(id);
+  const made = await name(me.id, PlanId(id), async (user, plan) => {
+    const a = await planAccess(user, plan), edit = canEditPlan(a);
+    if (!edit) throw refusal(a, "edit", "plan");
+    const state = await plans.planState(plan, edit);
+    if (!state) throw new Error("Plan not found");
+    const { sketch, report } = networkToSketch(state.network);
+    if (!sketch.lanes.length) throw new Error("This plan has no roads to convert.");
+    const r = await plans.createV2From(plan, user, { sketch, note: `Converted from V1: ${report.lanes} lanes, ${report.connectors} connectors, ${report.junctions} junctions` }, edit);
+    if (!r) throw new Error("Plan not found");
+    return { ...r, report };
+  });
+  revalidatePath(`/cities/${made.cityId}`);
+  return { id: made.id, report: made.report };
 }
 
 export async function duplicatePlan(id: string) {
