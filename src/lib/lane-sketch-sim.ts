@@ -42,12 +42,17 @@ import {
   onCrossing, crossingFrame,
   type LaneControl, type LaneShape, type Pt, type Sketch, type SketchCrossing,
 } from "./lane-sketch";
+import { resolveTuning, type Tuning } from "./sketch-tuning";
 
 export interface SimParams {
   /** vehicles per hour coming in on each lane where traffic starts */
   rate: number;
   /** desired speed on straight lanes, km/h */
   speed: number;
+  /** the random numbers' seed (the same seed, the same run; default 1) */
+  seed?: number;
+  /** the simulation settings changed from their defaults (see sketch-tuning.ts) */
+  tune?: Partial<Tuning>;
 }
 export const DEFAULT_SIM: SimParams = { rate: 400, speed: 50 };
 
@@ -78,7 +83,7 @@ export interface SimStats {
 }
 
 /** pedestrians: seconds at the start of a red they may step out in (lights); seconds after a group before the next (zebras); walking speed (m/s) */
-const PED_WALK = 8, PED_YIELD = 5, PED_V = 1.2;
+let PED_WALK = 8, PED_YIELD = 5, PED_V = 1.2;
 /** pedestrians at a zebra: waiting at the kerb (since when), the group on it (from, until), their claim on it, and the counts so far */
 interface PedState { waiting: number; since: number; crossing: number; from: number; until: number; redSince: number; claim: boolean; crossed: number; waitSum: number }
 /** a zebra as the cars see it: where it runs over each lane and connector (s0..s1), the lights over it (the connectors they hold), and its pedestrians */
@@ -190,20 +195,33 @@ export interface SimVehicle {
   forceUntil: number;
   /** times it was told to go (the next deadlock tries another car first) */
   forced: number;
+  /** its desired speed as a share of the lanes' (1, or within the settings' spread of it) */
+  vf: number;
   /** it has stopped at the stop line of the lane it is on */
   stopped: boolean;
 }
 
-const LEN = 4.5, S0 = 2, T_HEAD = 1.2, A_MAX = 1.5, B_COMF = 2, A_LAT = 2.5, LOOK = 120;
+const LEN = 4.5, A_LAT = 2.5, LOOK = 120;
+/** the drivers (settable: see applyTuning): the gap when stopped (m), the time gap (s), acceleration and comfortable braking (m/s²) */
+let S0 = 2, T_HEAD = 1.2, A_MAX = 1.5, B_COMF = 2;
 /** seconds of waiting after which a car goes before cars that can still stop for it */
-const PATIENCE = 6;
+let PATIENCE = 6;
 const HALF_W = 0.9;
 /** paths closer than this (centre to centre) are within reach of each other: cars on them could touch */
 const NEAR = 2.4;
 /** m/s: the speed to come up to a yield line at */
-const YIELD_V = 4;
+let YIELD_V = 4;
 /** seconds a car giving way at a line wants between clearing the path and the next car getting there */
-const GAP = 1.5;
+let GAP = 1.5;
+/**
+ * The settings a simulation runs with, put in place (they are the module's: set again at the start of every
+ * step, so simulations with different settings in one place each run with their own)
+ */
+function applyTuning(t: Tuning) {
+  A_MAX = t.accel; B_COMF = t.brake; T_HEAD = t.headway; S0 = t.minGap;
+  PATIENCE = t.patience; GAP = t.yieldGap; YIELD_V = t.yieldSpeed;
+  PED_WALK = t.pedWalk; PED_YIELD = t.pedYield; PED_V = t.pedSpeed;
+}
 /** seconds a car takes to move over to the lane it changes to */
 const SHIFT_T = 2;
 /** m/s²: the hardest braking a lane change may ask of the car changing or the one coming up behind it */
@@ -337,9 +355,15 @@ export class SketchSim {
   /** pedestrians draw their own random numbers, so adding them leaves the cars' run as it was */
   private pedRnd: () => number;
 
+  /** the settings, every one (those not changed at their defaults) */
+  private tuning: Tuning;
+  private seed: number;
   constructor(sk: Sketch, public params: SimParams = DEFAULT_SIM, seed = 1) {
-    this.rnd = mulberry32(seed);
-    this.pedRnd = mulberry32((seed * 7919) ^ 0x9ed5);
+    this.seed = params.seed ?? seed;
+    this.rnd = mulberry32(this.seed);
+    this.pedRnd = mulberry32((this.seed * 7919) ^ 0x9ed5);
+    this.tuning = resolveTuning(params.tune);
+    applyTuning(this.tuning);
     this.sketch = sk;
     this.build();
   }
@@ -503,6 +527,10 @@ export class SketchSim {
   /** new speed and demand: speeds worked out again, the next arrivals drawn again */
   setParams(p: SimParams) {
     this.params = p;
+    this.tuning = resolveTuning(p.tune);
+    applyTuning(this.tuning);
+    // (a new seed: the run from the start, restarted, is the one it gives)
+    if (p.seed !== undefined) this.seed = p.seed;
     this.note({ what: "params", ...p });
     this.build();
     for (const s of this.sources) s.next = this.t + this.gap(s.rate);
@@ -513,8 +541,10 @@ export class SketchSim {
     this.log = []; this.frames = []; this.drawn.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0;
     this.replay = []; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
-    for (const s of this.sources) s.next = this.gap(s.rate);
     for (const x of this.crossings) x.ped = newPed();
+    // (from the start again: the same random numbers, the same run)
+    this.rnd = mulberry32(this.seed); this.pedRnd = mulberry32((this.seed * 7919) ^ 0x9ed5);
+    for (const s of this.sources) s.next = this.gap(s.rate);
   }
 
   /**
@@ -884,6 +914,7 @@ export class SketchSim {
   }
 
   step(dt: number) {
+    applyTuning(this.tuning);
     this.t += dt;
     if (Math.floor(this.t) !== Math.floor(this.t - dt)) this.breakDeadlocks();
     // lights (those that respond to traffic: is a car within 50 m of a connector they hold?)
@@ -913,7 +944,10 @@ export class SketchSim {
       s.next = this.t + this.gap(s.rate);
       // (no faster than it can stop from behind the last car in)
       const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - LEN - S0 - 1)));
-      const v: SimVehicle = { id: this.nextId++, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: LEN, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0 };
+      const v: SimVehicle = { id: this.nextId++, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: LEN, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: 1 };
+      // (speeds varying: its own share of the lanes' speed; no random number drawn when they don't, so runs stay as they were)
+      const spread = this.tuning.speedSpread / 100;
+      if (spread > 0) v.vf = 1 + (this.rnd() * 2 - 1) * spread;
       this.plan(v);
       this.note({ what: "in", car: v.id, lane: s.lane.key, exit: v.exit?.key ?? null, dest: v.dest });
       this.vehicles.push(v);
@@ -946,7 +980,7 @@ export class SketchSim {
     const acc = new Map<SimVehicle, number>(), held = new Map<SimVehicle, { gap: number; lead: number }>();
     for (const v of this.vehicles) {
       const route = this.route(v);
-      let gap = Infinity, lead = 0, vmax = v.edge.vmax, why: string | null = null;
+      let gap = Infinity, lead = 0, vmax = v.edge.vmax * v.vf, why: string | null = null;
       const behind = (g: number, speed: number, reason: string) => { if (g < gap) { gap = g; lead = speed; why = reason; } };
       /** the zones ahead where its path meets another (not to stop in), and where those it gives way at start */
       const zones: { s: number; e: number }[] = [], yields: { at: number; why: string }[] = [];
@@ -1065,7 +1099,7 @@ export class SketchSim {
           behind(Math.max(0.1, d + S0), 0, `pedestrians at ${this.crossings[o.k].def.id}`);
         }
         // slowing down in time for a slower stretch
-        if (r.off > 0) vmax = Math.min(vmax, Math.sqrt(r.edge.vmax ** 2 + 2 * B_COMF * r.off));
+        if (r.off > 0) vmax = Math.min(vmax, Math.sqrt((r.edge.vmax * v.vf) ** 2 + 2 * B_COMF * r.off));
         const tMe = (d: number) => timeTo(d, v.v, r.edge.vmax);
         // (on a connector from a line it gives way at; still before the line, it waits there, not at the zone)
         const minor = r.edge.kind === "conn" && !!r.edge.minor;

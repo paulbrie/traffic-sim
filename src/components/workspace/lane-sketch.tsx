@@ -28,6 +28,7 @@ import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
+import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/sketch-replay-bar";
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
@@ -177,7 +178,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [simSpeed, setSimSpeed] = useState(1);
   // (saved with the sketch: changing them isn't an undo step)
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
-  const setParams = (p: SimParams) => laneSketch$.next({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed } });
+  const setParams = (p: SimParams) => laneSketch$.next({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}) } });
   const [readOnly] = useDeepSubject(ui, "readOnly");
   // the background (V2 plans): how the imagery shows, the image, a scale being set by two clicks
   const [sat, setSatState] = useState<SatOptions>(loadSatOptions);
@@ -1088,7 +1089,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} />
           )}
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
-          <TrafficPanel sketch={sketch} params={params} setParams={setParams} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
+          <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
           <DemandPanel sketch={sketch} readOnly={readOnly} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
@@ -1626,8 +1627,8 @@ function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; rea
   );
 }
 
-function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats, onCopy }: {
-  sketch: Sketch; params: SimParams; setParams: (p: SimParams) => void; simSpeed: number; setSimSpeed: (n: number) => void; stats: SimStats | null; onCopy: () => void;
+function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpeed, stats, onCopy }: {
+  sketch: Sketch; params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean; simSpeed: number; setSimSpeed: (n: number) => void; stats: SimStats | null; onCopy: () => void;
 }) {
   // where cars come in
   const entries = entryLanes(sketch).length;
@@ -1645,6 +1646,7 @@ function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats,
         <NumberField id="sk-rate" label="Each entry" unit="veh/h" digits={0} value={params.rate} min={0} max={3000} step={50} onCommit={rate => setParams({ ...params, rate })} />
         <NumberField id="sk-speed" label="Speed" unit="km/h" digits={0} value={params.speed} min={10} max={130} step={5} onCommit={speed => setParams({ ...params, speed })} />
       </div>
+      <SimSettingsButton params={params} setParams={setParams} readOnly={readOnly} />
       <ToggleGroup type="single" value={String(simSpeed)} onValueChange={v => v && setSimSpeed(Number(v))} aria-label="Simulation speed" className="w-full">
         {[1, 3, 10, 30].map(n => <ToggleGroupItem key={n} value={String(n)} className="h-7 flex-1 text-xs">{n}×</ToggleGroupItem>)}
       </ToggleGroup>

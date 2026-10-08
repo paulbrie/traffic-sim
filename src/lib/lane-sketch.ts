@@ -8,6 +8,7 @@
  * anywhere, a roundabout's ring for instance, and follow the lanes when they move. In between they
  * go through the bend points they were drawn with, if any.
  */
+import { sanitizeTuning, type Tuning } from "./sketch-tuning";
 
 export interface Pt { x: number; y: number }
 /**
@@ -49,8 +50,8 @@ export interface Sketch {
   lanes: SketchLane[]; connectors: SketchConnector[]; roads: SketchRoad[]; junctions: SketchJunction[];
   /** road ends joined so the road carries on (see `SketchLink`) */
   links?: SketchLink[];
-  /** the cars run on it: vehicles per hour at each entry, and the speed on straight lanes (km/h) */
-  traffic?: { rate: number; speed: number };
+  /** the cars run on it: vehicles per hour at each entry, the speed on straight lanes (km/h), the random numbers' seed, the simulation settings changed (see sketch-tuning.ts) */
+  traffic?: { rate: number; speed: number; seed?: number; tune?: Partial<Tuning> };
   /** where it is on Earth: the latitude / longitude of its origin (x east, y south, metres; as a V1 plan's `geo`), for the satellite imagery under it */
   geo?: { lat: number; lon: number };
   /** zebra crossings drawn by hand (see `SketchCrossing`) */
@@ -1920,7 +1921,8 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const g = o.geo as Sketch["geo"];
   const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;
   const t = o.traffic as Sketch["traffic"];
-  const traffic = t && num(t.rate) && num(t.speed) ? { rate: Math.min(3000, Math.max(0, t.rate)), speed: Math.min(130, Math.max(10, t.speed)) } : undefined;
+  const tune = t ? sanitizeTuning(t.tune) : null, seed = t && num(t.seed) ? Math.round(Math.min(1e9, Math.max(1, t.seed))) : undefined;
+  const traffic = t && num(t.rate) && num(t.speed) ? { rate: Math.min(3000, Math.max(0, t.rate)), speed: Math.min(130, Math.max(10, t.speed)), ...(seed !== undefined ? { seed } : {}), ...(tune ? { tune } : {}) } : undefined;
   const end = (e: unknown): RoadEnd | null => { const x = e as RoadEnd; return x && roads.some(r => r.id === x.road) && (x.end === "start" || x.end === "end") ? { road: x.road, end: x.end } : null; };
   const links: SketchLink[] = [];
   for (const k of Array.isArray(o.links) ? o.links : []) {
