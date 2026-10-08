@@ -827,6 +827,18 @@ export class SketchSim {
       if (m != null) put(waitIn, h!.n.lane, { w, pos: m });
     }
 
+    // the cars that may be on their way to an edge (as toPlace sees it): on it, just off it (their backs still on
+    // it), about to take it from the lane before, or on the connector or lane leading into it; in the cars' order,
+    // so each car meets the others as it did when it looked at every car
+    const toward = new Map<Edge, SimVehicle[]>();
+    const mark = (e: Edge | null | undefined, w: SimVehicle) => { if (!e) return; const l = toward.get(e); if (!l) toward.set(e, [w]); else if (l[l.length - 1] !== w) l.push(w); };
+    for (const w of this.vehicles) {
+      mark(w.edge, w); mark(w.trail?.edge, w); mark(w.trail?.before?.edge, w);
+      if (w.edge.kind === "conn") mark(w.edge.to!.lane, w);
+      else if (w.exit) { mark(w.exit, w); mark(w.exit.to!.lane, w); }
+    }
+    const NONE: SimVehicle[] = [];
+
     const acc = new Map<SimVehicle, number>(), held = new Map<SimVehicle, { gap: number; lead: number }>();
     for (const v of this.vehicles) {
       const route = this.route(v);
@@ -998,7 +1010,7 @@ export class SketchSim {
           const tClear = minor ? timeTo(dMe + k.after + LEN, v.v, r.edge.vmax) + GAP : 0;
           // (already in among the zones this one is part of: it can't stop short of them any more, it goes through first)
           const meIn = r.edge === v.edge && r.edge.kind === "conn" && this.inRun(r.edge, v.pos, k.at - k.before);
-          for (const w of this.vehicles) {
+          for (const w of toward.get(k.other) ?? NONE) {
             if (w === v) continue;
             const dW = this.toPlace(w, k.other, k.otherAt, LEN + 1 + k.otherAfter);
             if (dW === null) continue;
