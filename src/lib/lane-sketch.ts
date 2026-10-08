@@ -188,12 +188,21 @@ export function removeCorner(j: SketchJunction, i: number): SketchJunction {
   return { ...j, outline: j.outline.filter((_, k) => k !== i), ...(j.curved ? { curved: j.curved.filter((_, k) => k !== i) } : {}) };
 }
 
+// (how far along a polyline each of its points is: kept, so a place on a long lane is found by halving)
+const runs = new WeakMap<Pt[], Float64Array>();
+function runOf(pts: Pt[]): Float64Array {
+  let r = runs.get(pts);
+  if (r) return r;
+  r = new Float64Array(Math.max(1, pts.length));
+  for (let i = 1; i < pts.length; i++) r[i] = r[i - 1] + dist(pts[i - 1], pts[i]);
+  runs.set(pts, r);
+  return r;
+}
+
 export function laneLength(s: LaneShape): number {
   if (s.kind === "arc") return Math.abs(s.sweep) * s.r;
   const pts = linePath(s);
-  let L = 0;
-  for (let i = 1; i < pts.length; i++) L += dist(pts[i - 1], pts[i]);
-  return L;
+  return pts.length > 1 ? runOf(pts)[pts.length - 1] : 0;
 }
 
 /** the point `s` metres along the lane and the direction of travel there (unit vector) */
@@ -205,15 +214,13 @@ export function pointAt(sh: LaneShape, s: number): { p: Pt; d: Pt } {
     return { p: { x: sh.c.x + sh.r * Math.cos(a), y: sh.c.y + sh.r * Math.sin(a) }, d: { x: -sg * Math.sin(a), y: sg * Math.cos(a) } };
   }
   const pts = linePath(sh);
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1], b = pts[i], l = dist(a, b);
-    if (s <= l || i === pts.length - 1) {
-      const t = l ? Math.min(1, s / l) : 0, d = l ? { x: (b.x - a.x) / l, y: (b.y - a.y) / l } : { x: 1, y: 0 };
-      return { p: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }, d };
-    }
-    s -= l;
-  }
-  return { p: pts[0] ?? { x: 0, y: 0 }, d: { x: 1, y: 0 } };
+  if (pts.length < 2) return { p: pts[0] ?? { x: 0, y: 0 }, d: { x: 1, y: 0 } };
+  // (the first piece ending at or past `s`)
+  const run = runOf(pts);
+  let lo = 1, hi = pts.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (run[m] >= s) hi = m; else lo = m + 1; }
+  const a = pts[lo - 1], b = pts[lo], l = run[lo] - run[lo - 1], t = l ? Math.min(1, (s - run[lo - 1]) / l) : 0, d = l ? { x: (b.x - a.x) / l, y: (b.y - a.y) / l } : { x: 1, y: 0 };
+  return { p: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }, d };
 }
 
 /** the lane as a polyline, points about `step` metres apart on arcs */
