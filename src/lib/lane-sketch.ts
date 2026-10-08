@@ -45,6 +45,8 @@ export interface Sketch {
   links?: SketchLink[];
   /** the cars run on it: vehicles per hour at each entry, and the speed on straight lanes (km/h) */
   traffic?: { rate: number; speed: number };
+  /** where it is on Earth: the latitude / longitude of its origin (x east, y south, metres; as a V1 plan's `geo`), for the satellite imagery under it */
+  geo?: { lat: number; lon: number };
 }
 /** what a junction's surface takes in, and the roads its connectors join */
 export interface JunctionContents { lanes: string[]; connectors: string[]; roads: string[] }
@@ -244,6 +246,8 @@ export function addLane(sk: Sketch, lane: SketchLane): Sketch {
 export function remove(sk: Sketch, ids: { lanes?: Iterable<string>; connectors?: Iterable<string>; roads?: Iterable<string>; junctions?: Iterable<string> }): Sketch {
   const lanes = new Set(ids.lanes ?? []), conns = new Set(ids.connectors ?? []), roads = new Set(ids.roads ?? []), js = new Set(ids.junctions ?? []);
   return {
+    // (what it has besides: its traffic settings, links, place on Earth)
+    ...sk,
     lanes: sk.lanes.filter(l => !lanes.has(l.id)),
     connectors: sk.connectors.filter(c => !conns.has(c.id) && !lanes.has(c.from.lane) && !lanes.has(c.to.lane)),
     roads: sk.roads.filter(r => !roads.has(r.id)).map(r => ({ ...r, lanes: r.lanes.filter(l => !lanes.has(l)) })).filter(r => r.lanes.length),
@@ -334,7 +338,7 @@ export function pastePart(sk: Sketch, part: Sketch, dx: number, dy: number): { s
   const roads = part.roads.map(r => ({ id: fresh("r"), name: `${r.name} copy`, lanes: r.lanes.map(l => laneIds.get(l)!) }));
   const junctions = part.junctions.map(j => ({ id: fresh("j"), name: `${j.name} copy`, outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.lights ? { lights: { ...j.lights } } : {}) }));
   return {
-    sketch: { lanes: [...sk.lanes, ...lanes], connectors: [...sk.connectors, ...connectors], roads: [...sk.roads, ...roads], junctions: [...sk.junctions, ...junctions] },
+    sketch: { ...sk, lanes: [...sk.lanes, ...lanes], connectors: [...sk.connectors, ...connectors], roads: [...sk.roads, ...roads], junctions: [...sk.junctions, ...junctions] },
     piece: { lanes: lanes.map(l => l.id), connectors: connectors.map(c => c.id), junctions: junctions.map(j => j.id) },
   };
 }
@@ -1212,6 +1216,8 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const curved = Array.isArray(j.curved) && j.curved.length === outline.length ? { curved: (j.curved as unknown[]).map(Boolean) } : {};
     junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...lightsOf(j.lights) });
   }
+  const g = o.geo as Sketch["geo"];
+  const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;
   const t = o.traffic as Sketch["traffic"];
   const traffic = t && num(t.rate) && num(t.speed) ? { rate: Math.min(3000, Math.max(0, t.rate)), speed: Math.min(130, Math.max(10, t.speed)) } : undefined;
   const end = (e: unknown): RoadEnd | null => { const x = e as RoadEnd; return x && roads.some(r => r.id === x.road) && (x.end === "start" || x.end === "end") ? { road: x.road, end: x.end } : null; };
@@ -1221,6 +1227,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     if (!str(k?.id) || !a || !b || links.some(x => x.id === k.id)) continue;
     links.push({ id: k.id, a, b, conns: Array.isArray(k.conns) ? (k.conns as unknown[]).filter((c): c is string => typeof c === "string" && connectors.some(x => x.id === c)) : [] });
   }
-  if (!lanes.length && !junctions.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}) };
+  // (nothing drawn and nowhere placed: no sketch)
+  if (!lanes.length && !junctions.length && !geo) return null;
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}) };
 }

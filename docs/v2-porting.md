@@ -69,14 +69,14 @@ noted), **todo**, or **n/a** (not needed in V2).
 
 | Feature | V1 files | V2 status |
 |---|---|---|
-| Satellite and photo tiles, geo-located plans | `render/satellite.ts`, `render/photo-tiles.ts` | todo |
-| Reference image (underlay) with scale | `lib/underlay.ts`, `state/underlay-image.ts`, `underlay-panel.tsx` | todo |
+| Satellite and photo tiles, geo-located plans | `render/satellite.ts`, `render/photo-tiles.ts` | done: `sketch.geo` set from a place search (the place put under the view), Esri / Google imagery with brightness (`components/v2/background.tsx`); to do: photo tiles (3D) |
+| Reference image (underlay) with scale | `lib/underlay.ts`, `state/underlay-image.ts`, `underlay-panel.tsx` | partial: upload, opacity, position, width, rotation, scale by two clicks and a known distance (the plan's underlay, shared with V1); to do: drag / turn it on the canvas |
 | 3D view, helicopter mode | `view-3d.tsx`, `render/scene3d.ts`, `helicopter.ts` | todo |
 | Road surfaces and markings | `render/draw2d.ts`, `render/geometry.ts` | done (asphalt, kerbs, lane and centre lines, stop / yield / signal lines, signs) |
 
 ## Suggested order
 
-1. Satellite / reference image under the sketch, with real scale (draw V2 plans over real places).
+1. ~~Satellite / reference image under the sketch, with real scale~~ (done).
 2. Demand (where cars come from and go to) and routing over the network.
 3. Signal groups and green waves, then the optimizer.
 4. Buses, pedestrians and crossings, parking.

@@ -19,17 +19,20 @@ import {
 } from "@/lib/lane-sketch";
 import { DEFAULT_SIM, SketchSim, type ReplayCar, type SimParams, type SimStats } from "@/lib/lane-sketch-sim";
 import { Slider } from "@/components/ui/slider";
-import { laneSketch$, ui } from "@/state/store";
+import { laneSketch$, ui, underlay$ } from "@/state/store";
 import { editSketch, recordSketch, redoSketch, setSketchClip, setSketchSim, sketchClip, sketchSim, undoSketch } from "@/state/lane-sketch";
 import { readPalette, speedColor } from "@/render/palette";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField } from "./fields";
+import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
+import { underlayImg$ } from "@/state/underlay-image";
 
 type Tool = "select" | "lane" | "arc" | "circle" | "connector" | "junction" | "slice";
 /** what can be shown on the sketch, or hidden (kept in the browser) */
-type Layer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names";
+type Layer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names" | "satellite" | "image";
 type Layers = Record<Layer, boolean>;
-const LAYERS: { id: Layer; label: string; hint: string }[] = [
+/** (`page`: only on a V2 plan's full-page editor) */
+const LAYERS: { id: Layer; label: string; hint: string; page?: boolean }[] = [
   { id: "surfaces", label: "Road surfaces", hint: "Asphalt under the roads and junctions, as on the plan's map" },
   { id: "markings", label: "Markings", hint: "Lane lines and centre lines on the road surfaces" },
   { id: "lanes", label: "Lanes", hint: "Each lane's green line and its direction of travel (the selected ones always show)" },
@@ -38,6 +41,8 @@ const LAYERS: { id: Layer; label: string; hint: string }[] = [
   { id: "cars", label: "Cars", hint: "The cars, while the simulation is on" },
   { id: "names", label: "Names", hint: "Road and junction names" },
   { id: "grid", label: "Grid", hint: "A line every metre close up, every 10 m stronger" },
+  { id: "satellite", label: "Satellite imagery", hint: "The imagery where the plan is on the map (V2 plans placed on the map)", page: true },
+  { id: "image", label: "Reference image", hint: "The plan's reference image (V2 plans)", page: true },
 ];
 const ALL_LAYERS = Object.fromEntries(LAYERS.map(l => [l.id, true])) as Layers;
 function loadLayers(): Layers {
@@ -180,9 +185,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
   const setParams = (p: SimParams) => laneSketch$.next({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed } });
   const [readOnly] = useDeepSubject(ui, "readOnly");
+  // the background (V2 plans): how the imagery shows, the image, a scale being set by two clicks
+  const [sat, setSatState] = useState<SatOptions>(loadSatOptions);
+  const setSat = (o: SatOptions) => { setSatState(o); saveSatOptions(o); };
+  const [underlay] = useSubject(underlay$), [ulImg] = useSubject(underlayImg$);
+  const [calib, setCalib] = useState<Calibration | null>(null);
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib });
 
   // ------------------------------------------------------------ coordinates, snapping, picking
   const toWorld = (e: { clientX: number; clientY: number }): Pt => {
@@ -295,10 +305,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
-      if (canvas.current) paint(canvas.current, { ...live.current, view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null });
+      // (the background, V2 plans only: the imagery where the plan is, the reference image)
+      const l = live.current, bg = (x: typeof l): Background => ({ geo: x.sketch.geo ?? null, satellite: x.layers.satellite, sat: x.sat, underlay: x.layers.image ? x.underlay : null, img: x.ulImg, calib: x.calib, onTile: redraw });
+      if (canvas.current) paint(canvas.current, { ...live.current, view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : null });
     });
   };
-  useEffect(() => { live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT }; redraw(); });
+  useEffect(() => { live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib }; redraw(); });
   const changeTool = (t: Tool) => { draft.current = null; setTool(t); redraw(); };
   /** a car picked to inspect (null: none) */
   const setSelCar = (id: number | null) => { setSelCarId(id); setCarInfo(id !== null ? carInfoAt(id, live.current.replayT) : null); };
@@ -527,8 +539,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
 
   // ------------------------------------------------------------ pointer
+  /** the middle of the view and how much it shows, metres */
+  const viewNow = () => { const c = canvas.current, v = view.current; return { cx: v.cx, cy: v.cy, wm: (c?.clientWidth ?? 800) / v.scale, hm: (c?.clientHeight ?? 600) / v.scale }; };
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     panel.current?.focus();
+    // (setting the image's scale: the two points clicked)
+    const c0 = live.current.calib;
+    if (c0 && e.button === 0 && !space.current && !(c0.a && c0.b)) {
+      const p = toWorld(e);
+      setCalib(c0.a ? { ...c0, b: p } : { a: p, b: null });
+      return;
+    }
     // (the view taken over: a glide to centre something stopped)
     cancelAnimationFrame(glide.current);
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -809,7 +830,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                 All layers
               </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator />
-              {LAYERS.map(l => (
+              {LAYERS.filter(l => page || !l.page).map(l => (
                 <DropdownMenuCheckboxItem key={l.id} className="group" checked={layers[l.id]} title={l.hint} onCheckedChange={v => setLayers({ ...layers, [l.id]: !!v })} onSelect={e => e.preventDefault()}>
                   <span className={cn(l.id === "markings" && !layers.surfaces && "text-muted-foreground")}>{l.label}</span>
                   <button type="button" className="ml-auto rounded px-1 text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 group-focus:opacity-100 hover:bg-background hover:text-foreground"
@@ -869,11 +890,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <SelectionPanel sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
             selPt={selPt} onCurvePoint={curvePoint} onDeletePoint={deletePoint}
             onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} />
+          {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
             <Button size="sm" variant="ghost" aria-label="Clear the sketch" title="Clear the sketch (undo brings it back)" disabled={empty}
-              onClick={() => { editSketch(() => emptySketch()); setSel(NO_SEL); }}><Trash2 /></Button>
+              onClick={() => { editSketch(s => ({ ...emptySketch(), ...(s.geo ? { geo: s.geo } : {}), ...(s.traffic ? { traffic: s.traffic } : {}) })); setSel(NO_SEL); }}><Trash2 /></Button>
           </div>
         </aside>
       </div>
@@ -1481,6 +1503,8 @@ interface PaintState {
   simT: number | null;
   /** the traffic lights as they run with the cars (null: worked out from the fixed cycle) */
   signals: SignalController[] | null;
+  /** what is under the sketch: the satellite imagery, the reference image (V2 plans; null otherwise) */
+  bg: Background | null;
   /** the car picked to inspect, with the way it will go */
   car: ReturnType<SketchSim["inspect"]>;
   /** the layers shown */
@@ -1512,13 +1536,19 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   ctx.setTransform(dpr * v.scale, 0, 0, dpr * v.scale, dpr * (w / 2 - v.cx * v.scale), dpr * (h / 2 - v.cy * v.scale));
   const x0 = v.cx - (w / 2) * px, x1 = v.cx + (w / 2) * px, y0 = v.cy - (h / 2) * px, y1 = v.cy + (h / 2) * px;
 
+  // the background (V2 plans): the imagery and the reference image
+  if (st.bg) drawBackground(ctx, st.bg, { minX: x0, minY: y0, maxX: x1, maxY: y1 }, v.scale * dpr, px);
   // grid: a line every metre when close, every 10 m stronger
   for (const [step, color] of [[1, col.minor], [10, col.major]] as const) {
-    if (!st.layers.grid || step * v.scale < 6) continue;
+    // (over imagery or an image: only lines far enough apart, and fainter, not to hide what is under them)
+    const under = !!st.bg && ((st.bg.satellite && !!st.bg.geo) || !!(st.bg.underlay?.visible && st.bg.img));
+    if (!st.layers.grid || step * v.scale < (under ? 24 : 6)) continue;
+    ctx.globalAlpha = under ? 0.35 : 1;
     ctx.beginPath();
     for (let x = Math.floor(x0 / step) * step; x <= x1; x += step) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
     for (let y = Math.floor(y0 / step) * step; y <= y1; y += step) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
     ctx.strokeStyle = color; ctx.lineWidth = px; ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   const path = (pts: Pt[]) => { ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); };

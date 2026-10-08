@@ -11,6 +11,7 @@ import { HistoryButton } from "@/components/workspace/history-dialog";
 import { LaneSketch } from "@/components/workspace/lane-sketch";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
 import { loadPlan } from "@/state/store";
+import { startUnderlayImage } from "@/state/underlay-image";
 
 /**
  * A plan on the V2 engine: the lane sketch is the plan, its editor the whole page (drawing, the cars,
@@ -19,7 +20,7 @@ import { loadPlan } from "@/state/store";
  */
 export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
   // load once per mount (keyed by plan id), before the editor reads the stores
-  useState(() => { loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read", plan.sketch); return plan.id; });
+  useState(() => { loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read", plan.sketch); startUnderlayImage(); return plan.id; });
   useAutosave(plan.id);
   useLive(plan.id);
   return (
