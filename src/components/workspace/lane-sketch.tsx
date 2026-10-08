@@ -1862,7 +1862,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   if (!S) { /* (the surfaces are in the image kept) */ } else if (st.layers.surfaces) {
     // like the roads: one asphalt surface, the union of the road lanes' bands and the junctions (every
     // kerb first, then all the grey over them, so only the outline of the whole shows)
-    const roadLanes = sk.roads.flatMap(r => r.lanes).filter(id => vis.lanes.has(id)).map(id => laneById(sk, id)).filter(l => !!l);
+    // (every lane, in a road or not: a lane taken out of its road keeps its asphalt)
+    const roadLanes = sk.lanes.filter(l => vis.lanes.has(l.id));
     ctx.lineCap = "butt"; ctx.lineJoin = "round";
     // (far out the kerbs are under a pixel: the asphalt only)
     for (const pass of far ? [1] : [0, 1]) {

@@ -1210,7 +1210,14 @@ export function junctionContents(sk: Sketch, j: SketchJunction): JunctionContent
   for (const p of border) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
   const inBox = (p: Pt) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
   const near = (pts: Pt[]) => inBox(pts[0]) || inBox(pts[pts.length - 1]) || inBox(pts[pts.length >> 1]);
-  const lanes = sk.lanes.filter(l => { if (inRoad.has(l.id)) return false; const p = samples(l.shape, 1); return near(p) && mostlyInside(p, border); }).map(l => l.id);
+  // (a lane's points every metre along it: a straight lane's own points are only its two ends)
+  const lanes = sk.lanes.filter(l => {
+    if (inRoad.has(l.id)) return false;
+    const ends = samples(l.shape, 1);
+    if (!near(ends)) return false;
+    const L = laneLength(l.shape), n = Math.max(2, Math.ceil(L));
+    return mostlyInside(Array.from({ length: n + 1 }, (_, i) => pointAt(l.shape, (L * i) / n).p), border);
+  }).map(l => l.id);
   const connectors = sk.connectors.filter(c => { const p = connectorPts(sk, c); return p && near(p) && mostlyInside(p, border); });
   const roads = new Set<string>();
   for (const c of connectors) for (const e of [c.from, c.to]) { const r = roadOf(sk, e.lane); if (r) roads.add(r.id); }
