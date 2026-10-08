@@ -1423,14 +1423,14 @@ export function smoothSurface(bands: Band[], r: number): Pt[][] {
 export const insideLoops = (p: Pt, loops: Pt[][]) => loops.filter(l => insidePolygon(p, l)).length % 2 === 1;
 /** the radius a smoothed junction's notches are rounded off to, by default (metres) */
 export const SMOOTH_R = 6;
-const smoothed = new WeakMap<Sketch, Map<string, Pt[][]>>();
-/** a smoothed automatic junction's surface (kept while the sketch is the same) */
+// (kept for the contents it was made from, while the sketch and the rounding are the same)
+const smoothed = new WeakMap<JunctionContents, { sk: Sketch; r: number; loops: Pt[][] }>();
+/** a smoothed automatic junction's surface */
 export function smoothJunction(sk: Sketch, j: SketchJunction, c: JunctionContents): Pt[][] {
-  let m = smoothed.get(sk);
-  if (!m) smoothed.set(sk, (m = new Map()));
-  const key = `${j.id}:${j.smooth}`;
-  let loops = m.get(key);
-  if (!loops) m.set(key, (loops = smoothSurface(junctionBands(sk, c), j.smooth ?? SMOOTH_R)));
+  const r = j.smooth ?? SMOOTH_R, k = smoothed.get(c);
+  if (k && k.sk === sk && k.r === r) return k.loops;
+  const loops = smoothSurface(junctionBands(sk, c), r);
+  smoothed.set(c, { sk, r, loops });
   return loops;
 }
 
