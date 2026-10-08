@@ -14,7 +14,7 @@ import { unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, addLane, contentsOf, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
-  roadOf, rotation, samples, setControl, surfaceAround, transformPiece, translation,
+  roadOf, rotation, samples, setControl, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
   type Band, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
@@ -209,7 +209,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     return best ? { p: best, snapped: true } : { p: { x: Math.round(p.x * 2) / 2, y: Math.round(p.y * 2) / 2 }, snapped: false };
   };
-  /** what is under `p`: connectors first (they are thin), then lanes, then the smallest junction surface */
+  /** what is under `p`: zebras, then connectors (on top of the lanes), then lanes, then the smallest junction surface */
   const pick = (p: Pt): Hit | null => {
     const sk = live.current.sketch, px = 1 / view.current.scale;
     // (a zebra crossing: over the lanes it crosses)
@@ -221,8 +221,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const pts = connectorPts(sk, c);
       if (!pts) continue;
       const d = nearestOn({ kind: "line", pts }, p).d;
-      if (d <= 6 * px && d - 4 * px < bd) { bd = d - 4 * px; best = { connector: c.id }; }
+      if (d <= 6 * px && d < bd) { bd = d; best = { connector: c.id }; }
     }
+    // (connectors are over the lanes: one under the pointer is picked before the lane it is on)
+    if (best) return best;
     for (const id of near.lanes) {
       const l = laneById(sk, id)!, d = nearestOn(l.shape, p).d - l.width / 2;
       if (d <= 4 * px && d < bd) { bd = d; best = { lane: l.id }; }
@@ -568,8 +570,6 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     };
     glide.current = requestAnimationFrame(step);
   };
-  /** a point added to a selected connector (a bend) or junction (a corner) where it was double-clicked; on a point, the point taken out */
-  const editPoints = (p: Pt) => {
   /** a search entry chosen (Cmd/Ctrl+K): selected, and the view moved gently to it */
   const goTo = (to: SearchTarget) => {
     const sk = live.current.sketch, piece = (p: Partial<Piece>): Piece => ({ lanes: p.lanes ?? [], connectors: p.connectors ?? [], junctions: p.junctions ?? [] });
@@ -603,6 +603,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
   }, []);
+  /** a point added to a selected connector (a bend) or junction (a corner) where it was double-clicked; on a point, the point taken out */
+  const editPoints = (p: Pt) => {
     const sk = live.current.sketch, s = live.current.sel, h = handleAt(p);
     if (h?.kind === "end") return true;
     if (h?.kind === "lane") { deletePoint(h.id, h.i); return true; }
@@ -1046,10 +1048,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <div className="pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
             <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
-          <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
-            onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} />
           {searchOpen && <SketchSearch sketch={sketch} contents={contents} cars={searchOpen.cars}
             onGo={goTo} onClose={() => { setSearchOpen(null); panel.current?.focus(); }} />}
+          <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
+            onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} />
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
@@ -1297,6 +1299,50 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover }: { sketch: 
   );
 }
 
+/**
+ * A lane's (or a road's, by its lead lane) geometry, as in V1's inspector: how far its end is from its
+ * start and which way (a compass bearing), how long it is along the curve, and where its ends are. A
+ * new length stretches it (a road: all its lanes) along that line from its start; a new bearing turns
+ * it about its start; a new end moves that end (its connectors stay where they were on it).
+ */
+function GeometrySection({ sketch, lanes, lead }: { sketch: Sketch; lanes: string[]; lead: string }) {
+  const l = laneById(sketch, lead);
+  if (!l || isFullCircle(l.shape) || (l.shape.kind === "line" && l.shape.closed)) return null;
+  const sh = l.shape, L = laneLength(sh), A = pointAt(sh, 0).p, B = pointAt(sh, L).p;
+  const chord = dist(A, B), bearing = (deg(Math.atan2(B.x - A.x, -(B.y - A.y))) + 360) % 360;
+  const line = sh.kind === "line", endsShown = line && lanes.length === 1;
+  // (from the sketch as it is when the edit is made: a field can commit twice before it is shown again)
+  const ends = (s: Sketch) => { const x = laneById(s, lead)!.shape, a = pointAt(x, 0).p, b = pointAt(x, laneLength(x)).p; return { a, b, d: dist(a, b) }; };
+  const setLength = (n: number) => editSketch(s => { const { a, b, d } = ends(s); return d > 0.01 && n > 0.1 ? stretchLanes(s, lanes, a, { x: (b.x - a.x) / d, y: (b.y - a.y) / d }, n / d) : s; });
+  const setBearing = (d: number) => editSketch(s => {
+    const { a, b } = ends(s), now = deg(Math.atan2(b.x - a.x, -(b.y - a.y)));
+    return Math.abs(d - now) < 1e-6 ? s : transformPiece(s, { lanes, connectors: [], junctions: [] }, rotation(a, ((d - now) * Math.PI) / 180));
+  });
+  const setEnd = (which: "start" | "end", p: Pt) => editSketch(s => setLaneEnds(s, lead, which === "start" ? p : undefined, which === "end" ? p : undefined));
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-xs font-medium">Geometry</span>
+      <div className="grid grid-cols-2 gap-2">
+        {line
+          ? <NumberField id="sk-g-len" label={sh.pts.length > 2 ? "Chord length" : "Length"} unit="m" value={chord} min={0.5} max={100000} step={0.5} digits={2} onCommit={setLength} />
+          : <NumberField id="sk-g-len" label="Chord length" unit="m" value={chord} digits={2} onCommit={() => {}} className="pointer-events-none opacity-60" />}
+        <NumberField id="sk-g-brg" label="Bearing" unit="°" value={bearing} min={0} max={360} step={1} digits={1} onCommit={setBearing} />
+      </div>
+      {(sh.kind === "arc" || sh.pts.length > 2) && <p className="text-[11px] text-muted-foreground">Along the curve: {fmtM(L)}{sh.kind === "arc" ? " (set by its radius and sweep)" : ""}</p>}
+      {endsShown && sh.kind === "line" && (["start", "end"] as const).map(w => {
+        const p = w === "start" ? A : B;
+        return (
+          <div key={w} className="grid grid-cols-[3rem_1fr_1fr] items-end gap-2">
+            <span className="pb-2 text-xs text-muted-foreground capitalize">{w}</span>
+            <NumberField id={`sk-g-${w}-x`} label="X" unit="m" value={p.x} step={0.5} digits={2} onCommit={x => setEnd(w, { x, y: p.y })} />
+            <NumberField id={`sk-g-${w}-y`} label="Y" unit="m" value={p.y} step={0.5} digits={2} onCommit={y => setEnd(w, { x: p.x, y })} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover }: {
   sketch: Sketch; sel: Sel; setSel: (s: Sel) => void; contents: Map<string, JunctionContents>; junctionSel: (ids: string[]) => Sel;
   selPt: { lane: string; i: number } | null; onCurvePoint: (lane: string, i: number) => void; onDeletePoint: (lane: string, i: number) => void;
@@ -1354,6 +1400,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             )}
           </div>
         )}
+        <GeometrySection sketch={sketch} lanes={road.align ? [road.align.ref] : road.lanes} lead={road.align?.ref ?? road.lanes[0]} />
         <div className="flex gap-1.5">
           <Button size="sm" variant="outline" className="flex-1" onClick={() => editSketch(sk => ({ ...sk, roads: sk.roads.filter(r => r.id !== road.id) }))}>Ungroup</Button>
           <Button size="sm" variant="ghost" onClick={onDelete} aria-label="Delete the road's lanes" title="Delete the road and its lanes"><Trash2 /></Button>
@@ -1456,6 +1503,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           {sh.kind === "arc" && <NumberField id="sk-r" label="Radius" unit="m" value={sh.r} min={1} max={500} step={0.5} onCommit={r => set({ ...sh, r })} />}
           {sh.kind === "arc" && <NumberField id="sk-sw" label="Sweep" unit="°" digits={0} value={deg(sh.sweep)} min={-360} max={360} onCommit={d => set({ ...sh, sweep: (d * Math.PI) / 180 })} />}
         </div>
+        {!lead && <GeometrySection sketch={sketch} lanes={[lane.id]} lead={lane.id} />}
         {sh.kind === "arc" && !lead && (
           <Button size="sm" variant="outline" title="Make it curved points along the same circle, to drag, add and curve like a drawn lane (a ring stays a ring); its connectors stay where they are"
             onClick={() => editSketch(s => arcToPoints(s, lane.id))}><Spline /> Edit as points</Button>
@@ -1654,6 +1702,10 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
   const junctionsShown = sketch.junctions.filter(j => { if (sj.has(j.id)) return true; const c = contents.get(j.id); return !!c && (c.connectors.some(id => sc.has(id)) || c.lanes.some(id => sl.has(id))); });
   const linksShown = (sketch.links ?? []).filter(k => sel.link === k.id || k.conns.some(id => sc.has(id)));
   const looseLanesShown = looseLanes.filter(l => sl.has(l.id)), looseConnsShown = looseConns.filter(c => sc.has(c.id));
+  // (every lane in no road, whatever is selected: the junction it is on, if any)
+  const orphans = sketch.lanes.filter(l => !inRoad.has(l.id));
+  const orphanJunction = new Map<string, string>();
+  for (const j of sketch.junctions) for (const id of contents.get(j.id)?.lanes ?? []) if (!inRoad.has(id)) orphanJunction.set(id, j.name);
   const roadName = (id: string) => sketch.roads.find(r => r.id === id)?.name ?? id;
   const laneName = (id: string) => { const r = roadOf(sketch, id); return r ? `${id} (${r.name})` : id; };
   const piece = (p: Partial<Piece>): Piece => ({ lanes: p.lanes ?? [], connectors: p.connectors ?? [], junctions: p.junctions ?? [] });
@@ -1697,10 +1749,6 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
       key: `${under}conn:${id}`, depth, on: sel.connectors.includes(id), hit: { connector: id }, sel: { ...NO_SEL, connectors: [id] }, zoom: piece({ connectors: [id] }),
       label: <>{id} <span className="text-muted-foreground">{c.from.lane} → {c.to.lane}</span></>, title: `From ${laneName(c.from.lane)} to ${laneName(c.to.lane)}`,
     });
-  // (every lane in no road, whatever is selected: the junction it is on, if any)
-  const orphans = sketch.lanes.filter(l => !inRoad.has(l.id));
-  const orphanJunction = new Map<string, string>();
-  for (const j of sketch.junctions) for (const id of contents.get(j.id)?.lanes ?? []) if (!inRoad.has(id)) orphanJunction.set(id, j.name);
   };
   const open = (key: string) => !closed.has(key);
 
@@ -1772,6 +1820,21 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
           {(() => { const { shown, more } = capped("looseConns", looseConnsShown, c => sel.connectors.includes(c.id)); return [...shown.map(c => connRow(c.id, 0)), moreRow("looseConns", more)]; })()}
         </>}
       </>}
+
+      {orphans.length > 0 && <>
+        <div className="mt-2 border-t pt-1" />
+        {heading("h:orphans", "Lanes in no road", orphans.length)}
+        {open("h:orphans") && <>
+          <p className="px-6 pb-0.5 text-[11px] text-muted-foreground">All of them, whatever is selected · group them into roads with G</p>
+          {(() => {
+            const { shown, more } = capped("orphans", orphans, l => sel.lanes.includes(l.id));
+            return [...shown.flatMap(l => {
+              const r = laneRow(l.id, 0, "orphan:", orphanJunction.get(l.id));
+              return r ? [r] : [];
+            }), moreRow("orphans", more)];
+          })()}
+        </>}
+      </>}
     </div>
   );
 }
@@ -1815,21 +1878,6 @@ let scratch: HTMLCanvasElement | null = null;
 /**
  * The sketch drawn: `part` "static", everything but what moves with the cars (into the image kept between
  * frames; `size`: the size of the canvas it is for, CSS px), or "dynamic", what moves (the cars, the car
-
-      {orphans.length > 0 && <>
-        <div className="mt-2 border-t pt-1" />
-        {heading("h:orphans", "Lanes in no road", orphans.length)}
-        {open("h:orphans") && <>
-          <p className="px-6 pb-0.5 text-[11px] text-muted-foreground">All of them, whatever is selected · group them into roads with G</p>
-          {(() => {
-            const { shown, more } = capped("orphans", orphans, l => sel.lanes.includes(l.id));
-            return [...shown.flatMap(l => {
-              const r = laneRow(l.id, 0, "orphan:", orphanJunction.get(l.id));
-              return r ? [r] : [];
-            }), moreRow("orphans", more)];
-          })()}
-        </>}
-      </>}
  * picked, the traffic lights), over that image.
  */
 function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic", size?: { w: number; h: number }) {

@@ -1150,6 +1150,44 @@ export function circleLanes(sk: Sketch, ids: Iterable<string>): Sketch {
   };
 }
 
+/** how far along each connector end is after some lanes changed shape: at the nearest place on the new shape to where it was (`move`: where its old place goes), a lane's start or end kept there */
+function replace(sk: Sketch, changed: Map<string, { old: LaneShape; shape: LaneShape }>, move: (p: Pt) => Pt = p => p): SketchConnector[] {
+  const place = (x: LaneAt) => {
+    const c = changed.get(x.lane);
+    if (!c) return x;
+    const L0 = laneLength(c.old), L1 = laneLength(c.shape);
+    const s = x.s <= 0.01 ? 0 : x.s >= L0 - 0.01 ? L1 : nearestOn(c.shape, move(pointAt(c.old, x.s).p)).s;
+    return { ...x, s: Number(s.toFixed(2)) };
+  };
+  return sk.connectors.map(c => (changed.has(c.from.lane) || changed.has(c.to.lane) ? { ...c, from: place(c.from), to: place(c.to) } : c));
+}
+
+/**
+ * Lanes made longer or shorter: every point moved along `dir` (a unit vector) by how far along it it is
+ * from `o`, times `k` (1: as it is). Line lanes only (arcs are left: their radius and sweep set them);
+ * the bends of connectors between two of the lanes moved with them; connectors stay where they were on
+ * the lanes (their place moved with them).
+ */
+export function stretchLanes(sk: Sketch, ids: Iterable<string>, o: Pt, dir: Pt, k: number): Sketch {
+  const want = new Set(ids), changed = new Map<string, { old: LaneShape; shape: LaneShape }>();
+  const move = (p: Pt) => { const a = (p.x - o.x) * dir.x + (p.y - o.y) * dir.y; return { x: Number((p.x + dir.x * a * (k - 1)).toFixed(3)), y: Number((p.y + dir.y * a * (k - 1)).toFixed(3)) }; };
+  for (const l of sk.lanes) if (want.has(l.id) && l.shape.kind === "line") changed.set(l.id, { old: l.shape, shape: { ...l.shape, pts: l.shape.pts.map(move) } });
+  if (!changed.size || Math.abs(k - 1) < 1e-9) return sk;
+  const conns = replace(sk, changed, move).map(c => (c.via?.length && changed.has(c.from.lane) && changed.has(c.to.lane) ? { ...c, via: c.via.map(move) } : c));
+  return { ...sk, lanes: sk.lanes.map(l => { const c = changed.get(l.id); return c ? { ...l, shape: c.shape } : l; }), connectors: conns };
+}
+
+/** a line lane's first or last point put somewhere else (its connectors stay where they were on it) */
+export function setLaneEnds(sk: Sketch, id: string, start?: Pt, end?: Pt): Sketch {
+  const l = laneById(sk, id);
+  if (!l || l.shape.kind !== "line" || l.shape.closed) return sk;
+  const pts = [...l.shape.pts];
+  if (start) pts[0] = start;
+  if (end) pts[pts.length - 1] = end;
+  const shape: LaneShape = { ...l.shape, pts }, changed = new Map([[id, { old: l.shape as LaneShape, shape }]]);
+  return { ...sk, lanes: sk.lanes.map(x => (x.id === id ? { ...x, shape } : x)), connectors: replace(sk, changed) };
+}
+
 // ---------------------------------------------------------------- junctions
 
 export function insidePolygon(p: Pt, poly: Pt[]) {
