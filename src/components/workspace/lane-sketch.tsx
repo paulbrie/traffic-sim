@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import {
   LANE_WIDTH, addLane, straightenLanes, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
@@ -82,7 +82,7 @@ type Draft =
   | { kind: "connector"; from: LaneAt; via: Pt[] }
   | { kind: "junction"; pts: Pt[] };
 type Drag =
-  | { kind: "pan"; x0: number; y0: number; v0: View }
+  | { kind: "pan"; x0: number; y0: number; v0: View; /** with the right button: a click without moving opens the menu */ right?: boolean }
   | { kind: "move"; base: Sketch; from: Pt; piece: Piece }
   | { kind: "handle"; base: Sketch; h: Handle }
   | { kind: "box"; a: Pt; b: Pt; add: boolean }
@@ -192,6 +192,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const setSat = (o: SatOptions) => { setSatState(o); saveSatOptions(o); };
   const [underlay] = useSubject(underlay$), [ulImg] = useSubject(underlayImg$);
   const [calib, setCalib] = useState<Calibration | null>(null);
+  // the menu a right click opens, where it was clicked, and the lanes it is for
+  const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean } | null>(null);
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
   // what the handlers and the drawing read (kept current after every render)
   const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib });
@@ -543,6 +545,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // ------------------------------------------------------------ pointer
   /** the middle of the view and how much it shows, metres */
   const viewNow = () => { const c = canvas.current, v = view.current; return { cx: v.cx, cy: v.cy, wm: (c?.clientWidth ?? 800) / v.scale, hm: (c?.clientHeight ?? 600) / v.scale }; };
+  const openMenu = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const sk = live.current.sketch, s = live.current.sel, raw = toWorld(e), l = laneUnder(sk, raw, 1 / view.current.scale);
+    // (on a lane of the selection: all the lanes selected; on another: that one, selected; off any: the lanes selected, if any)
+    const lanes = l ? (s.lanes.includes(l.id) ? s.lanes : [l.id]) : s.lanes;
+    if (!lanes.length) return;
+    if (l && !s.lanes.includes(l.id)) setSel({ ...NO_SEL, lanes: [l.id] });
+    const can = lanes.some(id => { const sh = laneById(sk, id)?.shape; return sh?.kind === "line" && !sh.closed && sh.pts.length > 2 && !leadOf(sk, id); });
+    const r = e.currentTarget.getBoundingClientRect();
+    setMenu({ x: e.clientX - r.left, y: e.clientY - r.top, lanes, straightenable: can });
+  };
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     panel.current?.focus();
     // (setting the image's scale: the two points clicked)
@@ -556,7 +568,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     cancelAnimationFrame(glide.current);
     e.currentTarget.setPointerCapture(e.pointerId);
     const raw = toWorld(e);
-    if (e.button === 1 || e.button === 2 || space.current) { drag.current = { kind: "pan", x0: e.clientX, y0: e.clientY, v0: { ...view.current } }; return; }
+    if (e.button === 1 || e.button === 2 || space.current) { setMenu(null); drag.current = { kind: "pan", x0: e.clientX, y0: e.clientY, v0: { ...view.current }, right: e.button === 2 && !space.current }; return; }
     if (e.button !== 0) return;
     const sk = live.current.sketch, d = draft.current;
     switch (tool) {
@@ -713,9 +725,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     redraw();
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = drag.current;
     drag.current = null;
+    // a right click (not a right drag): the menu for the lane under it, or the lanes selected
+    if (g?.kind === "pan" && g.right && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) { openMenu(e); return; }
     if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate") recordSketch(g.base);
     if (g?.kind === "box" && dist(g.a, g.b) * view.current.scale > 3) {
       const sk = live.current.sketch, x0 = Math.min(g.a.x, g.b.x), x1 = Math.max(g.a.x, g.b.x), y0 = Math.min(g.a.y, g.b.y), y1 = Math.max(g.a.y, g.b.y);
@@ -851,12 +865,26 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             onHover={h => { hover.current = h; redraw(); }} onZoom={zoomTo} onCenter={centerOn} />
         </aside>
         <div className="relative min-w-0 flex-1">
+          {menu && (
+            <DropdownMenu open onOpenChange={o => { if (!o) setMenu(null); }}>
+              <DropdownMenuTrigger asChild><span className="absolute size-px" style={{ left: menu.x, top: menu.y }} aria-hidden /></DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56" onCloseAutoFocus={e => { e.preventDefault(); panel.current?.focus(); }}>
+                <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{menu.lanes.length === 1 ? `Lane ${menu.lanes[0]}` : `${menu.lanes.length} lanes`}</DropdownMenuLabel>
+                <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => editSketch(s => straightenLanes(s, menu.lanes))}>
+                  Straighten <span className="ml-auto text-[11px] text-muted-foreground">only the ends</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => editSketch(s => straightenLanes(s, menu.lanes, 0.5))}>
+                  Fewer points <span className="ml-auto text-[11px] text-muted-foreground">within 0.5 m</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <canvas ref={canvas} className={cn("absolute inset-0 size-full touch-none", tool === "select" ? "cursor-default" : "cursor-crosshair")}
             onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
             onPointerLeave={() => { cursor.current = null; hover.current = null; redraw(); }}
             onDoubleClick={onDoubleClick} onContextMenu={e => e.preventDefault()} />
           <div className="pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
-            <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans
+            <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu
           </div>
           {replayRange && (replayT === null ? (
             <Button size="sm" variant="outline" className="absolute bottom-6 left-2 h-7 bg-background/90 shadow-sm" onClick={startReplay}
