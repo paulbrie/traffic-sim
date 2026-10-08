@@ -320,7 +320,10 @@ export function remove(sk: Sketch, ids: { lanes?: Iterable<string>; connectors?:
     ...sk,
     lanes: sk.lanes.filter(l => !lanes.has(l.id)),
     connectors: sk.connectors.filter(c => !conns.has(c.id) && !lanes.has(c.from.lane) && !lanes.has(c.to.lane)),
-    roads: sk.roads.filter(r => !roads.has(r.id)).map(r => ({ ...r, lanes: r.lanes.filter(l => !lanes.has(l)) })).filter(r => r.lanes.length),
+    // (the roads untouched kept as they are, and their list if none is: what is kept with them stays)
+    roads: roads.size || sk.roads.some(r => r.lanes.some(l => lanes.has(l)))
+      ? sk.roads.filter(r => !roads.has(r.id)).map(r => (r.lanes.some(l => lanes.has(l)) ? { ...r, lanes: r.lanes.filter(l => !lanes.has(l)) } : r)).filter(r => r.lanes.length)
+      : sk.roads,
     junctions: sk.junctions.filter(j => !js.has(j.id)),
     // (links kept: `syncLinks` drops those whose roads are gone)
     ...(sk.links ? { links: sk.links } : {}),
@@ -500,6 +503,8 @@ export function leadOf(sk: Sketch, lane: string): string | null {
 export function settle(sk: Sketch): Sketch {
   return syncLinks(settleRoads(sk));
 }
+/** how each lane following a lead was laid out last: the lead lane it was laid out from, how far, which way */
+const laidOut = new WeakMap<SketchLane, { lead: SketchLane; offset: number; reverse: boolean }>();
 function settleRoads(sk: Sketch): Sketch {
   if (!sk.roads.some(r => r.align)) return sk;
   let lanes = sk.lanes, roads = sk.roads;
@@ -515,8 +520,17 @@ function settleRoads(sk: Sketch): Sketch {
     }
     const lead = lanes.find(l => l.id === align.ref);
     if (!lead) continue;
-    const want = new Map(align.lanes.map(a => [a.id, offsetShape(lead.shape, a.offset, a.reverse)]));
-    lanes = lanes.map(l => (want.has(l.id) ? { ...l, shape: want.get(l.id)! } : l));
+    // (a lane following the same lead, as far and the same way, as when it was laid out last is kept as it is)
+    const want = new Map(align.lanes.map(a => [a.id, a]));
+    lanes = lanes.map(l => {
+      const a = want.get(l.id);
+      if (!a) return l;
+      const was = laidOut.get(l);
+      if (was && was.lead === lead && was.offset === a.offset && was.reverse === a.reverse) return l;
+      const next = { ...l, shape: offsetShape(lead.shape, a.offset, a.reverse) };
+      laidOut.set(next, { lead, offset: a.offset, reverse: a.reverse });
+      return next;
+    });
   }
   // (connectors kept within their lanes' new lengths)
   const len = new Map(lanes.map(l => [l.id, laneLength(l.shape)]));

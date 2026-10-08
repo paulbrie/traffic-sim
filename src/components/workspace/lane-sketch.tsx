@@ -180,6 +180,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const setSat = (o: SatOptions) => { setSatState(o); saveSatOptions(o); };
   const [underlay] = useSubject(underlay$), [ulImg] = useSubject(underlayImg$);
   const [calib, setCalib] = useState<Calibration | null>(null);
+  // the hand shown over the map: open while Space is held (ready to drag it), closed while it is dragged
+  const [hand, setHand] = useState<"" | "grab" | "grabbing">("");
   // the menu a right click opens, where it was clicked, and the lanes it is for
   const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null } | null>(null);
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
@@ -627,7 +629,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     cancelAnimationFrame(glide.current);
     e.currentTarget.setPointerCapture(e.pointerId);
     const raw = toWorld(e);
-    if (e.button === 1 || e.button === 2 || space.current) { setMenu(null); drag.current = { kind: "pan", x0: e.clientX, y0: e.clientY, v0: { ...view.current }, right: e.button === 2 && !space.current }; return; }
+    if (e.button === 1 || e.button === 2 || space.current) { setMenu(null); if (e.button !== 2) setHand("grabbing"); drag.current = { kind: "pan", x0: e.clientX, y0: e.clientY, v0: { ...view.current }, right: e.button === 2 && !space.current }; return; }
     if (e.button !== 0) return;
     const sk = live.current.sketch, d = draft.current;
     switch (tool) {
@@ -760,6 +762,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const raw = toWorld(e), g = drag.current, v = view.current;
     if (g?.kind === "pan") {
       view.current = { ...g.v0, cx: g.v0.cx - (e.clientX - g.x0) / v.scale, cy: g.v0.cy - (e.clientY - g.y0) / v.scale };
+      // (a right drag shows the closed hand once it moves: a right click opens the menu)
+      if (hand !== "grabbing" && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) >= 4) setHand("grabbing");
     } else if (g?.kind === "move") {
       const p = snap(raw).p;
       dragShow(settle(transformPiece(g.base, g.piece, translation(p.x - g.from.x, p.y - g.from.y))));
@@ -817,6 +821,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = drag.current;
     drag.current = null;
+    if (hand !== "") setHand(space.current ? "grab" : "");
     // (the drag's result made the plan's sketch: undo records it just below)
     if (dragSk.current) { const sk = dragSk.current; dragSk.current = null; laneSketch$.next(sk); }
     // a right click (not a right drag): the menu for the lane under it, or the lanes selected
@@ -876,7 +881,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (mod && k === "v") { e.preventDefault(); paste(); return; }
     if (mod && k === "d") { e.preventDefault(); duplicate(); return; }
     if (mod) return;
-    if (k === " ") { e.preventDefault(); space.current = true; return; }
+    if (k === " ") { e.preventDefault(); space.current = true; if (hand === "") setHand("grab"); return; }
     if (k === "escape") { if (d) draft.current = null; else { setSel(NO_SEL); setSelCar(null); } redraw(); return; }
     if (k === "enter") { finishLane(); finishJunction(); return; }
     if (k === "backspace" && d && (d.kind === "lane" || d.kind === "junction" || d.kind === "connector")) {
@@ -905,7 +910,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const t = TOOLS.find(t => t.key.toLowerCase() === k);
     if (t) changeTool(t.id);
   };
-  const onKeyUp = (e: React.KeyboardEvent) => { if (e.key === " ") space.current = false; };
+  const onKeyUp = (e: React.KeyboardEvent) => { if (e.key === " ") { space.current = false; if (drag.current?.kind !== "pan") setHand(""); } };
 
   const toolInfo = TOOLS.find(t => t.id === tool)!;
   const copy = () => {
@@ -995,7 +1000,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <canvas ref={canvas} className={cn("absolute inset-0 size-full touch-none", tool === "select" ? "cursor-default" : "cursor-crosshair")}
+          <canvas ref={canvas} className={cn("absolute inset-0 size-full touch-none", hand === "grab" ? "cursor-grab" : hand === "grabbing" ? "cursor-grabbing" : tool === "select" ? "cursor-default" : "cursor-crosshair")}
             onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
             onPointerLeave={() => { cursor.current = null; hover.current = null; redraw(); }}
             onDoubleClick={onDoubleClick} onContextMenu={e => e.preventDefault()} />
