@@ -28,6 +28,7 @@ import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
+import { SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/sketch-replay-bar";
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
@@ -149,6 +150,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** replaying what was kept: the moment shown (null: the cars as they are), playing or not, and the span kept */
   const [replayT, setReplayT] = useState<number | null>(null);
   const [replayPlaying, setReplayPlaying] = useState(false);
+  /** the search over the sketch (Cmd/Ctrl+K) while open, with the cars running when it opened */
+  const [searchOpen, setSearchOpen] = useState<{ cars: { id: number }[] } | null>(null);
   const [replayRange, setReplayRange] = useState<ReplayKept | null>(() => sketchSim()?.replayRange() ?? null);
   const [follow, setFollow] = useState(false);
   /** the layers shown (kept in the browser) */
@@ -548,8 +551,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
    * only if the piece wouldn't fit as it is.
    */
   const glide = useRef(0);
-  const centerOn = (piece: Piece) => {
-    const c = canvas.current, b = boundsOfPts(piecePoints(live.current.sketch, piece));
+  const centerOn = (piece: Piece) => centerOnPts(piecePoints(live.current.sketch, piece));
+  /** …or round some points */
+  const centerOnPts = (pts: Pt[]) => {
+    const c = canvas.current, b = boundsOfPts(pts);
     if (!c || !b) return;
     const from = { ...view.current }, fit = Math.min(c.clientWidth / (b.maxX - b.minX + 30), c.clientHeight / (b.maxY - b.minY + 30));
     const to = { cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, scale: Math.max(0.5, Math.min(from.scale, fit)) };
@@ -565,6 +570,39 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
   /** a point added to a selected connector (a bend) or junction (a corner) where it was double-clicked; on a point, the point taken out */
   const editPoints = (p: Pt) => {
+  /** a search entry chosen (Cmd/Ctrl+K): selected, and the view moved gently to it */
+  const goTo = (to: SearchTarget) => {
+    const sk = live.current.sketch, piece = (p: Partial<Piece>): Piece => ({ lanes: p.lanes ?? [], connectors: p.connectors ?? [], junctions: p.junctions ?? [] });
+    if (to.kind === "car") {
+      setSel(NO_SEL); setSelCar(to.id);
+      const c = sim.current?.poses().find(x => x.id === to.id);
+      if (c) centerOnPts([c.p]);
+      redraw();
+      return;
+    }
+    setSelCar(null);
+    switch (to.kind) {
+      case "road": { const r = sk.roads.find(x => x.id === to.id); if (r) { setSel({ ...NO_SEL, lanes: r.lanes, road: r.id }); centerOn(piece({ lanes: r.lanes })); } break; }
+      case "lane": setSel({ ...NO_SEL, lanes: [to.id] }); centerOn(piece({ lanes: [to.id] })); break;
+      case "connector": setSel({ ...NO_SEL, connectors: [to.id] }); centerOn(piece({ connectors: [to.id] })); break;
+      case "junction": setSel(junctionSel(sk, [to.id])); centerOn(piece({ junctions: [to.id] })); break;
+      case "link": { const k = sk.links?.find(x => x.id === to.id); if (k) { setSel({ ...NO_SEL, link: k.id }); centerOn(piece({ connectors: k.conns })); } break; }
+      case "crossing": { const x = sk.crossings?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, crossing: x.id }); centerOnPts([x.a, x.b]); } break; }
+    }
+    redraw();
+  };
+  // Cmd/Ctrl+K from anywhere on the page, typing included: the search
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault(); e.stopPropagation();
+        const cars = sim.current?.poses().map(c => ({ id: c.id })) ?? [];
+        setSearchOpen(o => (o ? null : { cars }));
+      }
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, []);
     const sk = live.current.sketch, s = live.current.sel, h = handleAt(p);
     if (h?.kind === "end") return true;
     if (h?.kind === "lane") { deletePoint(h.id, h.i); return true; }
@@ -1010,6 +1048,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           </div>
           <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
             onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} />
+          {searchOpen && <SketchSearch sketch={sketch} contents={contents} cars={searchOpen.cars}
+            onGo={goTo} onClose={() => { setSearchOpen(null); panel.current?.focus(); }} />}
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
