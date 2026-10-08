@@ -2254,16 +2254,30 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     ctx.beginPath(); ctx.arc(rh.h.x, rh.h.y, 2.5 * px, -Math.PI * 0.9, Math.PI * 0.4); ctx.stroke();
     dot(o, 2.5 * px, col.sel);
   }
+  // (curve handles: a white disc with a blue ring and a dark outer edge, to read on imagery, asphalt and the blue
+  // selection alike; the one picked with a blue centre; a little bigger under the pointer. Their guide lines: blue
+  // dashes over a white halo)
+  const curveHandle = (p: Pt, picked: boolean) => {
+    const over = !!st.cursor && dist(st.cursor.p, p) <= 8 * px, r = (over ? 9 : 7) * px;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r + 1.25 * px, 0, Math.PI * 2); ctx.fillStyle = "rgba(15,23,42,0.55)"; ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fillStyle = "#ffffff"; ctx.fill(); ctx.strokeStyle = col.sel; ctx.lineWidth = 2.25 * px; ctx.stroke();
+    if (picked) dot(p, 3 * px, col.sel);
+  };
+  const curveGuide = (pts: Pt[], closed: boolean) => {
+    path(pts); if (closed) ctx.closePath();
+    ctx.setLineDash([]); ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = 3.5 * px; ctx.stroke();
+    ctx.setLineDash([5 * px, 4 * px]); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.stroke(); ctx.setLineDash([]);
+  };
   // points of the selection, to drag: lane points, junction corners (squares), connector bends (rings)
   // (a line lane's points: corners square, curved ones round, the one picked filled; its control lines when curved)
   for (const id of s.lanes) {
     const l = laneById(sk, id);
     if (l?.shape.kind !== "line" || leadOf(sk, id)) continue;
     const sh = l.shape;
-    if (sh.curved?.some(Boolean)) { path(sh.pts); if (sh.closed) ctx.closePath(); ctx.strokeStyle = col.sel; ctx.globalAlpha = 0.5; ctx.lineWidth = px; ctx.setLineDash([3 * px, 3 * px]); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; }
+    if (sh.curved?.some(Boolean)) curveGuide(sh.pts, !!sh.closed);
     sh.pts.forEach((p, i) => {
       const picked = st.selPt?.lane === id && st.selPt.i === i;
-      if (sh.curved?.[i]) { ctx.beginPath(); ctx.arc(p.x, p.y, 4 * px, 0, Math.PI * 2); ctx.fillStyle = picked ? col.sel : col.bg; ctx.fill(); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.stroke(); }
+      if (sh.curved?.[i]) curveHandle(p, picked);
       else { square(p); if (picked) { ctx.fillStyle = col.sel; ctx.fillRect(p.x - 3.5 * px, p.y - 3.5 * px, 7 * px, 7 * px); } }
     });
   }
@@ -2271,10 +2285,10 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   for (const id of s.junctions) {
     const j = sk.junctions.find(x => x.id === id);
     if (!j) continue;
-    if (j.curved?.some(Boolean)) { path(j.outline); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.globalAlpha = 0.5; ctx.lineWidth = px; ctx.setLineDash([3 * px, 3 * px]); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; }
+    if (j.curved?.some(Boolean)) curveGuide(j.outline, true);
     j.outline.forEach((p, i) => {
       if (!j.curved?.[i]) { square(p); return; }
-      ctx.beginPath(); ctx.arc(p.x, p.y, 4 * px, 0, Math.PI * 2); ctx.fillStyle = col.bg; ctx.fill(); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.stroke();
+      curveHandle(p, false);
     });
   }
   for (const id of s.connectors) {
