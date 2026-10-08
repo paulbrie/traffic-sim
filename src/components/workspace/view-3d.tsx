@@ -243,11 +243,11 @@ export function View3D() {
       satMat.color.setScalar(u.display.satBrightness ?? 1);
       if (!want || !geo) return;
       const b = simController.compiled.bounds, pad = Math.max(150, 0.2 * Math.max(b.maxX - b.minX, b.maxY - b.minY));
-      const key = `${geo.lat},${geo.lon}:${Math.round(b.minX / 100)},${Math.round(b.minY / 100)},${Math.round(b.maxX / 100)},${Math.round(b.maxY / 100)}`;
+      const key = `${u.display.satSource}:${geo.lat},${geo.lon}:${Math.round(b.minX / 100)},${Math.round(b.minY / 100)},${Math.round(b.maxX / 100)},${Math.round(b.maxY / 100)}`;
       if (key === satKey) return;
       satKey = key;
       const gen = ++satGen;
-      satelliteMosaic(geo, { minX: b.minX - pad, minY: b.minY - pad, maxX: b.maxX + pad, maxY: b.maxY + pad }).then(m => {
+      satelliteMosaic(geo, { minX: b.minX - pad, minY: b.minY - pad, maxX: b.maxX + pad, maxY: b.maxY + pad }, 4096, u.display.satSource).then(m => {
         if (!m || gen !== satGen) return;
         satMat.map?.dispose();
         const tex = new THREE.CanvasTexture(m.canvas);

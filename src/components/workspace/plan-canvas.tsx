@@ -6,10 +6,10 @@ import { batch } from "subjecto";
 import { buildRoadGeo, type RoadGeo } from "@/render/geometry";
 import { MARKER_HEAD, buildPaths, connectorsOf, drawScene, toScreen, toWorld, underlayHandles, type Camera, type Overlay, type PathCache, type UnderlayHandle } from "@/render/draw2d";
 import { readPalette, type Palette } from "@/render/palette";
-import { connShapeKey, connectorHandles, connectorId, linkExtent, LW, type CNode, type Edge, type LanePiece } from "@/engine/compile";
+import { simplifyRing, connShapeKey, connectorHandles, connectorId, linkExtent, LW, type CNode, type Edge, type LanePiece } from "@/engine/compile";
 import { pointInPoly } from "@/engine/buildings";
 import type { CrossingDef, Network, ParkingDef, Vec } from "@/engine/types";
-import { commit, endGesture, highlightedLayers, network$, select, selectMany, selectedAll, toggleSelect, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
+import { busy, commit, endGesture, highlightedLayers, network$, select, selectMany, selectedAll, toggleSelect, setUnderlay, ui, underlay$, type LayerId, type Selection, type UiState } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { noteDraw } from "@/state/perf";
 import { changeConnection, connectLanes, lanesArrivingNear, lanesLeavingNear, setConnectorShape } from "@/state/connections";
@@ -19,7 +19,12 @@ import { worldToImage, type Underlay } from "@/lib/underlay";
 import { unproject } from "@/lib/osm/area";
 import { routeBetween, routeShape } from "@/engine/route";
 import * as ops from "@/state/ops";
-import { canJoin, createJunction } from "@/state/junctions";
+import { isJunction } from "@/engine/refs";
+import { canJoin, createJunction, deleteJunction, joinStandalone, standaloneAt } from "@/state/junctions";
+import { groupById, groupHull, groupOfLink, groupOfNode, groupPorts, hull, moveGroup, place, placePoint } from "@/state/groups";
+import { placingPiece, stopPlacing } from "@/state/placing";
+import { createRoundabout, islandRadius, joinRadius, TWO_LANES_FROM } from "@/state/roundabouts";
+import { createRing, isRing, joinRing, moveRingPoint, ringById, ringOfLink, ringOfNode, ringPointAt, ringPoints, setRing } from "@/state/rings";
 import { onCrossing } from "@/engine/crossings";
 import { bayOutline, rowEnds } from "@/engine/parking";
 import { toast } from "sonner";
@@ -30,6 +35,8 @@ type Drag =
   | { mode: "node"; id: string; moved: boolean; sx: number; sy: number }
   | { mode: "handle"; linkId: string; handle: "c1" | "c2" | "bend"; moved: boolean }
   | { mode: "conn"; id: string; which: "k1" | "k2" }
+  /** a bend point of the selected connector */
+  | { mode: "via"; id: string; idx: number }
   | { mode: "connEnd"; id: string; which: "start" | "end" }
   | { mode: "connNew"; from: string; sx: number; sy: number; moved: boolean }
   | { mode: "box"; a: Vec; b: Vec }
@@ -39,12 +46,19 @@ type Drag =
   /** a zebra crossing drawn by hand: moved whole, or one kerb end */
   | { mode: "crossing"; id: string; part: "move" | "a" | "b"; start: Vec; orig: CrossingDef; moved: boolean; sx: number; sy: number }
   | { mode: "outline"; node: string; idx: number }
+  /** a ring placed by hand: one of its points round it, or the whole ring */
+  | { mode: "ringPoint"; ring: string; node: string; moved: boolean; sx: number; sy: number }
+  | { mode: "ring"; ring: string; last: Vec; moved: boolean; sx: number; sy: number }
+  /** a junction group, moved whole */
+  | { mode: "group"; id: string; last: Vec; moved: boolean; sx: number; sy: number }
   | { mode: "ul-move"; start: Vec; x0: number; y0: number }
   | { mode: "ul-rotate"; a0: number; rot0: number }
   | { mode: "ul-scale"; d0: number; mpp0: number }
   | null;
 
 const HIT_NODE = 10, HIT_HANDLE = 9;
+/** a click this close to a junction outline's first point (px) closes it */
+const CLOSE_PX = 12;
 
 export function PlanCanvas() {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -230,6 +244,19 @@ export function PlanCanvas() {
       return ts.map(t => { const q = t.lp.poly.at(0); return { t, d: Math.hypot(q.x - w.x, q.y - w.y) }; }).filter(x => x.d < r).sort((a, b) => a.d - b.d)[0]?.t
         ?? ts.find(t => t.lp.poly.project(w.x, w.y).d < LW * 0.6) ?? null;
     }
+    /** a connector from lane `from` dropped on a ring (anywhere along it): a point of the ring there, joined to it */
+    function onRingDrop(from: string, w: Vec): boolean {
+      const lid = hitLane(w)?.split("|")[0], l = lid ? ops.linkById(net, lid) : undefined;
+      if (!l || !isRing(l)) return false;
+      const [fl, fd, fa] = from.split("|");
+      if (ops.linkById(net, fl)?.ring === l.ring) return false;
+      void busy("Joining the ring…", () => {
+        const r = joinRing(net, `${fl}:${fd}`, Number(fa), l.id, w);
+        if ("error" in r) { toast.error(r.error); return; }
+        commit(r.net); select({ kind: "connector", id: r.id }); ui.getValue().connectFrom = null;
+      });
+      return true;
+    }
     /** start drawing a connector from a lane's end (its lane selected, the lanes it can go to shown) */
     function startConnect(from: string) {
       select({ kind: "lane", id: from });
@@ -331,6 +358,51 @@ export function PlanCanvas() {
       for (const [p, which] of [[h.h1, "k1"], [h.h2, "k2"]] as const) { const q = toScreen(cam, p.x, p.y); if (Math.hypot(q.x - sx, q.y - sy) < HIT_HANDLE) return { id: sel.id, which }; }
       return null;
     }
+    /** the selected connector, its handles and bend points (world), and its key for setting its shape */
+    function selConnector() {
+      const sel = u.selection;
+      if (sel?.kind !== "connector") return null;
+      const v = connectorsOf(simController.compiled).find(x => connectorId(x) === sel.id);
+      if (!v) return null;
+      return { v, id: sel.id, h: connectorHandles(v.node, v.move, v.inLane, v.outLane), key: connShapeKey(v.move, v.inLane, v.outLane), np: v.node.pos };
+    }
+    /** a bend point of the selected connector under the pointer */
+    function hitConnVia(sx: number, sy: number): { id: string; idx: number } | null {
+      const s = selConnector();
+      if (!s) return null;
+      for (let i = 0; i < s.h.via.length; i++) { const q = toScreen(cam, s.h.via[i].x, s.h.via[i].y); if (Math.hypot(q.x - sx, q.y - sy) < HIT_HANDLE) return { id: s.id, idx: i }; }
+      return null;
+    }
+    /** the selected connector's shape with bend points `via` (world): free handles where they are now */
+    function withVia(s: NonNullable<ReturnType<typeof selConnector>>, via: Vec[]) {
+      const rel = (p: Vec) => ({ x: p.x - s.np.x, y: p.y - s.np.y });
+      return setConnectorShape(net, s.v.node.def.id, s.key, { c1: rel(s.h.h1), c2: rel(s.h.h2), ...(via.length ? { via: via.map(rel) } : {}) });
+    }
+    /** a double-click on the selected connector's path: a bend point there, between the ones it falls between */
+    function addConnVia(w: Vec, sx: number, sy: number): boolean {
+      const s = selConnector();
+      if (!s) return false;
+      // (on the path: within a few pixels of it)
+      const pts = s.v.pts;
+      let near = Infinity;
+      for (let k = 0; k + 3 < pts.length; k += 2) {
+        const ax = pts[k], ay = pts[k + 1], dx = pts[k + 2] - ax, dy = pts[k + 3] - ay, L2 = dx * dx + dy * dy || 1;
+        const t = Math.max(0, Math.min(1, ((w.x - ax) * dx + (w.y - ay) * dy) / L2));
+        near = Math.min(near, Math.hypot(ax + dx * t - w.x, ay + dy * t - w.y));
+      }
+      if (near > pxToM(10)) return false;
+      const knots = [s.h.P, ...s.h.via, s.h.Q];
+      let at = 0, bd = Infinity;
+      for (let i = 0; i + 1 < knots.length; i++) {
+        const a = knots[i], b = knots[i + 1], dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1;
+        const t = Math.max(0, Math.min(1, ((w.x - a.x) * dx + (w.y - a.y) * dy) / L2)), d = Math.hypot(a.x + dx * t - w.x, a.y + dy * t - w.y);
+        if (d < bd) { bd = d; at = i; }
+      }
+      const via = [...s.h.via]; via.splice(at, 0, { x: w.x, y: w.y });
+      commit(withVia(s, via));
+      void sx; void sy;
+      return true;
+    }
     function hitHandle(sx: number, sy: number): "c1" | "c2" | "bend" | null {
       const sel = u.selection;
       if (sel?.kind !== "link") return null;
@@ -370,7 +442,8 @@ export function PlanCanvas() {
       if (sel.kind === "node") n = c.nodeById.get(sel.id);
       else if (sel.kind === "lane") { const [lid, dir] = sel.id.split("|"); n = c.edgeByKey.get(`${lid}:${dir}`)?.to; }
       else if (sel.kind === "connector") n = c.nodeById.get(sel.id.split("|")[0]);
-      return n && n.ringR === 0 && n.degree >= 1 ? n.cluster.map(k => k.idx) : [];
+      // (a roundabout's paths are drawn too, though they can't be dragged)
+      return n && n.degree >= 1 ? n.cluster.map(k => k.idx) : [];
     }
     /** the nearest lane connector through a junction (only those of `only`, node indexes, when given) */
     function hitConnector(p: Vec, only?: Set<number>): string | null {
@@ -411,8 +484,14 @@ export function PlanCanvas() {
         const all = u.display.connectors || highlightedLayers(layers).includes("connectors"), focus = focusNodes();
         if (all || focus.length) { const id = hitConnector(w, all ? undefined : new Set(focus)); if (id) return { kind: "connector", id }; }
       }
-      // inside a junction drawn by hand: the junction (held by its leading node)
+      // a kerbed island painted on a point (a splitter island, one on a junction): that point
+      if (on("junctions") || on("roads")) for (const n of net.nodes) {
+        if (!n.paint) continue;
+        for (const a of n.paint) if (a.kind === "island" && pointInPoly(a.pts.map(p => ({ x: n.x + p.x, y: n.y + p.y })), w.x, w.y)) return { kind: "node", id: n.id };
+      }
+      // inside a junction drawn by hand: the junction (held by its leading node); one on its own: itself
       if (on("junctions") || on("roads")) for (const j of net.junctions ?? []) {
+        if (!j.nodes.length) { if (j.outline && pointInPoly(j.outline, w.x, w.y)) return { kind: "junction", id: j.id }; continue; }
         const n = c.nodeById.get(j.nodes[0]);
         if (n && n.polygon.length >= 3 && pointInPoly(n.polygon, w.x, w.y)) return { kind: "node", id: n.def.id };
       }
@@ -423,6 +502,31 @@ export function PlanCanvas() {
       if (roadsOn || on("counters")) { const l = hitLink(w); if (l && (roadsOn || ops.linkById(net, l.id)?.counter)) return { kind: "link", id: l.id }; }
       if (on("lanes")) { const id = hitLane(w); if (id) return { kind: "lane", id }; }
       if (on("buildings") || on("zones")) { const id = hitBuilding(w); if (id) return { kind: "building", id }; }
+      return null;
+    }
+    /** a click on part of a junction group picks the group (not from inside it: see ui.groupEdit) */
+    function asGroup(pick: Selection): Selection {
+      const g = pick.kind === "node" ? groupOfNode(net, pick.id)
+        : pick.kind === "link" ? groupOfLink(net, pick.id)
+          : pick.kind === "lane" ? groupOfLink(net, pick.id.split("|")[0])
+            : pick.kind === "connector" ? groupOfNode(net, pick.id.split("|")[0])
+              : pick.kind === "stop" ? groupOfLink(net, net.stops.find(x => x.id === pick.id)?.link ?? "")
+                : pick.kind === "parking" ? groupOfLink(net, net.parking?.find(x => x.id === pick.id)?.link ?? "")
+                  : null;
+      if (g && u.groupEdit !== g.id) return { kind: "group", id: g.id };
+      // (a ring placed by hand: its roads and lanes pick the ring itself)
+      const ringLink = pick.kind === "link" ? pick.id : pick.kind === "lane" ? pick.id.split("|")[0] : null, r = ringLink ? ringOfLink(net, ringLink) : null;
+      return r ? { kind: "ring", id: r.id } : pick;
+    }
+    /** the selected ring (or the ring of the selected point), its points under the pointer */
+    function selectedRing() {
+      const sel = u.selection;
+      return sel?.kind === "ring" ? ringById(net, sel.id) : sel?.kind === "node" ? ringOfNode(net, sel.id) : null;
+    }
+    function hitRingPoint(sx: number, sy: number): { ring: string; node: string } | null {
+      const r = selectedRing();
+      if (!r) return null;
+      for (const p of ringPoints(net, r)) { const n = ops.nodeById(net, p.id)!, q = toScreen(cam, n.x, n.y); if (Math.hypot(q.x - sx, q.y - sy) < HIT_HANDLE + 2) return { ring: r.id, node: p.id }; }
       return null;
     }
     function hitStop(p: Vec): string | null {
@@ -495,6 +599,20 @@ export function PlanCanvas() {
       if (e.button === 2 && tool === "road") { pending = null; markDirty(); return; }
       if (e.button !== 0) return;
 
+      // placing a junction (pasted, from the library): a click puts it down, joined to the roads it lands on
+      const piece = placingPiece();
+      if (piece) {
+        const at = gridSnap(w), turn = u.placing!.turn;
+        stopPlacing();
+        void busy(`Placing ${piece.name}…`, () => {
+          const r = place(net, piece, at, turn);
+          commit(r.net); select({ kind: "group", id: r.group }); u.panel = "inspect";
+          toast.success(`${piece.name} placed`, { description: r.joined ? `Joined to ${r.joined} road${r.joined === 1 ? "" : "s"} of the plan.` : "Not joined to any road: drag its entry and exit points onto road ends, or place it over roads." });
+        });
+        markDirty();
+        return;
+      }
+
       // picking a transit flow's exit: a click on an exit point sends the flow there
       const pe = ui.getValue().pickExit;
       if (pe) {
@@ -516,7 +634,7 @@ export function PlanCanvas() {
           // (stay in picking: more lanes can be clicked; Esc or Done ends it)
           const [lid, dir, ln] = cf.split("|"), r = connectLanes(net, simController.compiled, `${lid}:${dir}`, Number(ln), pick.e.key, pick.lp.lane);
           if (r) commit(r.net);
-        }
+        } else if (onRingDrop(cf, w)) { /* joined the ring there */ }
         markDirty();
         return;
       }
@@ -529,6 +647,27 @@ export function PlanCanvas() {
         if (Math.hypot(w.x - a.x, w.y - a.y) < 1) { markDirty(); return; }
         const [n2, x] = ops.addCrossing(net, a, w);
         commit(n2); select({ kind: "crossing", id: x.id }); markDirty();
+        return;
+      }
+      // a roundabout: the second click is on its outer kerb
+      if (sh.paint?.kind === "roundabout") {
+        const c0 = sh.paint.pts[0], kerb = Math.hypot(w.x - c0.x, w.y - c0.y), jid = sh.paint.node.startsWith("junction:") ? sh.paint.node.slice(9) : null, ringOnly = sh.paint.node === "ring";
+        sh.paint = null;
+        if (kerb < 3) { markDirty(); return; }
+        if (ringOnly) {
+          const r = createRing(net, c0, kerb, kerb >= TWO_LANES_FROM ? 2 : 1);
+          commit(r.net); ui.getValue().tool = "select"; select({ kind: "ring", id: r.ring }); ui.getValue().panel = "inspect";
+          toast.success("Ring placed", { description: "Drop connectors from lane ends onto it (a point is made there); drag its points round it; double-click it to add a point. Select a point to lead connectors off it." });
+          markDirty();
+          return;
+        }
+        void busy("Building the roundabout…", () => {
+        const j = jid ? net.junctions?.find(x => x.id === jid) : undefined;
+        const r = j ? createRoundabout(deleteJunction(net, j.id), c0, kerb, kerb >= TWO_LANES_FROM ? 2 : 1, { ends: j.nodes }) : createRoundabout(net, c0, kerb, kerb >= TWO_LANES_FROM ? 2 : 1);
+        if ("error" in r) toast.error(r.error);
+        else { commit(r.net); ui.getValue().tool = "select"; select({ kind: "group", id: r.group }); ui.getValue().panel = "inspect"; toast.success("Roundabout built", { description: "One junction group: a ring of one-way roads, each road joining at a junction where it gives way. Double-click it to edit inside; copy it or save it to your library." }); }
+        });
+        markDirty();
         return;
       }
       // a row of parking bays: the second click is where it ends
@@ -544,9 +683,25 @@ export function PlanCanvas() {
         commit(n2); select({ kind: "parking", id: p.id }); markDirty();
         return;
       }
+      // a junction's outline: clicking its first point again closes it and makes the junction
+      if (sh.paint?.kind === "junction" && sh.paint.pts.length >= 3) {
+        const f = toScreen(cam, sh.paint.pts[0].x, sh.paint.pts[0].y);
+        if (Math.hypot(f.x - sx, f.y - sy) <= CLOSE_PX) { finishPaint(); markDirty(); return; }
+      }
       if (sh.paint) { const pp = sh.paint; sh.paint = { ...pp, pts: [...pp.pts, { x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
       // Zebra crossing tool: the first kerb
       if (tool === "crossing") { sh.edit = null; sh.paint = { node: "", kind: "crossing", pts: [{ x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
+      // Ring tool: its centre (anywhere); the second click sets its outer kerb
+      if (tool === "ring") { sh.edit = null; sh.paint = { node: "ring", kind: "roundabout", pts: [{ x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
+      // Roundabout tool: its centre (a junction's point when clicked on one)
+      if (tool === "roundabout") {
+        // (inside a junction drawn by hand: a ring there, joined to every one of its road ends)
+        const inJ = (net.junctions ?? []).find(j => { const n = j.nodes.length >= 2 ? simController.compiled.nodeById.get(j.nodes[0]) : undefined; return !!n && n.polygon.length >= 3 && pointInPoly(n.polygon, w.x, w.y); });
+        const on = inJ ? null : hitNode(sx, sy), nd = on ? ops.nodeById(net, on) : null;
+        sh.edit = null; sh.paint = { node: inJ ? `junction:${inJ.id}` : "", kind: "roundabout", pts: [nd ? { x: nd.x, y: nd.y } : { x: ops.round(w.x), y: ops.round(w.y) }] };
+        if (inJ) toast.info("A ring inside the junction", { description: "Click to set its outer kerb: all the junction's roads join the ring." });
+        markDirty(); return;
+      }
       // Parking tool: where a row of bays starts (anywhere; it ends at the next click)
       if (tool === "parking") { sh.edit = null; sh.paint = { node: "free", kind: "parking", pts: [{ x: ops.round(w.x), y: ops.round(w.y) }] }; markDirty(); return; }
       // Junction tool: the first corner of a new junction's outline
@@ -555,10 +710,13 @@ export function PlanCanvas() {
         const k = hitOutlinePoint(sx, sy);
         if (k >= 0) {
           const nd = ops.nodeById(net, sh.edit)!;
-          if (e.altKey) { if (nd.outline!.length > 3) commit(ops.setOutline(net, nd.id, nd.outline!.filter((_, i) => i !== k))); return; }
+          if (e.altKey) { if (nd.outline!.length > 3) { commit(ops.setOutline(net, nd.id, nd.outline!.filter((_, i) => i !== k))); sh.point = null; } return; }
+          // (picked: highlighted, Delete takes it out; and dragged)
+          sh.point = k;
           drag = { mode: "outline", node: nd.id, idx: k };
           return;
         }
+        if (sh.point != null) { sh.point = null; markDirty(); }
       }
 
       const calib = u.calib;
@@ -612,7 +770,13 @@ export function PlanCanvas() {
         const b = r2[1];
         const [added, link] = ops.addLink(n0, a, b, u.draft);
         // curved mode: bend the road smoothly through the previous point
-        const n2 = link && u.draft.curved ? ops.smoothAt(added, a) : added;
+        let n2 = link && u.draft.curved ? ops.smoothAt(added, a) : added;
+        // (drawn inside a junction group: the road is the group's — a new entry / exit point where it ends)
+        if (link && u.groupEdit) n2 = { ...n2, groups: n2.groups?.map(g => (g.id === u.groupEdit ? { ...g, links: [...g.links, link.id] } : g)) };
+        // (ending inside a junction standing on its own: once two roads reach it, they join it; the road ends there)
+        const alone = link ? standaloneAt(n2, ops.nodeById(n2, b) ?? { x: Infinity, y: Infinity }) : null;
+        const joined = alone ? joinStandalone(n2, alone.id) : null;
+        if (joined) { commit(joined.net); select({ kind: "node", id: joined.junction.nodes[0] }); pending = null; toast.success("Roads joined to the junction"); markDirty(); return; }
         if (link) { commit(n2); select({ kind: "link", id: link.id }); }
         else if (n0 !== net) commit(n0);
         pending = { p: ops.nodeById(network$.getValue(), b) ? { ...ops.nodeById(network$.getValue(), b)! } : s.p, nodeId: b };
@@ -664,6 +828,12 @@ export function PlanCanvas() {
       // the selected lane connector's curve handles (any layer)
       const ce = hitConnEnd(sx, sy);
       if (ce) { drag = { mode: "connEnd", id: ce.id, which: ce.which }; return; }
+      // the selected connector's bend points: drag one, Alt+click to take it out
+      const cv = hitConnVia(sx, sy);
+      if (cv) {
+        if (e.altKey) { const s = selConnector(); if (s) commit(withVia(s, s.h.via.filter((_, i) => i !== cv.idx))); return; }
+        drag = { mode: "via", id: cv.id, idx: cv.idx }; return;
+      }
       const ch = hitConnHandle(sx, sy);
       if (ch) { drag = { mode: "conn", id: ch.id, which: ch.which }; return; }
       // select tool: the curve handles of the selected road first (they win over a lane's end under them)
@@ -672,7 +842,16 @@ export function PlanCanvas() {
       // the end of a lane (zoomed in): a connector from it, dragged to a lane, or click the lanes after
       const le = tool === "select" ? hitLaneEnd(sx, sy) : null;
       if (le) { startConnect(le); drag = { mode: "connNew", from: le, sx, sy, moved: false }; return; }
-      const pick = pickInLayers(u.layers, sx, sy, w);
+      // a point of the selected ring: picked (its lane ends show, to lead connectors off it), and dragged round the ring
+      const rp = tool === "select" ? hitRingPoint(sx, sy) : null;
+      if (rp) { select({ kind: "node", id: rp.node }); drag = { mode: "ringPoint", ring: rp.ring, node: rp.node, moved: false, sx, sy }; markDirty(); return; }
+      const picked = pickInLayers(u.layers, sx, sy, w), pick = picked && tool === "select" && !e.shiftKey ? asGroup(picked) : picked;
+      if (pick?.kind === "ring") { select(pick); drag = { mode: "ring", ring: pick.id, last: w, moved: false, sx, sy }; markDirty(); return; }
+      if (pick?.kind === "group") {
+        select(pick);
+        drag = { mode: "group", id: pick.id, last: w, moved: false, sx, sy };
+        return;
+      }
       if (pick) {
         // Shift+click: add it to what is selected (or take it out): roads, points, stops, buildings, connectors…
         if (e.shiftKey) { toggleSelect(pick); if (pick.kind === "node") return; } else select(pick);
@@ -711,6 +890,7 @@ export function PlanCanvas() {
       const { sx, sy } = local(e);
       const w = toWorld(cam, sx, sy);
       cursorWorld = w;
+      if (u.placing || u.shape.edit) markDirty();
       const c = ui.getValue().cursor;
       batch(() => { c.x = w.x; c.y = w.y; c.inside = true; });
       if (drag?.mode === "pan") {
@@ -757,6 +937,34 @@ export function PlanCanvas() {
         commit(ops.updateParking(net, drag.id, dragParking(drag, w)), `parking:${drag.id}`);
         return;
       }
+      if (drag?.mode === "ringPoint") {
+        if (!drag.moved && Math.hypot(sx - drag.sx, sy - drag.sy) < 3) return;
+        drag.moved = true;
+        const r = ringById(net, drag.ring);
+        if (!r) return;
+        commit(moveRingPoint(net, r.id, drag.node, Math.atan2(w.y - r.y, w.x - r.x)), `ringpt:${drag.node}`);
+        return;
+      }
+      if (drag?.mode === "ring") {
+        if (!drag.moved && Math.hypot(sx - drag.sx, sy - drag.sy) < 3) return;
+        drag.moved = true;
+        const r = ringById(net, drag.ring);
+        if (!r) return;
+        const dx = w.x - drag.last.x, dy = w.y - drag.last.y;
+        drag.last = w;
+        commit(setRing(net, r.id, { x: ops.round(r.x + dx), y: ops.round(r.y + dy) }), `ring:${r.id}`);
+        return;
+      }
+      if (drag?.mode === "group") {
+        if (!drag.moved && Math.hypot(sx - drag.sx, sy - drag.sy) < 3) return;
+        drag.moved = true;
+        const g = groupById(net, drag.id);
+        if (!g) return;
+        const dx = w.x - drag.last.x, dy = w.y - drag.last.y;
+        drag.last = w;
+        commit(moveGroup(net, g, dx, dy), `group:${g.id}`);
+        return;
+      }
       if (drag?.mode === "node") {
         if (!drag.moved && Math.hypot(sx - drag.sx, sy - drag.sy) < 3) return;
         drag.moved = true;
@@ -769,27 +977,39 @@ export function PlanCanvas() {
         const d = drag, nd = ops.nodeById(net, d.node);
         if (!nd?.outline) return;
         const p = shift ? { x: w.x, y: w.y } : gridSnap(w);
-        commit(ops.setOutline(net, nd.id, nd.outline.map((q, i) => (i === d.idx ? { x: p.x - nd.x, y: p.y - nd.y } : q))), `outline:${nd.id}`);
+        commit(ops.setOutline(net, nd.id, nd.outline.map((q, i) => (i === d.idx ? { ...q, x: p.x - nd.x, y: p.y - nd.y } : q))), `outline:${nd.id}`);
         return;
       }
       if (drag?.mode === "connEnd") { markDirty(); return; }
       if (drag?.mode === "connNew") { if (Math.hypot(sx - drag.sx, sy - drag.sy) > 4) drag.moved = true; markDirty(); return; }
       if (drag?.mode === "box") { drag.b = w; markDirty(); return; }
+      if (drag?.mode === "via") {
+        const s = selConnector(), d = drag;
+        if (!s || s.id !== d.id) return;
+        const via = s.h.via.map((p, i) => (i === d.idx ? (shift ? { x: w.x, y: w.y } : gridSnap(w)) : p));
+        commit(withVia(s, via), `via:${d.id}`);
+        return;
+      }
       if (drag?.mode === "conn") {
         const d = drag, v = connectorsOf(simController.compiled).find(x => connectorId(x) === d.id);
         if (!v) return;
         const h = connectorHandles(v.node, v.move, v.inLane, v.outLane);
         const key = connShapeKey(v.move, v.inLane, v.outLane), np = v.node.pos;
-        if (e.shiftKey || h.free) {
-          // Shift (or already free): the handle goes wherever it is dragged
+        if (!e.shiftKey) {
+          // the handle goes wherever it is dragged (Shift: it slides along its lane, keeping the path square to it)
           const rel = (p: Vec) => ({ x: p.x - np.x, y: p.y - np.y });
           const c1 = d.which === "k1" ? rel(w) : rel(h.h1), c2 = d.which === "k2" ? rel(w) : rel(h.h2);
-          commit(setConnectorShape(net, v.node.def.id, key, { c1, c2 }), `conn:${d.id}`);
+          commit(setConnectorShape(net, v.node.def.id, key, { c1, c2, ...(h.via.length ? { via: h.via.map(rel) } : {}) }), `conn:${d.id}`);
         } else {
           // each handle slides along its lane's direction (the path stays tangent to both lanes)
           const k = d.which === "k1" ? (w.x - h.P.x) * h.tp.x + (w.y - h.P.y) * h.tp.y : (h.Q.x - w.x) * h.tq.x + (h.Q.y - w.y) * h.tq.y;
           const reach: [number, number] = d.which === "k1" ? [Math.max(0.5, k), h.k2] : [h.k1, Math.max(0.5, k)];
-          commit(setConnectorShape(net, v.node.def.id, key, reach), `conn:${d.id}`);
+          if (h.via.length) {
+            // (with bend points: the handle put on its lane's line, the rest kept)
+            const rel = (p: Vec) => ({ x: p.x - np.x, y: p.y - np.y });
+            const on = d.which === "k1" ? { x: h.P.x + h.tp.x * reach[0], y: h.P.y + h.tp.y * reach[0] } : { x: h.Q.x - h.tq.x * reach[1], y: h.Q.y - h.tq.y * reach[1] };
+            commit(setConnectorShape(net, v.node.def.id, key, { c1: rel(d.which === "k1" ? on : h.h1), c2: rel(d.which === "k2" ? on : h.h2), via: h.via.map(rel) }), `conn:${d.id}`);
+          } else commit(setConnectorShape(net, v.node.def.id, key, reach), `conn:${d.id}`);
         }
         return;
       }
@@ -846,6 +1066,7 @@ export function PlanCanvas() {
           const r = t ? connectLanes(net, simController.compiled, `${lid}:${dir}`, Number(ln), t.e.key, t.lp.lane) : null;
           ui.getValue().connectFrom = null;
           if (r) { commit(r.net); select({ kind: "connector", id: r.id }); }
+          else if (!t) onRingDrop(d.from, toWorld(cam, sx, sy));
         }
         markDirty();
         return;
@@ -905,6 +1126,11 @@ export function PlanCanvas() {
       if (e.type === "keyup" && e.code === "Space") { spaceHeld = false; canvas.style.cursor = "default"; }
       if (e.type === "keydown" && e.key === "Escape") setMenu(null);
       const sh = ui.getValue().shape;
+      if (e.type === "keydown" && !typing && e.key === "Escape" && sh.edit && !sh.paint) { sh.edit = null; sh.point = null; e.stopPropagation(); markDirty(); return; }
+      if (e.type === "keydown" && !typing && e.key === "Escape" && ui.getValue().placing) { stopPlacing(); e.stopPropagation(); markDirty(); return; }
+      if (e.type === "keydown" && !typing && e.key === "Escape" && ui.getValue().groupEdit && !sh.paint && !ui.getValue().connectFrom) {
+        const id = ui.getValue().groupEdit!; ui.getValue().groupEdit = null; select({ kind: "group", id }); e.stopPropagation(); markDirty(); return;
+      }
       if (e.type === "keydown" && !typing && e.key === "Escape" && ui.getValue().connectFrom) { ui.getValue().connectFrom = null; e.stopPropagation(); markDirty(); return; }
       if (e.type === "keydown" && !typing && e.key === "Escape" && ui.getValue().pickExit) { ui.getValue().pickExit = null; e.stopPropagation(); markDirty(); return; }
       if (e.type === "keydown" && !typing && sh.paint && (e.key === "Enter" || e.key === "Escape")) {
@@ -920,7 +1146,8 @@ export function PlanCanvas() {
     const onDbl = (e: MouseEvent) => {
       const sh = ui.getValue().shape;
       // drawing a painted area: a double-click finishes it
-      if (sh.paint) { finishPaint(); return; }
+      // (a junction's outline is closed on its first point, or with Enter: a double-click only adds points)
+      if (sh.paint) { if (sh.paint.kind !== "junction") finishPaint(); return; }
       // editing an outline: double-click an edge to add a point there
       if (sh.edit) {
         const nd = ops.nodeById(net, sh.edit);
@@ -938,6 +1165,30 @@ export function PlanCanvas() {
       }
       if (u.tool === "road") { pending = null; markDirty(); return; }
       if (u.tool !== "select") return;
+      // double-click the selected connector's path: a bend point there
+      { const { sx, sy } = local(e); if (addConnVia(toWorld(cam, sx, sy), sx, sy)) { markDirty(); return; } }
+      // double-click a junction group: go inside it (its roads and junctions are picked one by one; Esc comes out)
+      {
+        const { sx, sy } = local(e), w = toWorld(cam, sx, sy), p = pickInLayers(u.layers, sx, sy, w), g = p && asGroup(p);
+        if (g?.kind === "group") { u.groupEdit = g.id; select(p); markDirty(); return; }
+        // double-click a junction: edit its outline (starting from the automatic one)
+        const cn = p?.kind === "node" ? simController.compiled.nodeById.get(p.id) : undefined, lead = cn ? cn.lead ?? cn : undefined;
+        if (lead && isJunction(lead) && !(lead.ringR > 0) && !u.readOnly) {
+          const nd = ops.nodeById(net, lead.def.id)!;
+          if (!nd.outline && lead.polygon.length >= 3) commit(ops.setOutline(net, nd.id, simplifyRing(lead.polygon, 0.15).map(q => ({ x: q.x - nd.x, y: q.y - nd.y }))));
+          const sh = ui.getValue().shape;
+          sh.paint = null; sh.point = null; sh.edit = nd.id;
+          select({ kind: "node", id: nd.id }); u.panel = "inspect";
+          toast.info("Editing the junction's outline", { description: "Drag its points; double-click an edge to add one; click a point to pick it (Delete removes it, C curves the kerb round it). Esc or Done when finished." });
+          markDirty();
+          return;
+        }
+      }
+      // double-click a ring: a point of it there (to lead a connector off it, or join it at)
+      {
+        const { sx, sy } = local(e), w = toWorld(cam, sx, sy), l = hitLink(w), def = l ? ops.linkById(net, l.id) : undefined;
+        if (def && isRing(def)) { const r = ringPointAt(net, def.id, w); if (r) { commit(r.net); select({ kind: "node", id: r.node }); markDirty(); } return; }
+      }
       // double-click a road to add a bend point you can drag
       const { sx, sy } = local(e);
       if (hitNode(sx, sy)) return;
@@ -955,11 +1206,16 @@ export function PlanCanvas() {
       // (a double-click also clicked twice: drop points on top of the one before)
       const pts = p.pts.filter((q, i) => i === 0 || Math.hypot(q.x - p.pts[i - 1].x, q.y - p.pts[i - 1].y) > 0.3);
       sh.paint = null;
-      if (p.kind === "junction") {
+      if (p.kind === "roundabout") { /* (built by the second click) */ }
+      else if (p.kind === "junction") {
         // a junction drawn by hand: cut the roads at it, then show it in the inspector
-        const r = pts.length >= 3 ? createJunction(net, pts) : { error: "Draw at least three corners." };
-        if ("error" in r) toast.error(r.error);
-        else { commit(r.net); ui.getValue().tool = "select"; select({ kind: "node", id: r.junction.nodes[0] }); ui.getValue().panel = "inspect"; }
+        void busy("Building the junction…", () => {
+          const r = pts.length >= 3 ? createJunction(net, pts) : { error: "Draw at least three corners." };
+          if ("error" in r) { toast.error(r.error); return; }
+          commit(r.net); ui.getValue().tool = "select"; ui.getValue().panel = "inspect";
+          if (r.junction.nodes.length) select({ kind: "node", id: r.junction.nodes[0] });
+          else { select({ kind: "junction", id: r.junction.id }); toast.info("Junction on its own", { description: "No roads reach it yet: draw roads to it (or across it) and they join it." }); }
+        });
       } else if (nd && pts.length >= 3 && (p.kind === "hatch" || p.kind === "island")) commit(ops.addPaint(net, nd.id, p.kind, pts.map(q => ({ x: q.x - nd.x, y: q.y - nd.y }))));
       markDirty();
     }
@@ -1012,7 +1268,7 @@ export function PlanCanvas() {
           underlay: ul ? { u: ul, img: ulImg, editing: u.tool === "image" && !u.calib.active, hover: ulHover } : null,
           calib: u.calib.active ? { a: u.calib.a, b: u.calib.b, cursor: cursorWorld } : null,
           buildings: u.display.buildings,
-          satellite: u.display.satellite, satBrightness: u.display.satBrightness, onTile: markDirty, connectors: u.display.connectors, highlight: highlightedLayers(u.layers), show: u.layers, maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
+          satellite: u.display.satellite, satBrightness: u.display.satBrightness, satSource: u.display.satSource, onTile: markDirty, connectors: u.display.connectors, highlight: highlightedLayers(u.layers), show: u.layers, maskRoads: u.display.maskRoads, trace: traceFor(u.trace),
           focusNodes: focusNodes(),
           box: drag?.mode === "box" ? { a: drag.a, b: drag.b } : null,
           exitPick: u.pickExit ? (() => {
@@ -1033,7 +1289,7 @@ export function PlanCanvas() {
             };
           })() : null,
           // (the junction being edited, zoomed in: its lanes' ends, where a connector can be started)
-          laneEnds: lanesAimable() ? focusNodes().flatMap(i => simController.compiled.nodes[i].arms.flatMap(a => a.inEdge?.lanes.map(lp => laneEndGrip(a.inEdge!, lp)) ?? [])) : [],
+          laneEnds: lanesAimable() ? focusNodes().filter(i => !(simController.compiled.nodes[i].ringR > 0)).flatMap(i => simController.compiled.nodes[i].arms.flatMap(a => a.inEdge?.lanes.map(lp => laneEndGrip(a.inEdge!, lp)) ?? [])) : [],
           connectPick: (() => {
             if (drag?.mode === "connEnd") {
               const t = connEndTargets(drag.id, drag.which);
@@ -1050,7 +1306,35 @@ export function PlanCanvas() {
           })(),
           shape: (() => {
             const sh = u.shape, on = sh.edit ? ops.nodeById(net, sh.edit) : null;
-            return { outline: on?.outline ? on.outline.map(p => ({ x: on.x + p.x, y: on.y + p.y })) : null, paint: sh.paint?.pts ?? null, cursor: cursorWorld };
+            const rc = sh.paint?.kind === "roundabout" ? sh.paint.pts[0] : null, kerb = rc && cursorWorld ? Math.hypot(cursorWorld.x - rc.x, cursorWorld.y - rc.y) : 0;
+            const ring = rc && kerb >= 3 ? { c: rc, kerb, island: Math.max(0, islandRadius(kerb, kerb >= TWO_LANES_FROM ? 2 : 1)), join: sh.paint?.node === "ring" ? kerb : joinRadius(kerb), lanes: kerb >= TWO_LANES_FROM ? 2 : 1 } : null;
+            return { outline: on?.outline ? on.outline.map(p => ({ ...p, x: on.x + p.x, y: on.y + p.y })) : null, paint: sh.paint?.pts ?? null, paintKind: sh.paint?.kind ?? null,
+              point: sh.edit ? sh.point ?? null : null, pointHover: sh.edit && cursorWorld ? (() => { const q = toScreen(cam, cursorWorld!.x, cursorWorld!.y); return hitOutlinePoint(q.x, q.y); })() : -1, cursor: cursorWorld, ring,
+              closable: sh.paint?.kind === "junction" && sh.paint.pts.length >= 3 && !!cursorWorld && (() => { const f = toScreen(cam, sh.paint!.pts[0].x, sh.paint!.pts[0].y), q = toScreen(cam, cursorWorld!.x, cursorWorld!.y); return Math.hypot(f.x - q.x, f.y - q.y) <= CLOSE_PX; })() };
+          })(),
+          ringSel: (() => {
+            const sel = u.selection, r = sel?.kind === "ring" ? ringById(net, sel.id) : sel?.kind === "node" ? ringOfNode(net, sel.id) : null;
+            if (!r) return null;
+            return { c: { x: r.x, y: r.y }, pts: ringPoints(net, r).map(p => { const n = ops.nodeById(net, p.id)!; return { x: n.x, y: n.y, id: p.id }; }), picked: sel?.kind === "node" ? sel.id : null };
+          })(),
+          jgroup: (() => {
+            // (a junction on its own, selected: its outline)
+            if (u.selection?.kind === "junction") { const sid = u.selection.id, j = net.junctions?.find(x => x.id === sid); return j?.outline ? { hull: j.outline, ports: [], inside: false } : null; }
+            const id = u.selection?.kind === "group" ? u.selection.id : u.groupEdit, g = id ? groupById(net, id) : null;
+            return g ? { hull: groupHull(net, g, 4), ports: groupPorts(net, g), inside: u.groupEdit === g.id } : null;
+          })(),
+          ghost: (() => {
+            const piece = placingPiece();
+            if (!piece || !cursorWorld) return null;
+            const at = gridSnap(cursorWorld), turn = u.placing!.turn, byId = new Map(piece.net.nodes.map(n => [n.id, n])), lines: number[][] = [], pts: Vec[] = [];
+            for (const l of piece.net.links) {
+              const A = byId.get(l.from), B = byId.get(l.to);
+              if (!A || !B) continue;
+              const line: number[] = [];
+              for (let k = 0; k <= 12; k++) { const q = placePoint(ops.linkPoint(l, A, B, k / 12), at, turn); line.push(q.x, q.y); pts.push(q); }
+              lines.push(line);
+            }
+            return { lines, hull: hull(pts, 4) };
           })(),
           alsoSelected: u.selection?.kind !== "link" ? [] : u.multi.length ? u.multi : u.tool === "segment" && u.segScope === "road" ? ops.chainLinks(net, u.selection.id).map(c => c.id).slice(1) : [],
         });

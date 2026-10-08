@@ -1,4 +1,4 @@
-import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type ReversibleDef, type PlanSettings, type Vec, type ConnShape, type ConnectorDef, type LaneTargets, type MarkerDef, BAY_SIZE, PARKING, type CrossingDef, type ParkingDef, type ParkingKind } from "./types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, MAX_PHASES, DEFAULT_SETTINGS, DEFAULT_SIGNAL, LANE_TURNS, type ApproachSign, type BuildingDef, type BuildingUse, type GeoArea, type Bays, type LaneDrop, type LaneTurns, type Network, type ReversibleDef, type PlanSettings, type Vec, type ConnShape, type ConnectorDef, type LaneTargets, type MarkerDef, BAY_SIZE, PARKING, type CrossingDef, type ParkingDef, type ParkingKind, type JunctionDef, RING_MIN, RING_MAX } from "./types";
 import { sanitizeParams } from "./params";
 
 const num = (v: unknown, lo: number, hi: number, def: number) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
@@ -53,6 +53,38 @@ function bays(v: unknown, lanes: number, bus: boolean): Bays | null {
 }
 
 /** Normalises untrusted JSON into a well-formed Network (drops dangling references). */
+/**
+ * In a plan whose junctions are drawn by hand, a road end joined by lane connectors to a junction's road end
+ * (its lanes into the junction's, or theirs into it) is one of that junction's (added to `junctions`, in place),
+ * so it takes the junction's control and markings: e.g. a road redrawn up to a junction and connected by hand.
+ */
+export function adoptConnectedEnds(net: Pick<Network, "nodes" | "links" | "junctions">): boolean {
+  const js = net.junctions ?? [];
+  if (!js.length) return false;
+  const linkById = new Map(net.links.map(l => [l.id, l]));
+  const deg = new Map<string, number>();
+  for (const l of net.links) for (const id of [l.from, l.to]) deg.set(id, (deg.get(id) ?? 0) + 1);
+  // (the road end an edge key "link:dir" leaves from)
+  const startOf = (key: string) => { const [id, d] = key.split(":"), l = linkById.get(id); return l ? (d === "1" ? l.from : l.to) : null; };
+  const of = new Map<string, JunctionDef>();
+  for (const j of js) for (const id of j.nodes) of.set(id, j);
+  let changed = false;
+  for (let pass = 0; pass < 8; pass++) {
+    let more = false;
+    for (const n of net.nodes) for (const x of n.connectors ?? []) {
+      const to = startOf(x.out);
+      if (!to || to === n.id) continue;
+      const a = of.get(n.id), b = of.get(to);
+      // (one of the two in a junction, the other a loose road end in none)
+      const [j, end] = a && !b ? [a, to] : b && !a ? [b, n.id] : [null, null];
+      if (!j || !end || deg.get(end) !== 1) continue;
+      j.nodes.push(end); of.set(end, j); more = changed = true;
+    }
+    if (!more) break;
+  }
+  return changed;
+}
+
 export function sanitizeNetwork(input: unknown): Network {
   const src = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const arr = (k: string) => (Array.isArray(src[k]) ? (src[k] as Record<string, unknown>[]) : []);
@@ -68,13 +100,15 @@ export function sanitizeNetwork(input: unknown): Network {
       exitWeight: typeof n.exitWeight === "number" && isFinite(n.exitWeight) ? Math.min(100, Math.max(0, n.exitWeight)) : null,
       phases: phases(n.phases),
       ...(n.ringLanes === 2 ? { ringLanes: 2 as const } : {}),
+      ...(typeof n.ringRadius === "number" && Number.isFinite(n.ringRadius) ? { ringRadius: Math.max(RING_MIN, Math.min(RING_MAX, n.ringRadius)) } : {}),
       ...(laneMapOf(n.laneMap) ?? {}),
       ...(connShapeOf(n.connShape) ?? {}),
       ...(connectorsOf(n.connectors) ?? {}),
       ...(closedOf(n.closed) ?? {}),
-      ...(ptsOf(n.outline, 400) ? { outline: ptsOf(n.outline, 400)! } : {}),
+      ...(ptsOf(n.outline, 400) ? { outline: ptsOf(n.outline, 400)!.map((p, i) => ((n.outline as { round?: unknown }[])[i]?.round === true ? { ...p, round: true } : p)) } : {}),
       ...(paintOf(n.paint) ?? {}),
       ...(n.laneLines === true ? { laneLines: true } : {}),
+      ...(n.markings === "solid" || n.markings === "none" ? { markings: n.markings as "solid" | "none" } : {}),
       ...(n.align === true ? { align: true } : {}),
       ...(typeof n.peds === "number" && isFinite(n.peds) && n.peds > 0 ? { peds: Math.round(Math.min(3000, n.peds)) } : {}),
       signal: {
@@ -128,6 +162,7 @@ export function sanitizeNetwork(input: unknown): Network {
       ...(typeof l.laneWidth === "number" && isFinite(l.laneWidth) && Math.abs(l.laneWidth - LANE_WIDTH.default) > 0.01 ? { laneWidth: Math.round(num(l.laneWidth, LANE_WIDTH.min, LANE_WIDTH.max, LANE_WIDTH.default) * 10) / 10 } : {}),
       ...(Number.isInteger(l.level) && (l.level as number) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, l.level as number)) } : {}),
       ...(typeof l.slip === "string" && ids.has(l.slip) && l.slip !== l.from && l.slip !== l.to ? { slip: l.slip } : {}),
+      ...(typeof l.ring === "string" && l.ring && (l.lanesF === 0 || l.lanesB === 0) ? { ring: l.ring } : {}),
       ...(rev ? { rev } : {}),
     };
   }).filter(l => l.lanesF + l.lanesB > 0);
@@ -180,7 +215,9 @@ export function sanitizeNetwork(input: unknown): Network {
   const junctions = arr("junctions").filter(j => typeof j.id === "string" && j.id).slice(0, 2000).map(j => ({
     id: str(j.id, "", 64),
     nodes: (Array.isArray(j.nodes) ? j.nodes : []).filter((x: unknown): x is string => typeof x === "string" && ends.has(x) && !inJunction.has(x) && (inJunction.add(x), true)),
-  })).filter(j => j.nodes.length);
+    outline: Array.isArray(j.outline) ? (j.outline as unknown[]).map(vec).filter((p): p is Vec => !!p).slice(0, 200) : [],
+  })).map((j): JunctionDef => (j.nodes.length ? { id: j.id, nodes: j.nodes } : { id: j.id, nodes: [], ...(j.outline.length >= 3 ? { outline: j.outline } : {}) })).filter(j => j.nodes.length || j.outline);
+  if (src.manualJunctions === true) adoptConnectedEnds({ nodes, links, junctions });
   // zebra crossings drawn by hand (anywhere), and rows of parking bays (reached from existing roads)
   const crossings = arr("crossings").filter(x => typeof x.id === "string" && x.id && vec(x.a) && vec(x.b)).slice(0, 2000).map((x): CrossingDef => ({
     id: str(x.id, "", 64), a: vec(x.a)!, b: vec(x.b)!, width: Math.round(num(x.width, 1.5, 12, 4) * 10) / 10, peds: Math.round(num(x.peds, 0, 5000, 300)),
@@ -199,7 +236,21 @@ export function sanitizeNetwork(input: unknown): Network {
       ...(x.giveWay === true ? { giveWay: true } : {}),
     };
   });
-  return { version: 1, nodes, links, stops, lines, ...(crossings.length ? { crossings } : {}), ...(parking.length ? { parking } : {}), ...(src.manualJunctions === true ? { manualJunctions: true } : {}), ...(junctions.length ? { junctions } : {}), ...(markers.length ? { markers } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(zones.length ? { zones } : {}), ...(zoneFlows.length ? { zoneFlows } : {}), ...(reversibles.length ? { reversibles } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
+  // junction groups: of roads still there, each road in one group at most
+  const grouped = new Set<string>(), groups: { id: string; name: string; links: string[] }[] = [];
+  for (const g of Array.isArray(src.groups) ? src.groups : []) {
+    if (!g || typeof g.id !== "string" || !Array.isArray(g.links)) continue;
+    const ls = (g.links as unknown[]).filter((x): x is string => typeof x === "string" && linkIds.has(x) && !grouped.has(x));
+    if (!ls.length) continue;
+    ls.forEach(x => grouped.add(x));
+    groups.push({ id: g.id, name: typeof g.name === "string" ? g.name.slice(0, 80) : "Junction", links: ls });
+  }
+  // rings placed by hand: with roads of theirs still there
+  const ringTags = new Set(links.flatMap(l => (l.ring ? [l.ring] : [])));
+  const rings = arr("rings").filter(r => typeof r.id === "string" && ringTags.has(r.id as string) && vec(r)).slice(0, 500).map(r => ({
+    id: r.id as string, x: num(r.x, -1e6, 1e6, 0), y: num(r.y, -1e6, 1e6, 0), kerb: num(r.kerb, RING_MIN, RING_MAX, 15), lanes: (r.lanes === 2 ? 2 : 1) as 1 | 2,
+  }));
+  return { version: 1, nodes, links, stops, lines, ...(crossings.length ? { crossings } : {}), ...(parking.length ? { parking } : {}), ...(src.manualJunctions === true ? { manualJunctions: true } : {}), ...(junctions.length ? { junctions } : {}), ...(groups.length ? { groups } : {}), ...(rings.length ? { rings } : {}), ...(markers.length ? { markers } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(flows.length ? { flows } : {}), ...(zones.length ? { zones } : {}), ...(zoneFlows.length ? { zoneFlows } : {}), ...(reversibles.length ? { reversibles } : {}), ...(buildings.length ? { buildings } : {}), ...(geo ? { geo } : {}) };
 }
 
 /** most buildings a plan keeps (an imported district of a few km²) */
@@ -276,7 +327,8 @@ function shapeOf(r: unknown): ConnShape | null {
   if (r && typeof r === "object" && !Array.isArray(r)) {
     const f = (p: unknown) => { const x = Number((p as Vec)?.x), y = Number((p as Vec)?.y); return isFinite(x) && isFinite(y) && Math.abs(x) < 300 && Math.abs(y) < 300 ? { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 } : null; };
     const c1 = f((r as { c1?: unknown }).c1), c2 = f((r as { c2?: unknown }).c2);
-    return c1 && c2 ? { c1, c2 } : null;
+    const viaIn = (r as { via?: unknown }).via, via = Array.isArray(viaIn) ? viaIn.slice(0, 16).map(f).filter((p): p is Vec => !!p) : [];
+    return c1 && c2 ? { c1, c2, ...(via.length ? { via } : {}) } : null;
   }
   if (!Array.isArray(r) || r.length !== 2) return null;
   const [a, b] = r.map(Number);

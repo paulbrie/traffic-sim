@@ -3,10 +3,11 @@ import { compile } from "@/engine/compile";
 import type { Network } from "@/engine/types";
 import { changeConnection } from "./connections";
 import * as ops from "./ops";
+import { deleteGroup } from "./groups";
 import type { Selection } from "./store";
 
 /** objects of these kinds can be deleted */
-export const DELETABLE = new Set<Selection["kind"]>(["node", "link", "stop", "line", "building", "connector", "marker", "crossing", "parking"]);
+export const DELETABLE = new Set<Selection["kind"]>(["node", "link", "stop", "line", "building", "connector", "marker", "crossing", "parking", "group"]);
 
 /**
  * Delete everything in `list` (what can be deleted): lane connectors first, each against the plan as it is
@@ -25,6 +26,7 @@ export function deleteSelected(net: Network, list: readonly Selection[]): Networ
   for (const s of list) if (s.kind === "stop") n = ops.deleteStop(n, s.id);
   for (const s of list) if (s.kind === "line") n = ops.deleteLine(n, s.id);
   for (const s of list) if (s.kind === "building") n = ops.deleteBuilding(n, s.id);
+  for (const s of list) if (s.kind === "group") n = deleteGroup(n, s.id);
   for (const s of list) if (s.kind === "link") n = ops.deleteLink(n, s.id);
   for (const s of list) if (s.kind === "node" && n.nodes.some(x => x.id === s.id)) n = ops.deleteNode(n, s.id);
   return n;

@@ -11,9 +11,11 @@ import { DEFAULT_SETTINGS, emptyNetwork, type Network, type PlanSettings } from 
 import type { Stats } from "@/engine/sim";
 import type { Vec } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
-import { mergeNetworks, mergeSettings, mergeUnderlay } from "./merge";
+import { emptySketch, type Sketch } from "@/lib/lane-sketch";
+import type { SatSource } from "@/render/satellite";
+import { mergeNetworks, mergeSettings, mergeSketch, mergeUnderlay } from "./merge";
 
-export type Tool = "select" | "road" | "segment" | "stop" | "pan" | "image" | "marker" | "junction" | "crossing" | "parking";
+export type Tool = "select" | "road" | "segment" | "stop" | "pan" | "image" | "marker" | "junction" | "crossing" | "parking" | "roundabout" | "ring";
 /** the kinds of object the map shows and can select (TransModeler-style layers); any combination can be on */
 export type LayerId = "roads" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones" | "markers" | "crossings" | "parking";
 /** `key`: Shift + this letter switches the layer on or off (Shift+A: all of them) */
@@ -43,7 +45,13 @@ export type Selection =
   | { kind: "vehicle"; id: string }
   | { kind: "marker"; id: string }
   | { kind: "crossing"; id: string }
-  | { kind: "parking"; id: string };
+  | { kind: "parking"; id: string }
+  /** a junction group (Network.groups): its roads and junctions as one */
+  | { kind: "group"; id: string }
+  /** a junction standing on its own, no road joined yet (JunctionDef.outline) */
+  | { kind: "junction"; id: string }
+  /** a ring placed by hand (Network.rings) */
+  | { kind: "ring"; id: string };
 export type SaveStatus = "saved" | "dirty" | "saving" | "error" | "conflict";
 
 export interface UiState {
@@ -61,7 +69,7 @@ export interface UiState {
   pickExit: string | null;
   /** route tracer: from an entry point to an exit, starting in an entry lane (null = the kerb-side one) */
   trace: { from: string | null; to: string | null; lane: number | null };
-  display: { bySpeed: boolean; reservations: boolean; labels: boolean; buildings: boolean; junctions: boolean; satellite: boolean; connectors: boolean; maskRoads: boolean; /** satellite imagery brightness (0.3–1) */ satBrightness: number; /** the CPU / memory load panel */ perf: boolean };
+  display: { bySpeed: boolean; reservations: boolean; labels: boolean; buildings: boolean; junctions: boolean; satellite: boolean; connectors: boolean; maskRoads: boolean; /** satellite imagery brightness (0.3–1) */ satBrightness: number; /** where the satellite imagery comes from */ satSource: SatSource; /** the CPU / memory load panel */ perf: boolean };
   sim: { running: boolean; speed: number; epoch: number };
   save: { status: SaveStatus; revision: number; savedAt: string | null; message: string };
   cursor: { x: number; y: number; inside: boolean };
@@ -83,12 +91,22 @@ export interface UiState {
   console: boolean;
   /** the search bar over the map (Cmd/Ctrl+K) */
   search: boolean;
+  /** the lane sketch window (an experiment, see `laneSketch$`) */
+  sketch: boolean;
+  /** inside a junction group (double-click it): clicks pick its roads and junctions instead of the group */
+  groupEdit: string | null;
+  /** a junction being placed (pasted, or from the library): it follows the pointer, R turns it, a click puts it down */
+  placing: { name: string; turn: number } | null;
+  /** a slow edit under way (see busy()): what it is doing, shown over the map */
+  busy: string | null;
+  /** the last such note (kept while it fades out) */
+  busyLabel: string;
   /** opened with view-only access: edits are blocked and nothing is saved */
   readOnly: boolean;
   /** junction editor: the junction whose outline is being edited, and a painted area being drawn */
   /** `paint` of kind "junction": the outline of a junction drawn by hand (Junction tool; `node` unused) */
   /** `paint` also holds a zebra crossing being drawn (its first end) and a row of parking bays (its first end) */
-  shape: { edit: string | null; paint: { node: string; kind: "hatch" | "island" | "junction" | "crossing" | "parking"; pts: Vec[] } | null };
+  shape: { edit: string | null; /** the outline point picked (being edited): Delete takes it out */ point?: number | null; paint: { node: string; kind: "hatch" | "island" | "junction" | "crossing" | "parking" | "roundabout"; pts: Vec[] } | null };
   /** drawing a lane connector: the lane it starts from ("linkId|dir|lane"); the next lane clicked on the map ends it */
   connectFrom: string | null;
   /** keep every simulation step for the replay bar (costs time and memory on big plans) */
@@ -109,7 +127,7 @@ export const ui = new DeepSubject<UiState>(
     multi: [],
     extra: [],
     pickExit: null,
-    display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85, perf: false },
+    display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85, satSource: "esri", perf: false },
     sim: { running: false, speed: 3, epoch: 0 },
     save: { status: "saved", revision: 1, savedAt: null, message: "" },
     cursor: { x: 0, y: 0, inside: false },
@@ -123,6 +141,11 @@ export const ui = new DeepSubject<UiState>(
     dataview: false,
     console: false,
     search: false,
+    sketch: false,
+    groupEdit: null,
+    placing: null,
+    busy: null,
+    busyLabel: "",
     readOnly: false,
     shape: { edit: null, paint: null },
     connectFrom: null,
@@ -135,6 +158,8 @@ export const ui = new DeepSubject<UiState>(
 export const network$ = new Subject<Network>(emptyNetwork(), { name: "network", updateIfStrictlyEqual: false });
 export const settings$ = new Subject<PlanSettings>(DEFAULT_SETTINGS, { name: "settings", updateIfStrictlyEqual: false });
 export const stats$ = new Subject<Stats | null>(null, { name: "stats" });
+/** the lane sketch: lanes, connectors and roads drawn freely in their own window; in memory only (never saved) */
+export const laneSketch$ = new Subject<Sketch>(emptySketch(), { name: "laneSketch", updateIfStrictlyEqual: false });
 export const underlay$ = new Subject<Underlay | null>(null, { name: "underlay", updateIfStrictlyEqual: false });
 
 // ---------------------------------------------------------------- history
@@ -227,18 +252,23 @@ export function setUnderlay(next: Underlay | null | ((cur: Underlay) => Underlay
 
 // ---------------------------------------------------------------- live updates
 /** the plan as last loaded or saved here: what this page and the server both started from (for merging) */
-let synced: { network: Network; settings: PlanSettings; underlay: Underlay | null } = { network: emptyNetwork(), settings: DEFAULT_SETTINGS, underlay: null };
+let synced: { network: Network; settings: PlanSettings; underlay: Underlay | null; sketch: Sketch } = { network: emptyNetwork(), settings: DEFAULT_SETTINGS, underlay: null, sketch: laneSketch$.getValue() };
 /** what was just saved is now what the server has */
-export function markSynced(network: Network, settings: PlanSettings, underlay: Underlay | null) { synced = { network, settings, underlay }; }
+export function markSynced(network: Network, settings: PlanSettings, underlay: Underlay | null, sketch: Sketch) { synced = { network, settings, underlay, sketch }; }
+// (the lane sketch saves with the plan: any change to it but the one just loaded or merged in is unsaved)
+laneSketch$.subscribe(k => { if (k !== synced.sketch) markDirty(); });
+/** listeners told when the sketch is replaced by one loaded or merged in (its own undo history no longer applies) */
+export const sketchReplaced = new Set<(why: "load" | "merge") => void>();
 
 /**
  * A newer version saved elsewhere (another person, tab or window, or written to the database): taken in,
  * merged with what is not saved here yet (see ./merge), and the undo history rebased onto it, so undoing
  * still undoes only this page's own edits. Unsaved changes stay unsaved (the merged plan saves next).
  */
-export function applyRemote(revision: number, savedAt: string, theirs: { network: Network; settings: PlanSettings; underlay: Underlay | null }) {
-  const b = synced, mineN = network$.getValue(), mineS = settings$.getValue(), mineU = underlay$.getValue();
-  const mineChanged = mineN !== b.network || mineS !== b.settings || mineU !== b.underlay;
+export function applyRemote(revision: number, savedAt: string, remote: { network: Network; settings: PlanSettings; underlay: Underlay | null; sketch: Sketch | null }) {
+  const b = synced, mineN = network$.getValue(), mineS = settings$.getValue(), mineU = underlay$.getValue(), mineK = laneSketch$.getValue();
+  const mineChanged = mineN !== b.network || mineS !== b.settings || mineU !== b.underlay || mineK !== b.sketch;
+  const theirs = { ...remote, sketch: remote.sketch ?? emptySketch() };
   const net = mergeNetworks(b.network, mineN, theirs.network);
   for (let i = 0; i < past.length; i++) past[i] = mergeNetworks(b.network, past[i], theirs.network);
   for (let i = 0; i < future.length; i++) future[i] = mergeNetworks(b.network, future[i], theirs.network);
@@ -252,12 +282,14 @@ export function applyRemote(revision: number, savedAt: string, theirs: { network
   network$.next(net);
   settings$.next(mergeSettings(b.settings, mineS, theirs.settings));
   underlay$.next(mergeUnderlay(b.underlay, mineU, theirs.underlay));
+  const k = mergeSketch(b.sketch, mineK, theirs.sketch);
+  if (k !== mineK) { laneSketch$.next(k); sketchReplaced.forEach(f => f("merge")); }
   pruneSelection(net);
   syncHistoryFlags();
 }
 
 /** Load a plan into the stores (clears history). */
-export function loadPlan(planId: string, network: Network, settings: PlanSettings, revision: number, savedAt: string, underlay: Underlay | null = null, readOnly = false) {
+export function loadPlan(planId: string, network: Network, settings: PlanSettings, revision: number, savedAt: string, underlay: Underlay | null = null, readOnly = false, sketch: Sketch | null = null) {
   past.length = 0; future.length = 0; coalesceKey = null;
   batch(() => {
     const u = ui.getValue();
@@ -273,10 +305,13 @@ export function loadPlan(planId: string, network: Network, settings: PlanSetting
     u.save.message = "";
     u.calib.active = false; u.calib.a = null; u.calib.b = null;
   });
-  synced = { network, settings, underlay };
+  const k = sketch ?? emptySketch();
+  synced = { network, settings, underlay, sketch: k };
   network$.next(network);
   settings$.next(settings);
   underlay$.next(underlay);
+  laneSketch$.next(k);
+  sketchReplaced.forEach(f => f("load"));
   syncHistoryFlags();
 }
 
@@ -289,7 +324,7 @@ export function select(sel: Selection | null) {
     if (u.pickExit) u.pickExit = null;
     // (the junction editor belongs to its junction: selecting something else ends it)
     const keep = sel?.kind === "node" ? sel.id : null;
-    if (u.shape.edit && u.shape.edit !== keep) u.shape.edit = null;
+    if (u.shape.edit && u.shape.edit !== keep) { u.shape.edit = null; u.shape.point = null; }
     if (u.shape.paint && u.shape.paint.node !== keep) u.shape.paint = null;
     // (drawing a connector starts from the selected lane: selecting something else ends it)
     if (u.connectFrom && !(sel?.kind === "lane" && sel.id === u.connectFrom)) u.connectFrom = null;
@@ -344,7 +379,10 @@ function pruneSelection(net: Network) {
               : sel.kind === "marker" ? (net.markers ?? []).some(m => m.id === sel.id)
                 : sel.kind === "crossing" ? (net.crossings ?? []).some(x => x.id === sel.id)
                   : sel.kind === "parking" ? (net.parking ?? []).some(x => x.id === sel.id)
-                    : true;
+                    : sel.kind === "group" ? (net.groups ?? []).some(x => x.id === sel.id)
+                    : sel.kind === "junction" ? (net.junctions ?? []).some(x => x.id === sel.id && !x.nodes.length)
+                    : sel.kind === "ring" ? (net.rings ?? []).some(x => x.id === sel.id)
+                      : true;
   const all = selectedAll();
   if (all.every(alive)) return;
   const left = all.filter(alive);
@@ -354,4 +392,29 @@ function pruneSelection(net: Network) {
 export function setTool(tool: Tool) {
   const u = ui.getValue();
   if (u.tool !== tool) u.tool = tool;
+}
+
+/** two animation frames: long enough for the browser to paint what was just changed */
+const painted = () => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+/** how long the note takes to fade in or out (ms; the BusyNote's transition) */
+export const BUSY_FADE = 150;
+let busyRuns = 0;
+/**
+ * Run a slow edit with a "working" note over the map: the note is painted first (the edit itself blocks the
+ * page), and stays until the map has been drawn again with the result.
+ */
+export async function busy<T>(label: string, work: () => T): Promise<T> {
+  busyRuns++;
+  const u = ui.getValue();
+  u.busyLabel = label; u.busy = label;
+  try {
+    // (the note faded in before the edit blocks the page: a frozen half-faded note reads as a glitch)
+    await painted();
+    await new Promise(r => setTimeout(r, BUSY_FADE));
+    const out = work();
+    await painted();
+    return out;
+  } finally {
+    if (--busyRuns === 0) ui.getValue().busy = null;
+  }
 }

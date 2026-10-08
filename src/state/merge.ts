@@ -65,6 +65,11 @@ export function mergeSettings(base: PlanSettings, mine: PlanSettings, theirs: Pl
   return out as unknown as PlanSettings;
 }
 
+/** the lane sketch: whichever side changed it (both: this page's) */
+export function mergeSketch<T>(base: T, mine: T, theirs: T): T {
+  return changed(mine, base) ? mine : theirs;
+}
+
 export function mergeUnderlay(base: Underlay | null, mine: Underlay | null, theirs: Underlay | null): Underlay | null {
   return changed(mine, base) ? mine : theirs;
 }

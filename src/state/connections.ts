@@ -4,7 +4,8 @@
  */
 import { CROSS_REACH, exitLanesOf, laneAllowed, type Compiled, type Edge, type LanePiece } from "@/engine/compile";
 import { dist } from "@/engine/geom";
-import type { ConnShape, ConnectorDef, LaneTargets, Network, NodeDef } from "@/engine/types";
+import type { ConnShape, ConnectorDef, LaneTargets, Network, NodeDef, Vec } from "@/engine/types";
+import { adoptConnectedEnds } from "@/engine/validate";
 import * as ops from "./ops";
 
 const asList = (t: LaneTargets): number[] => (t == null ? [] : Array.isArray(t) ? [...t] : [t]);
@@ -45,7 +46,11 @@ function write(net: Network, c: Compiled, nodeId: string, list: ConnectorDef[], 
   for (const k of touched) {
     if (list.some(x => x.in === k || x.out === k)) closed.delete(k); else closed.add(k);
   }
-  return ops.updateNode(net, nodeId, { connectors: list, closed: closed.size ? [...closed] : undefined, laneMap: undefined, connShape: undefined });
+  net = ops.updateNode(net, nodeId, { connectors: list, closed: closed.size ? [...closed] : undefined, laneMap: undefined, connShape: undefined });
+  // (a road end connected to a junction drawn by hand becomes one of its road ends)
+  if (!net.manualJunctions || !net.junctions) return net;
+  const junctions = net.junctions.map(j => ({ ...j, nodes: [...j.nodes] }));
+  return adoptConnectedEnds({ ...net, junctions }) ? { ...net, junctions } : net;
 }
 
 /** a junction's connectors written out as they are now (nothing changes but that they are kept from now on) */
@@ -150,7 +155,8 @@ export function setConnectorShape(net: Network, nodeId: string, key: string, sha
   const def = ops.nodeById(net, nodeId);
   if (!def) return net;
   if (!def.connectors) return ops.setConnShape(net, nodeId, key, shape);
-  const sh = shape && (Array.isArray(shape) ? [r2(shape[0]), r2(shape[1])] as [number, number] : { c1: { x: r2(shape.c1.x), y: r2(shape.c1.y) }, c2: { x: r2(shape.c2.x), y: r2(shape.c2.y) } });
+  const rp = (p: Vec) => ({ x: r2(p.x), y: r2(p.y) });
+  const sh = shape && (Array.isArray(shape) ? [r2(shape[0]), r2(shape[1])] as [number, number] : { c1: rp(shape.c1), c2: rp(shape.c2), ...(shape.via?.length ? { via: shape.via.map(rp) } : {}) });
   const connectors = def.connectors.map(x => {
     if (`${x.in}|${x.a}>${x.out}|${x.b}` !== key) return x;
     const rest: ConnectorDef = { in: x.in, a: x.a, out: x.out, b: x.b };

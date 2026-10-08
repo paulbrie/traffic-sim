@@ -1,6 +1,6 @@
 /** Pure network edit operations. Each returns a new Network (never mutates). */
 import { newId, makeNode } from "@/engine/sample";
-import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type ReversibleDef, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape, type LaneTargets, type MarkerDef, type CrossingDef, type ParkingDef } from "@/engine/types";
+import { MAX_PHASES, lanesAtLine, type Bays, type BuildingDef, type FlowDef, type ZoneDef, type ZoneFlowDef, type LineDef, type LinkDef, type Network, type ReversibleDef, type NodeDef, type SignalGroup, type SignalGroupMember, type SignalPhase, type StopDef, type Vec, type ConnShape, type LaneTargets, type MarkerDef, type CrossingDef, type ParkingDef, type OutlinePoint } from "@/engine/types";
 import { connShapeKey, exitLanesOf, laneAllowed, linkExtent, type Compiled } from "@/engine/compile";
 import { greenWaveOffsets, withCustomPhases } from "@/engine/signals";
 
@@ -92,8 +92,8 @@ export function setConnShape(net: Network, nodeId: string, key: string, reach: C
 }
 
 /** Set (or with null, clear) a junction's hand-drawn outline: points relative to the node. */
-export function setOutline(net: Network, nodeId: string, pts: Vec[] | null): Network {
-  return updateNode(net, nodeId, { outline: pts && pts.length >= 3 ? pts.map(p => ({ x: round(p.x), y: round(p.y) })) : undefined });
+export function setOutline(net: Network, nodeId: string, pts: OutlinePoint[] | null): Network {
+  return updateNode(net, nodeId, { outline: pts && pts.length >= 3 ? pts.map(p => ({ x: round(p.x), y: round(p.y), ...(p.round ? { round: true } : {}) })) : undefined });
 }
 /** Add a painted area (hatched or a kerbed island) to a junction; points relative to the node. */
 export function addPaint(net: Network, nodeId: string, kind: "hatch" | "island", pts: Vec[]): Network {
@@ -128,10 +128,42 @@ export function moveNode(net: Network, id: string, p: Vec): Network {
   };
 }
 
+/** how far back from a deleted junction its roads' loose ends are left (m) */
+const DETACH = 4;
+
+/**
+ * Delete a point. Its roads stay: at a junction each keeps a loose end of its own (an entry / exit point) a
+ * few metres back from where the junction was; at a plain point between two roads they become one road
+ * where they can (or are parted like a junction's). A road's own loose end goes with that road.
+ */
 export function deleteNode(net: Network, id: string): Network {
-  // (the node goes with its roads, unused: pruneRefs takes it out, and hands on what it held for a junction)
-  const links = net.links.filter(l => l.from !== id && l.to !== id);
-  return pruneRefs({ ...net, links });
+  const nd = nodeById(net, id), attached = net.links.filter(l => l.from === id || l.to === id);
+  // (a loose end, or nothing on it: the point goes with its road; pruneRefs takes it out, and hands on what
+  // it held for a junction)
+  if (!nd || attached.length <= 1) return pruneRefs({ ...net, links: net.links.filter(l => l.from !== id && l.to !== id) });
+  if (attached.length === 2 && !nd.junction && attached[0].id !== attached[1].id) {
+    const merged = mergeLinks(net, attached.map(l => l.id));
+    if (!("error" in merged) && merged.err < 1) return merged.net;
+  }
+  for (const { id: lid } of attached) {
+    const l = linkById(net, lid);
+    if (!l) continue;
+    if (l.from === id && l.to === id) { net = deleteLink(net, l.id); continue; }
+    const A = nodeById(net, l.from)!, B = nodeById(net, l.to)!, len = linkLength(l, A, B), atStart = l.from === id;
+    const back = Math.min(DETACH, len * 0.25), t = tAt(l, A, B, atStart ? back : len - back);
+    if (back < 0.5 || t <= 0.001 || t >= 0.999) {
+      // (too short to shorten: its own end, where the point was)
+      const end = makeNode(nd.x, nd.y);
+      net = { ...net, nodes: [...net.nodes, end], links: net.links.map(x => (x.id === l.id ? { ...x, ...(atStart ? { from: end.id } : { to: end.id }) } : x)) };
+      continue;
+    }
+    // cut it a little way back and drop the piece reaching the point
+    const [cut, mid] = splitLink(net, l.id, t, linkPoint(l, A, B, t));
+    net = cut;
+    const stub = net.links.find(x => (x.from === id && x.to === mid.id) || (x.from === mid.id && x.to === id));
+    if (stub) net = { ...net, links: net.links.filter(x => x.id !== stub.id) };
+  }
+  return pruneRefs({ ...net, links: net.links.filter(l => l.from !== id && l.to !== id) });
 }
 
 export function addLink(net: Network, from: string, to: string, draft: Pick<LinkDef, "lanesF" | "lanesB" | "busF" | "busB" | "speed">): [Network, LinkDef | null] {
@@ -199,7 +231,8 @@ export function splitLink(net: Network, id: string, t: number, at: Vec): [Networ
     const mid = { x: (p.line.a.x + p.line.b.x) / 2, y: (p.line.a.y + p.line.b.y) / 2 };
     return { ...p, link: nearestT(l, A, B, mid).t < t ? first.id : second.id };
   });
-  return [{ ...net, nodes: [...net.nodes, node], links: [...net.links.filter(x => x.id !== id), first, second], stops, ...(parking ? { parking } : {}) }, node];
+  const groups = net.groups?.map(g => (g.links.includes(id) ? { ...g, links: g.links.flatMap(x => (x === id ? [first.id, second.id] : [x])) } : g));
+  return [{ ...net, nodes: [...net.nodes, node], links: [...net.links.filter(x => x.id !== id), first, second], stops, ...(parking ? { parking } : {}), ...(groups ? { groups } : {}) }, node];
 }
 
 /** Merge a node into another (used when a drawn road ends on an existing node). */
@@ -274,10 +307,13 @@ function pruneRefs(net: Network): Network {
   const flows = net.flows?.filter(f => nodeIds.has(f.from) && nodeIds.has(f.to));
   const reversibles = net.reversibles?.filter(r => net.links.some(l => l.rev === r.id));
   const parking = net.parking?.filter(p => linkIds.has(p.link));
+  const jgroups = net.groups?.map(g => ({ ...g, links: g.links.filter(id => linkIds.has(id)) })).filter(g => g.links.length);
+  const ringTags = new Set(net.links.flatMap(l => (l.ring ? [l.ring] : []))), rings = net.rings?.filter(r => ringTags.has(r.id));
   // (junctions drawn by hand keep the road ends still there; the first holds the junction's own settings —
   // control, lights, outline — and hands them on to the next when it goes; one left with a single road end
   // is a junction no more: that end is a loose end again)
-  const junctions = net.junctions?.map(j => ({ ...j, nodes: j.nodes.filter(id => nodeIds.has(id)) })).filter(j => j.nodes.length >= 2);
+  // (one standing on its own, no road joined yet, stays)
+  const junctions = net.junctions?.map(j => ({ ...j, nodes: j.nodes.filter(id => nodeIds.has(id)) })).filter(j => j.nodes.length >= 2 || (!j.nodes.length && (j.outline?.length ?? 0) >= 3));
   for (const j of net.junctions ?? []) {
     const left = j.nodes.filter(id => nodeIds.has(id)), was = net.nodes.find(n => n.id === j.nodes[0]);
     if (left.length >= 2 && was && left[0] !== j.nodes[0]) {
@@ -295,6 +331,8 @@ function pruneRefs(net: Network): Network {
     ...net,
     ...(net.junctions ? { junctions: junctions!.length ? junctions : undefined } : {}),
     ...(net.parking ? { parking: parking!.length ? parking : undefined } : {}),
+    ...(net.groups ? { groups: jgroups!.length ? jgroups : undefined } : {}),
+    ...(net.rings ? { rings: rings!.length ? rings : undefined } : {}),
     ...(net.reversibles ? { reversibles } : {}),
     nodes,
     stops,
@@ -946,6 +984,7 @@ function leaving(net: Network, a: string, b: string): Vec | null {
 }
 
 /** parameter along a link at arc length d from its start */
+export function tAtLength(l: LinkDef, A: Vec, B: Vec, d: number): number { return tAt(l, A, B, d); }
 function tAt(l: LinkDef, A: Vec, B: Vec, d: number): number {
   if (!l.c1 || !l.c2) return Math.max(0, Math.min(1, d / Math.max(1e-6, Math.hypot(B.x - A.x, B.y - A.y))));
   let len = 0, prev = A;
@@ -1119,7 +1158,8 @@ export function mergeLinks(net: Network, ids: string[]): { net: Network; id: str
   // the junctions at its two ends now meet the merged road (a piece drawn the other way had its directions swapped)
   const tips = [{ x: chain[0], node: head.from }, { x: chain[chain.length - 1], node: tail.to }];
   for (const { x, node } of tips) net = remapEdgeKeys(net, node, k => { const [lid, d] = k.split(":"); return lid === x.l.id ? `${merged.id}:${x.rev ? -Number(d) : Number(d)}` : k; });
-  return { net: pruneRefs({ ...net, links: [...net.links.filter(l => !set.has(l.id)), merged], stops }), id: merged.id, err: fit.err };
+  const groups = net.groups?.map(g => (g.links.some(x => set.has(x)) ? { ...g, links: [...g.links.filter(x => !set.has(x)), merged.id] } : g));
+  return { net: pruneRefs({ ...net, links: [...net.links.filter(l => !set.has(l.id)), merged], stops, ...(groups ? { groups } : {}) }), id: merged.id, err: fit.err };
 }
 
 // ---------------------------------------------------------------- reversible middle lanes

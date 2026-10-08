@@ -8,6 +8,10 @@ export abstract class SimJunctions extends SimReversible {
   /** a crossing nothing else at its junction crosses or joins: driven through without stopping or asking */
   protected drivesThrough(p: Piece): boolean {
     if (p.kind !== "conn" || p.role !== "turn" || !throughConns(this.net, p.node).has(p)) return false;
+    // (round a ring of roads the ring drives on — traffic joining it only goes into a gap — but not into one
+    // already on its way across it)
+    // (one joining the ring into the same lane counts: a long path in from a road further away ends beside the ring)
+    if (p.inEdge.link.ring && p.inEdge.link.ring === p.outEdge.link.ring) return !this.occOf(this.ns[p.node.idx]).some(o => o.conn !== p && o.v.piece === o.conn && (conflicts(o.conn, p) || (o.conn.outEdge === p.outEdge && o.conn.outLane === p.outLane)));
     // (not while a vehicle let in holds a path that meets it — one turning from a lane its turn isn't marked
     // for: a path the junction couldn't foresee)
     return !this.occOf(this.ns[p.node.idx]).some(o => o.conn !== p && conflicts(o.conn, p));
@@ -119,18 +123,24 @@ export abstract class SimJunctions extends SimReversible {
       }
       if (o.piece.kind === "conn") {
         const n = o.piece.node;
-        for (const k of n.cluster) for (const x of this.ns[(k.lead ?? k).idx].occ) if (x.conn === o.piece && !(x.entered && x.v.piece !== o.piece)) return true;
+        // (let through and on it, or on the move to it; one let through but stopped short — for these very
+        // pedestrians — is not in their way: they would wait for it, and it for them)
+        for (const k of n.cluster) for (const x of this.ns[(k.lead ?? k).idx].occ) if (x.conn === o.piece && (x.v.piece === o.piece || (!x.entered && x.v.v > 1))) return true;
       }
     }
     return false;
   }
   /** pedestrians are on, or have claimed, a crossing drawn by hand over this connector (or just past it, on its exit lane) */
-  protected handCrossingBlocks(c: Conn): boolean {
+  protected handCrossingBlocks(c: Conn, v?: Vehicle): boolean {
     if (!this.crosses.length) return false;
     const exit = c.outEdge.lanes[c.outLane];
+    // (a crossing it is already on — one drawn over the junction's line — it drives off, rather than wait on it
+    // for pedestrians who wait for it)
+    const on = new Set<number>();
+    if (v) for (const o of this.crossOn.get(v.piece.id) ?? []) if (v.s > o.s0 - 0.3 && v.s - v.len < o.s1) on.add(o.k);
     for (const [piece, near] of [[c, Infinity], [exit, 15]] as const) {
       for (const o of this.crossOn.get(piece.id) ?? []) {
-        if (o.s0 > near) continue;
+        if (o.s0 > near || on.has(o.k)) continue;
         const p = this.crosses[o.k].ped;
         if (p.crossing > 0 || p.claim) return true;
       }
@@ -138,8 +148,8 @@ export abstract class SimJunctions extends SimReversible {
     return false;
   }
   /** pedestrians are on, or have claimed, a crossing this connector drives over */
-  protected pedBlocks(n: CNode, c: Conn): boolean {
-    if (this.handCrossingBlocks(c)) return true;
+  protected pedBlocks(n: CNode, c: Conn, v?: Vehicle): boolean {
+    if (this.handCrossingBlocks(c, v)) return true;
     if (!this.peds[n.idx].length) return false;
     for (const k of c.outEdge.from === n ? [c.inEdge.inArm, c.outEdge.outArm] : [c.inEdge.inArm]) {
       const p = this.pedCross(n, k);
@@ -173,6 +183,8 @@ export abstract class SimJunctions extends SimReversible {
    */
   protected majorTraffic(node: CNode): Conn[] {
     const out: Conn[] = [];
+    // (joining a roundabout's ring of roads: the gap a driver accepts there, as at a roundabout point)
+    const horizon = node.cluster.some(k => k.arms.some(a => a.link.ring)) ? this.P.ringGap : this.P.priorityHorizon;
     for (const arm of node.cluster.length === 1 ? node.arms : node.cluster.flatMap(k => k.arms)) {
       const e = arm.inEdge;
       if (!e || e.sign) continue;
@@ -180,10 +192,11 @@ export abstract class SimJunctions extends SimReversible {
         const list = this.index.get(lp.id); if (!list) continue;
         for (const u of list) {
           if (u.dead || u.route[u.ri] !== e) continue;
-          // queued priority traffic that is standing still lets minor traffic in (zip merging)
-          if (u.v < 3 && !u.granted) continue;
+          // queued priority traffic that is standing still lets minor traffic in (zip merging); round a ring of
+          // roads only that standing still (moving slowly, it drives on round without asking)
+          if (u.v < (horizon === this.P.ringGap ? 0.5 : 3) && !u.granted) continue;
           const dist = lp.len - u.s, eta = dist / Math.max(u.v, 2);
-          if (dist > 70 || eta > this.P.priorityHorizon) continue;
+          if (dist > 70 || eta > horizon) continue;
           const cross = this.crossingFor(u, u.ri, u.lane);
           if (cross && cross[0].kind === "conn") out.push(cross[0] as Conn);
         }
@@ -224,6 +237,69 @@ export abstract class SimJunctions extends SimReversible {
     for (const u of this.index.get(between.id) || []) if (u.s - u.len < v.len + 2) return false;
     return true;
   }
+  /** each roundabout built as a ring of roads (LinkDef.ring): its roads, and how many vehicles it holds before it would lock */
+  private ringsCache: Map<string, { edges: Set<Edge>; cap: number }> | null = null;
+  protected ringOf(tag: string) {
+    if (!this.ringsCache) {
+      this.ringsCache = new Map();
+      for (const e of this.net.edges) {
+        const t = e.link.ring;
+        if (!t) continue;
+        const r = this.ringsCache.get(t) ?? { edges: new Set<Edge>(), cap: 0 };
+        r.edges.add(e);
+        this.ringsCache.set(t, r);
+      }
+      // (one vehicle per 8.5 m of circulating lane, counting its junctions' paths: room to move on, short of locking)
+      for (const r of this.ringsCache.values()) {
+        let len = 0;
+        for (const e of r.edges) len += e.lanes.reduce((s, lp) => s + lp.len, 0) + (e.trimA + e.trimB) * e.n;
+        r.cap = Math.max(2, Math.floor(len / 8.5));
+      }
+    }
+    return this.ringsCache.get(tag)!;
+  }
+  /** joining a roundabout's ring of roads at `c` would fill it up: vehicles on it, on paths round it, and let in to join it */
+  protected ringFull(c: Conn, v: Vehicle): boolean {
+    const tag = c.outEdge.link.ring;
+    if (!tag || c.inEdge.link.ring === tag) return false;
+    const ring = this.ringOf(tag);
+    // vehicles on it, on paths round it or into it (however long: a lane joining it from further away), and
+    // let in to join it — counted once a step, then each grant this step added
+    if (this.ringCountAt !== this.tick) {
+      this.ringCountAt = this.tick; this.ringCount.clear();
+      for (const u of this.vehicles) {
+        if (u.dead) continue;
+        const p = u.piece, t = p.kind === "lane" ? (ring.edges.has(p.edge) ? tag : p.edge.link.ring) : p.kind === "conn" ? p.outEdge.link.ring : undefined;
+        // (let in and about to go: at the line of the lane its grant starts from)
+        const g = !t && u.granted && u.conn && p.kind === "lane" && p.edge === u.conn.inEdge && p.len - u.s < 25 ? u.conn.outEdge.link.ring : undefined;
+        const k = t ?? g;
+        if (k) this.ringCount.set(k, (this.ringCount.get(k) ?? 0) + 1);
+      }
+    }
+    const on = (this.ringCount.get(tag) ?? 0) - (v.granted && v.conn?.outEdge.link.ring === tag ? 1 : 0);
+    // (turns: of those kept waiting because it was full, the one waiting longest goes first when there is room)
+    const waits = this.ringWaits.get(tag) ?? new Map<Vehicle, { since: number; seen: number }>();
+    this.ringWaits.set(tag, waits);
+    for (const [u, w] of waits) if (u.dead || this.tick - w.seen > 20) waits.delete(u);
+    const mine = waits.get(v);
+    if (on + 1 > ring.cap) { waits.set(v, { since: mine?.since ?? this.tick, seen: this.tick }); return true; }
+    let first: Vehicle | null = null, at = Infinity;
+    for (const [u, w] of waits) if (w.since < at) { at = w.since; first = u; }
+    if (first && first !== v) { waits.set(v, { since: mine?.since ?? this.tick, seen: this.tick }); return true; }
+    // (still waiting its turn until it is let in: it may yet have to wait for a gap)
+    if (mine) mine.seen = this.tick;
+    return false;
+  }
+  /** let in to join a ring of roads: it counts for the rest of this step, and its turn is over */
+  protected ringJoined(c: Conn, v: Vehicle) {
+    const tag = c.outEdge.link.ring;
+    if (!tag || c.inEdge.link.ring === tag) return;
+    this.ringWaits.get(tag)?.delete(v);
+    this.ringCount.set(tag, (this.ringCount.get(tag) ?? 0) + 1);
+  }
+  private ringWaits = new Map<string, Map<Vehicle, { since: number; seen: number }>>();
+  private ringCountAt = -1;
+  private ringCount = new Map<string, number>();
   // ------------------------------------------------------------ junctions
   protected arbitrate(st: NodeState) {
     st.occ = st.occ.filter(o => {
@@ -326,7 +402,9 @@ export abstract class SimJunctions extends SimReversible {
         if (sig !== "green" && !sneak && !this.mustGoOnSignal(r.v, r.d, sig)) { deny(r.v, `${sig} light`); continue; }
       }
       // pedestrians on (or about to step onto) the crossing it would drive over
-      if (this.pedBlocks(n, c)) { deny(r.v, "waits for pedestrians on the crossing"); continue; }
+      if (this.pedBlocks(n, c, r.v)) { deny(r.v, "waits for pedestrians on the crossing"); continue; }
+      // a roundabout's ring of roads nearly full: joining it would lock it (it doesn't hold up the others)
+      if (this.ringFull(c, r.v)) { deny(r.v, "the roundabout is full"); continue; }
       let ok = true, why = "", yielded = false;
       // (a vehicle driving through on a path that meets this one, not booked: it is in the way until it is out)
       if (!through.has(c)) for (const x of throughOn) if (x.conn !== c && conflicts(c, x.conn)) { ok = false; why = log ? `path crosses #${x.v.id} driving through` : `path crosses #${x.v.id}`; break; }
@@ -345,6 +423,7 @@ export abstract class SimJunctions extends SimReversible {
       if (ok && !this.exitRoom(st, c, r.v)) { ok = false; holdsQueue = false; this.exitWanted.set(c.outEdge.lanes[c.outLane].id, this.tick); why = log ? `no room on the exit (${c.outEdge.link.name || c.outEdge.link.id} lane ${c.outLane + 1})` : `no room on the exit (lane ${c.outLane + 1})`; }
       if (ok) {
         if (r.early) { if (r.v.early?.conn !== c) continue; r.v.early.granted = true; } else { r.v.conn = c; r.v.granted = true; }
+        this.ringJoined(c, r.v);
         const occ: Occ = { v: r.v, conn: c, entered: false, sneak };
         st.occ.push(occ); if (held !== st.occ) held.push(occ);
         this.denyWhy.delete(r.v.id);

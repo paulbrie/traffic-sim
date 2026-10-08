@@ -1,16 +1,16 @@
 /** Canvas 2D renderer for the plan view (world units = metres). */
-import { connectorHandles, connectorId, connectorPreview, type Compiled, type ConnectorView, type Piece } from "@/engine/compile";
+import { connectorHandles, connectorId, connectorPreview, exitLanesOf, laneAllowed, type Compiled, type ConnectorView, type Piece } from "@/engine/compile";
 import { bayOutline, bayPose, rowEnds } from "@/engine/parking";
 import { pedestrianSpots, type PedSpot } from "./pedestrians";
 import { DEFAULT_MARKER_COLOR } from "@/engine/markers";
 import type { Poly } from "@/engine/geom";
 import type { SimMirror as Sim, VehicleView as Vehicle } from "@/engine/sim/mirror";
-import type { BuildingDef, BuildingUse, LinkDef, Network, Vec } from "@/engine/types";
+import { outlineCurve, type BuildingDef, type BuildingUse, type LinkDef, type Network, type OutlinePoint, type Vec } from "@/engine/types";
 import { laneSign, type LaneSign, type RoadGeo, type Strip } from "./geometry";
 import { buildingColor, speedColor, type Palette } from "./palette";
 import { underlayCorners, type Underlay } from "@/lib/underlay";
 import { junctionRefs } from "@/engine/refs";
-import { drawSatellite } from "./satellite";
+import { drawSatellite, type SatSource } from "./satellite";
 
 export interface Camera { cx: number; cy: number; scale: number; w: number; h: number; dpr: number }
 export const toScreen = (c: Camera, x: number, y: number): Vec => ({ x: (x - c.cx) * c.scale + c.w / 2, y: (y - c.cy) * c.scale + c.h / 2 });
@@ -159,7 +159,19 @@ export interface Overlay {
    */
   connectPick?: { from: Vec; targets: ArrayLike<number>[]; ends?: Vec[]; snap?: Vec | null; cursor: Vec | null } | null;
   /** junction editor: the outline being edited (its points), a painted area being drawn, the pointer */
-  shape?: { outline: Vec[] | null; paint: Vec[] | null; cursor: Vec | null };
+  /** a ring placed by hand, selected (or one of its points): its centre and points */
+  ringSel?: { c: Vec; pts: { x: number; y: number; id: string }[]; picked: string | null } | null;
+  /** the junction group selected (or gone into): its outline and its entry / exit points */
+  jgroup?: { hull: Vec[]; ports: { at: Vec; out: Vec; lanesIn: number; lanesOut: number; joined: boolean }[]; inside: boolean } | null;
+  /** a junction being placed, under the pointer: its roads' centre lines and outline */
+  ghost?: { lines: number[][]; hull: Vec[] } | null;
+  shape?: { outline: OutlinePoint[] | null; paint: Vec[] | null; cursor: Vec | null;
+    /** what is being drawn, and (a junction's outline) whether a click now closes it on its first point */
+    paintKind?: string | null; closable?: boolean;
+    /** the outline point picked, and the one under the pointer (-1: none) */
+    point?: number | null; pointHover?: number;
+    /** a roundabout being built: centre, outer kerb, island and where the roads are cut (m) */
+    ring?: { c: Vec; kerb: number; island: number; join: number; lanes: number } | null };
   selection: { kind: string; id: string } | null;
   hover: { kind: "node" | "link" | "stop" | "handle"; id: string } | null;
   showNodes: boolean;
@@ -181,6 +193,7 @@ export interface Overlay {
   satellite: boolean;
   /** imagery brightness, 0.3–1 (dimmer imagery lets the roads and traffic stand out) */
   satBrightness?: number;
+  satSource?: SatSource;
   onTile?: () => void;
   /** draw every lane connector through the junctions */
   connectors: boolean;
@@ -207,6 +220,28 @@ export interface Overlay {
 }
 
 const connectorCache = new WeakMap<Compiled, ConnectorView[]>();
+/**
+ * The paths through each roundabout, for showing with the connectors: each entry and exit, and the
+ * circulating lanes they use (worked out by the roundabout, not set by hand: not selectable).
+ */
+const ringPathCache = new WeakMap<Compiled, { node: number; pts: ArrayLike<number> }[]>();
+export function ringPathsOf(c: Compiled) {
+  let list = ringPathCache.get(c);
+  if (!list) {
+    list = [];
+    for (const n of c.nodes) {
+      if (!n.controlled || !(n.ringR > 0)) continue;
+      const seen = new Set<Piece>();
+      for (const moves of n.moves.values()) for (const m of moves) for (let a = m.lo; a <= m.hi; a++) {
+        if (!laneAllowed(m, a)) continue;
+        for (const b of exitLanesOf(m, a)) for (const p of c.crossing(m, a, b)) if (!seen.has(p)) { seen.add(p); list.push({ node: n.idx, pts: p.poly.pts }); }
+      }
+    }
+    ringPathCache.set(c, list);
+  }
+  return list;
+}
+
 export function connectorsOf(c: Compiled) {
   let list = connectorCache.get(c);
   if (!list) connectorCache.set(c, (list = connectorPreview(c)));
@@ -288,7 +323,7 @@ const roadLayers = (ov: Overlay): RoadLayers => ({ roads: ov.show.includes("road
 function background(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, paths: PathCache, net: Network, ov: Overlay): Background {
   const { w, h, dpr } = cam, W = Math.max(1, Math.round(w * dpr)), H = Math.max(1, Math.round(h * dpr));
   const ul = ov.underlay?.u.visible && ov.underlay.img ? ov.underlay : null;
-  const key = [cam.cx, cam.cy, cam.scale, W, H, dpr, idOf(paths), idOf(pal), ov.buildings ? idOf(net.buildings) : 0, ov.satellite ? idOf(net.geo) : 0,
+  const key = [cam.cx, cam.cy, cam.scale, W, H, dpr, idOf(paths), idOf(pal), ov.buildings ? idOf(net.buildings) : 0, ov.satellite ? `${idOf(net.geo)}:${ov.satSource ?? "esri"}` : 0,
     ov.satBrightness ?? 1, ov.gridOn ? ov.snapStep : 0, ov.maskRoads ? 1 : 0, ov.show.join("+"),
     ul ? [idOf(ul.img), ul.u.x, ul.u.y, ul.u.rot, ul.u.mpp, ul.u.opacity, ul.u.w, ul.u.h].join(":") : 0].join(",");
   let bg = backgrounds.get(ctx);
@@ -318,7 +353,7 @@ function paintBase(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palette, pat
   if (ov.satellite && net.geo) {
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * (w / 2 - cam.cx * scale), dpr * (h / 2 - cam.cy * scale));
     const a = toWorld(cam, 0, 0), b = toWorld(cam, w, h);
-    drawSatellite(ctx, net.geo, { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y }, scale * dpr, onTile);
+    drawSatellite(ctx, net.geo, { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y }, scale * dpr, onTile, ov.satSource);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const dim = 1 - (ov.satBrightness ?? 1);
     if (dim > 0.005) { ctx.fillStyle = `rgba(0,0,0,${dim.toFixed(3)})`; ctx.fillRect(0, 0, w, h); }
@@ -469,6 +504,8 @@ export function drawScene(
     ctx.strokeStyle = "#e8c547"; ctx.globalAlpha = 0.9; ctx.lineWidth = Math.max(0.18, px * 1.2); ctx.lineCap = "round";
     ctx.beginPath();
     for (const { pts } of list) { ctx.moveTo(pts[0], pts[1]); for (let k = 2; k < pts.length; k += 2) ctx.lineTo(pts[k], pts[k + 1]); }
+    // (roundabouts: their entries, exits and circulating lanes)
+    for (const { node, pts } of ringPathsOf(compiled)) if (!focus || focus.has(node)) { ctx.moveTo(pts[0], pts[1]); for (let k = 2; k < pts.length; k += 2) ctx.lineTo(pts[k], pts[k + 1]); }
     ctx.stroke(); ctx.globalAlpha = 1;
   }
 
@@ -689,18 +726,97 @@ export function drawScene(
   // junction editor: the outline's points (drag; double-click an edge to add, Alt+click to remove),
   // and the painted area being drawn (click points, double-click or Enter to finish)
   if (ov.shape?.outline) {
-    const pts = ov.shape.outline.map(p => toScreen(cam, p.x, p.y));
+    const pts = ov.shape.outline.map(p => toScreen(cam, p.x, p.y)), kerb = outlineCurve(ov.shape.outline).map(p => toScreen(cam, p.x, p.y));
+    // (the kerb as it runs, curves and all; faintly, the straight lines between the points that pull it)
+    if (ov.shape.outline.some(p => p.round)) { ctx.save(); ctx.strokeStyle = pal.select; ctx.globalAlpha = 0.35; ctx.lineWidth = 1; ctx.setLineDash([2, 3]); ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke(); ctx.restore(); }
     ctx.strokeStyle = pal.select; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]);
-    ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = pal.bg; ctx.lineWidth = 2;
-    for (const q of pts) { ctx.beginPath(); ctx.rect(q.x - 4.5, q.y - 4.5, 9, 9); ctx.fill(); ctx.stroke(); }
+    ctx.beginPath(); kerb.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+    ctx.lineWidth = 2;
+    pts.forEach((q, i) => {
+      const picked = ov.shape!.point === i, hover = ov.shape!.pointHover === i, r = picked ? 7 : hover ? 6 : 4.5;
+      if (picked) { ctx.save(); ctx.fillStyle = "rgba(255,122,26,0.25)"; ctx.beginPath(); ctx.arc(q.x, q.y, 14, 0, Math.PI * 2); ctx.fill(); ctx.restore(); }
+      ctx.fillStyle = picked ? "#ff7a1a" : hover ? pal.select : pal.bg; ctx.strokeStyle = picked ? "rgba(0,0,0,0.7)" : pal.select;
+      // (a round point: a circle; a corner: a square)
+      ctx.beginPath(); if (ov.shape!.outline![i].round) ctx.arc(q.x, q.y, r, 0, Math.PI * 2); else ctx.rect(q.x - r, q.y - r, r * 2, r * 2); ctx.fill(); ctx.stroke();
+    });
+    ctx.strokeStyle = pal.select;
+  }
+  // a ring placed by hand: its centre and its points (drag them round it; the picked one filled)
+  if (ov.ringSel) {
+    const c = toScreen(cam, ov.ringSel.c.x, ov.ringSel.c.y);
+    ctx.save(); ctx.strokeStyle = pal.select; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(c.x - 6, c.y); ctx.lineTo(c.x + 6, c.y); ctx.moveTo(c.x, c.y - 6); ctx.lineTo(c.x, c.y + 6); ctx.stroke();
+    for (const p of ov.ringSel.pts) {
+      const q = toScreen(cam, p.x, p.y), picked = p.id === ov.ringSel.picked;
+      ctx.fillStyle = picked ? pal.select : pal.bg; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(q.x, q.y, picked ? 8 : 6.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // a junction group: its outline (dashed while inside it), and its entry / exit points as arrows (in, out, or both)
+  if (ov.jgroup && ov.jgroup.hull.length >= 3) {
+    const pts = ov.jgroup.hull.map(p => toScreen(cam, p.x, p.y));
+    ctx.save(); ctx.strokeStyle = pal.select; ctx.lineWidth = ov.jgroup.inside ? 1.5 : 2; ctx.setLineDash(ov.jgroup.inside ? [8, 5] : []);
+    ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke();
+    if (!ov.jgroup.inside) { ctx.globalAlpha = 0.06; ctx.fillStyle = pal.select; ctx.fill(); ctx.globalAlpha = 1; }
+    ctx.setLineDash([]);
+    for (const p of ov.jgroup.ports) {
+      const q = toScreen(cam, p.at.x, p.at.y), ux = p.out.x, uy = p.out.y, s = 9;
+      ctx.fillStyle = p.joined ? pal.select : pal.bg; ctx.strokeStyle = pal.select; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(q.x, q.y, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      // (an arrow out for lanes leaving, in for lanes arriving)
+      const arrow = (dir: 1 | -1) => {
+        const tip = { x: q.x + ux * (dir > 0 ? 22 : 8), y: q.y + uy * (dir > 0 ? 22 : 8) }, back = { x: tip.x - ux * s * dir, y: tip.y - uy * s * dir };
+        ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(back.x - uy * s * 0.5, back.y + ux * s * 0.5); ctx.lineTo(back.x + uy * s * 0.5, back.y - ux * s * 0.5); ctx.closePath(); ctx.fillStyle = pal.select; ctx.fill();
+      };
+      if (p.lanesOut) arrow(1);
+      if (p.lanesIn) { const tip = { x: q.x + ux * 24, y: q.y + uy * 24 }; ctx.save(); ctx.translate(tip.x - q.x, tip.y - q.y); arrow(-1); ctx.restore(); }
+    }
+    ctx.restore();
+  }
+  // a junction being placed: its roads and outline under the pointer
+  if (ov.ghost) {
+    ctx.save(); ctx.strokeStyle = pal.select; ctx.globalAlpha = 0.85; ctx.lineWidth = Math.max(2, 3.2 * cam.scale); ctx.lineCap = "round";
+    for (const l of ov.ghost.lines) { ctx.beginPath(); for (let k = 0; k < l.length; k += 2) { const q = toScreen(cam, l[k], l[k + 1]); if (k) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); } ctx.stroke(); }
+    ctx.globalAlpha = 1; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+    const h = ov.ghost.hull.map(p => toScreen(cam, p.x, p.y));
+    if (h.length >= 3) { ctx.beginPath(); h.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke(); }
+    ctx.restore();
+  }
+  if (ov.shape?.ring) {
+    const { c: rc, kerb, island, join, lanes } = ov.shape.ring, q = toScreen(cam, rc.x, rc.y), s = cam.scale;
+    ctx.save();
+    ctx.fillStyle = "rgba(120,120,130,0.25)"; ctx.beginPath(); ctx.arc(q.x, q.y, kerb * s, 0, Math.PI * 2); ctx.arc(q.x, q.y, island * s, 0, Math.PI * 2, true); ctx.fill();
+    ctx.strokeStyle = pal.select; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(q.x, q.y, kerb * s, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(q.x, q.y, island * s, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(q.x, q.y, join * s, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = "600 12px ui-sans-serif, system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    const label = `radius ${kerb.toFixed(1)} m · ${lanes} lane${lanes === 1 ? "" : "s"} · roads cut at the dashed circle`;
+    ctx.lineWidth = 3; ctx.strokeStyle = pal.bg; ctx.strokeText(label, q.x, q.y - join * s - 6); ctx.fillStyle = pal.select; ctx.fillText(label, q.x, q.y - join * s - 6);
+    ctx.restore();
   }
   if (ov.shape?.paint) {
+    // (bright orange and thick, to stand out on any aerial image; a junction's outline stays open until it is closed on its first point)
+    const DRAW = "#ff7a1a", junction = ov.shape.paintKind === "junction";
     const pts = ov.shape.paint.map(p => toScreen(cam, p.x, p.y)), cur = ov.shape.cursor ? toScreen(cam, ov.shape.cursor.x, ov.shape.cursor.y) : null;
-    ctx.strokeStyle = pal.select; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
-    ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); if (cur && pts.length) ctx.lineTo(cur.x, cur.y); if (pts.length >= 2) ctx.lineTo(pts[0].x, pts[0].y); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = pal.select;
-    for (const q of pts) { ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, Math.PI * 2); ctx.fill(); }
+    ctx.save();
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    const path = () => { ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); if (cur && pts.length) ctx.lineTo(ov.shape!.closable ? pts[0].x : cur.x, ov.shape!.closable ? pts[0].y : cur.y); if (!junction && pts.length >= 2) ctx.lineTo(pts[0].x, pts[0].y); };
+    // (a dark halo under it, then the line)
+    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 6; ctx.setLineDash([]); path(); ctx.stroke();
+    ctx.strokeStyle = DRAW; ctx.lineWidth = 3.5; ctx.setLineDash([10, 6]); path(); ctx.stroke(); ctx.setLineDash([]);
+    for (const [i, q] of pts.entries()) {
+      const first = i === 0 && junction && pts.length >= 3;
+      ctx.beginPath(); ctx.arc(q.x, q.y, first ? (ov.shape.closable ? 9 : 7) : 5, 0, Math.PI * 2);
+      ctx.fillStyle = first && !ov.shape.closable ? "#fff" : DRAW; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = first ? DRAW : "rgba(0,0,0,0.6)"; ctx.stroke();
+    }
+    if (junction && ov.shape.closable) {
+      ctx.font = "600 12px ui-sans-serif, system-ui, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.strokeText("Click to close", pts[0].x + 12, pts[0].y - 8); ctx.fillStyle = "#fff"; ctx.fillText("Click to close", pts[0].x + 12, pts[0].y - 8);
+    }
+    ctx.restore();
   }
   // a selected zebra crossing (its outline), or row of parking bays (every bay)
   if (sel?.kind === "crossing" || sel?.kind === "parking") {
@@ -731,6 +847,13 @@ export function drawScene(
         const r = hov === id ? 7 : 5.5;
         ctx.fillStyle = hov === id ? pal.select : pal.bg; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+      // its bend points (double-click the path to add one, drag to move, Alt+click to take out)
+      if (h.via.length) {
+        const vs = h.via.map(p => toScreen(cam, p.x, p.y));
+        ctx.save(); ctx.strokeStyle = "#ff7a1a"; ctx.globalAlpha = 0.6; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); for (const q of vs) ctx.lineTo(q.x, q.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.restore();
+        for (const q of vs) { ctx.fillStyle = "#ff7a1a"; ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(q.x, q.y - 7); ctx.lineTo(q.x + 7, q.y); ctx.lineTo(q.x, q.y + 7); ctx.lineTo(q.x - 7, q.y); ctx.closePath(); ctx.fill(); ctx.stroke(); }
       }
       // its two ends: square handles to drag onto another lane end
       for (const q of [P, Q]) { ctx.fillStyle = pal.select; ctx.strokeStyle = pal.bg; ctx.lineWidth = 2; ctx.beginPath(); ctx.rect(q.x - 5, q.y - 5, 10, 10); ctx.fill(); ctx.stroke(); }

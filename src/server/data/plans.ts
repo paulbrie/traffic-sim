@@ -8,6 +8,7 @@ import { db, schema } from "@/db";
 import { DEFAULT_SETTINGS, type Network, type PlanSettings } from "@/engine/types";
 import { sanitizeNetwork, sanitizeSettings } from "@/engine/validate";
 import { sanitizeUnderlay } from "@/lib/underlay";
+import { sanitizeSketch } from "@/lib/lane-sketch";
 import type { CityId, PlanId, VersionId, ViewerId } from "@/lib/ids";
 import type { CanEditCity, CanEditPlan, CanOwnPlan, CanViewPlan } from "../proofs/policy";
 import type { VersionOfPlan } from "../proofs/version-of-plan";
@@ -34,7 +35,7 @@ export async function createPlan<U, C>(
       .insert(schema.plans)
       .values({ cityId: city.value, name: input.name, description: input.description, network: input.network, settings: input.settings ?? DEFAULT_SETTINGS })
       .returning();
-    await recordVersion(tx, plan.id, author.value, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: null }, "create", input.note);
+    await recordVersion(tx, plan.id, author.value, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: null, sketch: null }, "create", input.note);
     await tx.update(schema.cities).set({ updatedAt: new Date() }).where(eq(schema.cities.id, city.value));
     return plan.id;
   });
@@ -45,7 +46,7 @@ export async function createCityWithPlan(owner: ViewerId, city: { name: string; 
   return db.transaction(async tx => {
     const [c] = await tx.insert(schema.cities).values({ ownerId: owner, name: city.name, description: city.description }).returning({ id: schema.cities.id });
     const [p] = await tx.insert(schema.plans).values({ cityId: c.id, name: plan.name, description: plan.description, network: plan.network, settings: plan.settings }).returning();
-    await recordVersion(tx, p.id, owner, { revision: p.revision, network: p.network, settings: p.settings, underlay: null }, "create", plan.note);
+    await recordVersion(tx, p.id, owner, { revision: p.revision, network: p.network, settings: p.settings, underlay: null, sketch: null }, "create", plan.note);
     return { cityId: c.id, planId: p.id };
   });
 }
@@ -60,7 +61,7 @@ export async function createPlanNextTo<U, P>(
   if (!src) return null;
   const id = await db.transaction(async tx => {
     const [plan] = await tx.insert(schema.plans).values({ cityId: src.cityId, name: input.name, description: input.description, network: input.network, settings: input.settings }).returning();
-    await recordVersion(tx, plan.id, author.value, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: null }, "create", input.note);
+    await recordVersion(tx, plan.id, author.value, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: null, sketch: null }, "create", input.note);
     await tx.update(schema.cities).set({ updatedAt: new Date() }).where(eq(schema.cities.id, src.cityId));
     return plan.id;
   });
@@ -74,10 +75,10 @@ export async function duplicatePlan<U, P>(plan: Named<P, PlanId>, author: Named<
   const id = await db.transaction(async tx => {
     const [copy] = await tx
       .insert(schema.plans)
-      .values({ cityId: src.cityId, name: `${src.name} (copy)`.slice(0, 120), description: src.description, network: src.network, settings: src.settings, underlay: src.underlay })
+      .values({ cityId: src.cityId, name: `${src.name} (copy)`.slice(0, 120), description: src.description, network: src.network, settings: src.settings, underlay: src.underlay, sketch: src.sketch })
       .returning();
     await tx.execute(sql`insert into plan_images (plan_id, mime, data, bytes) select ${copy.id}, mime, data, bytes from plan_images where plan_id = ${plan.value}`);
-    await recordVersion(tx, copy.id, author.value, { revision: copy.revision, network: copy.network, settings: copy.settings, underlay: copy.underlay }, "create", `Copied from “${src.name}”`);
+    await recordVersion(tx, copy.id, author.value, { revision: copy.revision, network: copy.network, settings: copy.settings, underlay: copy.underlay, sketch: copy.sketch }, "create", `Copied from “${src.name}”`);
     return copy.id;
   });
   return { id, cityId: src.cityId };
@@ -103,13 +104,13 @@ export async function planRevision<U, P>(plan: Named<P, PlanId>, _proof: CanView
 
 /** The plan as it is now, and who saved it last (with that save's note). */
 export async function planState<U, P>(plan: Named<P, PlanId>, _proof: CanViewPlan<U, P>) {
-  const [p] = await db.select({ revision: schema.plans.revision, updatedAt: schema.plans.updatedAt, network: schema.plans.network, settings: schema.plans.settings, underlay: schema.plans.underlay }).from(schema.plans).where(eq(schema.plans.id, plan.value));
+  const [p] = await db.select({ revision: schema.plans.revision, updatedAt: schema.plans.updatedAt, network: schema.plans.network, settings: schema.plans.settings, underlay: schema.plans.underlay, sketch: schema.plans.sketch }).from(schema.plans).where(eq(schema.plans.id, plan.value));
   if (!p) return null;
   const [v] = await db.select({ note: schema.planVersions.note, name: schema.users.name, email: schema.users.email })
     .from(schema.planVersions).leftJoin(schema.users, eq(schema.users.id, schema.planVersions.userId))
     .where(eq(schema.planVersions.planId, plan.value)).orderBy(desc(schema.planVersions.updatedAt)).limit(1);
   return {
-    revision: p.revision, savedAt: p.updatedAt.toISOString(), network: sanitizeNetwork(p.network), settings: sanitizeSettings(p.settings), underlay: sanitizeUnderlay(p.underlay),
+    revision: p.revision, savedAt: p.updatedAt.toISOString(), network: sanitizeNetwork(p.network), settings: sanitizeSettings(p.settings), underlay: sanitizeUnderlay(p.underlay), sketch: sanitizeSketch(p.sketch),
     by: v ? v.name || v.email || null : null, note: v?.note ?? "",
   };
 }
@@ -123,7 +124,7 @@ export type SaveResult = { ok: true; revision: number; savedAt: string } | { ok:
  */
 export async function savePlan<U, P>(
   plan: Named<P, PlanId>, author: Named<U, ViewerId>,
-  input: { network: unknown; keepBuildings?: boolean; settings: unknown; underlay?: unknown; revision: number; force?: boolean },
+  input: { network: unknown; keepBuildings?: boolean; settings: unknown; underlay?: unknown; sketch?: unknown; revision: number; force?: boolean },
   _proof: CanEditPlan<U, P>,
 ): Promise<SaveResult> {
   const id = plan.value;
@@ -135,17 +136,17 @@ export async function savePlan<U, P>(
     // put them back before sanitising, so zone members that are buildings survive
     if (Array.isArray(kept) && kept.length) raw = { ...raw, buildings: kept };
   }
-  const network = sanitizeNetwork(raw), settings = sanitizeSettings(input.settings), underlay = sanitizeUnderlay(input.underlay);
+  const network = sanitizeNetwork(raw), settings = sanitizeSettings(input.settings), underlay = sanitizeUnderlay(input.underlay), sketch = sanitizeSketch(input.sketch);
   const now = new Date();
   const where = input.force ? eq(schema.plans.id, id) : and(eq(schema.plans.id, id), eq(schema.plans.revision, input.revision));
   const row = await db.transaction(async tx => {
     const [r] = await tx
       .update(schema.plans)
-      .set({ network, settings, underlay, revision: sql`${schema.plans.revision} + 1`, updatedAt: now })
+      .set({ network, settings, underlay, sketch, revision: sql`${schema.plans.revision} + 1`, updatedAt: now })
       .where(where)
       .returning({ revision: schema.plans.revision, cityId: schema.plans.cityId });
     if (!r) return null;
-    await recordVersion(tx, id, author.value, { revision: r.revision, network, settings, underlay }, "save");
+    await recordVersion(tx, id, author.value, { revision: r.revision, network, settings, underlay, sketch }, "save");
     await tx.update(schema.cities).set({ updatedAt: now }).where(eq(schema.cities.id, r.cityId));
     return r;
   });
@@ -192,14 +193,14 @@ export async function restorePlanVersion<U, P, V>(
 ): Promise<number | null> {
   const [ver] = await db.select().from(schema.planVersions).where(eq(schema.planVersions.id, version.value));
   if (!ver) return null;
-  const network = sanitizeNetwork(ver.network), settings = sanitizeSettings(ver.settings), underlay = sanitizeUnderlay(ver.underlay);
+  const network = sanitizeNetwork(ver.network), settings = sanitizeSettings(ver.settings), underlay = sanitizeUnderlay(ver.underlay), sketch = sanitizeSketch(ver.sketch);
   const now = new Date(), when = ver.updatedAt.toISOString().slice(0, 16).replace("T", " ");
   return db.transaction(async tx => {
     const [r] = await tx.update(schema.plans)
-      .set({ network, settings, underlay, revision: sql`${schema.plans.revision} + 1`, updatedAt: now })
+      .set({ network, settings, underlay, sketch, revision: sql`${schema.plans.revision} + 1`, updatedAt: now })
       .where(eq(schema.plans.id, plan.value)).returning({ revision: schema.plans.revision, cityId: schema.plans.cityId });
     if (!r) return null;
-    await recordVersion(tx, plan.value, author.value, { revision: r.revision, network, settings, underlay }, "restore", `Restored the version from ${when} UTC (revision ${ver.revision})`);
+    await recordVersion(tx, plan.value, author.value, { revision: r.revision, network, settings, underlay, sketch }, "restore", `Restored the version from ${when} UTC (revision ${ver.revision})`);
     await tx.update(schema.cities).set({ updatedAt: now }).where(eq(schema.cities.id, r.cityId));
     return r.revision;
   });

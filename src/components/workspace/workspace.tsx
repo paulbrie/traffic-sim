@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import {
-  ArrowLeft, Box, ChevronDown, Pentagon, Footprints, SquareParking, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, SquareTerminal, Search, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, Keyboard, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert,
+  ArrowLeft, Box, ChevronDown, Circle, CircleDot, Pentagon, Footprints, SquareParking, Eye, Bus, Hand, MapPin, Layers, Minus, Table2, SquareTerminal, Search, Spline, Image as ImageIcon, Map as MapIcon, MapPlus, Maximize, MousePointer2, Pause, Play, Redo2, RotateCcw, Route, Undo2, Settings, Keyboard, ZoomIn, ZoomOut, Check, CloudOff, Loader2, TriangleAlert, PenLine,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,8 @@ import { fetchPlanState, savePlan, saveWarMode } from "@/server/actions";
 import { basePath } from "@/lib/base-path";
 import { MAX_LANES, type Network, type PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
-import { allLayersOn, applyRemote, commit, edits, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, markSynced, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll } from "@/state/store";
+import type { Sketch } from "@/lib/lane-sketch";
+import { allLayersOn, applyRemote, commit, edits, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, markSynced, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll, laneSketch$ } from "@/state/store";
 import { DELETABLE, deleteSelected } from "@/state/bulk";
 import { simController } from "@/state/sim-controller";
 import { heliKeys$ } from "@/state/heli-keys";
@@ -32,7 +33,7 @@ import { OsmImportDialog, describeStats, type OsmImportMode } from "@/components
 import { bboxCenter, unproject, type BBox } from "@/lib/osm/area";
 import { suggestSettings } from "@/lib/osm/convert";
 import { startUnderlayImage } from "@/state/underlay-image";
-import { SAT_ATTRIBUTION } from "@/render/satellite";
+import { GOOGLE_LOGO, SAT_ATTRIBUTION, googleImagery, googleImageryInfo } from "@/render/satellite";
 import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
 import * as ops from "@/state/ops";
 import { cn } from "@/lib/utils";
@@ -53,13 +54,22 @@ import { Dataview } from "./dataview";
 import { ProblemConsole, useProblemCount } from "./problem-console";
 import { SearchPalette } from "./search-palette";
 import { AssistantChat } from "./assistant-chat";
-import { deleteJunction } from "@/state/junctions";
+import { LaneSketch } from "./lane-sketch";
+import { MapJunctionControls } from "./map-junction-controls";
+import { JunctionLibrary } from "./junction-library";
+import { BusyNote } from "./busy-note";
+import { deleteJunction, deleteStandalone } from "@/state/junctions";
+import { deleteGroup } from "@/state/groups";
+import { deleteRing, removeRingPoint, ringOfNode } from "@/state/rings";
+import { copyPiece, pastePiece, pieceFromSelection, startPlacing } from "@/state/placing";
 
 const View3D = dynamic(() => import("./view-3d").then(m => m.View3D), { ssr: false, loading: () => <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading 3D…</div> });
 
 export interface WorkspacePlan {
   id: string; name: string; cityId: string; cityName: string;
   network: Network; settings: PlanSettings; underlay: Underlay | null; revision: number; updatedAt: string;
+  /** the lane sketch saved with the plan */
+  sketch: Sketch | null;
   /** what the signed-in user may do: owner / write edit and save, read only views and simulates */
   access: "owner" | "write" | "read";
 }
@@ -67,7 +77,7 @@ export interface WorkspacePlan {
 /** `assistant`: the chat bubble with Claude Code on the dev server (admins, where it is switched on) */
 export function Workspace({ plan, user, prefs, assistant = false }: { plan: WorkspacePlan; user: MenuUser; prefs: UserPrefs; assistant?: boolean }) {
   // load once per mount (the component is keyed by plan id) before children read the stores
-  useState(() => { heliKeys$.next(prefs.heliKeys); simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read"); ui.getValue().warMode = prefs.warMode; setSavedBuildings(plan.network.buildings); startUnderlayImage(); return plan.id; });
+  useState(() => { heliKeys$.next(prefs.heliKeys); simController.start(); loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read", plan.sketch); ui.getValue().warMode = prefs.warMode; setSavedBuildings(plan.network.buildings); startUnderlayImage(); return plan.id; });
   useAutosave(plan.id);
   useLive(plan.id);
   useShortcuts();
@@ -75,6 +85,7 @@ export function Workspace({ plan, user, prefs, assistant = false }: { plan: Work
   const [panel, setPanel] = useDeepSubject(ui, "panel");
   const [dataview] = useDeepSubject(ui, "dataview");
   const [consoleOpen] = useDeepSubject(ui, "console");
+  const [sketchOpen] = useDeepSubject(ui, "sketch");
 
   return (
     <TooltipProvider>
@@ -92,9 +103,12 @@ export function Workspace({ plan, user, prefs, assistant = false }: { plan: Work
               <SpeedLegend />
               <PerfPanel />
               {view === "2d" && <ReplayBar />}
+              {view === "2d" && <MapJunctionControls />}
+              <BusyNote />
               <StatusBar />
               <SearchPalette />
               {assistant && <AssistantChat planName={plan.name} />}
+              {sketchOpen && <LaneSketch />}
             </div>
             {dataview && <Dataview />}
             {consoleOpen && <ProblemConsole />}
@@ -139,6 +153,8 @@ function TopBar({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
         : <SaveIndicator planId={plan.id} />}
       <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} />
       <OptimizeButton planId={plan.id} planName={plan.name} />
+      {plan.access !== "read" && <JunctionLibrary />}
+      <SketchButton />
       <Separator orientation="vertical" className="!h-5" />
       <LayerPicker />
       <div className="ml-auto flex items-center gap-2">
@@ -165,6 +181,16 @@ function TopBar({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
         <UserMenu user={user} />
       </div>
     </header>
+  );
+}
+
+/** opens the lane sketch, a window to draw lanes and connectors freely (an experiment) */
+function SketchButton() {
+  const [open] = useDeepSubject(ui, "sketch");
+  return (
+    <Tip label="Lane sketch (experiment): draw lanes, rings and connectors freely, group lanes into roads">
+      <Button size="sm" variant={open ? "secondary" : "ghost"} aria-pressed={open} onClick={() => { ui.getValue().sketch = !open; }}><PenLine /> Sketch</Button>
+    </Tip>
   );
 }
 
@@ -334,6 +360,8 @@ const TOOLS: { id: Tool; label: string; key: string; icon: React.ReactNode }[] =
   { id: "stop", label: "Place bus stops", key: "B", icon: <Bus /> },
   { id: "marker", label: "Place markers", key: "K", icon: <MapPin /> },
   { id: "junction", label: "Draw junctions", key: "J", icon: <Pentagon /> },
+  { id: "roundabout", label: "Build roundabouts", key: "U", icon: <CircleDot /> },
+  { id: "ring", label: "Place a ring (connect lanes to it by hand)", key: "Q", icon: <Circle /> },
   { id: "crossing", label: "Draw zebra crossings", key: "X", icon: <Footprints /> },
   { id: "parking", label: "Draw parking bays", key: "G", icon: <SquareParking /> },
   { id: "image", label: "Move reference image", key: "I", icon: <ImageIcon /> },
@@ -504,11 +532,20 @@ function SpeedLegend() {
   );
 }
 
-/** Esri's attribution, while its imagery is on screen */
+/** the imagery's attribution (Google: its logo and credits, or why it failed), while it is on screen */
 function SatelliteCredit() {
   const [display] = useDeepSubject(ui, "display");
   const [net] = useSubject(network$);
+  const google = useSyncExternalStore(googleImageryInfo.subscribe, googleImageryInfo.get, googleImageryInfo.get);
   if (!display.satellite || !net.geo) return null;
+  if (display.satSource === "google" && googleImagery) {
+    return (
+      <div className={cn("pointer-events-none absolute bottom-3 left-16 z-10 flex max-w-[60%] items-center gap-1.5 rounded bg-background/80 px-1.5 py-0.5 text-[10px]", google.error ? "text-destructive" : "text-muted-foreground")}>
+        {!google.error && <img src={GOOGLE_LOGO} alt="Google" className="h-3.5 w-auto" />}
+        <span className="truncate">{google.error ?? (google.copyright || "Imagery ©Google")}</span>
+      </div>
+    );
+  }
   return <div className="pointer-events-none absolute bottom-3 left-16 z-10 rounded bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground">{SAT_ATTRIBUTION}</div>;
 }
 
@@ -520,16 +557,22 @@ function StatusBar() {
   const [pickExit] = useDeepSubject(ui, "pickExit");
   const [hintNet] = useSubject(network$);
   const manualJ = !!hintNet.manualJunctions;
-  const hint = pickExit && view === "2d" ? "Click an exit point (marked with a target) to send the transit flow there · Esc to cancel"
+  const [placing] = useDeepSubject(ui, "placing");
+  const [groupEdit] = useDeepSubject(ui, "groupEdit");
+  const hint = placing && view === "2d" ? `Placing ${placing.name}: click to put it down (roads it lands on are cut at its edge and joined to it) · R / Shift+R turns it · Esc cancels`
+    : groupEdit && view === "2d" ? "Inside a junction group: its roads and junctions are edited one by one · Esc comes back out"
+    : pickExit && view === "2d" ? "Click an exit point (marked with a target) to send the transit flow there · Esc to cancel"
     : calib.active && view === "2d" ? "Calibrating: click two points on the image whose real distance you know · Esc to cancel"
     : view === "3d"
     ? "Drag to orbit · right-drag to pan · scroll to zoom · click to select"
     : tool === "road" ? (manualJ ? "Click to place points · C toggles curved · carry on from a road's loose end · junctions are drawn with the Junction tool (J) · Esc to finish" : "Click to place points · C toggles curved · click a road to join it · Shift for 15° · Esc to finish")
       : tool === "stop" ? "Click the side of a road where buses should stop"
         : tool === "marker" ? "Click to place a marker (on a building: on its roof in 3D) · drag a marker to move it"
+        : tool === "roundabout" ? "Click the roundabout's centre — inside a junction drawn by hand, its roads all join the ring — then its outer kerb · Esc to cancel. It is built as one-way roads round the ring, each road joining at a junction where it gives way: edit them like any road and junction"
+        : tool === "ring" ? "Click the ring's centre, then its outer kerb · Esc to cancel. It joins nothing: draw connectors from lane ends onto it (anywhere: a point is made there), and from its points to the roads leaving; double-click it to add a point"
         : tool === "crossing" ? "Click one kerb, then the other: the zebra runs between them (4 m wide; set it in the inspector) · Esc to cancel"
         : tool === "parking" ? "Click both ends of a row of bays, anywhere (cars reach it from the nearest road, within 80 m) · drag a row to move it, an end to stretch it · Esc to cancel"
-        : tool === "junction" ? "Click the junction's corners · double-click or Enter to finish · Esc to cancel. Roads crossing it are cut there; road ends up to 6 m outside move onto it"
+        : tool === "junction" ? "Click the junction's corners, then its first corner again to close it (or Enter) · Esc to cancel. Roads crossing it are cut there; road ends up to 6 m outside join it; with no road it stands on its own until roads are drawn to it"
         : tool === "image" ? "Drag the image to move · corners scale · round handle rotates (Shift: 15°)"
         : "Double-click a road to add a bend point · scroll to pan · ⌘/Ctrl + scroll to zoom";
   return (
@@ -564,18 +607,18 @@ async function doSave(planId: string, force = false) {
   const s = ui.getValue().save;
   s.status = "saving";
   try {
-    const net = network$.getValue(), settings = settings$.getValue(), underlay = underlay$.getValue();
+    const net = network$.getValue(), settings = settings$.getValue(), underlay = underlay$.getValue(), sketch = laneSketch$.getValue();
     // after a conflict ("keep mine") everything is sent, so their building edits can't survive
     const keepBuildings = !force && !!net.buildings?.length && net.buildings === savedBuildings;
     const res = await savePlan(planId, {
       network: keepBuildings ? { ...net, buildings: undefined } : net, keepBuildings,
-      settings, underlay, revision: s.revision, force,
+      settings, underlay, sketch, revision: s.revision, force,
     });
     if (res.ok) {
-      savedBuildings = net.buildings; markSynced(net, settings, underlay); mergeTries = 0;
+      savedBuildings = net.buildings; markSynced(net, settings, underlay, sketch); mergeTries = 0;
       s.revision = res.revision; s.savedAt = res.savedAt; s.message = "";
       // (changed again while saving: still to save)
-      s.status = again || network$.getValue() !== net || settings$.getValue() !== settings || underlay$.getValue() !== underlay ? "dirty" : "saved";
+      s.status = again || network$.getValue() !== net || settings$.getValue() !== settings || underlay$.getValue() !== underlay || laneSketch$.getValue() !== sketch ? "dirty" : "saved";
     } else if (res.reason === "forbidden") {
       s.status = "error"; s.message = "You no longer have edit access";
     } else if (res.reason === "conflict" && mergeTries < 3) {
@@ -671,7 +714,7 @@ function useAutosave(planId: string) {
       lastOther = now;
       onChange();
     };
-    const subs = [ui.subscribe("save/status", onChange), network$.subscribe(onChange), settings$.subscribe(onOther), underlay$.subscribe(onOther)];
+    const subs = [ui.subscribe("save/status", onChange), network$.subscribe(onChange), settings$.subscribe(onOther), underlay$.subscribe(onOther), laneSketch$.subscribe(onOther)];
     const hide = () => { if (document.hidden && ui.getValue().save.status === "dirty") doSave(planId); };
     const unload = (e: BeforeUnloadEvent) => { const st = ui.getValue().save.status; if (st === "dirty" || st === "saving") { e.preventDefault(); } };
     // Cmd/Ctrl+S: save now (even with nothing changed), from anywhere on the page
@@ -708,7 +751,20 @@ function useShortcuts() {
       const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase(), u = ui.getValue();
       if (mod && k === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
       if (mod && k === "y") { e.preventDefault(); redo(); return; }
+      // ⌘C: the junction (group, or the roads) selected, to place again here or in another plan; ⌘V: place it
+      if (mod && k === "c" && u.view === "2d" && !window.getSelection()?.toString()) {
+        const piece = pieceFromSelection(network$.getValue(), selectedAll(u));
+        if (piece) { e.preventDefault(); void copyPiece(piece).then(() => toast.success(`Copied ${piece.name}`, { description: "⌘V / Ctrl+V to place it (here or in another plan)." })); }
+        return;
+      }
+      if (mod && k === "v" && u.view === "2d" && !u.readOnly) {
+        e.preventDefault();
+        void pastePiece().then(p => { if (p) startPlacing(p); else toast.info("Nothing to paste", { description: "Copy a junction (select it, ⌘C) first." }); });
+        return;
+      }
       if (mod) return;
+      // placing a junction: R turns it 15° (Shift+R the other way)
+      if (u.placing && k === "r") { e.preventDefault(); u.placing.turn += ((e.shiftKey ? -15 : 15) * Math.PI) / 180; return; }
       // Shift + letter: a layer on or off (see LAYERS); Shift+A: all of them
       if (e.shiftKey && !e.altKey) {
         if (k === "a") { e.preventDefault(); toggleAllLayers(); return; }
@@ -721,6 +777,8 @@ function useShortcuts() {
       else if (k === "k" && u.view === "2d" && !u.readOnly) setTool("marker");
       else if (k === "j" && u.view === "2d" && !u.readOnly && network$.getValue().manualJunctions) setTool("junction");
       else if (k === "x" && u.view === "2d" && !u.readOnly) setTool("crossing");
+      else if (k === "u" && u.view === "2d" && !u.readOnly) setTool("roundabout");
+      else if (k === "q" && u.view === "2d" && !u.readOnly) setTool("ring");
       else if (k === "g" && u.view === "2d" && !u.readOnly) setTool("parking");
       else if (k === "i" && u.view === "2d" && !u.readOnly) { setTool("image"); u.panel = "image"; }
       else if (k === "c" && u.tool === "road") u.draft.curved = !u.draft.curved;
@@ -733,6 +791,20 @@ function useShortcuts() {
       else if (k === "+" || k === "=") sendView("zoomIn");
       else if (k === "-") sendView("zoomOut");
       else if (k === "escape") select(null);
+      else if (k === "c" && u.shape.edit && u.shape.point != null && u.tool !== "road") {
+        // the picked outline point: the kerb curves round it, or turns a corner there
+        const net = network$.getValue(), nd = net.nodes.find(n => n.id === u.shape.edit), i = u.shape.point;
+        if (nd?.outline?.[i]) commit(ops.setOutline(net, nd.id, nd.outline.map((p, j) => (j === i ? { ...p, round: !p.round } : p))));
+      }
+      else if ((k === "delete" || k === "backspace") && u.shape.edit && u.shape.point != null) {
+        // the picked point of the outline being edited
+        e.preventDefault();
+        const net = network$.getValue(), nd = net.nodes.find(n => n.id === u.shape.edit), i = u.shape.point;
+        if (!nd?.outline) return;
+        if (nd.outline.length <= 3) { toast.info("An outline needs at least three points."); return; }
+        commit(ops.setOutline(net, nd.id, nd.outline.filter((_, j) => j !== i)));
+        u.shape.point = null;
+      }
       else if (k === "delete" || k === "backspace") {
         const sel = u.selection, net = network$.getValue();
         if (!sel) return;
@@ -742,8 +814,13 @@ function useShortcuts() {
         if (all.length > 1) { commit(deleteSelected(net, all.filter(x => DELETABLE.has(x.kind)))); select(null); return; }
         // (a junction drawn by hand, selected — its first road end stands for it: the junction goes, as with its
         // inspector's delete, leaving the roads' ends loose)
-        const hand = sel.kind === "node" ? net.junctions?.find(j => j.nodes[0] === sel.id) : undefined;
-        if (hand) { commit(deleteJunction(net, hand.id)); select(null); }
+        const hand = sel.kind === "node" ? net.junctions?.find(j => j.nodes.includes(sel.id)) : undefined;
+        const ringPt = sel.kind === "node" ? ringOfNode(net, sel.id) : null;
+        if (sel.kind === "ring") { commit(deleteRing(net, sel.id)); select(null); }
+        else if (ringPt) { const r = removeRingPoint(net, ringPt.id, sel.id); if ("error" in r) toast.error(r.error); else { commit(r); select({ kind: "ring", id: ringPt.id }); } }
+        else if (sel.kind === "group") { commit(deleteGroup(net, sel.id)); select(null); }
+        else if (sel.kind === "junction") { commit(deleteStandalone(net, sel.id)); select(null); }
+        else if (hand) { commit(deleteJunction(net, hand.id)); select(null); }
         else if (sel.kind === "node") commit(ops.deleteNode(net, sel.id));
         else if (sel.kind === "link") commit(ops.deleteLink(net, sel.id));
         else if (sel.kind === "stop") commit(ops.deleteStop(net, sel.id));
