@@ -1639,14 +1639,14 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
     </button>
   );
   // (`under`: what the row is listed under, for its key: a lane or connector may be on two junctions whose surfaces overlap)
-  const laneRow = (id: string, depth: number, under = "") => {
+  const laneRow = (id: string, depth: number, under = "", on?: string) => {
     const l = laneById(sketch, id);
     if (!l) return null;
     const next = sketch.connectors.filter(c => c.from.lane === id).map(c => c.to.lane);
     const sign = l.control === "stop" ? <span className="font-medium text-red-600 dark:text-red-400">stop</span> : l.control === "yield" ? <span className="font-medium text-amber-600 dark:text-amber-400">yield</span> : null;
     return row({
       key: `${under}lane:${id}`, depth, on: sel.lanes.includes(id) && !sel.road, hit: { lane: id }, sel: { ...NO_SEL, lanes: [id] }, zoom: piece({ lanes: [id] }),
-      label: <>{id} {sign}</>, note: isFullCircle(l.shape) ? `ring · ${fmtM(laneLength(l.shape))}` : fmtM(laneLength(l.shape)),
+      label: <>{id} {sign}</>, note: [isFullCircle(l.shape) ? `ring · ${fmtM(laneLength(l.shape))}` : fmtM(laneLength(l.shape)), on].filter(Boolean).join(" · "),
       title: next.length ? `Leads on to ${[...new Set(next)].map(laneName).join(", ")}` : "Leads nowhere: cars drive off its end",
     });
   };
@@ -1657,6 +1657,10 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
       key: `${under}conn:${id}`, depth, on: sel.connectors.includes(id), hit: { connector: id }, sel: { ...NO_SEL, connectors: [id] }, zoom: piece({ connectors: [id] }),
       label: <>{id} <span className="text-muted-foreground">{c.from.lane} → {c.to.lane}</span></>, title: `From ${laneName(c.from.lane)} to ${laneName(c.to.lane)}`,
     });
+  // (every lane in no road, whatever is selected: the junction it is on, if any)
+  const orphans = sketch.lanes.filter(l => !inRoad.has(l.id));
+  const orphanJunction = new Map<string, string>();
+  for (const j of sketch.junctions) for (const id of contents.get(j.id)?.lanes ?? []) if (!inRoad.has(id)) orphanJunction.set(id, j.name);
   };
   const open = (key: string) => !closed.has(key);
 
@@ -1771,6 +1775,21 @@ let scratch: HTMLCanvasElement | null = null;
 /**
  * The sketch drawn: `part` "static", everything but what moves with the cars (into the image kept between
  * frames; `size`: the size of the canvas it is for, CSS px), or "dynamic", what moves (the cars, the car
+
+      {orphans.length > 0 && <>
+        <div className="mt-2 border-t pt-1" />
+        {heading("h:orphans", "Lanes in no road", orphans.length)}
+        {open("h:orphans") && <>
+          <p className="px-6 pb-0.5 text-[11px] text-muted-foreground">All of them, whatever is selected · group them into roads with G</p>
+          {(() => {
+            const { shown, more } = capped("orphans", orphans, l => sel.lanes.includes(l.id));
+            return [...shown.flatMap(l => {
+              const r = laneRow(l.id, 0, "orphan:", orphanJunction.get(l.id));
+              return r ? [r] : [];
+            }), moreRow("orphans", more)];
+          })()}
+        </>}
+      </>}
  * picked, the traffic lights), over that image.
  */
 function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic", size?: { w: number; h: number }) {
