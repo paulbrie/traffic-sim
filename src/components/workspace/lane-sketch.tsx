@@ -2397,9 +2397,21 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   if (st.layers.demand && v.scale >= 1.5) {
     const { entries, exits } = demandWays(sk), lane = (id: string) => laneById(sk, id)!;
     const sumW = exits.reduce((a, w) => a + w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0), 0);
+    const tags: { x: number; y: number; hw: number; hh: number }[] = [];
     const tag = (ids: string[], atEnd: boolean, text: string, color: string) => {
-      const l = lane(ids[0]), q = pointAt(l.shape, atEnd ? laneLength(l.shape) : 0), k = (atEnd ? 1 : -1) * 18 * px;
-      label(text, { x: q.p.x + q.d.x * k, y: q.p.y + q.d.y * k }, color);
+      // (out beyond the lane's end by as much of the pill as lies that way and a gap, clear of the point there to
+      // drag; further out while it would cover one put before, a way in and a way out at one road end say)
+      const l = lane(ids[0]), q = pointAt(l.shape, atEnd ? laneLength(l.shape) : 0), sg = atEnd ? 1 : -1;
+      ctx.save(); ctx.font = "600 11px ui-sans-serif, system-ui, sans-serif"; const tw = ctx.measureText(text).width; ctx.restore();
+      const hw = (tw / 2 + 5) * px, hh = 9 * px, reach = Math.abs(q.d.x) * hw + Math.abs(q.d.y) * hh;
+      let k = reach + 12 * px, c = { x: 0, y: 0 };
+      for (let n = 0; n < 40; n++) {
+        c = { x: q.p.x + q.d.x * k * sg, y: q.p.y + q.d.y * k * sg };
+        if (!tags.some(t => Math.abs(t.x - c.x) < t.hw + hw + 2 * px && Math.abs(t.y - c.y) < t.hh + hh + 2 * px)) break;
+        k += 4 * px;
+      }
+      tags.push({ ...c, hw, hh });
+      label(text, c, color);
     };
     for (const w of entries) tag(w.lanes, false, `→ ${Math.round(w.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0))}/h`, dark ? "#4ade80" : "#15803d");
     for (const w of exits) { const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0); tag(w.lanes, true, ws === 0 ? "closed" : `${sumW ? Math.round((ws / sumW) * 100) : 0}% →`, dark ? "#93c5fd" : "#1d4ed8"); }
