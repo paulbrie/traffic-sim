@@ -53,6 +53,47 @@ export interface Sketch {
   traffic?: { rate: number; speed: number };
   /** where it is on Earth: the latitude / longitude of its origin (x east, y south, metres; as a V1 plan's `geo`), for the satellite imagery under it */
   geo?: { lat: number; lon: number };
+  /** zebra crossings drawn by hand (see `SketchCrossing`) */
+  crossings?: SketchCrossing[];
+}
+/**
+ * A zebra crossing, as V1's: from one kerb `a` to the other `b`, `width` metres along the traffic, `peds`
+ * pedestrians an hour. They have priority: cars stop before it while they wait or cross (one too close to
+ * stop goes first); where a light holds the traffic over it, they walk early in its red.
+ */
+export interface SketchCrossing { id: string; a: Pt; b: Pt; width: number; peds: number }
+export const CROSSING_WIDTH = 4, CROSSING_PEDS = 300;
+
+/** a crossing's outline (a and b's sides, `width` apart) and its axes: `u` from kerb to kerb, `v` along the traffic */
+export function crossingFrame(x: SketchCrossing) {
+  const dx = x.b.x - x.a.x, dy = x.b.y - x.a.y, len = Math.hypot(dx, dy) || 1, u = { x: dx / len, y: dy / len }, v = { x: -u.y, y: u.x }, h = x.width / 2;
+  const corners = [
+    { x: x.a.x + v.x * h, y: x.a.y + v.y * h }, { x: x.b.x + v.x * h, y: x.b.y + v.y * h },
+    { x: x.b.x - v.x * h, y: x.b.y - v.y * h }, { x: x.a.x - v.x * h, y: x.a.y - v.y * h },
+  ];
+  return { u, v, len, corners };
+}
+/** is `p` on the crossing (with `pad` metres to spare all round) */
+export function onCrossing(x: SketchCrossing, p: Pt, pad = 0): boolean {
+  const f = crossingFrame(x), qx = p.x - x.a.x, qy = p.y - x.a.y, along = qx * f.u.x + qy * f.u.y, across = qx * f.v.x + qy * f.v.y;
+  return along >= -pad && along <= f.len + pad && Math.abs(across) <= x.width / 2 + pad;
+}
+/** a new crossing from kerb `a` to kerb `b` (the next free id) */
+export function addCrossing(sk: Sketch, a: Pt, b: Pt): [Sketch, SketchCrossing] {
+  const used = new Set((sk.crossings ?? []).map(x => x.id));
+  let n = used.size + 1;
+  while (used.has(`x${n}`)) n++;
+  const r = (q: Pt) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 });
+  const x: SketchCrossing = { id: `x${n}`, a: r(a), b: r(b), width: CROSSING_WIDTH, peds: CROSSING_PEDS };
+  return [{ ...sk, crossings: [...(sk.crossings ?? []), x] }, x];
+}
+export function updateCrossing(sk: Sketch, id: string, patch: Partial<Omit<SketchCrossing, "id">>): Sketch {
+  return { ...sk, crossings: (sk.crossings ?? []).map(x => (x.id === id ? { ...x, ...patch } : x)) };
+}
+export function deleteCrossing(sk: Sketch, id: string): Sketch {
+  const rest = (sk.crossings ?? []).filter(x => x.id !== id);
+  const { crossings: _, ...out } = sk;
+  return rest.length ? { ...out, crossings: rest } : out;
 }
 /** what a junction's surface takes in, and the roads its connectors join */
 export interface JunctionContents { lanes: string[]; connectors: string[]; roads: string[] }
@@ -1644,7 +1685,13 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     if (!str(k?.id) || !a || !b || links.some(x => x.id === k.id)) continue;
     links.push({ id: k.id, a, b, conns: Array.isArray(k.conns) ? (k.conns as unknown[]).filter((c): c is string => typeof c === "string" && connectors.some(x => x.id === c)) : [] });
   }
+  const crossings: SketchCrossing[] = [];
+  for (const x of Array.isArray(o.crossings) ? o.crossings : []) {
+    const ab = pts([x?.a, x?.b], 2);
+    if (!str(x?.id) || !ab || dist(ab[0], ab[1]) < 0.5 || crossings.some(y => y.id === x.id)) continue;
+    crossings.push({ id: x.id, a: ab[0], b: ab[1], width: num(x.width) ? Math.min(12, Math.max(1.5, x.width)) : CROSSING_WIDTH, peds: num(x.peds) ? Math.round(Math.min(5000, Math.max(0, x.peds))) : CROSSING_PEDS });
+  }
   // (nothing drawn and nowhere placed: no sketch)
-  if (!lanes.length && !junctions.length && !geo) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}) };
+  if (!lanes.length && !junctions.length && !geo && !crossings.length) return null;
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}) };
 }
