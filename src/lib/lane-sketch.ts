@@ -521,7 +521,8 @@ function settleRoads(sk: Sketch): Sketch {
   // (connectors kept within their lanes' new lengths)
   const len = new Map(lanes.map(l => [l.id, laneLength(l.shape)]));
   const clamp = (a: LaneAt) => (len.has(a.lane) && a.s > len.get(a.lane)! ? { ...a, s: len.get(a.lane)! } : a);
-  return { ...sk, lanes, roads, connectors: sk.connectors.map(c => ({ ...c, from: clamp(c.from), to: clamp(c.to) })) };
+  // (connectors not clamped kept as they are: their curves are kept with them)
+  return { ...sk, lanes, roads, connectors: sk.connectors.map(c => { const f = clamp(c.from), t = clamp(c.to); return f === c.from && t === c.to ? c : { ...c, from: f, to: t }; }) };
 }
 
 /** a lane turned to run the other way (its connectors stay at the same places) */
@@ -1148,6 +1149,44 @@ function lanesInRoads(sk: Sketch) {
   return x;
 }
 
+/**
+ * Every junction's contents for a sketch, worked out again only for the junctions near what changed since
+ * the sketch asked for last (a drag changes a lane or two and their connectors: the junctions round them);
+ * all of them when the roads changed, or much did.
+ */
+let lastContents: { sk: Sketch; c: Map<string, JunctionContents> } | null = null;
+export function contentsOf(sk: Sketch): Map<string, JunctionContents> {
+  const prev = lastContents;
+  let out: Map<string, JunctionContents> | null = null;
+  if (prev && prev.sk.roads === sk.roads && prev.sk !== sk) {
+    const boxes: Box[] = [], pad = 2;
+    const oldLanes = new Map(prev.sk.lanes.map(l => [l.id, l])), oldConns = new Map(prev.sk.connectors.map(c => [c.id, c]));
+    const moved = new Set<string>();
+    for (const l of sk.lanes) { const o = oldLanes.get(l.id); if (o !== l) { moved.add(l.id); boxes.push(boxOf(samples(l.shape, 2), pad)); if (o) boxes.push(boxOf(samples(o.shape, 2), pad)); } }
+    for (const l of prev.sk.lanes) if (!laneById(sk, l.id)) { moved.add(l.id); boxes.push(boxOf(samples(l.shape, 2), pad)); }
+    for (const c of sk.connectors) {
+      const o = oldConns.get(c.id);
+      if (o === c && !moved.has(c.from.lane) && !moved.has(c.to.lane)) continue;
+      const p = connectorPts(sk, c), q = o && connectorPts(prev.sk, o);
+      if (p) boxes.push(boxOf(p, pad)); if (q) boxes.push(boxOf(q, pad));
+    }
+    const nowConns = new Set(sk.connectors.map(c => c.id));
+    for (const c of prev.sk.connectors) if (!nowConns.has(c.id)) { const q = connectorPts(prev.sk, c); if (q) boxes.push(boxOf(q, pad)); }
+    if (boxes.length <= 400) {
+      const oldJ = new Map(prev.sk.junctions.map(j => [j.id, j]));
+      out = new Map();
+      for (const j of sk.junctions) {
+        const was = prev.c.get(j.id), jb = j.outline.length ? boxOf(outlinePath(j), 0) : null;
+        out.set(j.id, was && oldJ.get(j.id) === j && !(jb && boxes.some(b => boxesMeet(b, jb))) ? was : junctionContents(sk, j));
+      }
+    }
+  }
+  if (prev?.sk === sk) out = prev.c;
+  out ??= new Map(sk.junctions.map(j => [j.id, junctionContents(sk, j)]));
+  lastContents = { sk, c: out };
+  return out;
+}
+
 export function junctionContents(sk: Sketch, j: SketchJunction): JunctionContents {
   if (j.outline.length < 3) return { lanes: [], connectors: [], roads: [] };
   const inRoad = lanesInRoads(sk);
@@ -1334,12 +1373,18 @@ function offsetPolyline(pts: Pt[], o: number): Pt[] {
     return { x: p.x + ((c.y - a.y) / l) * o, y: p.y - ((c.x - a.x) / l) * o };
   });
 }
+// (a road's markings, kept while the road and its lanes are the same: an edit works out only the roads it changed)
+const roadMarks = new WeakMap<SketchRoad, { lanes: SketchLane[]; out: Marking[] }>();
 export function roadMarkings(sk: Sketch): Marking[] {
   const cached = markings.get(sk);
   if (cached) return cached;
-  const out: Marking[] = [];
+  const all: Marking[] = [];
   for (const road of sk.roads) {
     const lanes = road.lanes.map(id => laneById(sk, id)).filter((l): l is SketchLane => !!l);
+    const kept = roadMarks.get(road);
+    if (kept && kept.lanes.length === lanes.length && kept.lanes.every((l, i) => l === lanes[i])) { all.push(...kept.out); continue; }
+    const out: Marking[] = [];
+    roadMarks.set(road, { lanes, out });
     for (const a of lanes) {
       const L = laneLength(a.shape), n = Math.max(2, Math.ceil(L / 0.5));
       let run: Pt[] = [], runWith: { b: SketchLane; same: boolean } | null = null;
@@ -1369,10 +1414,11 @@ export function roadMarkings(sk: Sketch): Marking[] {
       }
       flush();
     }
+    all.push(...out);
   }
-  for (const k of sk.links ?? []) out.push(...(linkGeometry(sk, k)?.lines ?? []));
-  markings.set(sk, out);
-  return out;
+  for (const k of sk.links ?? []) all.push(...(linkGeometry(sk, k)?.lines ?? []));
+  markings.set(sk, all);
+  return all;
 }
 
 export function convexHull(pts: Pt[]): Pt[] {

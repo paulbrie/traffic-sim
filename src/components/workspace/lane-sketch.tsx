@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { cn } from "@/lib/utils";
 import { unproject } from "@/lib/osm/area";
 import {
-  LANE_WIDTH, addLane, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, contentsOf, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -156,7 +156,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const setLayers = setSketchLayers;
   // (without what is gone, deleted by an undo for instance)
   const sel = useMemo(() => prune(rawSel, sketch), [rawSel, sketch]);
-  const contents = useMemo(() => new Map(sketch.junctions.map(j => [j.id, junctionContents(sketch, j)])), [sketch]);
+  // (worked out again only round what changed: a drag on a city-sized sketch stays quick)
+  const contents = useMemo(() => contentsOf(sketch), [sketch]);
 
   const canvas = useRef<HTMLCanvasElement>(null);
   const view = useRef<View>({ cx: 0, cy: 0, scale: 6 });
@@ -298,6 +299,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (the sketch drawn without what moves with the cars, kept between frames: redrawn when something
   // else changed, `full`, or the view or the canvas did; each frame then only the cars and lights over it)
   const kept = useRef<{ canvas: HTMLCanvasElement; stale: boolean; key: string } | null>(null);
+  // (a drag's sketch, shown while the drag goes on: see dragShow)
+  const dragSk = useRef<Sketch | null>(null);
   const redraw = (full = true) => {
     if (full && kept.current) kept.current.stale = true;
     if (frame.current) return;
@@ -307,7 +310,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       if (!c) return;
       // (the background, V2 plans only: the imagery where the plan is, the reference image)
       const l = live.current, bg = (x: typeof l): Background => ({ geo: x.sketch.geo ?? null, satellite: x.layers.satellite, sat: x.sat, underlay: x.layers.image ? x.underlay : null, img: x.ulImg, calib: x.calib, onTile: redraw });
-      const st: PaintState = { ...live.current, view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : null };
+      const st: PaintState = { ...live.current, sketch: dragSk.current ?? live.current.sketch, view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : null };
       const w = c.clientWidth, h = c.clientHeight, v = view.current, key = `${w}x${h}:${v.cx},${v.cy},${v.scale}`;
       kept.current ??= { canvas: document.createElement("canvas"), stale: true, key: "" };
       const k = kept.current;
@@ -353,7 +356,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const setSelCar = (id: number | null) => { setSelCarId(id); setCarInfo(id !== null ? carInfoAt(id, live.current.replayT) : null); };
 
   // ------------------------------------------------------------ cars
-  useEffect(() => { sim.current?.setSketch(sketch); }, [sketch]);
+  // (the sketch sent to the cars once it has stayed the same for a quarter of a second: not at every move of a drag)
+  useEffect(() => {
+    const s = sim.current;
+    if (!s) return;
+    const t = setTimeout(() => s.setSketch(sketch), 250);
+    return () => clearTimeout(t);
+  }, [sketch]);
   useEffect(() => { sim.current?.setParams(params); }, [params]);
   // the cars run in the worker, at the speed picked (it sends a frame after each go: see onSimFrame)
   useEffect(() => { sim.current?.run(running, simSpeed); }, [running, simSpeed]);
@@ -742,29 +751,34 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     redraw();
   };
 
+  /**
+   * A drag's sketch shown as it goes, but kept in the editor until the drag ends (then made the plan's
+   * sketch once: the panels, the cars, saving and undo see the result, not every move of the drag).
+   */
+  const dragShow = (sk: Sketch) => { dragSk.current = sk; redraw(); };
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const raw = toWorld(e), g = drag.current, v = view.current;
     if (g?.kind === "pan") {
       view.current = { ...g.v0, cx: g.v0.cx - (e.clientX - g.x0) / v.scale, cy: g.v0.cy - (e.clientY - g.y0) / v.scale };
     } else if (g?.kind === "move") {
       const p = snap(raw).p;
-      laneSketch$.next(settle(transformPiece(g.base, g.piece, translation(p.x - g.from.x, p.y - g.from.y))));
+      dragShow(settle(transformPiece(g.base, g.piece, translation(p.x - g.from.x, p.y - g.from.y))));
     } else if (g?.kind === "handle" && g.h.kind === "end") {
       // the end goes to the place on the lane under the cursor (and stays at the last one off lanes)
       const { id, end } = g.h, place = placeOn(raw), b = g.base;
       const c = b.connectors.find(x => x.id === id)!, other = c[end === "from" ? "to" : "from"];
       if (place && !(place.lane === other.lane && Math.abs(place.s - other.s) < 0.5 && !c.via?.length))
-        laneSketch$.next({ ...b, connectors: b.connectors.map(x => (x.id === id ? { ...x, [end]: place } : x)) });
+        dragShow({ ...b, connectors: b.connectors.map(x => (x.id === id ? { ...x, [end]: place } : x)) });
     } else if (g?.kind === "handle" && g.h.kind !== "end") {
       const { kind, id, i } = g.h, b = g.base;
       if (kind === "lane") {
         const l = laneById(b, id)!;
-        if (l.shape.kind === "line") laneSketch$.next(settle(reshape(b, id, { ...l.shape, pts: l.shape.pts.map((q, k) => (k === i ? snap(raw, id).p : q)) })));
+        if (l.shape.kind === "line") dragShow(settle(reshape(b, id, { ...l.shape, pts: l.shape.pts.map((q, k) => (k === i ? snap(raw, id).p : q)) })));
       } else if (kind === "bend") {
         const q = { x: Math.round(raw.x * 4) / 4, y: Math.round(raw.y * 4) / 4 };
-        laneSketch$.next({ ...b, connectors: b.connectors.map(c => (c.id === id ? { ...c, via: c.via!.map((x, k) => (k === i ? q : x)) } : c)) });
+        dragShow({ ...b, connectors: b.connectors.map(c => (c.id === id ? { ...c, via: c.via!.map((x, k) => (k === i ? q : x)) } : c)) });
       } else {
-        laneSketch$.next({ ...b, junctions: b.junctions.map(j => (j.id === id ? { ...j, outline: j.outline.map((x, k) => (k === i ? snap(raw).p : x)) } : j)) });
+        dragShow({ ...b, junctions: b.junctions.map(j => (j.id === id ? { ...j, outline: j.outline.map((x, k) => (k === i ? snap(raw).p : x)) } : j)) });
       }
     } else if (g?.kind === "crossing") {
       // (to the half metre, as points are; Shift: off the grid)
@@ -774,7 +788,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         const dx = raw.x - g.from.x, dy = raw.y - g.from.y;
         const patch = g.part === "move" ? (() => { const a = q({ x: x0.a.x + dx, y: x0.a.y + dy }); return { a, b: { x: x0.b.x + a.x - x0.a.x, y: x0.b.y + a.y - x0.a.y } }; })() : { [g.part]: q(raw) };
         const next = { ...x0, ...patch };
-        if (dist(next.a, next.b) >= 1) laneSketch$.next(updateCrossing(g.base, g.id, patch));
+        if (dist(next.a, next.b) >= 1) dragShow(updateCrossing(g.base, g.id, patch));
       }
     } else if (g?.kind === "box") {
       g.b = raw;
@@ -783,7 +797,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       let a = wrapAngle(Math.atan2(raw.y - g.o.y, raw.x - g.o.x) - g.a0);
       a = e.shiftKey ? Math.round(a / step) * step : a;
       g.angle = a;
-      laneSketch$.next(settle(transformPiece(g.base, g.piece, rotation(g.o, a))));
+      dragShow(settle(transformPiece(g.base, g.piece, rotation(g.o, a))));
     }
     if (canvas.current && tool === "select" && !g) {
       const rh = rotateHandle(live.current.sketch, live.current.sel, v.scale);
@@ -803,9 +817,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = drag.current;
     drag.current = null;
+    // (the drag's result made the plan's sketch: undo records it just below)
+    if (dragSk.current) { const sk = dragSk.current; dragSk.current = null; laneSketch$.next(sk); }
     // a right click (not a right drag): the menu for the lane under it, or the lanes selected
     if (g?.kind === "pan" && g.right && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) { openMenu(e); return; }
-    if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || (g?.kind === "crossing" && live.current.sketch !== g.base)) recordSketch(g.base);
+    if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || (g?.kind === "crossing" && laneSketch$.getValue() !== g.base)) recordSketch(g.base);
     if (g?.kind === "box" && dist(g.a, g.b) * view.current.scale > 3) {
       const sk = live.current.sketch, x0 = Math.min(g.a.x, g.b.x), x1 = Math.max(g.a.x, g.b.x), y0 = Math.min(g.a.y, g.b.y), y1 = Math.max(g.a.y, g.b.y);
       const inside = (pts: Pt[] | null) => !!pts?.length && pts.every(p => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1);
