@@ -94,15 +94,16 @@ export function networkToSketch(net: Network): { sketch: Sketch; report: Convert
       const rings = [n.ring, n.ring2].filter((r): r is NonNullable<typeof r> => !!r);
       const ringIds: string[] = [];
       for (const ring of rings) {
-        const m = ring.length, seq = [ring[m - 1].between];
-        for (let k = m - 2; k >= 0; k--) seq.push(ring[k].pass, ring[k].between);
-        seq.push(ring[m - 1].pass);
-        const pts: Pt[] = [];
-        for (const p of seq) for (const q of polyPts(p.poly)) if (!pts.length || Math.hypot(q.x - pts[pts.length - 1].x, q.y - pts[pts.length - 1].y) > 0.05) pts.push(q);
-        if (pts.length > 2 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) < 0.5) pts.pop();
-        const id = `l${++ln}`, s = simplify(pts, 0.1);
-        sk.lanes.push({ id, shape: { kind: "line", pts: s, closed: true }, width: 4.5 });
-        ringIds.push(id); extra.push(...s);
+        // (a true circle round the node, as wide as V1's pieces are from it on average, the way they run: the
+        // pieces themselves overlap, one running back, where two arms are close together)
+        const c = n.pos, pts = ring.flatMap(r => [...polyPts(r.pass.poly), ...polyPts(r.between.poly)]);
+        const radius = pts.reduce((a, p) => a + Math.hypot(p.x - c.x, p.y - c.y), 0) / pts.length;
+        const pp = polyPts(ring[0].pass.poly), a0 = Math.atan2(pp[0].y - c.y, pp[0].x - c.x), a1 = Math.atan2(pp[pp.length - 1].y - c.y, pp[pp.length - 1].x - c.x);
+        const turn = Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0));
+        const id = `l${++ln}`;
+        sk.lanes.push({ id, shape: { kind: "arc", c: { x: r2(c.x), y: r2(c.y) }, r: r2(radius), a0: r2(a0), sweep: turn < 0 ? -2 * Math.PI : 2 * Math.PI }, width: 4.5 });
+        ringIds.push(id);
+        for (let k = 0; k < 24; k++) { const a = (k / 24) * 2 * Math.PI; extra.push({ x: c.x + radius * Math.cos(a), y: c.y + radius * Math.sin(a) }); }
       }
       const at = (ring: string, p: Pt) => nearestOn(laneShape(ring), p).s;
       const seen = new Set<string>();
