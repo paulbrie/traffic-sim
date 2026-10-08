@@ -900,8 +900,12 @@ export class SignalController {
 }
 
 /** every junction's lights, as plans (what the cars and the drawing go by) */
+const plansKept = new WeakMap<Sketch, SignalPlan[]>();
 export function signalPlans(sk: Sketch): SignalPlan[] {
-  return sk.junctions.flatMap(j => { const p = j.lights ? signalPlan(sk, j, junctionContents(sk, j)) : null; return p ? [p] : []; });
+  // (kept per sketch: drawn every frame while the cars run)
+  let x = plansKept.get(sk);
+  if (!x) plansKept.set(sk, (x = sk.junctions.flatMap(j => { const p = j.lights ? signalPlan(sk, j, junctionContents(sk, j)) : null; return p ? [p] : []; })));
+  return x;
 }
 
 /** a lane's shape changed; connectors on it are kept within its new length */

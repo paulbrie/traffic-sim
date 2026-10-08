@@ -310,16 +310,40 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     showAt(Math.min(r.to, Math.max(r.from, t + dt)));
   };
   const frame = useRef(0);
-  const redraw = () => {
+  // (the sketch drawn without what moves with the cars, kept between frames: redrawn when something
+  // else changed, `full`, or the view or the canvas did; each frame then only the cars and lights over it)
+  const kept = useRef<{ canvas: HTMLCanvasElement; stale: boolean; key: string } | null>(null);
+  const redraw = (full = true) => {
+    if (full && kept.current) kept.current.stale = true;
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
+      const c = canvas.current;
+      if (!c) return;
       // (the background, V2 plans only: the imagery where the plan is, the reference image)
       const l = live.current, bg = (x: typeof l): Background => ({ geo: x.sketch.geo ?? null, satellite: x.layers.satellite, sat: x.sat, underlay: x.layers.image ? x.underlay : null, img: x.ulImg, calib: x.calib, onTile: redraw });
-      if (canvas.current) paint(canvas.current, { ...live.current, view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : null });
+      const st: PaintState = { ...live.current, view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : null };
+      const w = c.clientWidth, h = c.clientHeight, v = view.current, key = `${w}x${h}:${v.cx},${v.cy},${v.scale}`;
+      kept.current ??= { canvas: document.createElement("canvas"), stale: true, key: "" };
+      const k = kept.current;
+      if (k.stale || k.key !== key) { paint(k.canvas, st, "static", { w, h }); k.stale = false; k.key = key; }
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+      const ctx = c.getContext("2d")!;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(k.canvas, 0, 0);
+      paint(c, st, "dynamic");
     });
   };
-  useEffect(() => { live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib }; redraw(); });
+  // (a render: the kept image drawn again only if something it shows changed, not for the cars' stats)
+  const shownBy = useRef<unknown[]>([]);
+  useEffect(() => {
+    live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib };
+    const now = [sketch, sel, tool, contents, selPt, layers, page, sat, underlay, ulImg, calib];
+    const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
+    shownBy.current = now;
+    redraw(changed);
+  });
   const changeTool = (t: Tool) => { draft.current = null; setTool(t); redraw(); };
   /** a car picked to inspect (null: none) */
   const setSelCar = (id: number | null) => { setSelCarId(id); setCarInfo(id !== null ? carInfoAt(id, live.current.replayT) : null); };
@@ -340,7 +364,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const c = live.current.follow && live.current.selCar !== null ? s.inspect(live.current.selCar) : null;
       if (c) view.current = { ...view.current, cx: c.p.x, cy: c.p.y };
       if (now - shown > 250) { shown = now; setStats(s.stats()); setReplayRange(s.replayRange()); if (live.current.selCar !== null) setCarInfo(s.inspect(live.current.selCar)); }
-      redraw();
+      redraw(false);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -772,7 +796,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       redraw();
     };
     c.addEventListener("wheel", onWheel, { passive: false });
-    const ro = new ResizeObserver(redraw);
+    const ro = new ResizeObserver(() => redraw());
     ro.observe(c);
     return () => { c.removeEventListener("wheel", onWheel); ro.disconnect(); cancelAnimationFrame(frame.current); frame.current = 0; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1603,8 +1627,14 @@ function markBox(m: { pts: Pt[] }) {
 /** where automatic junction surfaces are put together before going on the sketch */
 let scratch: HTMLCanvasElement | null = null;
 
-function paint(c: HTMLCanvasElement, st: PaintState) {
-  const dpr = Math.min(2, window.devicePixelRatio || 1), w = c.clientWidth, h = c.clientHeight;
+/**
+ * The sketch drawn: `part` "static", everything but what moves with the cars (into the image kept between
+ * frames; `size`: the size of the canvas it is for, CSS px), or "dynamic", what moves (the cars, the car
+ * picked, the traffic lights), over that image.
+ */
+function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic", size?: { w: number; h: number }) {
+  const S = part === "static", D = part === "dynamic";
+  const dpr = Math.min(2, window.devicePixelRatio || 1), w = size?.w ?? c.clientWidth, h = size?.h ?? c.clientHeight;
   if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
   const ctx = c.getContext("2d")!, v = st.view, px = 1 / v.scale, tool = st.tool, placeOn = st.placeOn;
   const { sketch: sk, sel: s } = st;
@@ -1618,8 +1648,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   };
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = col.bg;
-  ctx.fillRect(0, 0, w, h);
+  if (S) { ctx.fillStyle = col.bg; ctx.fillRect(0, 0, w, h); }
   ctx.setTransform(dpr * v.scale, 0, 0, dpr * v.scale, dpr * (w / 2 - v.cx * v.scale), dpr * (h / 2 - v.cy * v.scale));
   const x0 = v.cx - (w / 2) * px, x1 = v.cx + (w / 2) * px, y0 = v.cy - (h / 2) * px, y1 = v.cy + (h / 2) * px;
   // what is in view (with a margin for kerbs and labels): only that is drawn
@@ -1629,9 +1658,9 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   const far = v.scale < 1;
 
   // the background (V2 plans): the imagery and the reference image
-  if (st.bg) drawBackground(ctx, st.bg, { minX: x0, minY: y0, maxX: x1, maxY: y1 }, v.scale * dpr, px);
+  if (S && st.bg) drawBackground(ctx, st.bg, { minX: x0, minY: y0, maxX: x1, maxY: y1 }, v.scale * dpr, px);
   // grid: a line every metre when close, every 10 m stronger
-  for (const [step, color] of [[1, col.minor], [10, col.major]] as const) {
+  if (S) for (const [step, color] of [[1, col.minor], [10, col.major]] as const) {
     // (over imagery or an image: only lines far enough apart, and fainter, not to hide what is under them)
     const under = !!st.bg && ((st.bg.satellite && !!st.bg.geo) || !!(st.bg.underlay?.visible && st.bg.img));
     if (!st.layers.grid || step * v.scale < (under ? 24 : 6)) continue;
@@ -1690,7 +1719,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     sc.globalCompositeOperation = "destination-out"; sc.strokeStyle = "#000"; strokeBands(sc, bands, 0);
     sc.globalCompositeOperation = "source-over"; blit(1);
   };
-  if (st.layers.surfaces) {
+  if (!S) { /* (the surfaces are in the image kept) */ } else if (st.layers.surfaces) {
     // like the roads: one asphalt surface, the union of the road lanes' bands and the junctions (every
     // kerb first, then all the grey over them, so only the outline of the whole shows)
     const roadLanes = sk.roads.flatMap(r => r.lanes).filter(id => vis.lanes.has(id)).map(id => laneById(sk, id)).filter(l => !!l);
@@ -1757,12 +1786,12 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     }
   }
   // (an automatic junction's border, saying what it takes in, shown to edit while it is selected or hovered)
-  for (const j of autos) {
+  if (S) for (const j of autos) {
     if (j.outline.length < 3 || !(jOn(j) || jOver(j))) continue;
     path(outlinePath(j)); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.globalAlpha = 0.6; ctx.lineWidth = px; ctx.setLineDash([4 * px, 3 * px]); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
   // selection and hover halos under the lanes
-  for (const l of sk.lanes) {
+  if (S) for (const l of sk.lanes) {
     if (!vis.lanes.has(l.id)) continue;
     const on = selLanes.has(l.id), over = (hv && "lane" in hv && hv.lane === l.id) || (hv && "lanes" in hv && hv.lanes.includes(l.id));
     if (!on && !over) continue;
@@ -1772,7 +1801,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   }
   // lanes: a green line down the middle (on a faint band as wide as the lane), with chevrons along their direction of travel
   // (far out, under a pixel a metre: only the lines, all in one go)
-  if (far) {
+  if (S && far) {
     ctx.beginPath();
     for (const l of sk.lanes) {
       if (!vis.lanes.has(l.id) || (!st.layers.lanes && !selLanes.has(l.id))) continue;
@@ -1781,7 +1810,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     }
     ctx.lineCap = "butt"; ctx.lineJoin = "round"; ctx.strokeStyle = col.lane; ctx.lineWidth = Math.max(0.2, 1.5 * px); ctx.stroke();
   }
-  for (const l of far ? [] : sk.lanes) {
+  for (const l of far || !S ? [] : sk.lanes) {
     if (!vis.lanes.has(l.id) || (!st.layers.lanes && !selLanes.has(l.id))) continue;
     const pts = samples(l.shape, 0.5), closed = isFullCircle(l.shape);
     ctx.lineCap = "butt"; ctx.lineJoin = "round"; ctx.strokeStyle = col.lane;
@@ -1807,7 +1836,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     ctx.beginPath(); ctx.arc(c.x, c.y, R * 0.68, 0, Math.PI * 2);
     ctx.fillStyle = state === "green" ? pal.go : state === "amber" ? pal.slow : state === "red" ? pal.stop : pal.muted; ctx.fill();
   };
-  for (const plan of st.layers.signs ? signalPlans(sk) : []) {
+  for (const plan of st.layers.signs && D ? signalPlans(sk) : []) {
     const ctl = st.signals?.find(x => x.plan.junction === plan.junction) ?? null;
     // (a lane's light: green if one of its connectors is, else amber if one is, else red)
     const laneState = (lane: string) => {
@@ -1845,7 +1874,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   }
   // the signs, as on the plan's map, on the kerb beside the line (one for lanes side by side with the
   // same sign: by the one on the right): a red octagon, a give-way triangle pointing to the junction
-  for (const l of st.layers.signs ? sk.lanes : []) {
+  for (const l of st.layers.signs && S ? sk.lanes : []) {
     if (!l.control || isFullCircle(l.shape) || !vis.lanes.has(l.id)) continue;
     const { p, d } = pointAt(l.shape, laneLength(l.shape)), n = { x: -d.y, y: d.x }, road = roadOf(sk, l.id);
     const besideRight = road?.lanes.some(id => {
@@ -1868,7 +1897,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     }
   }
   // the lines across the lanes' ends
-  for (const l of st.layers.signs ? sk.lanes : []) {
+  for (const l of st.layers.signs && S ? sk.lanes : []) {
     if (!l.control || isFullCircle(l.shape) || !vis.lanes.has(l.id)) continue;
     const { p, d } = pointAt(l.shape, laneLength(l.shape)), n = { x: -d.y, y: d.x }, hw = l.width / 2;
     if (st.layers.surfaces) {
@@ -1895,7 +1924,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     ctx.lineTo(p.x - d.x * size - d.y * size * 0.5, p.y - d.y * size + d.x * size * 0.5);
     ctx.lineTo(p.x - d.x * size + d.y * size * 0.5, p.y - d.y * size - d.x * size * 0.5); ctx.closePath(); ctx.fill();
   };
-  for (const cn of sk.connectors) {
+  for (const cn of S ? sk.connectors : []) {
     const pts = connectorPts(sk, cn);
     if (!pts) continue;
     // (a phase's connectors, hovered in the lights' panel: lit green)
@@ -1912,7 +1941,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     dot(pts[0], 2.5 * px, ctx.strokeStyle);
   }
   // cars as on the plan's map (cut corners, a windscreen), in its speed colours: green at their desired speed to red when stopped
-  for (const car of st.layers.cars ? st.cars ?? [] : []) {
+  for (const car of st.layers.cars && D ? st.cars ?? [] : []) {
     const { p, d } = car, hl = Math.max(car.len, 5 * px) / 2, hw = Math.max(1.8, 3 * px) / 2, r = Math.min(0.7, hw);
     const at2 = (x: number, y: number): [number, number] => [p.x + d.x * x - d.y * y, p.y + d.y * x + d.x * y];
     const body: [number, number][] = [[hl - r, -hw], [hl, -hw + r], [hl, hw - r], [hl - r, hw], [-hl + r, hw], [-hl, hw - r], [-hl, -hw + r], [-hl + r, -hw]];
@@ -1924,7 +1953,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     ctx.fillStyle = "rgba(20,28,34,0.55)"; ctx.fill();
   }
   // the car picked: the way it will go, and a ring round it
-  if (st.car) {
+  if (D && st.car) {
     const { route, p } = st.car;
     if (route.length > 1) {
       path(route); ctx.strokeStyle = col.sel; ctx.lineWidth = 2.5 * px; ctx.setLineDash([6 * px, 4 * px]); ctx.lineCap = "round"; ctx.stroke(); ctx.setLineDash([]);
@@ -1933,6 +1962,8 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     }
     ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(3.2, 14 * px), 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.lineWidth = 2 * px; ctx.stroke();
   }
+  // (what moves is drawn: the rest is in the image kept)
+  if (D) return;
   // the selection's box and the handle to turn it by
   const turning = st.drag?.kind === "rotate" ? st.drag : null;
   const rh = tool === "select" && !st.draft && (!st.drag || turning) ? rotateHandle(sk, s, v.scale) : null;
