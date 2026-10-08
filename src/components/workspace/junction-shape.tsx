@@ -3,7 +3,9 @@
 import { useDeepSubject } from "subjecto/react";
 import { Check, PenLine, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { alignableNodes, simplifyRing } from "@/engine/compile";
 import type { Network, NodeDef } from "@/engine/types";
 import { commit, ui } from "@/state/store";
@@ -35,9 +37,22 @@ export function JunctionShapeSection({ net, node }: { net: Network; node: NodeDe
           : <Button size="sm" variant="outline" onClick={startEdit}><PenLine /> Edit outline</Button>}
         {node.outline && <Button size="sm" variant="ghost" onClick={() => { commit(ops.setOutline(net, node.id, null)); ui.getValue().shape.edit = null; }}><RotateCcw /> Automatic outline</Button>}
       </div>
+      {editing && node.outline && (() => {
+        const pick = shape.point ?? null, pt = pick !== null ? node.outline[pick] : null;
+        const setRound = (f: (i: number, round: boolean) => boolean) => commit(ops.setOutline(net, node.id, node.outline!.map((p, i) => ({ ...p, round: f(i, !!p.round) }))));
+        return (
+          <div className="flex flex-wrap items-center gap-2">
+            {pt
+              ? <Button size="sm" variant="outline" title="The kerb curves round this point instead of turning a corner there (C)" onClick={() => setRound((i, r) => (i === pick ? !r : r))}>{pt.round ? "Make it a corner" : "Curve round it"} <Kbd className="ml-1">C</Kbd></Button>
+              : <span className="text-xs text-muted-foreground">Click a point to pick it.</span>}
+            <Button size="sm" variant="ghost" onClick={() => setRound(() => true)}>All curved</Button>
+            <Button size="sm" variant="ghost" onClick={() => setRound(() => false)}>All corners</Button>
+          </div>
+        );
+      })()}
       <p className="text-xs text-muted-foreground">
         {editing
-          ? "Drag the square points to follow the kerb on the aerial (hold Shift to leave the grid). Double-click an edge to add a point, Alt+click a point to remove it."
+          ? "Drag the points to follow the kerb on the aerial (hold Shift to leave the grid). Click a point to pick it: Delete takes it out, C makes the kerb curve round it (a circle) or turn a corner there (a square). Double-click an edge to add a point; Alt+click a point to remove it."
           : node.outline ? "Outline drawn by hand." : "Automatic outline: the road ends plus every lane path through the junction."}
       </p>
       {(canAlign || node.align) && (
@@ -52,6 +67,17 @@ export function JunctionShapeSection({ net, node }: { net: Network; node: NodeDe
             clears connector shapes set by hand here.
           </p>
         </>
+      )}
+      {cn.handNodes && (
+        <div className="flex items-center justify-between gap-2 text-sm">
+          <span>Lines between lanes going straight across</span>
+          <ToggleGroup type="single" value={node.markings ?? "dashed"} aria-label="Lines between lanes going straight across"
+            onValueChange={v => v && commit(ops.updateNode(net, node.id, { markings: v === "dashed" ? undefined : (v as "solid" | "none") }))}>
+            <ToggleGroupItem value="dashed" className="h-7 px-2 text-xs" title="Dashed, as on the road: changing lanes allowed">Dashed</ToggleGroupItem>
+            <ToggleGroupItem value="solid" className="h-7 px-2 text-xs" title="Solid: no changing lanes across the junction">Solid</ToggleGroupItem>
+            <ToggleGroupItem value="none" className="h-7 px-2 text-xs" title="No lines across the junction">None</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
       )}
       <label className="flex items-center justify-between gap-2 text-sm">
         <span>Lane lines through the junction</span>

@@ -6,7 +6,7 @@
  */
 import polygonClipping from "polygon-clipping";
 import { Poly, connectorPoints, connectorReach, cubicPoints, signedAngle, normAngle, hull, dist } from "./geom";
-import { MAX_LANES, type ConnShape, type ConnectorDef, type FlowDef, type JunctionDef, type LaneTargets, type LinkDef, type ReversibleDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
+import { MAX_LANES, RING_MIN, RING_MAX, outlineCurve, type ConnShape, type ConnectorDef, type FlowDef, type JunctionDef, type LaneTargets, type LinkDef, type ReversibleDef, Network, NodeDef, StopDef, LineDef, Vec, ZoneDef, ZoneFlowDef } from "./types";
 import { attachBuildings, type Place } from "./buildings";
 import { compileCrossings, type CCrossing } from "./crossings";
 import { compileParking, type CParking } from "./parking";
@@ -443,6 +443,8 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
 
   /** a junction's outline and asphalt (worked out from its lanes, or drawn by hand) */
   function shapeOf(n: CNode) {
+    // (a point of a ring inside a junction drawn by hand: that junction's area covers it)
+    if (isRingPoint(n) && n.cluster.some(k => k.lead === k && k.handNodes)) { n.polygon = []; n.surface = []; return; }
     // a junction's shape comes from the lanes through it: the road ends plus every lane path at its
     // full width, so the road always covers its lanes (and the kerbs follow the turns)
     if (opts.outlines !== false && !n.ringR && !(n.lead && n.lead !== n) && (n.degree >= 3 || n.controlled || n.rounded || outlineArms(n).length > n.arms.length)) {
@@ -460,7 +462,7 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     }
     // an outline drawn by hand wins (its kerb band is worked out the same way)
     if (opts.outlines !== false && !n.ringR && (n.degree >= 2 || n.lead === n) && n.def.outline && n.def.outline.length >= 3) {
-      const outer = orient(n.def.outline.map(p => ({ x: n.pos.x + p.x, y: n.pos.y + p.y })));
+      const outer = orient(outlineCurve(n.def.outline).map(p => ({ x: n.pos.x + p.x, y: n.pos.y + p.y })));
       n.polygon = outer; n.surface = kerbInset(n, outer) ?? outer;
     }
   }
@@ -478,7 +480,8 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     n.peds = n.controlled && !roundabout && n.degree >= 2 ? n.def.peds ?? 0 : 0;
     if (roundabout) {
       const maxW = Math.max(...n.arms.map(a => a.w));
-      n.ringR = n.def.ringLanes === 2 ? Math.max(14, Math.min(36, maxW + 7)) : Math.max(9, Math.min(32, maxW + 5));
+      n.ringR = n.def.ringRadius ? Math.max(RING_MIN, Math.min(RING_MAX, n.def.ringRadius)) - LW / 2
+        : n.def.ringLanes === 2 ? Math.max(14, Math.min(36, maxW + 7)) : Math.max(9, Math.min(32, maxW + 5));
     }
     for (let i = 0; i < n.arms.length; i++) {
       const arm = n.arms[i];
@@ -771,7 +774,8 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     // set by hand or not — is a junction: traffic through it takes turns, as at any other)
     if (n.degree === 2 && !n.controlled && !n.gateway && !n.ringR && pathsMeet(n)) n.controlled = true;
     // (a junction drawn by hand: worked out once all its road ends have their turns, below)
-    if (!n.handNodes) shapeOf(n);
+    // (a ring's points too: whether a junction drawn by hand covers them is known once junctions are grouped, below)
+    if (!n.handNodes && !isRingPoint(n)) shapeOf(n);
     // (a junction drawn by hand is drawn once, by its leading node)
     if (n.lead && n.lead !== n) { n.polygon = []; n.surface = []; }
     // signal phases: group arms that face each other
@@ -835,9 +839,6 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     }
   }
 
-  // junctions drawn by hand: their shape, now that every road end has its turns
-  for (const n of nodes) if (n.handNodes) shapeOf(n);
-
   // ---- junctions over several nodes: nodes linked by connectors grant their crossings as one ----
   {
     const up = nodes.map((_, i) => i), find = (i: number): number => (up[i] === i ? i : (up[i] = find(up[i])));
@@ -857,6 +858,10 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
       }
     }
   }
+
+  // junctions drawn by hand, and the points of rings: their shape, now that every road end has its turns and
+  // junctions are grouped
+  for (const n of nodes) if (n.handNodes || isRingPoint(n)) shapeOf(n);
 
   // ---- lights per connector: green given connector by connector, for every node of the junction ----
   for (const n of nodes) {
@@ -1263,7 +1268,7 @@ function buildConn(n: CNode, move: Movement, a: number, b: number, id: number): 
       pts = connectorPoints(P, tp, X, tq, 14);
       shift = off;
     } else pts = shape && !Array.isArray(shape)
-      ? cubicPoints(P, { x: n.pos.x + shape.c1.x, y: n.pos.y + shape.c1.y }, { x: n.pos.x + shape.c2.x, y: n.pos.y + shape.c2.y }, Q, 14)
+      ? viaPoints(P, { x: n.pos.x + shape.c1.x, y: n.pos.y + shape.c1.y }, (shape.via ?? []).map(v => ({ x: n.pos.x + v.x, y: n.pos.y + v.y })), { x: n.pos.x + shape.c2.x, y: n.pos.y + shape.c2.y }, Q)
       : connectorPoints(P, tp, Q, tq, 14, shape);
   }
   const poly = new Poly(pts);
@@ -1343,14 +1348,18 @@ export function throughConns(c: Compiled, n: CNode): Set<Conn> {
       if (!laneAllowed(m, a)) continue;
       // (a lane set by hand goes where it is set; otherwise a vehicle may take any lane of the road it turns into,
       // the one that suits its next turn: every one is a path that may meet another)
-      const outs = m.map ? [...exitLanesOf(m, a), exitLane(m, a, true)] : Array.from({ length: m.out.n }, (_, b) => b);
+      // (round a ring of roads, staying in its lane: a vehicle changing lanes across a junction there asks first)
+      const onRing = !!m.in.link.ring && m.in.link.ring === m.out.link.ring && a < m.out.n;
+      const outs = onRing ? [a] : m.map ? [...exitLanesOf(m, a), exitLane(m, a, true)] : Array.from({ length: m.out.n }, (_, b) => b);
       for (const b of new Set(outs)) cs.push(c.getConn(m, a, b));
     }
     all.push({ m, cs });
   }
   for (const x of all) {
     if (x.m.node !== n || !x.cs.length || x.m.turn === "U" || (ctl === "priority" && x.m.in.sign === "stop")) continue;
-    if (all.some(y => y.cs.some(b => x.cs.some(a => a !== b && conflicts(a, b))))) continue;
+    // (round a roundabout built as a ring of roads: the ring drives on; traffic joining it gives way)
+    const ring = ctl === "priority" && !!x.m.in.link.ring && x.m.in.link.ring === x.m.out.link.ring;
+    if (all.some(y => !(ring && y.m.in.sign) && y.cs.some(b => x.cs.some(a => a !== b && conflicts(a, b))))) continue;
     for (const a of x.cs) out.add(a);
   }
   return out;
@@ -1441,10 +1450,10 @@ export function connectorHandles(n: CNode, move: Movement, a: number, b: number)
     // free handles: report their reach along the lanes too (for the inspector)
     const h1 = { x: n.pos.x + custom.c1.x, y: n.pos.y + custom.c1.y }, h2 = { x: n.pos.x + custom.c2.x, y: n.pos.y + custom.c2.y };
     const k1 = (h1.x - P.x) * tp.x + (h1.y - P.y) * tp.y, k2 = (Q.x - h2.x) * tq.x + (Q.y - h2.y) * tq.y;
-    return { P, tp, Q, tq, k1, k2, custom: true, free: true, h1, h2 };
+    return { P, tp, Q, tq, k1, k2, custom: true, free: true, h1, h2, via: (custom.via ?? []).map(v => ({ x: n.pos.x + v.x, y: n.pos.y + v.y })) };
   }
   const [k1, k2] = custom ?? connectorReach(P, tp, Q, tq);
-  return { P, tp, Q, tq, k1, k2, custom: !!custom, free: false, h1: { x: P.x + tp.x * k1, y: P.y + tp.y * k1 }, h2: { x: Q.x - tq.x * k2, y: Q.y - tq.y * k2 } };
+  return { P, tp, Q, tq, k1, k2, custom: !!custom, free: false, h1: { x: P.x + tp.x * k1, y: P.y + tp.y * k1 }, h2: { x: Q.x - tq.x * k2, y: Q.y - tq.y * k2 }, via: [] as Vec[] };
 }
 
 /** selection id of a lane connector */
@@ -1576,6 +1585,8 @@ interface OutlineInputs { n: CNode; polys: Ring[][]; pieces: Ring[][]; key: stri
  */
 /** the nodes a junction's outline covers: itself, or a junction drawn by hand's road ends (from its leading node) */
 const outlineNodes = (n: CNode): CNode[] => n.handNodes ?? [n];
+/** a point on a ring (its roads all the ring's): see LinkDef.ring */
+const isRingPoint = (n: CNode) => n.arms.length > 0 && n.arms.every(a => !!a.link.ring);
 function outlineArms(n: CNode): Arm[] {
   if (n.handNodes) {
     // (a junction drawn by hand: every road end's arm, and the roads its connectors lead into elsewhere)
@@ -1605,7 +1616,14 @@ function outlineInputs(n: CNode, inset: number): OutlineInputs {
     const pt = (side: number, back: number): Pair => [m.x + r.x * side - a.mu.x * back, m.y + r.y * side - a.mu.y * back];
     polys.push([[pt(lo, 0), pt(hi, 0), pt(hi, d), pt(lo, d), pt(lo, 0)]]);
   }
-  for (const k of outlineNodes(n)) for (const list of k.moves.values()) for (const mv of list) for (let q = mv.lo; q <= mv.hi; q++) {
+  // (a point of a ring placed by hand covers just the ring through it; a path off the ring is covered by the
+  // junction drawn by hand it leads into, with that junction's own paths)
+  const moves: [CNode, Movement][] = [];
+  const coveredByHand = (k: CNode) => isRingPoint(k) && k.cluster.some(h => h.lead === h && !!h.handNodes);
+  for (const k of outlineNodes(n)) for (const list of k.moves.values()) for (const mv of list) if (!coveredByHand(k) || mv.out.link.ring === mv.in.link.ring) moves.push([k, mv]);
+  // (a junction drawn by hand joined to a ring placed in it: the ring's points and paths too, so its area is one piece round the ring)
+  if (n.handNodes) for (const k of n.cluster) if (isRingPoint(k)) for (const list of k.moves.values()) for (const mv of list) moves.push([k, mv]);
+  for (const [k, mv] of moves) for (let q = mv.lo; q <= mv.hi; q++) {
     if (!laneAllowed(mv, q)) continue;
     for (const b of exitLanesOf(mv, q)) {
       const P = buildConn(k, mv, q, b, -1).poly.pts, cnt = P.length / 2;
@@ -1809,3 +1827,24 @@ function smoothOutline(n: CNode, inset = 0): Vec[] {
   return out;
 }
 
+
+/**
+ * A connector's path drawn by hand: from P, leaving towards handle h1, smoothly through each bend point in turn
+ * (each crossed in the direction from the point before it to the one after), into Q from handle h2. Without bend
+ * points it is the cubic P, h1, h2, Q.
+ */
+export function viaPoints(P: Vec, h1: Vec, via: Vec[], h2: Vec, Q: Vec): number[] {
+  if (!via.length) return cubicPoints(P, h1, h2, Q, 14);
+  const knots = [P, ...via, Q], out: number[] = [];
+  const unitOf = (v: Vec) => { const d = Math.hypot(v.x, v.y) || 1; return { x: v.x / d, y: v.y / d }; };
+  // the direction through each bend point: from the point before it to the one after (Catmull-Rom)
+  const dir = (i: number) => unitOf({ x: knots[i + 1].x - knots[i - 1].x, y: knots[i + 1].y - knots[i - 1].y });
+  for (let i = 0; i + 1 < knots.length; i++) {
+    const A = knots[i], B = knots[i + 1], L = Math.hypot(B.x - A.x, B.y - A.y) / 3;
+    const c1 = i === 0 ? h1 : { x: A.x + dir(i).x * L, y: A.y + dir(i).y * L };
+    const c2 = i + 2 === knots.length ? h2 : { x: B.x - dir(i + 1).x * L, y: B.y - dir(i + 1).y * L };
+    const seg = cubicPoints(A, c1, c2, B, 10);
+    out.push(...(i ? seg.slice(2) : seg));
+  }
+  return out;
+}

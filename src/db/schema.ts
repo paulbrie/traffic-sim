@@ -1,6 +1,7 @@
 import { boolean, customType, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 import type { Network, PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
+import type { Sketch } from "@/lib/lane-sketch";
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
@@ -44,6 +45,8 @@ export const plans = pgTable(
     settings: jsonb("settings").$type<PlanSettings>().notNull(),
     /** reference image placement; the image itself is in plan_images */
     underlay: jsonb("underlay").$type<Underlay>(),
+    /** the lane sketch (lanes, connectors, roads, junctions drawn freely, and its traffic settings) */
+    sketch: jsonb("sketch").$type<Sketch>(),
     /** incremented on every save, used to detect concurrent edits */
     revision: integer("revision").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -69,6 +72,7 @@ export const planVersions = pgTable(
     network: jsonb("network").$type<Network>().notNull(),
     settings: jsonb("settings").$type<PlanSettings>().notNull(),
     underlay: jsonb("underlay").$type<Underlay>(),
+    sketch: jsonb("sketch").$type<Sketch>(),
     userId: uuid("user_id").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -116,6 +120,15 @@ export const userPrefs = pgTable("user_prefs", {
   warMode: boolean("war_mode").notNull().default(false),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** Junctions each user has saved to reuse (the junction library): a junction piece (src/state/groups.ts), named. */
+export const junctionTemplates = pgTable("junction_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  piece: jsonb("piece").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("junction_templates_user_idx").on(t.userId)]);
 
 /** Server-side sessions; the cookie holds a random token, the table holds its SHA-256. */
 export const sessions = pgTable(

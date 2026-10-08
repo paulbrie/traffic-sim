@@ -52,6 +52,7 @@ function catalogue(): Item[] {
   for (const l of net.lines) add("Bus line", l.name, `${l.stops.length} stops · ${l.buses} buses`, l.id, { kind: "line", id: l.id }, null);
   for (const x of net.crossings ?? []) add("Zebra crossing", x.id, `${x.peds} pedestrians / h`, x.id, { kind: "crossing", id: x.id }, { x: (x.a.x + x.b.x) / 2, y: (x.a.y + x.b.y) / 2 });
   for (const p of net.parking ?? []) add("Parking", p.id, `${p.kind} bays · reached from ${roadName(p.link)}`, p.id, { kind: "parking", id: p.id }, { x: (p.line.a.x + p.line.b.x) / 2, y: (p.line.a.y + p.line.b.y) / 2 });
+  for (const g of net.groups ?? []) { const ls = new Set(g.links), pts = net.links.filter(l => ls.has(l.id)).flatMap(l => [l.from, l.to]).map(id => net.nodes.find(n => n.id === id)!).filter(Boolean); add("Junction group", g.name, `${g.links.length} roads`, g.id, { kind: "group", id: g.id }, centroid(pts)); }
   for (const z of net.zones ?? []) add("Zone", z.name, `${z.members.length} members`, z.id, { kind: "zone", id: z.id }, null);
   for (const m of net.markers ?? []) add("Marker", m.label || m.id, "", m.id, { kind: "marker", id: m.id }, { x: m.x, y: m.y });
   if (sim) for (const v of sim.vehicles) if (!v.dead) add("Vehicle", `#${v.id}`, `${v.kind} · ${v.state}`, String(v.id), { kind: "vehicle", id: String(v.id) }, { x: (v.fx + v.rx) / 2, y: (v.fy + v.ry) / 2 });

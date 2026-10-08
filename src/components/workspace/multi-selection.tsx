@@ -1,14 +1,15 @@
 "use client";
 
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Trash2, X } from "lucide-react";
+import { Group, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { DELETABLE, deleteSelected, describeSelection } from "@/state/bulk";
+import { makeGroup } from "@/state/groups";
 import { commit, network$, select, selectedAll, selectMany, ui, type Selection } from "@/state/store";
 import { Section } from "./fields";
 
-const KIND: Partial<Record<Selection["kind"], string>> = { node: "Point", link: "Road", stop: "Stop", line: "Bus line", building: "Building", connector: "Connector", lane: "Lane", vehicle: "Vehicle", zone: "Zone", marker: "Marker" };
+const KIND: Partial<Record<Selection["kind"], string>> = { node: "Point", link: "Road", stop: "Stop", line: "Bus line", building: "Building", connector: "Connector", lane: "Lane", vehicle: "Vehicle", zone: "Zone", marker: "Marker", group: "Junction" };
 
 /** several objects selected together (Shift+click, Shift+drag a box): what they are, and delete them all */
 export function MultiSelection() {
@@ -25,6 +26,9 @@ export function MultiSelection() {
     if (s.kind === "parking") { const p = net.parking?.find(x => x.id === s.id); return p ? `${p.kind} bays` : s.id; }
     return s.id;
   };
+  // (the roads selected, and those between two selected points)
+  const pts = new Set(all.filter(s => s.kind === "node").map(s => s.id));
+  const groupable = [...new Set([...all.filter(s => s.kind === "link").map(s => s.id), ...net.links.filter(l => pts.has(l.from) && pts.has(l.to)).map(l => l.id)])];
   const remove = () => { commit(deleteSelected(net, deletable)); select(null); };
   return (
     <div>
@@ -38,12 +42,16 @@ export function MultiSelection() {
           <Button size="sm" variant="destructive" disabled={readOnly || !deletable.length} onClick={remove}>
             <Trash2 /> Delete {deletable.length === all.length ? "all" : `${deletable.length}`} <Kbd className="ml-1">Del</Kbd>
           </Button>
+          {groupable.length > 0 && !readOnly && (
+            <Button size="sm" variant="outline" title="Keep the selected roads (and those between selected points) together as one junction: move, copy and save it as one"
+              onClick={() => { const [n2, g] = makeGroup(net, groupable); if (g) { commit(n2); select({ kind: "group", id: g.id }); } }}><Group /> Make a junction group</Button>
+          )}
           <Button size="sm" variant="ghost" onClick={() => select(null)}><X /> Clear</Button>
         </div>
         {deletable.length < all.length && <p className="text-xs text-muted-foreground">Lanes and vehicles can&apos;t be deleted; they stay.</p>}
         <p className="text-[11px] text-muted-foreground">
-          Shift+click adds or removes one, Shift+drag on the map adds everything in a box. Deleting a point takes its roads
-          with it. Undo (⌘Z) brings it all back.
+          Shift+click adds or removes one, Shift+drag on the map adds everything in a box. Deleting a junction keeps its
+          roads (their ends left loose). Undo (⌘Z) brings it all back.
         </p>
       </Section>
       <Section title="Selected">

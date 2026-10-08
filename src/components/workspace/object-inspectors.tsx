@@ -163,10 +163,22 @@ function ConnectorShape({ v }: { v: ReturnType<typeof connectorsOf>[number] }) {
         <NumberField id="k2" label="Joins along its lane" unit="m" value={h.k2} min={0.5} max={200} step={0.5} digits={1} onCommit={x => set([h.k1, x], `k2:${key}`)} />
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {h.custom ? "Shaped by hand." : "Automatic shape."} Drag the two round handles on the map (each slides along its lane; hold Shift to move one freely) to reshape it, or a square end onto another lane end to connect it there;
+        {h.custom ? "Shaped by hand." : "Automatic shape."} Drag the two round handles on the map anywhere to reshape it (hold Shift to slide one along its lane instead), or a square end onto another lane end to connect it there;
         the junction&apos;s outline follows its lanes, and vehicles drive the new path.
       </p>
-      {h.custom && <Button variant="outline" size="sm" className="justify-self-start" onClick={() => set(null)}>Automatic shape</Button>}
+      <p className="text-[11px] text-muted-foreground">
+        <span className="font-medium text-foreground">Bend points: {h.via.length}.</span> Double-click the connector on the map to add one where you click; drag one to
+        move it (Shift: off the grid); Alt+click one to take it out. The path runs smoothly through them in order.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {h.via.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => {
+            const rel = (p: { x: number; y: number }) => ({ x: p.x - v.node.pos.x, y: p.y - v.node.pos.y });
+            commit(setConnectorShape(network$.getValue(), nodeId, key, { c1: rel(h.h1), c2: rel(h.h2) }));
+          }}>Remove the bend points</Button>
+        )}
+        {h.custom && <Button variant="outline" size="sm" onClick={() => set(null)}>Automatic shape</Button>}
+      </div>
     </Section>
   );
 }

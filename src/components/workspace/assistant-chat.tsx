@@ -14,6 +14,7 @@ import { replayMomentText } from "@/state/replay-copy";
 import { readSteps, type WalkStep } from "@/lib/walkthrough";
 import { ChatMarkdown } from "./chat-markdown";
 import { Walkthrough } from "./walkthrough";
+import { ResizeEdges, useFloatingBox } from "./floating-box";
 
 /** one step the assistant took (a file read, a command run…) */
 interface ToolStep { name: string; detail: string }
@@ -31,63 +32,6 @@ interface Chat { session: string | null; msgs: Msg[] }
 
 const MAX_PROBLEMS = 400;
 
-/** where the panel is on the map and its size (px from the map's top left); null: the corner it opens in */
-interface Box { x: number; y: number; w: number; h: number }
-type Edge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
-const BOX_KEY = "assistant:box", MIN_W = 300, MIN_H = 240;
-const loadBox = (): Box | null => { try { const b = JSON.parse(localStorage.getItem(BOX_KEY) ?? ""); return b && [b.x, b.y, b.w, b.h].every(Number.isFinite) ? b : null; } catch { return null; } };
-const EDGES: { e: Edge; cls: string }[] = [
-  { e: "n", cls: "top-0 inset-x-2 h-1.5 cursor-ns-resize" }, { e: "s", cls: "bottom-0 inset-x-2 h-1.5 cursor-ns-resize" },
-  { e: "w", cls: "left-0 inset-y-2 w-1.5 cursor-ew-resize" }, { e: "e", cls: "right-0 inset-y-2 w-1.5 cursor-ew-resize" },
-  { e: "nw", cls: "top-0 left-0 size-3 cursor-nwse-resize" }, { e: "se", cls: "bottom-0 right-0 size-3 cursor-nwse-resize" },
-  { e: "ne", cls: "top-0 right-0 size-3 cursor-nesw-resize" }, { e: "sw", cls: "bottom-0 left-0 size-3 cursor-nesw-resize" },
-];
-
-/**
- * Moving the panel by its title bar and sizing it by its edges and corners, kept inside the map; remembered
- * in this browser. A double click on the title bar puts it back in its corner.
- */
-function useBox() {
-  const [box, setBox] = useState<Box | null>(loadBox);
-  const panel = useRef<HTMLDivElement>(null);
-  const start = (e: React.PointerEvent, edge: Edge | null) => {
-    const el = panel.current, parent = el?.offsetParent as HTMLElement | null;
-    if (!el || !parent || e.button !== 0) return;
-    e.preventDefault();
-    const pr = parent.getBoundingClientRect(), r = el.getBoundingClientRect();
-    const b0 = { x: r.left - pr.left, y: r.top - pr.top, w: r.width, h: r.height }, x0 = e.clientX, y0 = e.clientY;
-    let last = b0;
-    const move = (ev: PointerEvent) => {
-      const dx = ev.clientX - x0, dy = ev.clientY - y0, pw = parent.clientWidth, ph = parent.clientHeight;
-      let { x, y, w, h } = b0;
-      if (!edge) { x = Math.max(0, Math.min(pw - w, x + dx)); y = Math.max(0, Math.min(ph - h, y + dy)); }
-      else {
-        if (edge.includes("e")) w = Math.max(MIN_W, Math.min(pw - x, w + dx));
-        if (edge.includes("s")) h = Math.max(MIN_H, Math.min(ph - y, h + dy));
-        if (edge.includes("w")) { const nx = Math.max(0, Math.min(x + w - MIN_W, x + dx)); w += x - nx; x = nx; }
-        if (edge.includes("n")) { const ny = Math.max(0, Math.min(y + h - MIN_H, y + dy)); h += y - ny; y = ny; }
-      }
-      last = { x, y, w, h };
-      setBox(last);
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      document.body.style.userSelect = "";
-      try { localStorage.setItem(BOX_KEY, JSON.stringify(last)); } catch { /* private mode */ }
-    };
-    document.body.style.userSelect = "none";
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
-  const reset = () => { setBox(null); try { localStorage.removeItem(BOX_KEY); } catch { /* private mode */ } };
-  // (kept inside the map when it gets smaller than when the panel was placed)
-  const style: React.CSSProperties | undefined = box ? {
-    left: `max(0px, min(${box.x}px, calc(100% - ${box.w}px)))`, top: `max(0px, min(${box.y}px, calc(100% - ${box.h}px)))`,
-    width: `min(${box.w}px, 100%)`, height: `min(${box.h}px, 100%)`,
-  } : undefined;
-  return { panel, style, placed: !!box, start, reset };
-}
 const keyOf = (planId: string) => `assistant:${planId}`;
 const load = (planId: string): Chat => {
   try { const c = JSON.parse(sessionStorage.getItem(keyOf(planId)) ?? ""); if (c && Array.isArray(c.msgs)) return { session: c.session ?? null, msgs: c.msgs.map((m: Msg) => ({ ...m, busy: false })) }; } catch { /* none yet */ }
@@ -124,7 +68,7 @@ export function AssistantChat({ planName }: { planName: string }) {
   const abort = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const busy = chat.msgs.some(m => m.busy);
-  const { panel, style, placed, start, reset } = useBox();
+  const { panel, style, placed, start, reset } = useFloatingBox("assistant:box", 300, 240);
 
   const update = (f: (c: Chat) => Chat) => setChat(c => { const n = f(c); save(planId, n); return n; });
   const patchLast = (f: (m: Msg) => Msg) => update(c => (c.msgs.length ? { ...c, msgs: [...c.msgs.slice(0, -1), f(c.msgs[c.msgs.length - 1])] } : c));
@@ -201,7 +145,7 @@ export function AssistantChat({ planName }: { planName: string }) {
   return (
     <div ref={panel} style={style} role="dialog" aria-label="Assistant"
       className={`absolute z-20 flex flex-col overflow-hidden rounded-lg border bg-background shadow-lg ${placed ? "" : "bottom-3 left-3 h-[min(620px,calc(100%-1.5rem))] w-[min(420px,calc(100%-1.5rem))]"}`}>
-      {EDGES.map(({ e, cls }) => <div key={e} aria-hidden className={`absolute z-10 touch-none ${cls}`} onPointerDown={ev => start(ev, e)} />)}
+      <ResizeEdges start={start} />
       <div className="flex cursor-move touch-none items-center gap-2 border-b px-3 py-2 select-none" title="Drag to move · double-click to put back"
         onPointerDown={e => { if (!(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!(e.target as HTMLElement).closest("button")) reset(); }}>
         <MessageCircle className="size-4 text-muted-foreground" />

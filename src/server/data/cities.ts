@@ -97,10 +97,10 @@ export async function duplicateCity<U, C>(city: Named<C, CityId>, owner: Named<U
     const plans = await tx.select().from(schema.plans).where(eq(schema.plans.cityId, city.value)).orderBy(asc(schema.plans.createdAt));
     for (const p of plans) {
       const [plan] = await tx.insert(schema.plans)
-        .values({ cityId: copy.id, name: p.name, description: p.description, network: p.network, settings: p.settings, underlay: p.underlay })
+        .values({ cityId: copy.id, name: p.name, description: p.description, network: p.network, settings: p.settings, underlay: p.underlay, sketch: p.sketch })
         .returning();
       await tx.execute(sql`insert into plan_images (plan_id, mime, data, bytes) select ${plan.id}, mime, data, bytes from plan_images where plan_id = ${p.id}`);
-      await recordVersion(tx, plan.id, owner.value, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: plan.underlay }, "create", `Copied from “${src.name} / ${p.name}”`);
+      await recordVersion(tx, plan.id, owner.value, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: plan.underlay, sketch: plan.sketch }, "create", `Copied from “${src.name} / ${p.name}”`);
     }
     return copy.id;
   });

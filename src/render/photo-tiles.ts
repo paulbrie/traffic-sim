@@ -22,8 +22,7 @@ export function photoProvider(): PhotoProvider | null {
   return null;
 }
 
-/** Google's logo, which must be shown with its tiles */
-export const GOOGLE_LOGO = "https://www.gstatic.com/images/branding/googlelogo/svg/googlelogo_clr_74x24px.svg";
+export { GOOGLE_LOGO } from "./satellite";
 
 let draco: DRACOLoader | null = null;
 

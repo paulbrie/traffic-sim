@@ -1,5 +1,5 @@
 /** Static road geometry derived from the compiled network, shared by 2D and 3D renderers. */
-import { CURB, LEVEL_H, armEnd, connectorPreview, exitLane, isRev, laneAllowed, linkCenter, linkZ, throughConns, type Arm, type CNode, type Movement, type Compiled, type Edge } from "@/engine/compile";
+import { CURB, LEVEL_H, armEnd, connectorPreview, exitLane, exitLanesOf, isRev, laneAllowed, linkCenter, linkZ, throughConns, type Arm, type CNode, type Conn, type Movement, type Compiled, type Edge } from "@/engine/compile";
 import { Poly, normAngle } from "@/engine/geom";
 import { bayOutline } from "@/engine/parking";
 import type { LinkDef, MedianKind, Network, Vec } from "@/engine/types";
@@ -448,6 +448,10 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
     });
     if (n.deadEnd) deadEndMarks(geo, onN(n), n.pos, n.arms[0]);
   }
+  // junctions standing on their own (no road joined yet): their area
+  for (const j of net.junctions ?? []) if (!j.nodes.length && j.outline && j.outline.length >= 3) {
+    geo.junctions.push({ nodeId: j.id, polygon: j.outline, surface: j.outline, ring: null, deadEnd: null, on: { lv: 0 } });
+  }
   // painted areas and lane lines through junctions (set on the junction)
   for (const n of c.nodes) {
     const on = onN(n), abs = (q: Vec) => ({ x: n.pos.x + q.x, y: n.pos.y + q.y });
@@ -459,6 +463,15 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
     }
     if (n.def.laneLines && !n.ringR) for (const pts of junctionLaneLines(c, n)) geo.lines.push({ poly: new Poly(pts), dashed: true, kind: "lane", on });
     else for (const l of throughLines(c, n)) geo.lines.push({ ...l, on });
+    // a junction drawn by hand (on its leading road end): the markings of roads driven straight across it
+    if (n.handNodes) {
+      const across = handThroughLines(c, n.handNodes);
+      if (!n.def.laneLines && n.def.markings !== "none") for (const l of across.lines) geo.lines.push({ ...l, ...(n.def.markings === "solid" && l.kind === "lane" ? { dashed: false } : {}), on });
+      for (const m of across.medians) {
+        if (m.kind === "raised") geo.medians.push({ linkId: n.def.id, kind: "raised", strip: m.strip, on });
+        else geo.lines.push({ poly: m.strip.left, dashed: false, kind: "center", on }, { poly: m.strip.right, dashed: false, kind: "center", on });
+      }
+    }
   }
   const lineColor = new Map<string, string>();
   for (const l of net.lines) for (const s of l.stops) if (!lineColor.has(s)) lineColor.set(s, l.color);
@@ -585,6 +598,96 @@ function throughLines(c: Compiled, n: CNode): { poly: Poly; dashed: boolean; kin
     }
   }
   return out;
+}
+
+/** points along a path at k/steps of its length (backwards: from its end) */
+const along = (p: Poly, k: number, steps: number, back = false) => p.at((p.len * (back ? steps - k : k)) / steps);
+
+/** do two polylines (flat x, y lists) cross? */
+function crosses(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
+  for (let i = 0; i + 3 < a.length; i += 2) for (let j = 0; j + 3 < b.length; j += 2) {
+    const [x1, y1, x2, y2, x3, y3, x4, y4] = [a[i], a[i + 1], a[i + 2], a[i + 3], b[j], b[j + 1], b[j + 2], b[j + 3]];
+    const d = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3);
+    if (Math.abs(d) < 1e-9) continue;
+    const t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / d, u = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / d;
+    if (t > 0 && t < 1 && u > 0 && u < 1) return true;
+  }
+  return false;
+}
+
+/**
+ * The markings of a junction drawn by hand, inferred from its connectors: where a road is driven straight
+ * across it, a dashed line between each two neighbouring lanes that carry on side by side into neighbouring
+ * lanes, for as long as their paths run side by side; and on a two-way road (without a median) its centre
+ * line between the innermost lanes each way: as on the road where no turning path crosses it, a single
+ * dashed line where one does (turns into and out of a side road).
+ */
+function handThroughLines(c: Compiled, nodes: CNode[]): { lines: { poly: Poly; dashed: boolean; kind: "lane" | "center" }[]; medians: { kind: MedianKind; strip: Strip }[] } {
+  const out: { poly: Poly; dashed: boolean; kind: "lane" | "center" }[] = [], medians: { kind: MedianKind; strip: Strip }[] = [], steps = 24;
+  const conns = new Set<Conn>();
+  // (every lane-to-lane path the junction's turns use, built as the simulation builds them)
+  for (const k of nodes) for (const list of k.moves.values()) for (const m of list) for (let a = m.lo; a <= m.hi; a++) {
+    if (!laneAllowed(m, a)) continue;
+    // (not the paths onto or off a ring: they cross what is around it, no lane runs beside them)
+    for (const b of exitLanesOf(m, a)) { const x = c.getConn(m, a, b); if (x.role === "turn" && !x.ring && !m.in.link.ring && !m.out.link.ring) conns.add(x); }
+  }
+  const straight = [...conns].filter(x => x.move.turn === "S" && Math.abs(x.move.delta) < 0.35);
+  const turning = [...conns].filter(x => !straight.includes(x));
+  // straight on, by approach and exit: each lane's path (its first)
+  const groups = new Map<string, Map<number, Conn>>();
+  for (const x of straight) {
+    const k = `${x.inEdge.key}>${x.outEdge.key}`, g = groups.get(k) ?? new Map<number, Conn>();
+    if (!g.has(x.inLane)) g.set(x.inLane, x);
+    groups.set(k, g);
+  }
+  // midway between two paths, while they run side by side (`back`: the second runs the other way)
+  const between = (p: Poly, q: Poly, gap: number, back = false) => {
+    const pts: number[] = [];
+    for (let k = 0; k <= steps; k++) {
+      const u = along(p, k, steps), v = along(q, k, steps, back);
+      if (Math.abs(Math.hypot(u.x - v.x, u.y - v.y) - gap) > gap * 0.4 + 0.5) { if (pts.length >= 6) break; pts.length = 0; continue; }
+      pts.push((u.x + v.x) / 2, (u.y + v.y) / 2);
+    }
+    return pts.length >= 6 ? pts : null;
+  };
+  for (const g of groups.values()) for (const [a, x] of g) {
+    const y = g.get(a + 1);
+    if (y && y.outLane === x.outLane + 1) { const pts = between(x.poly, y.poly, x.inEdge.lw); if (pts) out.push({ poly: new Poly(pts), dashed: true, kind: "lane" }); }
+  }
+  // centre lines: the innermost straight path each way along the same two roads
+  const done = new Set<string>();
+  for (const [k, g] of groups) {
+    const x = g.get(0);
+    if (!x || x.outLane !== 0) continue;
+    const back = groups.get(`${x.outEdge.link.id}:${-x.outEdge.dir}>${x.inEdge.link.id}:${-x.inEdge.dir}`)?.get(0);
+    if (!back || back.outLane !== 0 || done.has(k)) continue;
+    done.add(`${back.inEdge.key}>${back.outEdge.key}`);
+    const li = x.inEdge.link, lo = x.outEdge.link, mi = li.median ?? 0, mo = lo.median ?? 0;
+    const pts = between(x.poly, back.poly, (x.inEdge.lw + back.inEdge.lw) / 2 + (mi + mo) / 2, true);
+    if (!pts) continue;
+    const poly = new Poly(pts), crossed = turning.some(t => crosses(pts, t.poly.pts));
+    if (mi || mo) {
+      // a median on both roads, and no turn across it here: it carries on through the junction (its width
+      // going from one road's to the other's); where a turn crosses, the gap stays open
+      if (!mi || !mo || crossed) continue;
+      const half = (k: number) => (mi + (mo - mi) * (k / (poly.pts.length / 2 - 1))) / 2;
+      const side = (sgn: number) => {
+        const q: number[] = [], N = poly.pts.length / 2;
+        for (let k = 0; k < N; k++) {
+          const a = Math.max(0, k - 1), b = Math.min(N - 1, k + 1), tx = poly.pts[2 * b] - poly.pts[2 * a], ty = poly.pts[2 * b + 1] - poly.pts[2 * a + 1], d = Math.hypot(tx, ty) || 1;
+          q.push(poly.pts[2 * k] - (ty / d) * half(k) * sgn, poly.pts[2 * k + 1] + (tx / d) * half(k) * sgn);
+        }
+        return new Poly(q);
+      };
+      medians.push({ kind: li.medianKind === "raised" && lo.medianKind === "raised" ? "raised" : "painted", strip: { left: side(-1), right: side(1) } });
+      continue;
+    }
+    if (crossed) { out.push({ poly, dashed: true, kind: "center" }); continue; }
+    const single = li.lanesF === 1 && li.lanesB === 1;
+    if (single) out.push({ poly, dashed: true, kind: "center" });
+    else out.push({ poly: poly.offset(0.2), dashed: false, kind: "center" }, { poly: poly.offset(-0.2), dashed: false, kind: "center" });
+  }
+  return { lines: out, medians };
 }
 
 /**

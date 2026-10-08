@@ -22,6 +22,32 @@ export interface SignalTiming {
   separate?: boolean;
 }
 
+/** a roundabout's outer kerb radius set by hand: at least, at most (m) */
+export const RING_MIN = 8, RING_MAX = 60;
+
+/** a point of a junction's outline drawn by hand: a corner, or (`round`) one the kerb curves round smoothly */
+export interface OutlinePoint { x: number; y: number; round?: boolean }
+
+/**
+ * The outline as the kerb runs: sharp corners kept, round ones curved — from halfway along the edge before
+ * to halfway along the edge after, pulled towards the point (so two round points next to each other make one
+ * smooth curve between them).
+ */
+export function outlineCurve(pts: readonly OutlinePoint[], steps = 8): Vec[] {
+  if (!pts.some(p => p.round)) return pts.map(p => ({ x: p.x, y: p.y }));
+  const out: Vec[] = [], n = pts.length, mid = (a: Vec, b: Vec) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    if (!p.round) { out.push({ x: p.x, y: p.y }); continue; }
+    const a = mid(pts[(i - 1 + n) % n], p), b = mid(p, pts[(i + 1) % n]);
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps, u = 1 - t;
+      out.push({ x: u * u * a.x + 2 * u * t * p.x + t * t * b.x, y: u * u * a.y + 2 * u * t * p.y + t * t * b.y });
+    }
+  }
+  return out;
+}
+
 export interface NodeDef {
   id: string;
   x: number;
@@ -59,6 +85,8 @@ export interface NodeDef {
    * kerb lane is for the first exit and the others for the rest.
    */
   ringLanes?: 1 | 2;
+  /** Roundabouts: the outer kerb's radius (m), set by hand (the Roundabout tool); missing = sized to fit its roads */
+  ringRadius?: number;
   /**
    * Lane connections set by hand, per turn: key "inLink:dir>outLink:dir" (the directed roads in and
    * out), value per incoming lane (0 = leftmost) the outgoing lane it feeds, several (the first is the
@@ -81,11 +109,16 @@ export interface NodeDef {
   /** approaches and exits (edge keys "link:dir") left unconnected on purpose */
   closed?: string[];
   /** junction outline drawn by hand (outer kerb edge), points relative to the node; replaces the automatic one */
-  outline?: Vec[];
+  outline?: OutlinePoint[];
   /** painted areas on the junction: hatched (no driving) or kerbed islands; points relative to the node */
   paint?: { kind: "hatch" | "island"; pts: Vec[] }[];
   /** draw lane lines through the junction, between neighbouring lane paths */
   laneLines?: boolean;
+  /**
+   * A junction drawn by hand: the lines between lanes driven straight across it (worked out from its
+   * connectors) solid (no changing lanes across it) or left out; missing = dashed, as on the road.
+   */
+  markings?: "solid" | "none";
   /**
    * Line up lanes: a one-way road carrying on one direction of a two-way road here has its lanes shifted
    * sideways (fading out along it) so they continue exactly where that direction's lanes are.
@@ -97,7 +130,11 @@ export interface NodeDef {
 export type LaneTargets = number | number[] | null;
 
 /** a lane connector's hand-set curve: handle lengths along the lanes, or free handle points (relative to its node) */
-export type ConnShape = [number, number] | { c1: Vec; c2: Vec };
+export type ConnShape = [number, number] | {
+  c1: Vec; c2: Vec;
+  /** bend points it passes through, in order from the lane it leaves (relative to the node): the curve runs smoothly through them */
+  via?: Vec[];
+};
 
 /**
  * A lane connector: lane `a` (0 = leftmost at the line) of the road arriving (edge key "link:dir", the
@@ -184,6 +221,11 @@ export interface LinkDef {
    * drawn between the slip lane and the junction corner.
    */
   slip?: string | null;
+  /**
+   * A roundabout's circulating road (built by the Roundabout tool): the roundabout's id, the same on all its
+   * roads. Traffic joining it waits while it is nearly full, so the ring can't lock itself.
+   */
+  ring?: string;
   /** width of each lane (m); missing = 3.2 */
   laneWidth?: number;
   /**
@@ -352,7 +394,30 @@ export interface MarkerDef {
  * node leads: its control, signal timing, lights and outline (NodeDef.outline, relative to it) are the
  * junction's.
  */
-export interface JunctionDef { id: string; nodes: string[] }
+export interface JunctionDef {
+  id: string; nodes: string[];
+  /**
+   * A junction standing on its own, no road joined to it yet (`nodes` empty): its outline (world m). Roads drawn
+   * to it, or across it, join it (and it becomes an ordinary junction drawn by hand, held by its first road end).
+   */
+  outline?: Vec[];
+}
+
+/**
+ * A junction group: roads and the junctions between them (a roundabout's ring and its entries, say) kept
+ * together as one junction: selected, moved, copied and saved as one, its inside edited like any roads and
+ * junctions. Its points are those of its roads; its loose ends, and its points other roads join, are its
+ * entry and exit points.
+ */
+export interface GroupDef { id: string; name: string; links: string[] }
+
+/**
+ * A ring placed by hand (the Ring tool): the circulating road of a roundabout of your own making, its roads
+ * (LinkDef.ring = this id) running anticlockwise round `x`, `y` between its points, which are where lanes join
+ * it or leave it (by lane connectors drawn to and from them). Its roads follow it: moving a point, the centre or
+ * the radius redraws them.
+ */
+export interface RingDef { id: string; x: number; y: number; /** outer kerb radius (m) */ kerb: number; lanes: 1 | 2 }
 
 /**
  * A zebra crossing drawn by hand, anywhere: across a road, or inside a junction. `a` → `b` runs from
@@ -444,6 +509,10 @@ export interface Network {
   manualJunctions?: boolean;
   /** junctions drawn by hand */
   junctions?: JunctionDef[];
+  /** junction groups (see GroupDef) */
+  groups?: GroupDef[];
+  /** rings placed by hand (see RingDef) */
+  rings?: RingDef[];
   /** zebra crossings drawn by hand */
   crossings?: CrossingDef[];
   /** rows of parking bays */

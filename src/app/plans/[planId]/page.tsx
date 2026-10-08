@@ -4,6 +4,7 @@ import { WorkspaceClient } from "@/components/workspace/workspace-client";
 import { getPlan, getUserPrefs } from "@/server/queries";
 import { sanitizeNetwork, sanitizeSettings } from "@/engine/validate";
 import { sanitizeUnderlay } from "@/lib/underlay";
+import { sanitizeSketch } from "@/lib/lane-sketch";
 import { DbSetupNotice } from "@/components/db-setup-notice";
 import { tryDb } from "@/server/db-status";
 import { getCurrentUser, requireUser } from "@/server/auth";
@@ -29,7 +30,7 @@ export default async function PlanPage({ params }: PageProps<"/plans/[planId]">)
     <WorkspaceClient
       plan={{
         id: plan.id, name: plan.name, cityId: plan.cityId, cityName,
-        network: sanitizeNetwork(plan.network), settings: sanitizeSettings(plan.settings), underlay: sanitizeUnderlay(plan.underlay),
+        network: sanitizeNetwork(plan.network), settings: sanitizeSettings(plan.settings), underlay: sanitizeUnderlay(plan.underlay), sketch: sanitizeSketch(plan.sketch),
         revision: plan.revision, updatedAt: plan.updatedAt.toISOString(), access,
       }}
       user={{ email: user.email, name: user.name, role: user.role }}

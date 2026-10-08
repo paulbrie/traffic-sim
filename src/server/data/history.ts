@@ -5,6 +5,7 @@ import { and, desc, eq, lt, sql } from "drizzle-orm";
 import { db, schema } from "@/db";
 import type { Network, PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
+import type { Sketch } from "@/lib/lane-sketch";
 
 /** autosaves by the same person within this window update the newest version instead of adding one */
 const SESSION_MS = 3 * 60_000;
@@ -12,7 +13,7 @@ const SESSION_MS = 3 * 60_000;
 export const KEEP_VERSIONS = 300;
 
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-export interface Snapshot { revision: number; network: Network; settings: PlanSettings; underlay: Underlay | null }
+export interface Snapshot { revision: number; network: Network; settings: PlanSettings; underlay: Underlay | null; sketch: Sketch | null }
 
 export async function recordVersion(tx: Tx, planId: string, userId: string, snap: Snapshot, kind: "create" | "save" | "restore", note = "") {
   const now = new Date();

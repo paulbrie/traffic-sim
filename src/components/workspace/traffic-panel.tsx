@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { googleImagery, type SatSource } from "@/render/satellite";
 import { network$, select, setSettings, settings$, stats$, ui } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { sendView } from "@/state/commands";
@@ -118,6 +120,15 @@ export function TrafficPanel() {
             <Switch checked={display[k]} onCheckedChange={v => setDisplay({ ...display, [k]: v })} />
           </label>
         ))}
+        {net.geo && display.satellite && googleImagery && (
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span>Imagery</span>
+            <ToggleGroup type="single" value={display.satSource} onValueChange={v => v && setDisplay({ ...display, satSource: v as SatSource })} aria-label="Where the satellite imagery comes from">
+              <ToggleGroupItem value="esri" className="h-7 px-2.5 text-xs" title="Esri World Imagery (free)">Esri</ToggleGroupItem>
+              <ToggleGroupItem value="google" className="h-7 px-2.5 text-xs" title="Google Maps satellite tiles: sharper in most cities; billed per thousand tiles by Google">Google</ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+        )}
         {net.geo && display.satellite && (
           <div className="grid gap-2">
             <Label htmlFor="satb" className="flex justify-between text-sm font-normal"><span>Imagery brightness</span><span className="font-mono text-xs tabular text-muted-foreground">{Math.round(display.satBrightness * 100)}%</span></Label>

@@ -3,7 +3,7 @@
 import { Fragment } from "react";
 import { toast } from "sonner";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { ArrowLeftRight, Footprints, Merge, Minus, Plus, Spline, TrafficCone, Trash2, TriangleAlert, Minus as StraightIcon } from "lucide-react";
+import { ArrowLeftRight, Footprints, Group, Merge, Minus, Plus, Spline, TrafficCone, Trash2, TriangleAlert, Minus as StraightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -14,10 +14,10 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Kbd } from "@/components/ui/kbd";
-import { commit, network$, select, stats$, ui } from "@/state/store";
+import { busy, commit, network$, select, stats$, ui } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import * as ops from "@/state/ops";
-import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, lanesAtLine, type Bays, type BuildingDef, type BuildingUse, type Control, type JunctionDef, type LinkDef, type Network, type NodeDef } from "@/engine/types";
+import { BUILDING_USES, LANE_WIDTH, LEVELS, MAX_BAYS, MAX_LANES, MAX_LANES_AT_LINE, MAX_MEDIAN, lanesAtLine, RING_MAX, RING_MIN, type Bays, type BuildingDef, type BuildingUse, type Control, type JunctionDef, type LinkDef, type Network, type NodeDef } from "@/engine/types";
 import { FLOOR_HEIGHT, USE_LABEL, polyArea, tripWeight } from "@/engine/buildings";
 import { IdChip, NumberField, Section, Stepper, compass } from "./fields";
 import { SignalGroupSection } from "./signal-groups";
@@ -30,7 +30,7 @@ import { LaneArrowsEditor, SignPicker } from "./lane-arrows";
 import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
 import { junctionRefs } from "@/engine/refs";
 import { minSec } from "@/lib/time";
-import { arrowLetters } from "@/engine/compile";
+import { arrowLetters, LW } from "@/engine/compile";
 import { sumCounters } from "@/engine/sim";
 import { JunctionEventLog, RoadEventLog, VehicleEventLog } from "./event-log";
 import { LaneConnectionsSection } from "./lane-connections";
@@ -42,6 +42,14 @@ import { MarkerInspector } from "./marker-inspector";
 import { JunctionFuelSection, fmtFuel } from "./fuel";
 import { CrossingInspector, ParkingInspector } from "./crossing-parking";
 import { deleteJunction, junctionOf, setJunctionControl } from "@/state/junctions";
+import { createRoundabout } from "@/state/roundabouts";
+import { makeGroup } from "@/state/groups";
+import { GroupInspector } from "./group-inspector";
+import { StandaloneJunctionInspector } from "./standalone-junction";
+import { IslandInspector, SplitterIslandSection } from "./splitter-island";
+import { islandAt } from "@/state/islands";
+import { ringOfNode } from "@/state/rings";
+import { RingInspector } from "./ring-inspector";
 import { deleteSelected } from "@/state/bulk";
 import { resetApproach } from "@/state/connections";
 
@@ -66,6 +74,9 @@ export function Inspector() {
   if (sel.kind === "crossing") { const x = net.crossings?.find(c => c.id === sel.id); return x ? <CrossingInspector net={net} x={x} /> : <PlanSummary net={net} />; }
   if (sel.kind === "parking") { const p = net.parking?.find(c => c.id === sel.id); return p ? <ParkingInspector net={net} p={p} /> : <PlanSummary net={net} />; }
   if (sel.kind === "marker") { const m = net.markers?.find(x => x.id === sel.id); return m ? <MarkerInspector net={net} m={m} /> : <PlanSummary net={net} />; }
+  if (sel.kind === "ring") { const r = net.rings?.find(x => x.id === sel.id); return r ? <RingInspector net={net} r={r} /> : <PlanSummary net={net} />; }
+  if (sel.kind === "junction") { const j = net.junctions?.find(x => x.id === sel.id && !x.nodes.length); return j ? <StandaloneJunctionInspector net={net} j={j} /> : <PlanSummary net={net} />; }
+  if (sel.kind === "group") { const g = net.groups?.find(x => x.id === sel.id); return g ? <GroupInspector net={net} g={g} /> : <PlanSummary net={net} />; }
   return <PlanSummary net={net} />;
 }
 
@@ -144,6 +155,11 @@ function NodeInspector({ net, node }: { net: Network; node: NodeDef }) {
   // (a road end on a junction drawn by hand: the junction, as its leading node holds it)
   const hand = junctionOf(net, node.id);
   if (hand) return <HandJunctionInspector net={net} j={hand} />;
+  // (a point of a ring placed by hand: the ring, and this point)
+  const ring = ringOfNode(net, node.id);
+  if (ring) return <RingInspector net={net} r={ring} point={node.id} />;
+  // (where a road parts round a splitter island: the island)
+  if (islandAt(net, node.id)) return <IslandInspector net={net} id={node.id} />;
   return <PointInspector net={net} node={node} />;
 }
 
@@ -256,8 +272,23 @@ function PointInspector({ net, node }: { net: Network; node: NodeDef }) {
                 <span>Two circulating lanes</span>
                 <Switch checked={node.ringLanes === 2} onCheckedChange={v => set({ ringLanes: v ? 2 : undefined })} aria-label="Two circulating lanes" />
               </label>
+              <div className="flex items-end gap-2">
+                <NumberField id="ring-r" label="Radius (outer kerb)" unit="m" className="flex-1" value={node.ringRadius ?? (cn ? cn.ringR + LW / 2 : 0)} min={RING_MIN} max={RING_MAX} step={0.5} digits={1}
+                  onCommit={v => set({ ringRadius: Math.max(RING_MIN, Math.min(RING_MAX, v)) }, `rr:${node.id}`)} />
+                {node.ringRadius != null && <Button size="sm" variant="ghost" className="h-8" title="Size it to fit its roads again" onClick={() => set({ ringRadius: undefined })}>Automatic</Button>}
+              </div>
+              {cn && cn.arms.some(a => (a.inEdge ?? a.outEdge) && (a.inEdge ?? a.outEdge)!.center.len < cn.ringR + 4.5 + 2) && (
+                <p className="text-xs text-amber-700 dark:text-amber-400">Some roads are shorter than the ring&apos;s reach ({(cn.ringR + 4.5).toFixed(1)} m from the centre): make it smaller, or build it again with the Roundabout tool (U).</p>
+              )}
+              {cn && (
+                <Button size="sm" variant="outline" title="Build it again as one-way roads round the ring, each road joining at a junction where it gives way: every lane, curve and connector can then be edited"
+                  onClick={() => void busy("Building the roundabout…", () => {
+                    const r = createRoundabout(network$.getValue(), cn.pos, node.ringRadius ?? cn.ringR + LW / 2, node.ringLanes === 2 ? 2 : 1);
+                    if ("error" in r) toast.error(r.error); else { commit(r.net); select({ kind: "group", id: r.group }); }
+                  })}>Make it editable (a ring of roads)</Button>
+              )}
               <p className="text-xs text-muted-foreground">
-                Ring radius {cn?.ringR.toFixed(1)} m. Entering traffic yields to the ring.
+                {node.ringRadius == null ? "Sized to fit its roads. " : ""}Entering traffic yields to the ring.
                 {node.ringLanes === 2 ? " The outer lane is for the first exit, the inner lane for going further round; on roads with two or more lanes, the kerb lane is for the first exit." : ""}
               </p>
             </>
@@ -586,6 +617,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
           <div className="flex flex-wrap gap-1">{[link.id, ...multi].map(id => <IdChip key={id} id={id} />)}</div>
           <div className="flex gap-2">
             <Button size="sm" className="flex-1" onClick={mergeSelectedRoads}><Merge /> Merge into one road <Kbd className="ml-1">M</Kbd></Button>
+            <Button size="sm" variant="outline" title="Keep these roads (and the junctions between them) together as one junction: move, copy and save it as one" onClick={() => { const [n2, g] = makeGroup(net, [link.id, ...multi]); if (g) { commit(n2); select({ kind: "group", id: g.id }); } }}><Group /> Group</Button>
             <Button size="sm" variant="ghost" onClick={() => setMulti([])}>Clear</Button>
             <Button size="sm" variant="ghost" className="text-destructive" title="Delete the selected roads (Del)" aria-label="Delete the selected roads" onClick={() => { commit(deleteSelected(net, [link.id, ...multi].map(id => ({ kind: "link" as const, id })))); select(null); }}><Trash2 /></Button>
           </div>
@@ -685,6 +717,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
           </div>
         )}
       </Section>
+      <SplitterIslandSection net={net} link={link} />
     </div>
   );
 }

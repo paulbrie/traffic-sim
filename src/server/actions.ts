@@ -6,6 +6,7 @@ import { sampleTown } from "@/engine/sample";
 import { emptyNetwork, type GeoRef, type Network, type PlanSettings } from "@/engine/types";
 import { sanitizeNetwork, sanitizeSettings } from "@/engine/validate";
 import type { Underlay } from "@/lib/underlay";
+import type { Sketch } from "@/lib/lane-sketch";
 import { CityId, PlanId, UserId, VersionId } from "@/lib/ids";
 import { bboxCenter, bboxProblem, bboxSize, ROAD_CLASSES, type BBox, type ImportOptions, type RoadClass } from "@/lib/osm/area";
 import { convertOsm, suggestSettings, type ImportStats } from "@/lib/osm/convert";
@@ -20,6 +21,8 @@ import { canEditCity, canEditPlan, canOwnCity, canOwnPlan, refusal } from "./pro
 import * as cities from "./data/cities";
 import * as plans from "./data/plans";
 import * as users from "./data/users";
+import * as templates from "./data/templates";
+import { readPiece, type JunctionPiece } from "@/state/groups";
 
 // Every action checks for a signed-in user, then names the ids it acts on and proves the user's access to
 // them (src/server/proofs); the data layer (src/server/data) won't take the ids without those proofs.
@@ -303,7 +306,7 @@ export async function deletePlan(id: string) {
  * The plan as it is now, for an open page that heard it changed (see /api/plans/[planId]/live): its
  * revision, contents, and who saved it last (with that save's note).
  */
-export async function fetchPlanState(id: string): Promise<{ revision: number; savedAt: string; network: Network; settings: PlanSettings; underlay: Underlay | null; by: string | null; note: string } | null> {
+export async function fetchPlanState(id: string): Promise<{ revision: number; savedAt: string; network: Network; settings: PlanSettings; underlay: Underlay | null; sketch: Sketch | null; by: string | null; note: string } | null> {
   const me = await assertUser();
   assertId(id);
   return name(me.id, PlanId(id), async (user, plan) => {
@@ -317,7 +320,7 @@ export async function fetchPlanState(id: string): Promise<{ revision: number; sa
  * the history. With `keepBuildings` the client left the (unchanged) buildings out of `network`, and the ones
  * already stored are kept, so large imported plans save quickly.
  */
-export async function savePlan(id: string, input: { network: unknown; keepBuildings?: boolean; settings: unknown; underlay?: unknown; revision: number; force?: boolean }): Promise<plans.SaveResult> {
+export async function savePlan(id: string, input: { network: unknown; keepBuildings?: boolean; settings: unknown; underlay?: unknown; sketch?: unknown; revision: number; force?: boolean }): Promise<plans.SaveResult> {
   const me = await assertUser();
   assertId(id);
   return name(me.id, PlanId(id), async (user, plan) => {
@@ -377,4 +380,45 @@ export async function saveWarMode(on: unknown): Promise<{ ok: true } | { ok: fal
   } catch {
     return { ok: false, error: "Couldn't save war mode (has the database been updated? npm run db:migrate)." };
   }
+}
+
+// ---------------------------------------------------------------- the junction library (the signed-in user's own)
+
+export type LibraryItem = { id: string; name: string; piece: JunctionPiece; createdAt: string };
+const MAX_PIECE_BYTES = 2_000_000;
+
+/** the junctions the signed-in user saved, newest first */
+export async function listJunctionLibrary(): Promise<{ ok: true; items: LibraryItem[] } | { ok: false; error: string }> {
+  const me = await assertUser();
+  try {
+    const rows = await templates.listTemplates(me.id);
+    const items = rows.flatMap(r => { const piece = readPiece(r.piece); return piece ? [{ id: r.id, name: r.name, piece, createdAt: r.createdAt.toISOString() }] : []; });
+    return { ok: true, items };
+  } catch {
+    return { ok: false, error: "Couldn't load the junction library (has the database been updated? npm run db:migrate)." };
+  }
+}
+
+/** save a junction to the signed-in user's library */
+export async function saveToJunctionLibrary(nameIn: unknown, pieceIn: unknown): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  const me = await assertUser();
+  const piece = readPiece(pieceIn);
+  if (!piece) return { ok: false, error: "That isn't a junction." };
+  const name = (typeof nameIn === "string" ? nameIn.trim() : "").slice(0, 80) || piece.name || "Junction";
+  // (stored as checked, without anything a plan doesn't take)
+  const clean = { ...piece, name, net: sanitizeNetwork(piece.net) };
+  if (JSON.stringify(clean).length > MAX_PIECE_BYTES) return { ok: false, error: "That junction is too big for the library." };
+  try {
+    if ((await templates.countTemplates(me.id)) >= templates.MAX_TEMPLATES) return { ok: false, error: `The library is full (${templates.MAX_TEMPLATES} junctions): delete some first.` };
+    return { ok: true, id: await templates.addTemplate(me.id, name, clean) };
+  } catch {
+    return { ok: false, error: "Couldn't save to the junction library (has the database been updated? npm run db:migrate)." };
+  }
+}
+
+export async function deleteFromJunctionLibrary(id: unknown): Promise<{ ok: true } | { ok: false; error: string }> {
+  const me = await assertUser();
+  if (typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id)) return { ok: false, error: "Not found." };
+  try { await templates.deleteTemplate(me.id, id); return { ok: true }; }
+  catch { return { ok: false, error: "Couldn't delete it from the junction library." }; }
 }
