@@ -1082,6 +1082,42 @@ export function curveLanes(sk: Sketch, ids: Iterable<string>): { sketch: Sketch;
   };
 }
 
+/**
+ * Ring lanes (closed lines) made true circles: the circle that fits their run best (least squares), at
+ * the same place, running the same way. Connectors on them stay where they were (at the nearest place on
+ * the circle). Other lanes are left as they are.
+ */
+export function circleLanes(sk: Sketch, ids: Iterable<string>): Sketch {
+  const want = new Set(ids), changed = new Map<string, { old: LaneShape; shape: LaneShape }>();
+  for (const l of sk.lanes) {
+    const sh = l.shape;
+    if (!want.has(l.id) || sh.kind !== "line" || !sh.closed || leadOf(sk, l.id)) continue;
+    const pts = samples(sh, 1);
+    if (pts.length < 6) continue;
+    // (the circle: x² + y² + D x + E y + F = 0, fitted by least squares; Kåsa)
+    let sxx = 0, syy = 0, sxy = 0, sxz = 0, syz = 0, sz = 0;
+    const n = pts.length, mx = pts.reduce((a, p) => a + p.x, 0) / n, my = pts.reduce((a, p) => a + p.y, 0) / n;
+    for (const p of pts) { const x = p.x - mx, y = p.y - my, z = x * x + y * y; sxx += x * x; syy += y * y; sxy += x * y; sxz += x * z; syz += y * z; sz += z; }
+    const det = sxx * syy - sxy * sxy;
+    if (Math.abs(det) < 1e-9) continue;
+    const a = (sxz * syy - syz * sxy) / det / 2, b = (syz * sxx - sxz * sxy) / det / 2;
+    const c = { x: mx + a, y: my + b }, r = Math.sqrt(a * a + b * b + sz / n);
+    // (the way it runs: the sign of the area its points go round)
+    let area = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) area += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y);
+    const a0 = Math.atan2(pts[0].y - c.y, pts[0].x - c.x);
+    const shape: LaneShape = { kind: "arc", c: { x: Number(c.x.toFixed(3)), y: Number(c.y.toFixed(3)) }, r: Number(r.toFixed(3)), a0, sweep: area > 0 ? 2 * Math.PI : -2 * Math.PI };
+    changed.set(l.id, { old: sh, shape });
+  }
+  if (!changed.size) return sk;
+  const place = (x: LaneAt) => { const ch = changed.get(x.lane); return ch ? { ...x, s: Number(nearestOn(ch.shape, pointAt(ch.old, x.s).p).s.toFixed(2)) } : x; };
+  return {
+    ...sk,
+    lanes: sk.lanes.map(l => { const ch = changed.get(l.id); return ch ? { ...l, shape: ch.shape } : l; }),
+    connectors: sk.connectors.map(c => (changed.has(c.from.lane) || changed.has(c.to.lane) ? { ...c, from: place(c.from), to: place(c.to) } : c)),
+  };
+}
+
 // ---------------------------------------------------------------- junctions
 
 export function insidePolygon(p: Pt, poly: Pt[]) {

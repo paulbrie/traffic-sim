@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { cn } from "@/lib/utils";
 import { unproject } from "@/lib/osm/area";
 import {
-  LANE_WIDTH, addLane, sketchIndex, boxesMeet, straightenLanes, curveLanes, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -175,7 +175,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [underlay] = useSubject(underlay$), [ulImg] = useSubject(underlayImg$);
   const [calib, setCalib] = useState<Calibration | null>(null);
   // the menu a right click opens, where it was clicked, and the lanes it is for
-  const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; geo: { lat: number; lon: number } | null } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null } | null>(null);
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
   // what the handlers and the drawing read (kept current after every render)
   const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib });
@@ -592,7 +592,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (l && !s.lanes.includes(l.id)) setSel({ ...NO_SEL, lanes: [l.id] });
     const can = lanes.some(id => { const sh = laneById(sk, id)?.shape; return sh?.kind === "line" && !sh.closed && sh.pts.length > 2 && !leadOf(sk, id); });
     const r = e.currentTarget.getBoundingClientRect();
-    setMenu({ x: e.clientX - r.left, y: e.clientY - r.top, lanes, straightenable: can, geo });
+    const ring = lanes.some(id => { const sh = laneById(sk, id)?.shape; return sh?.kind === "line" && !!sh.closed && !leadOf(sk, id); });
+    setMenu({ x: e.clientX - r.left, y: e.clientY - r.top, lanes, straightenable: can, ring, geo });
   };
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     panel.current?.focus();
@@ -926,6 +927,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                   </DropdownMenuItem>
                   <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => makeCurve(menu.lanes)}>
                     Make a curve <span className="ml-auto text-[11px] text-muted-foreground">2 ends, 1 curved point</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={readOnly || !menu.ring} onSelect={() => editSketch(s => circleLanes(s, menu.lanes))}>
+                    Make a circle <span className="ml-auto text-[11px] text-muted-foreground">a ring, made round</span>
                   </DropdownMenuItem>
                 </>}
                 {menu.geo && <>
@@ -1335,6 +1339,9 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             </div>
           ) : <p className="text-[11px] text-muted-foreground">Double-click the lane to add a point; click a point to pick it, Alt-click to curve it, double-click to take it out.</p>
         )}
+        {sh.kind === "line" && !lead && sh.closed && (
+          <Button size="sm" variant="outline" title="The ring as a true circle, the one that fits it best, running the same way (its connectors stay where they are)" onClick={() => editSketch(s => circleLanes(s, [lane.id]))}><Circle /> Make a circle</Button>
+        )}
         {sh.kind === "line" && !lead && !sh.closed && sh.pts.length > 2 && (
           <div className="grid grid-cols-2 gap-1.5">
             <Button size="sm" variant="outline" title="Only its two ends: a straight lane (its connectors stay where they are)" onClick={() => editSketch(s => straightenLanes(s, [lane.id]))}>Straighten</Button>
@@ -1394,6 +1401,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             <Button size="sm" variant="outline" title="The selected lanes with only their two ends: straight (rings, arcs and lanes following a lead are left; connectors stay where they are)" onClick={() => editSketch(s => straightenLanes(s, sel.lanes))}>Straighten</Button>
             <Button size="sm" variant="outline" title="The selected lanes without the points they don't need, each kept within half a metre of where it runs" onClick={() => editSketch(s => straightenLanes(s, sel.lanes, 0.5))}>Fewer points</Button>
             <Button size="sm" variant="outline" title="Each selected lane as its two ends and one curved point, the curve kept closest to where it runs (rings, arcs and lanes following a lead are left)" onClick={() => makeCurve(sel.lanes)}><Spline /> Make a curve</Button>
+            <Button size="sm" variant="outline" title="Each selected ring of points as a true circle, the one that fits it best, running the same way (its connectors stay where they are)" onClick={() => editSketch(s => circleLanes(s, sel.lanes))}><Circle /> Make a circle</Button>
           </>}
         </div>
         {selRoads.length === 2 && (
