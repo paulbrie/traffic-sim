@@ -28,6 +28,8 @@ export interface SimFrame {
   stats: ReturnType<SketchSim["stats"]> | null;
   replayRange: ReturnType<SketchSim["replayRange"]>;
   signals: { junction: string; phase: number; stage: "green" | "amber" | "allRed" }[];
+  /** the zebras' pedestrians (waiting, crossing, how far across) */
+  peds: ReturnType<SketchSim["peds"]>;
   /** the car watched, as `inspect` gives it (null: gone, or none watched) */
   watched: { id: number; info: ReturnType<SketchSim["inspect"]> } | null;
   /** simulated seconds per real second reached (less than asked when steps are slow) */
@@ -53,7 +55,7 @@ function frame(withStats: boolean) {
   if (stats) lastStats = now;
   post({
     type: "frame", t: sim.t, poses: sim.poses(), stats, replayRange: sim.replayRange(),
-    signals: sim.signals.map(c => ({ junction: c.plan.junction, phase: c.phase, stage: c.stage })),
+    signals: sim.signals.map(c => ({ junction: c.plan.junction, phase: c.phase, stage: c.stage })), peds: sim.peds(),
     watched: watch !== null ? { id: watch, info: sim.inspect(watch) } : null, rate,
   });
 }

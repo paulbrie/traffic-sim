@@ -6,7 +6,7 @@
  * for when wanted.
  */
 import { signalPlans, SignalController, type Pt, type Sketch } from "@/lib/lane-sketch";
-import type { ReplayCar, SimParams, SimStats, SketchSim } from "@/lib/lane-sketch-sim";
+import type { SimParams, SimStats, SketchSim } from "@/lib/lane-sketch-sim";
 import type { FromSimWorker, SimFrame, ToSimWorker } from "./sketch-sim.worker";
 
 /** a message without its request number (each kind of message on its own) */
@@ -104,6 +104,8 @@ export class SketchSimClient {
     });
   }
   stats(): SimStats | null { return this.lastStats; }
+  /** the zebras' pedestrians, as the worker last said they are */
+  peds(): SimFrame["peds"] { return this.last?.peds ?? []; }
   replayRange() { return this.last?.replayRange ?? null; }
   /** a car to follow: what `inspect` answers for it comes with every frame */
   inspect(id: number): ReturnType<SketchSim["inspect"]> {
@@ -123,7 +125,7 @@ export class SketchSimClient {
     return best;
   }
   /** the cars as they were at `t`: kept when asked for before; asked for now otherwise (the last ones had meanwhile) */
-  replayAt(t: number): { t: number; cars: ReplayCar[] } | null {
+  replayAt(t: number): ReturnType<SketchSim["replayAt"]> {
     const k = Math.round(t * 10) / 10;
     if (this.replays.has(k)) return (this.lastReplay = this.replays.get(k)!);
     if (!this.replayAsked.has(k)) {

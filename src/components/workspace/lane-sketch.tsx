@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, Undo2, Waypoints, X } from "lucide-react";
+import { Car, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, Undo2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,13 +12,13 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { cn } from "@/lib/utils";
 import { unproject } from "@/lib/osm/area";
 import {
-  LANE_WIDTH, addLane, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
   type Band, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
-import { DEFAULT_SIM, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
+import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { laneSketch$, ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
@@ -31,7 +31,7 @@ import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/s
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
 
-type Tool = "select" | "lane" | "arc" | "circle" | "connector" | "junction" | "slice";
+type Tool = "select" | "lane" | "arc" | "circle" | "connector" | "junction" | "slice" | "crossing";
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
 const LAYERS = SKETCH_LAYERS, ALL_LAYERS = ALL_SKETCH_LAYERS;
@@ -42,14 +42,15 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
   { id: "circle", key: "O", label: "Ring", icon: <Circle />, hint: "Click the centre, then the radius: a full ring of lane, anticlockwise (Shift: clockwise)" },
   { id: "connector", key: "C", label: "Connector", icon: <Milestone />, hint: "Click the lane traffic leaves, then click bend points anywhere (Alt: over a lane too), then the lane it joins · Backspace takes the last bend back · Esc cancels" },
   { id: "slice", key: "K", label: "Slice", icon: <Scissors />, hint: "Click a road to cut it across there into two roads (Shift: keep them linked, so the road carries on; Alt: only the lane under the pointer) · its connectors stay with the piece they are on" },
+  { id: "crossing", key: "X", label: "Zebra crossing", icon: <Footprints />, hint: "Click one kerb, then the other: the zebra runs between them (4 m wide, 300 pedestrians an hour; set them in its panel) · Esc cancels" },
   { id: "junction", key: "J", label: "Junction", icon: <Pentagon />, hint: "Click the junction's corners; click the first again (or Enter, or double-click) to close it. The lanes in no road and the connectors on it are its own" },
 ];
 const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
 
 interface View { cx: number; cy: number; /** px per metre */ scale: number }
-type Sel = Piece & { road: string | null; link?: string | null };
+type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null };
 const NO_SEL: Sel = { lanes: [], connectors: [], junctions: [], road: null };
-type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string };
+type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[] };
 /** a point to drag: a lane's, a connector's bend or end (moved along its lane or onto another), a junction's corner */
@@ -60,13 +61,16 @@ type Draft =
   | { kind: "arc"; c: Pt; start: { r: number; a0: number; sweep: number; last: number } | null }
   | { kind: "circle"; c: Pt }
   | { kind: "connector"; from: LaneAt; via: Pt[] }
-  | { kind: "junction"; pts: Pt[] };
+  | { kind: "junction"; pts: Pt[] }
+  | { kind: "crossing"; a: Pt };
 type Drag =
   | { kind: "pan"; x0: number; y0: number; v0: View; /** with the right button: a click without moving opens the menu */ right?: boolean }
   | { kind: "move"; base: Sketch; from: Pt; piece: Piece }
   | { kind: "handle"; base: Sketch; h: Handle }
   | { kind: "box"; a: Pt; b: Pt; add: boolean }
-  | { kind: "rotate"; base: Sketch; o: Pt; a0: number; piece: Piece; angle: number };
+  | { kind: "rotate"; base: Sketch; o: Pt; a0: number; piece: Piece; angle: number }
+  /** a zebra crossing: moved whole, or one kerb end */
+  | { kind: "crossing"; base: Sketch; id: string; part: "move" | "a" | "b"; from: Pt };
 
 const isEmpty = (p: Piece) => !p.lanes.length && !p.connectors.length && !p.junctions.length;
 /**
@@ -100,7 +104,8 @@ function withLeads(sk: Sketch, piece: Piece): Piece {
 
 function prune(sel: Sel, sk: Sketch): Sel {
   const ids = new Set(sk.lanes.map(l => l.id)), cids = new Set(sk.connectors.map(c => c.id)), jids = new Set(sk.junctions.map(j => j.id));
-  const linkOk = !sel.link || !!sk.links?.some(k => k.id === sel.link);
+  const linkOk = !sel.link || !!sk.links?.some(k => k.id === sel.link), crossingOk = !sel.crossing || !!sk.crossings?.some(x => x.id === sel.crossing);
+  if (!crossingOk) return { ...sel, crossing: null };
   if (linkOk && sel.lanes.every(l => ids.has(l)) && sel.connectors.every(c => cids.has(c)) && sel.junctions.every(j => jids.has(j)) && (!sel.road || sk.roads.some(r => r.id === sel.road))) return sel;
   return { lanes: sel.lanes.filter(l => ids.has(l)), connectors: sel.connectors.filter(c => cids.has(c)), junctions: sel.junctions.filter(j => jids.has(j)), road: sk.roads.some(r => r.id === sel.road) ? sel.road : null, link: linkOk ? sel.link : null };
 }
@@ -177,6 +182,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // the menu a right click opens, where it was clicked, and the lanes it is for
   const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null } | null>(null);
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
+  /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
+  const [peds, setPeds] = useState<PedView[]>([]);
   // what the handlers and the drawing read (kept current after every render)
   const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib });
 
@@ -198,6 +205,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** what is under `p`: connectors first (they are thin), then lanes, then the smallest junction surface */
   const pick = (p: Pt): Hit | null => {
     const sk = live.current.sketch, px = 1 / view.current.scale;
+    // (a zebra crossing: over the lanes it crosses)
+    for (const x of sk.crossings ?? []) if (onCrossing(x, p, 2 * px)) return { crossing: x.id };
     let best: Hit | null = null, bd = Infinity;
     // (only what is near it; connectors hidden: not picked, but for the selected ones)
     const near = sketchIndex(sk).near(p, 6 * px + 0.5), cs = sk.connectors.filter(c => near.conns.has(c.id));
@@ -254,10 +263,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the cars to draw, and the one picked: as they are, or as they were at the moment replayed */
   const carsShown = () => {
     const s = sim.current, t = live.current.replayT, id = live.current.selCar;
-    if (!s) return { cars: null, car: null };
-    if (t === null) return { cars: s.poses(), car: id !== null ? s.inspect(id) : null };
-    const cars = s.replayAt(t)?.cars ?? [];
-    return { cars, car: replayInfo(cars.find(c => c.id === id)) };
+    if (!s) return { cars: null, car: null, peds: null };
+    if (t === null) return { cars: s.poses(), car: id !== null ? s.inspect(id) : null, peds: s.peds() };
+    const f = s.replayAt(t), cars = f?.cars ?? [];
+    return { cars, car: replayInfo(cars.find(c => c.id === id)), peds: f?.peds ?? [] };
   };
   /** a car's details: as it is, or as it was at the moment replayed */
   const carInfoAt = (id: number, t: number | null) => (t === null ? sim.current?.inspect(id) ?? null : replayInfo(sim.current?.replayAt(t)?.cars.find(c => c.id === id)));
@@ -332,7 +341,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     // (while running, four times a second; paused, a frame is an answer: shown at once)
     if (!running || now - shownAt.current > 250) {
       shownAt.current = now;
-      setStats(s.stats()); setReplayRange(s.replayRange());
+      setStats(s.stats()); setPeds(s.peds()); setReplayRange(s.replayRange());
       if (id !== null) setCarInfo(carInfoAt(id, live.current.replayT));
     }
     redraw(false);
@@ -412,7 +421,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     try { await navigator.clipboard.writeText(text); toast.success("Replay data copied", { description: `${Math.round(text.length / 1024)} kB: paste it into the conversation.` }); }
     catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
   };
-  const resetCars = () => { sim.current?.reset(); setStats(sim.current?.stats() ?? null); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null); redraw(); };
+  const resetCars = () => { sim.current?.reset(); setStats(sim.current?.stats() ?? null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null); redraw(); };
 
   // ------------------------------------------------------------ editing
   /** a junction selected with what it takes in, so they move, turn and copy with it */
@@ -449,6 +458,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const deleteSel = () => {
     const s = live.current.sel;
     if (s.link) { const id = s.link; editSketch(sk => unlink(sk, id)); setSel(NO_SEL); return; }
+    if (s.crossing) { const id = s.crossing; editSketch(sk => deleteCrossing(sk, id)); setSel(NO_SEL); return; }
     if (isEmpty(s)) return;
     editSketch(sk => remove(sk, s));
     setSel(NO_SEL);
@@ -618,6 +628,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           drag.current = { kind: "rotate", base: sk, o: rh.o, a0: Math.atan2(raw.y - rh.o.y, raw.x - rh.o.x), piece: withLeads(sk, turning(s)), angle: 0 };
           return;
         }
+        // (the selected zebra's kerb ends: one moved on its own)
+        const xs = s.crossing ? sk.crossings?.find(x => x.id === s.crossing) : null;
+        if (xs) for (const part of ["a", "b"] as const) if (dist(raw, xs[part]) <= 7 / view.current.scale) { drag.current = { kind: "crossing", base: sk, id: xs.id, part, from: raw }; return; }
         const h = handleAt(raw);
         if (h?.kind === "lane") {
           setSelPt({ lane: h.id, i: h.i });
@@ -639,6 +652,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         }
         // (a link: selected on its own, nothing to drag)
         if ("link" in hit) { setSel({ ...NO_SEL, link: hit.link }); return; }
+        // (a zebra crossing: selected on its own, dragged whole)
+        if ("crossing" in hit) { setSel({ ...NO_SEL, crossing: hit.crossing }); drag.current = { kind: "crossing", base: sk, id: hit.crossing, part: "move", from: raw }; return; }
         const has = "lane" in hit ? s.lanes.includes(hit.lane) : "connector" in hit ? s.connectors.includes(hit.connector) : s.junctions.includes(hit.junction);
         if (e.shiftKey) {
           setSel("lane" in hit ? { ...s, road: null, lanes: toggle(s.lanes, hit.lane) } : "connector" in hit ? { ...s, road: null, connectors: toggle(s.connectors, hit.connector) }
@@ -672,6 +687,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       case "lane": {
         const p = snap(raw).p;
         if (d?.kind === "lane") d.pts.push(p); else draft.current = { kind: "lane", pts: [p] };
+        break;
+      }
+      case "crossing": {
+        const p = snap(raw).p;
+        if (d?.kind !== "crossing") { draft.current = { kind: "crossing", a: p }; break; }
+        draft.current = null;
+        if (dist(d.a, p) < 1) break;
+        let made: SketchCrossing | null = null;
+        editSketch(k => { const [next, x] = addCrossing(k, d.a, p); made = x; return next; });
+        if (made) { setSel({ ...NO_SEL, crossing: (made as SketchCrossing).id }); changeTool("select"); }
         break;
       }
       case "junction": {
@@ -741,6 +766,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       } else {
         laneSketch$.next({ ...b, junctions: b.junctions.map(j => (j.id === id ? { ...j, outline: j.outline.map((x, k) => (k === i ? snap(raw).p : x)) } : j)) });
       }
+    } else if (g?.kind === "crossing") {
+      // (to the half metre, as points are; Shift: off the grid)
+      const q = (p: Pt) => (e.shiftKey ? { x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100 } : { x: Math.round(p.x * 2) / 2, y: Math.round(p.y * 2) / 2 });
+      const x0 = g.base.crossings?.find(x => x.id === g.id);
+      if (x0) {
+        const dx = raw.x - g.from.x, dy = raw.y - g.from.y;
+        const patch = g.part === "move" ? (() => { const a = q({ x: x0.a.x + dx, y: x0.a.y + dy }); return { a, b: { x: x0.b.x + a.x - x0.a.x, y: x0.b.y + a.y - x0.a.y } }; })() : { [g.part]: q(raw) };
+        const next = { ...x0, ...patch };
+        if (dist(next.a, next.b) >= 1) laneSketch$.next(updateCrossing(g.base, g.id, patch));
+      }
     } else if (g?.kind === "box") {
       g.b = raw;
     } else if (g?.kind === "rotate") {
@@ -770,7 +805,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     drag.current = null;
     // a right click (not a right drag): the menu for the lane under it, or the lanes selected
     if (g?.kind === "pan" && g.right && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) { openMenu(e); return; }
-    if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate") recordSketch(g.base);
+    if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || (g?.kind === "crossing" && live.current.sketch !== g.base)) recordSketch(g.base);
     if (g?.kind === "box" && dist(g.a, g.b) * view.current.scale > 3) {
       const sk = live.current.sketch, x0 = Math.min(g.a.x, g.b.x), x1 = Math.max(g.a.x, g.b.x), y0 = Math.min(g.a.y, g.b.y), y1 = Math.max(g.a.y, g.b.y);
       const inside = (pts: Pt[] | null) => !!pts?.length && pts.every(p => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1);
@@ -966,9 +1001,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                 void navigator.clipboard.writeText(text).then(() => toast.success(`Car ${selCar}'s data copied`, { description: "Its state, its last 10 s and what happened to it. Paste it into the conversation." }), () => toast.error("Couldn't copy"));
               }} />
           )}
-          <SelectionPanel sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
-            selPt={selPt} onCurvePoint={curvePoint} onDeletePoint={deletePoint}
-            onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} />
+          {sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
+            <CrossingPanel x={sketch.crossings.find(x => x.id === sel.crossing)!} readOnly={readOnly} onDelete={deleteSel}
+              live={stats ? peds.find(q => q.id === sel.crossing) ?? null : null} />
+          ) : (
+            <SelectionPanel sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
+              selPt={selPt} onCurvePoint={curvePoint} onDeletePoint={deletePoint}
+              onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} />
+          )}
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
           <DemandPanel sketch={sketch} readOnly={readOnly} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
@@ -1000,6 +1040,7 @@ function reasonOf(why: string | null, kmh: number): { text: string; car?: number
   if ((m = /^merge (\S+) for car (\d+)$/.exec(why))) return { text: `Giving way to join ${edgeName(m[1])}, to car`, car: Number(m[2]) };
   if ((m = /^zone (\S+) for car (\d+)$/.exec(why))) return { text: `Giving way where its path meets ${edgeName(m[1])}, to car`, car: Number(m[2]) };
   if ((m = /^changing to (\S+)$/.exec(why))) return { text: `Waiting to change to ${edgeName(m[1])}` };
+  if ((m = /^pedestrians at (\S+)$/.exec(why))) return { text: `Stopping for pedestrians at zebra ${m[1]}` };
   if ((m = /^letting car (\d+) change lane$/.exec(why))) return { text: "Letting in, to change lane, car", car: Number(m[1]) };
   if ((m = /^letting car (\d+) in$/.exec(why))) return { text: "Letting in car", car: Number(m[1]) };
   if ((m = /^keeping clear \((.*)\)$/.exec(why))) { const r = reasonOf(m[1], kmh); return { text: `Keeping a crossing clear (${r.text.charAt(0).toLowerCase()}${r.text.slice(1)}${r.car !== undefined ? ` ${r.car}` : ""})` }; }
@@ -1425,6 +1466,41 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 
+/** a zebra crossing: where its kerbs are, how wide, how busy, and its pedestrians while the cars run (as V1's) */
+function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; readOnly: boolean; onDelete: () => void; live: PedView | null }) {
+  const set = (patch: Partial<Omit<SketchCrossing, "id">>) => editSketch(sk => updateCrossing(sk, x.id, patch));
+  const len = dist(x.a, x.b);
+  return (
+    <section className="grid gap-2 border-b p-3">
+      <div className="flex items-center gap-2">
+        <h3 className="flex-1 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Zebra crossing {x.id}</h3>
+        {!readOnly && <Button size="icon-sm" variant="ghost" aria-label="Delete the zebra crossing" title="Delete it (Del)" onClick={onDelete}><Trash2 /></Button>}
+      </div>
+      <p className="text-xs text-muted-foreground">{fmtM(len)} from kerb to kerb</p>
+      <div className="grid grid-cols-2 gap-2">
+        <NumberField id="sk-xw" label="Width (along the traffic)" unit="m" value={x.width} min={1.5} max={12} step={0.1} digits={1} onCommit={width => set({ width })} />
+        <NumberField id="sk-xp" label="Pedestrians" unit="/h" value={x.peds} min={0} max={5000} step={50} digits={0} onCommit={peds => set({ peds: Math.round(peds) })} />
+        <NumberField id="sk-xax" label="One kerb: X (east)" unit="m" value={x.a.x} onCommit={v => set({ a: { ...x.a, x: v } })} />
+        <NumberField id="sk-xay" label="Y (south)" unit="m" value={x.a.y} onCommit={v => set({ a: { ...x.a, y: v } })} />
+        <NumberField id="sk-xbx" label="Other kerb: X (east)" unit="m" value={x.b.x} onCommit={v => set({ b: { ...x.b, x: v } })} />
+        <NumberField id="sk-xby" label="Y (south)" unit="m" value={x.b.y} onCommit={v => set({ b: { ...x.b, y: v } })} />
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Pedestrians have priority: cars stop before it while they wait or cross (one too close to stop goes first). Where traffic lights hold the
+        traffic over it, they walk early in its red. A crossing with a refuge in the middle is two crossings. Drag it to move it, or a square end
+        to move that kerb (Shift: off the half-metre grid).
+      </p>
+      {live ? (
+        <div className="grid grid-cols-3 gap-2 text-center">
+          {([["Crossed", String(live.crossed ?? 0)], ["Mean wait", `${(live.avgWait ?? 0).toFixed(0)} s`], ["Waiting", String(live.waiting)]] as const).map(([k, v]) => (
+            <div key={k} className="rounded-md border px-2 py-1.5"><div className="font-mono text-sm font-semibold tabular">{v}</div><div className="text-[10px] text-muted-foreground">{k}</div></div>
+          ))}
+        </div>
+      ) : <p className="text-xs text-muted-foreground">Run the cars to see its pedestrians.</p>}
+    </section>
+  );
+}
+
 function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats, onCopy }: {
   sketch: Sketch; params: SimParams; setParams: (p: SimParams) => void; simSpeed: number; setSimSpeed: (n: number) => void; stats: SimStats | null; onCopy: () => void;
 }) {
@@ -1461,6 +1537,7 @@ function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats,
           {(stats.laneChanges ?? 0) > 0 && row("Lane changes", stats.laneChanges)}
           {(stats.deadlocks ?? 0) > 0 && row("Deadlocks broken", stats.deadlocks, "text-amber-700 dark:text-amber-400")}
           {row("Jumps", stats.jumps, stats.jumps ? "text-destructive" : undefined)}
+          {(sketch.crossings?.length ?? 0) > 0 && row("Pedestrians crossed / waiting", `${stats.pedsCrossed ?? 0} / ${stats.pedsWaiting ?? 0}`)}
           <Button size="sm" variant="outline" className="mt-1.5" onClick={onCopy}
             title="Copy what the cars did (the sketch, the cars now, every jump, the last minute's events, the last 10 s of every car) to paste into a conversation">
             <ClipboardCopy /> Copy simulation data
@@ -1650,6 +1727,8 @@ interface PaintState {
   bg: Background | null;
   /** the car picked to inspect, with the way it will go */
   car: ReturnType<SketchSim["inspect"]>;
+  /** the zebras' pedestrians, if running (live or replayed) */
+  peds: PedView[] | null;
   /** the layers shown */
   layers: Layers;
   /** what each junction takes in */
@@ -1980,6 +2059,35 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     arrowHead(pts[pts.length - 1], at(sk, cn.to)!.d, 8 * px);
     dot(pts[0], 2.5 * px, ctx.strokeStyle);
   }
+  // zebra crossings: white bars from kerb to kerb, a bar every metre; selected or under the pointer, outlined, its kerb ends to drag
+  for (const x of S ? sk.crossings ?? [] : []) {
+    const f = crossingFrame(x), on = s.crossing === x.id, over = !!hv && "crossing" in hv && hv.crossing === x.id, h = x.width / 2;
+    const xs = f.corners.map(p => p.x), ys = f.corners.map(p => p.y);
+    if (Math.max(...xs) < x0 || Math.min(...xs) > x1 || Math.max(...ys) < y0 || Math.min(...ys) > y1) continue;
+    ctx.fillStyle = dark ? "rgba(235,238,240,0.85)" : "rgba(255,255,255,0.92)";
+    for (let t = 0.25; t + 0.5 <= f.len + 1e-6; t += 1) {
+      const c0 = { x: x.a.x + f.u.x * t, y: x.a.y + f.u.y * t }, c1 = { x: c0.x + f.u.x * 0.5, y: c0.y + f.u.y * 0.5 };
+      ctx.beginPath(); ctx.moveTo(c0.x + f.v.x * h, c0.y + f.v.y * h); ctx.lineTo(c1.x + f.v.x * h, c1.y + f.v.y * h); ctx.lineTo(c1.x - f.v.x * h, c1.y - f.v.y * h); ctx.lineTo(c0.x - f.v.x * h, c0.y - f.v.y * h); ctx.closePath(); ctx.fill();
+    }
+    if (on || over) {
+      path(f.corners); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.lineWidth = (on ? 2 : 1.5) * px; ctx.setLineDash(on ? [] : [5 * px, 3 * px]); ctx.stroke(); ctx.setLineDash([]);
+    }
+    if (on) { square(x.a); square(x.b); }
+  }
+  // the zebras' pedestrians: waiting at the first kerb, crossing to the other, three abreast
+  const crossingById = new Map((sk.crossings ?? []).map(x => [x.id, x]));
+  for (const q of D && st.layers.cars ? st.peds ?? [] : []) {
+    const x = crossingById.get(q.id);
+    if (!x || (!q.waiting && !q.crossing)) continue;
+    const f = crossingFrame(x), GAP = 1, R = Math.max(0.35, 2.5 * px);
+    const person = (along: number, across: number) => {
+      const p = { x: x.a.x + f.u.x * along + f.v.x * across, y: x.a.y + f.u.y * along + f.v.y * across };
+      ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, Math.PI * 2); ctx.fillStyle = "#f59e0b"; ctx.fill();
+      ctx.strokeStyle = "rgba(20,28,34,0.7)"; ctx.lineWidth = Math.min(0.12, px); ctx.stroke();
+    };
+    for (let i = 0; i < Math.min(q.crossing, 9); i++) person(0.6 + q.progress * (f.len - 1.2) - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
+    for (let i = 0; i < Math.min(q.waiting, 9); i++) person(-GAP - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
+  }
   // cars as on the plan's map (cut corners, a windscreen), in its speed colours: green at their desired speed to red when stopped
   for (const car of st.layers.cars && D ? st.cars ?? [] : []) {
     const { p, d } = car, hl = Math.max(car.len, 5 * px) / 2, hw = Math.max(1.8, 3 * px) / 2, r = Math.min(0.7, hw);
@@ -2077,6 +2185,13 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     ctx.fillStyle = col.jFill; ctx.fill(); ctx.setLineDash([]); ctx.stroke();
     d.pts.forEach(square);
     if (cur && d.pts.length >= 3 && dist(cur.p, d.pts[0]) <= 10 * px) { ctx.beginPath(); ctx.arc(d.pts[0].x, d.pts[0].y, 7 * px, 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.stroke(); }
+  } else if (d?.kind === "crossing") {
+    const b = cur?.p ?? d.a;
+    if (dist(d.a, b) > 0.1) {
+      const f = crossingFrame({ id: "", a: d.a, b, width: 4, peds: 0 });
+      path(f.corners); ctx.closePath(); ctx.globalAlpha = 0.25; ctx.fill(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.stroke();
+    }
+    square(d.a);
   } else if (d?.kind === "circle" && cur) {
     ctx.beginPath(); ctx.arc(d.c.x, d.c.y, dist(d.c, cur.p), 0, Math.PI * 2); ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.stroke(); ctx.globalAlpha = 1;
   } else if (d?.kind === "arc") {
@@ -2096,7 +2211,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   ctx.setLineDash([]);
   if (d && "c" in d) dot(d.c, 3 * px, col.sel);
-  if (cur && (tool === "lane" || tool === "arc" || tool === "circle" || tool === "junction")) {
+  if (cur && (tool === "lane" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "crossing")) {
     ctx.beginPath(); ctx.arc(cur.p.x, cur.p.y, (cur.snapped ? 5 : 3) * px, 0, Math.PI * 2);
     ctx.strokeStyle = col.sel; ctx.fillStyle = col.sel; ctx.lineWidth = 1.5 * px; if (cur.snapped) ctx.stroke(); else ctx.fill();
   }
