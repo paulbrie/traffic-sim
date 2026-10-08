@@ -14,7 +14,7 @@ import { unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, addLane, contentsOf, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
-  roadOf, rotation, samples, setControl, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
+  roadOf, rotation, samples, setControl, junctionHoles, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
   type Band, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
@@ -187,7 +187,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // the hand shown over the map: open while Space is held (ready to drag it), closed while it is dragged
   const [hand, setHand] = useState<"" | "grab" | "grabbing">("");
   // the menu a right click opens, where it was clicked, and the lanes it is for
-  const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null; /** the place on the lane clicked a point can go (a line lane, not following a lead) */ add: { lane: string; p: Pt } | null } | null>(null);
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
@@ -235,7 +235,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const inJ = (j: SketchJunction) => {
       if (j.shape !== "auto") return insidePolygon(p, outlinePath(j));
       const c = live.current.contents.get(j.id) ?? { lanes: [], connectors: [], roads: [] };
-      return j.smooth ? insideLoops(p, smoothJunction(sk, j, c)) : onBands(junctionBands(sk, c), p);
+      return (j.smooth ? insideLoops(p, smoothJunction(sk, j, c)) : onBands(junctionBands(sk, c), p)) || junctionHoles(sk, c).some(h => insidePolygon(p, h));
     };
     const jn = sketchIndex(sk).near(p, 1).junctions;
     const js = sk.junctions.filter(j => jn.has(j.id) && inJ(j)).sort((a, b) => polygonArea(a.outline) - polygonArea(b.outline));
@@ -641,6 +641,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     return false;
   };
 
+  /** a point put on a line lane (where the right-click menu was opened), and picked */
+  const addPointAt = (a: { lane: string; p: Pt }) => {
+    const l = laneById(live.current.sketch, a.lane);
+    if (!l || l.shape.kind !== "line") return;
+    const shape = insertPoint(l.shape, a.p);
+    editSketch(k => reshape(k, a.lane, shape));
+    setSel({ ...NO_SEL, lanes: [a.lane] });
+    setSelPt({ lane: a.lane, i: shape.pts.findIndex(x => x === a.p) });
+  };
+
   // ------------------------------------------------------------ pointer
   /** the middle of the view and how much it shows, metres */
   const viewNow = () => { const c = canvas.current, v = view.current; return { cx: v.cx, cy: v.cy, wm: (c?.clientWidth ?? 800) / v.scale, hm: (c?.clientHeight ?? 600) / v.scale }; };
@@ -655,7 +665,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const can = lanes.some(id => { const sh = laneById(sk, id)?.shape; return sh?.kind === "line" && !sh.closed && sh.pts.length > 2 && !leadOf(sk, id); });
     const r = e.currentTarget.getBoundingClientRect();
     const ring = lanes.some(id => { const sh = laneById(sk, id)?.shape; return sh?.kind === "line" && !!sh.closed && !leadOf(sk, id); });
-    setMenu({ x: e.clientX - r.left, y: e.clientY - r.top, lanes, straightenable: can, ring, geo });
+    const add = l && l.shape.kind === "line" && !leadOf(sk, l.id) ? { lane: l.id, p: (q => ({ x: Number(q.x.toFixed(2)), y: Number(q.y.toFixed(2)) }))(pointAt(l.shape, nearestOn(l.shape, raw).s).p) } : null;
+    setMenu({ x: e.clientX - r.left, y: e.clientY - r.top, lanes, straightenable: can, ring, geo, add });
   };
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     panel.current?.focus();
@@ -1016,6 +1027,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               <DropdownMenuContent align="start" className="w-56" onCloseAutoFocus={e => { e.preventDefault(); panel.current?.focus(); }}>
                 {menu.lanes.length > 0 && <>
                   <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{menu.lanes.length === 1 ? `Lane ${menu.lanes[0]}` : `${menu.lanes.length} lanes`}</DropdownMenuLabel>
+                  <DropdownMenuItem disabled={readOnly || !menu.add} onSelect={() => addPointAt(menu.add!)}>
+                    <Plus /> Add point <span className="ml-auto text-[11px] text-muted-foreground">{menu.add ? "here" : "arcs: Edit as points"}</span>
+                  </DropdownMenuItem>
                   <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => editSketch(s => straightenLanes(s, menu.lanes))}>
                     Straighten <span className="ml-auto text-[11px] text-muted-foreground">only the ends</span>
                   </DropdownMenuItem>
@@ -1946,6 +1960,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   // (smoothed ones are outlines, like drawn ones; the others bands)
   const loopsOf = new Map(autos.filter(j => j.smooth).map(j => [j.id, smoothJunction(sk, j, contentsOf(j))]));
   const bandsOf = new Map(autos.filter(j => !j.smooth).map(j => [j.id, junctionBands(sk, contentsOf(j))]));
+  // (the ground they shut in: paved too; far out, a pixel or two, left out)
+  const holesOf = far ? [] : autos.flatMap(j => junctionHoles(sk, contentsOf(j)));
   const loopsPath = (loops: Pt[][]) => { ctx.beginPath(); for (const l of loops) { l.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); } };
   const strokeBands = (g: CanvasRenderingContext2D, bands: Band[], extra: number) => {
     for (const b of bands) {
@@ -1979,6 +1995,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       for (const j of drawn) { path(outlinePath(j)); ctx.closePath(); if (pass) ctx.fill(); else { ctx.lineWidth = kerbW; ctx.stroke(); } }
       for (const loops of loopsOf.values()) { loopsPath(loops); if (pass) ctx.fill("evenodd"); else { ctx.lineWidth = kerbW; ctx.stroke(); } }
       if (!far) for (const bands of bandsOf.values()) strokeBands(ctx, bands, pass ? 0 : kerbW);
+      if (pass && holesOf.length) { loopsPath(holesOf); ctx.fill("nonzero"); }
       // (a link: its sides kerbed, not its ends, where it meets its roads)
       for (const { g } of linkGeo) { if (pass) { path(g.outline); ctx.closePath(); ctx.fill(); } else { ctx.lineWidth = kerbW; for (const side of g.sides) { path(side); ctx.stroke(); } } }
       // (the lanes of one width in one go)

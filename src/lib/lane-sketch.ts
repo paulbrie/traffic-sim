@@ -1334,19 +1334,8 @@ export const onBands = (bands: Band[], p: Pt) => bands.some(b => {
   return q.d <= bandHalfWidth(b, q.s / (laneLength(sh) || 1));
 });
 
-/**
- * The union of some bands with its notches rounded off to radius `r` (a closing: grown by `r`, then
- * shrunk back by `r`, so the convex corners, a road's end say, stay as they were), as closed loops
- * (the outside and any holes, a roundabout's island say: fill them even-odd). Worked out on a grid
- * about a quarter metre fine.
- */
-export function smoothSurface(bands: Band[], r: number): Pt[][] {
-  const all = bands.flatMap(b => b.pts), bb = boundsOfPts(all);
-  if (!bb) return [];
-  const reach = Math.max(...bands.map(b => Math.max(b.width, b.w1 ?? 0) / 2)) + r;
-  const x0 = bb.minX - reach - 1, y0 = bb.minY - reach - 1, w = bb.maxX - x0 + reach + 1, h = bb.maxY - y0 + reach + 1;
-  const cell = Math.max(0.2, Math.sqrt((w * h) / 250_000)), nx = Math.ceil(w / cell) + 1, ny = Math.ceil(h / cell) + 1;
-  // grown: within `r` of a band
+/** a grid (from `x0`, `y0`, `cell` apart) with 1 where a point is within `r` of a band */
+function rasterBands(bands: Band[], x0: number, y0: number, cell: number, nx: number, ny: number, r: number): Uint8Array {
   const grown = new Uint8Array(nx * ny);
   for (const b of bands) {
     const pts = b.closed ? [...b.pts, b.pts[0]] : b.pts;
@@ -1366,26 +1355,10 @@ export function smoothSurface(bands: Band[], r: number): Pt[][] {
       }
     }
   }
-  // shrunk back: how far each point of it is from outside it (an exact distance transform), less `r`
-  const INF = 1e20, d2 = new Float64Array(nx * ny);
-  for (let k = 0; k < nx * ny; k++) d2[k] = grown[k] ? INF : 0;
-  const f = new Float64Array(Math.max(nx, ny)), out = new Float64Array(Math.max(nx, ny)), v = new Int32Array(Math.max(nx, ny)), z = new Float64Array(Math.max(nx, ny) + 1);
-  const pass = (n: number, get: (q: number) => number, set: (q: number, x: number) => void) => {
-    for (let q = 0; q < n; q++) f[q] = get(q);
-    let k = 0; v[0] = 0; z[0] = -INF; z[1] = INF;
-    for (let q = 1; q < n; q++) {
-      let s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
-      while (s <= z[k]) { k--; s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
-      k++; v[k] = q; z[k] = s; z[k + 1] = INF;
-    }
-    k = 0;
-    for (let q = 0; q < n; q++) { while (z[k + 1] < q) k++; out[q] = (q - v[k]) ** 2 + f[v[k]]; }
-    for (let q = 0; q < n; q++) set(q, out[q]);
-  };
-  for (let i = 0; i < nx; i++) pass(ny, q => d2[q * nx + i], (q, x) => { d2[q * nx + i] = x; });
-  for (let j = 0; j < ny; j++) pass(nx, q => d2[j * nx + q], (q, x) => { d2[j * nx + q] = x; });
-  const g = (i: number, j: number) => Math.sqrt(d2[j * nx + i]) * cell - r;
-  // its edge, where that is 0 (marching squares), the pieces chained into loops
+  return grown;
+}
+/** where `g` (on a grid from `x0`, `y0`, `cell` apart) is 0: marching squares, the pieces chained into loops */
+function traceLoops(x0: number, y0: number, cell: number, nx: number, ny: number, g: (i: number, j: number) => number): Pt[][] {
   const at = (i: number, j: number, i2: number, j2: number) => {
     const a = g(i, j), b = g(i2, j2), t = a === b ? 0.5 : a / (a - b);
     return { x: x0 + (i + (i2 - i) * t) * cell, y: y0 + (j + (j2 - j) * t) * cell };
@@ -1419,6 +1392,41 @@ export function smoothSurface(bands: Band[], r: number): Pt[][] {
   }
   return loops;
 }
+/**
+ * The union of some bands with its notches rounded off to radius `r` (a closing: grown by `r`, then
+ * shrunk back by `r`, so the convex corners, a road's end say, stay as they were), as closed loops
+ * (the outside and any holes, a roundabout's island say: fill them even-odd). Worked out on a grid
+ * about a quarter metre fine.
+ */
+export function smoothSurface(bands: Band[], r: number): Pt[][] {
+  const all = bands.flatMap(b => b.pts), bb = boundsOfPts(all);
+  if (!bb) return [];
+  const reach = Math.max(...bands.map(b => Math.max(b.width, b.w1 ?? 0) / 2)) + r;
+  const x0 = bb.minX - reach - 1, y0 = bb.minY - reach - 1, w = bb.maxX - x0 + reach + 1, h = bb.maxY - y0 + reach + 1;
+  const cell = Math.max(0.2, Math.sqrt((w * h) / 250_000)), nx = Math.ceil(w / cell) + 1, ny = Math.ceil(h / cell) + 1;
+  // grown: within `r` of a band
+  const grown = rasterBands(bands, x0, y0, cell, nx, ny, r);
+  // shrunk back: how far each point of it is from outside it (an exact distance transform), less `r`
+  const INF = 1e20, d2 = new Float64Array(nx * ny);
+  for (let k = 0; k < nx * ny; k++) d2[k] = grown[k] ? INF : 0;
+  const f = new Float64Array(Math.max(nx, ny)), out = new Float64Array(Math.max(nx, ny)), v = new Int32Array(Math.max(nx, ny)), z = new Float64Array(Math.max(nx, ny) + 1);
+  const pass = (n: number, get: (q: number) => number, set: (q: number, x: number) => void) => {
+    for (let q = 0; q < n; q++) f[q] = get(q);
+    let k = 0; v[0] = 0; z[0] = -INF; z[1] = INF;
+    for (let q = 1; q < n; q++) {
+      let s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+      while (s <= z[k]) { k--; s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
+      k++; v[k] = q; z[k] = s; z[k + 1] = INF;
+    }
+    k = 0;
+    for (let q = 0; q < n; q++) { while (z[k + 1] < q) k++; out[q] = (q - v[k]) ** 2 + f[v[k]]; }
+    for (let q = 0; q < n; q++) set(q, out[q]);
+  };
+  for (let i = 0; i < nx; i++) pass(ny, q => d2[q * nx + i], (q, x) => { d2[q * nx + i] = x; });
+  for (let j = 0; j < ny; j++) pass(nx, q => d2[j * nx + q], (q, x) => { d2[j * nx + q] = x; });
+  const g = (i: number, j: number) => Math.sqrt(d2[j * nx + i]) * cell - r;
+  return traceLoops(x0, y0, cell, nx, ny, g);
+}
 /** is `p` inside the loops (even-odd)? */
 export const insideLoops = (p: Pt, loops: Pt[][]) => loops.filter(l => insidePolygon(p, l)).length % 2 === 1;
 /** the radius a smoothed junction's notches are rounded off to, by default (metres) */
@@ -1432,6 +1440,83 @@ export function smoothJunction(sk: Sketch, j: SketchJunction, c: JunctionContent
   const loops = smoothSurface(junctionBands(sk, c), r);
   smoothed.set(c, { sk, r, loops });
   return loops;
+}
+
+/** slits narrower than this (metres) between an automatic junction's bands, or its bands and its roads, count as shut */
+const SLIT = 1;
+// (kept while what they come from is the same: the contents, their lanes and connectors, the lanes of
+// the roads joined; and for each sketch, so drawing it again finds them at once)
+const holesKept = new WeakMap<JunctionContents, { deps: object[]; holes: Pt[][] }>(), holesNow = new WeakMap<Sketch, Map<JunctionContents, Pt[][]>>();
+const byId = new WeakMap<Sketch, { conns: Map<string, SketchConnector>; roads: Map<string, SketchRoad> }>();
+/**
+ * The ground an automatic junction's surface shuts in (its bands and the roads it joins all round it,
+ * but for slits under a metre), to pave too: everything under a junction is road. Not what a ring lane
+ * on it goes round (a roundabout's island). As loops to fill, reaching a little under the bands.
+ */
+export function junctionHoles(sk: Sketch, c: JunctionContents): Pt[][] {
+  let now = holesNow.get(sk);
+  if (!now) holesNow.set(sk, (now = new Map()));
+  const had = now.get(c);
+  if (had) return had;
+  let ix = byId.get(sk);
+  if (!ix) byId.set(sk, (ix = { conns: new Map(sk.connectors.map(x => [x.id, x])), roads: new Map(sk.roads.map(r => [r.id, r])) }));
+  const roadLanes = c.roads.flatMap(id => ix.roads.get(id)?.lanes ?? []).flatMap(id => laneById(sk, id) ?? []);
+  const conns = c.connectors.flatMap(id => ix.conns.get(id) ?? []);
+  const deps: object[] = [...c.lanes.flatMap(id => laneById(sk, id) ?? []), ...conns, ...conns.flatMap(x => [laneById(sk, x.from.lane) ?? {}, laneById(sk, x.to.lane) ?? {}]), ...roadLanes];
+  const k = holesKept.get(c);
+  const holes = k && k.deps.length === deps.length && k.deps.every((d, i) => d === deps[i]) ? k.holes : holesOf(sk, c, roadLanes);
+  holesKept.set(c, { deps, holes });
+  now.set(c, holes);
+  return holes;
+}
+function holesOf(sk: Sketch, c: JunctionContents, roadLanes: SketchLane[]): Pt[][] {
+  const bands = junctionBands(sk, c);
+  if (bands.length < 2) return [];
+  const bb = boundsOfPts(bands.flatMap(b => b.pts));
+  if (!bb) return [];
+  const reach = Math.max(...bands.map(b => Math.max(b.width, b.w1 ?? 0) / 2)) + 2;
+  const x0 = bb.minX - reach, y0 = bb.minY - reach, w = bb.maxX - x0 + reach, h = bb.maxY - y0 + reach;
+  const cell = Math.max(0.3, Math.sqrt((w * h) / 25_000)), nx = Math.ceil(w / cell) + 1, ny = Math.ceil(h / cell) + 1;
+  const walls = [...bands, ...roadLanes.map(l => ({ pts: samples(l.shape, 1), width: l.width, closed: isFullCircle(l.shape) }))];
+  const shut = rasterBands(walls, x0, y0, cell, nx, ny, SLIT / 2);
+  // (the ground reached from the grid's edge is outside)
+  const seen = new Uint8Array(nx * ny), stack: number[] = [];
+  const push = (q: number) => { if (!shut[q] && !seen[q]) { seen[q] = 1; stack.push(q); } };
+  for (let i = 0; i < nx; i++) { push(i); push((ny - 1) * nx + i); }
+  for (let j = 0; j < ny; j++) { push(j * nx); push(j * nx + nx - 1); }
+  const flood = () => {
+    while (stack.length) {
+      const q = stack.pop()!, i = q % nx;
+      if (i > 0) push(q - 1); if (i < nx - 1) push(q + 1); if (q >= nx) push(q - nx); if (q < nx * (ny - 1)) push(q + nx);
+    }
+  };
+  flood();
+  // (the rest, piece by piece: left as it is if a ring lane goes round it)
+  const rings = c.lanes.flatMap(id => { const l = laneById(sk, id); return l && (isFullCircle(l.shape) || (l.shape.kind === "line" && l.shape.closed)) ? [samples(l.shape, 1)] : []; });
+  const hole = new Uint8Array(nx * ny);
+  let any = false;
+  for (let q = 0; q < nx * ny; q++) {
+    if (shut[q] || seen[q]) continue;
+    const p = { x: x0 + (q % nx) * cell, y: y0 + Math.floor(q / nx) * cell }, island = rings.some(r => insidePolygon(p, r));
+    const before = stack.length;
+    seen[q] = 1; stack.push(q);
+    const piece: number[] = [];
+    while (stack.length > before) {
+      const v = stack.pop()!, i = v % nx;
+      piece.push(v);
+      for (const u of [i > 0 ? v - 1 : -1, i < nx - 1 ? v + 1 : -1, v >= nx ? v - nx : -1, v < nx * (ny - 1) ? v + nx : -1]) if (u >= 0 && !shut[u] && !seen[u]) { seen[u] = 1; stack.push(u); }
+    }
+    if (!island) { for (const v of piece) hole[v] = 1; any = true; }
+  }
+  if (!any) return [];
+  // (grown under what shuts it in, so it meets the asphalt round it)
+  const grow = Math.ceil(SLIT / cell) + 1, paved = new Uint8Array(nx * ny);
+  for (let q = 0; q < nx * ny; q++) {
+    if (!hole[q]) continue;
+    const i = q % nx, j = Math.floor(q / nx);
+    for (let b = Math.max(0, j - grow); b <= Math.min(ny - 1, j + grow); b++) for (let a = Math.max(0, i - grow); a <= Math.min(nx - 1, i + grow); a++) paved[b * nx + a] = 1;
+  }
+  return traceLoops(x0, y0, cell, nx, ny, (i, j) => (paved[j * nx + i] ? 1 : -1));
 }
 
 /**
