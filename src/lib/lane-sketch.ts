@@ -963,6 +963,84 @@ export function straightenLanes(sk: Sketch, ids: Iterable<string>, tol?: number)
   };
 }
 
+/** how far `p` is from the polyline `path` */
+function offPath(p: Pt, path: Pt[]): number {
+  let d = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i], dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+    const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+    d = Math.min(d, Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy));
+  }
+  return d;
+}
+/**
+ * A line lane's run as one curve: its two ends and one curved point between them, put where the curve
+ * keeps closest to where the lane ran (starting from where the directions at its ends meet). `off`: the
+ * most it strays from that, in metres (a lane bending more than one curve can follow strays more).
+ */
+export function curveFit(sh: Extract<LaneShape, { kind: "line" }>): { shape: LaneShape; off: number } {
+  const old = linePath(sh), A = sh.pts[0], B = sh.pts[sh.pts.length - 1];
+  const shapeOf = (C: Pt): LaneShape => ({ kind: "line", pts: [A, C, B], curved: [false, true, false] });
+  const err = (C: Pt) => {
+    const np = linePath(shapeOf(C) as Extract<LaneShape, { kind: "line" }>);
+    let sum = 0, max = 0;
+    for (const p of old) { const d = offPath(p, np); sum += d * d; max = Math.max(max, d); }
+    for (const p of np) { const d = offPath(p, old); sum += d * d; max = Math.max(max, d); }
+    return { sum, max };
+  };
+  const n = old.length, d0 = { x: old[1].x - A.x, y: old[1].y - A.y }, d1 = { x: B.x - old[n - 2].x, y: B.y - old[n - 2].y };
+  const den = d0.x * d1.y - d0.y * d1.x;
+  let C = old[Math.floor(n / 2)];
+  if (Math.abs(den) > 1e-9) {
+    const t = ((B.x - A.x) * d1.y - (B.y - A.y) * d1.x) / den;
+    if (t > 0 && t * Math.hypot(d0.x, d0.y) < 4 * dist(A, B)) C = { x: A.x + d0.x * t, y: A.y + d0.y * t };
+  }
+  // (then moved a step at a time while that brings it closer, the steps halved down to a centimetre)
+  let best = err(C).sum;
+  for (let step = Math.max(0.5, dist(A, B) / 10); step > 0.01; ) {
+    let moved = false;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const q = { x: C.x + dx * step, y: C.y + dy * step }, e = err(q).sum;
+      if (e < best) { best = e; C = q; moved = true; }
+    }
+    if (!moved) step /= 2;
+  }
+  C = { x: Number(C.x.toFixed(3)), y: Number(C.y.toFixed(3)) };
+  return { shape: shapeOf(C), off: err(C).max };
+}
+/**
+ * Lanes made one curve each (see curveFit): open line lanes of more than three points, or not curved
+ * yet (rings, arcs and lanes following a lead are left). Connectors on them are put at the nearest place
+ * on the new shape (at the ends: the ends). `off`: how far each strays from where it ran.
+ */
+export function curveLanes(sk: Sketch, ids: Iterable<string>): { sketch: Sketch; off: { lane: string; off: number }[] } {
+  const want = new Set(ids), changed = new Map<string, { old: LaneShape; shape: LaneShape }>(), off: { lane: string; off: number }[] = [];
+  for (const l of sk.lanes) {
+    const sh = l.shape;
+    if (!want.has(l.id) || sh.kind !== "line" || sh.closed || sh.pts.length < 3 || leadOf(sk, l.id)) continue;
+    if (sh.pts.length === 3 && sh.curved?.[1]) continue;
+    const f = curveFit(sh);
+    changed.set(l.id, { old: sh, shape: f.shape });
+    off.push({ lane: l.id, off: f.off });
+  }
+  if (!changed.size) return { sketch: sk, off };
+  const place = (a: LaneAt) => {
+    const c = changed.get(a.lane);
+    if (!c) return a;
+    const L0 = laneLength(c.old), L1 = laneLength(c.shape);
+    const s = a.s <= 0.01 ? 0 : a.s >= L0 - 0.01 ? L1 : nearestOn(c.shape, pointAt(c.old, a.s).p).s;
+    return { ...a, s: Number(s.toFixed(2)) };
+  };
+  return {
+    sketch: {
+      ...sk,
+      lanes: sk.lanes.map(l => { const c = changed.get(l.id); return c ? { ...l, shape: c.shape } : l; }),
+      connectors: sk.connectors.map(c => (changed.has(c.from.lane) || changed.has(c.to.lane) ? { ...c, from: place(c.from), to: place(c.to) } : c)),
+    },
+    off,
+  };
+}
+
 // ---------------------------------------------------------------- junctions
 
 export function insidePolygon(p: Pt, poly: Pt[]) {

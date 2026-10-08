@@ -11,7 +11,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import {
-  LANE_WIDTH, addLane, sketchIndex, boxesMeet, straightenLanes, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, sketchIndex, boxesMeet, straightenLanes, curveLanes, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -920,6 +920,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                 <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => editSketch(s => straightenLanes(s, menu.lanes, 0.5))}>
                   Fewer points <span className="ml-auto text-[11px] text-muted-foreground">within 0.5 m</span>
                 </DropdownMenuItem>
+                <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => makeCurve(menu.lanes)}>
+                  Make a curve <span className="ml-auto text-[11px] text-muted-foreground">2 ends, 1 curved point</span>
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -986,6 +989,18 @@ function reasonOf(why: string | null, kmh: number): { text: string; car?: number
 }
 
 /** a recorded car's details, in the shape of a live one (what wasn't kept left out: its place along, its desired speed, its route) */
+/**
+ * Lanes made one curve each, their two ends and a curved point (see curveLanes); a warning for one that
+ * bends more than one curve can follow (straying more than half a lane's width from where it ran).
+ */
+function makeCurve(ids: string[]) {
+  let off: { lane: string; off: number }[] = [];
+  editSketch(s => { const r = curveLanes(s, ids); off = r.off; return r.sketch; });
+  if (!off.length) { toast("Nothing to make a curve of", { description: "Only open lanes of more than two points are (not rings or arcs, nor a road's lanes that follow its lead lane)." }); return; }
+  const worst = off.reduce((a, b) => (b.off > a.off ? b : a));
+  if (worst.off > LANE_WIDTH / 2) toast.warning(`Lane ${worst.lane} now strays up to ${worst.off.toFixed(1)} m from where it ran`, { description: "It bends more than one curve can follow: drag its curved point, or undo (Ctrl+Z) and use Fewer points instead." });
+}
+
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
   return { id: c.id, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, p: c.p, d: c.d, route: [] };
@@ -1310,6 +1325,9 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           <div className="grid grid-cols-2 gap-1.5">
             <Button size="sm" variant="outline" title="Only its two ends: a straight lane (its connectors stay where they are)" onClick={() => editSketch(s => straightenLanes(s, [lane.id]))}>Straighten</Button>
             <Button size="sm" variant="outline" title="Leave out the points it doesn't need, keeping it within half a metre of where it runs" onClick={() => editSketch(s => straightenLanes(s, [lane.id], 0.5))}>Fewer points</Button>
+            {!(sh.pts.length === 3 && sh.curved?.[1]) && (
+              <Button size="sm" variant="outline" className="col-span-2" title="Its two ends and one curved point between them, where the curve keeps closest to where it runs (drag the point to bend it; its connectors move to the nearest place)" onClick={() => makeCurve([lane.id])}><Spline /> Make a curve</Button>
+            )}
           </div>
         )}
         <div className="grid grid-cols-2 gap-2">
@@ -1361,6 +1379,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           {sel.lanes.length > 0 && <>
             <Button size="sm" variant="outline" title="The selected lanes with only their two ends: straight (rings, arcs and lanes following a lead are left; connectors stay where they are)" onClick={() => editSketch(s => straightenLanes(s, sel.lanes))}>Straighten</Button>
             <Button size="sm" variant="outline" title="The selected lanes without the points they don't need, each kept within half a metre of where it runs" onClick={() => editSketch(s => straightenLanes(s, sel.lanes, 0.5))}>Fewer points</Button>
+            <Button size="sm" variant="outline" title="Each selected lane as its two ends and one curved point, the curve kept closest to where it runs (rings, arcs and lanes following a lead are left)" onClick={() => makeCurve(sel.lanes)}><Spline /> Make a curve</Button>
           </>}
         </div>
         {selRoads.length === 2 && (
