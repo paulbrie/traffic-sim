@@ -138,6 +138,8 @@ interface Edge {
   neighbors: Neighbor[];
   /** where it crosses other lanes and connectors (or, connectors, ends where another does) */
   conflicts: Conflict[];
+  /** connectors: stretches of it in reach of other paths (crossing zones overlapping one another as one; not joins): one in there is committed */
+  runs: { s: number; e: number }[];
   /** where `pos` is, and the direction of travel there */
   locate: (pos: number) => { p: Pt; d: Pt };
 }
@@ -353,7 +355,7 @@ export class SketchSim {
       const ring = isFullCircle(sh);
       paths.set(`lane:${l.id}`, samples(sh, 1));
       edges.set(`lane:${l.id}`, {
-        key: `lane:${l.id}`, kind: "lane", id: l.id, len, ring, outs: [], ins: [], from: null, to: null, siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], neighbors: [],
+        key: `lane:${l.id}`, kind: "lane", id: l.id, len, ring, outs: [], ins: [], from: null, to: null, siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
         control: ring || signals.has(l.id) ? null : l.control ?? null, minor: null, signal: ring ? null : signals.get(l.id) ?? null, atEnd: false,
         // (bends slow it down: arcs, and lines with curved points or closed round; a sharp drawn corner doesn't slow a whole lane)
         vmax: sh.kind === "arc" ? bendSpeed(sh.r, v0) : sh.curved?.some(Boolean) || ring ? bendSpeed(minRadius(samples(sh, 1)), v0) : v0,
@@ -367,7 +369,7 @@ export class SketchSim {
       const pl = polyline(pts);
       // (places rounded to the centimetre can be a hair past a lane's end)
       const e: Edge = {
-        key: `conn:${c.id}`, kind: "conn", id: c.id, len: Math.max(pl.len, 0.1), ring: false, outs: [], ins: [], siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], neighbors: [],
+        key: `conn:${c.id}`, kind: "conn", id: c.id, len: Math.max(pl.len, 0.1), ring: false, outs: [], ins: [], siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
         control: null, minor: from.control && c.from.s >= from.len - 1 ? from.control : null, signal: null, atEnd: c.from.s >= from.len - 1,
         from: { lane: from, s: Math.min(c.from.s, from.len) }, to: { lane: to, s: Math.min(c.to.s, to.len) }, vmax: bendSpeed(minRadius(pts), v0), locate: pl.locate,
       };
@@ -437,6 +439,10 @@ export class SketchSim {
         A.conflicts.push({ other: B, at: r.at, otherAt: r.otherAt, before: r.at - r.a0, after: r.a1 - r.at, otherBefore: r.otherBefore, otherAfter: r.otherAfter, join });
         B.conflicts.push({ other: A, at: r.otherAt, otherAt: r.at, before: r.otherBefore, after: r.otherAfter, otherBefore: r.at - r.a0, otherAfter: r.a1 - r.at, join });
       }
+    }
+    for (const e of all) {
+      const zs = e.conflicts.filter(k => !k.join).map(k => ({ s: k.at - k.before, e: k.at + k.after })).sort((p, q) => p.s - q.s);
+      for (const z of zs) { const last = e.runs[e.runs.length - 1]; if (last && z.s <= last.e) last.e = Math.max(last.e, z.e); else e.runs.push({ ...z }); }
     }
     // traffic comes in where a lane starts with nothing joining it near its start (see entryLanes)
     const entries = new Map(entryLanes(sk).map(l => [`lane:${l.id}`, l]));
@@ -757,6 +763,11 @@ export class SketchSim {
     }
   }
 
+  /** a car with its front at `pos` on `e`, past the start of the zones that the one starting at `zs` is part of */
+  private inRun(e: Edge, pos: number, zs: number) {
+    return e.runs.some(q => q.s + 0.1 < pos && q.s <= zs + 0.01 && zs <= q.e);
+  }
+
   /** must car `v` (`dv` metres from the zone where their paths meet) let car `w` (`dw` metres from it) go first? */
   private yieldsTo(v: SimVehicle, dv: number, vmaxV: number, w: SimVehicle, dw: number, vmaxW: number) {
     const tv = timeTo(dv, v.v, vmaxV), tw = timeTo(dw, w.v, vmaxW);
@@ -783,6 +794,16 @@ export class SketchSim {
       const first = this.vehicles.reduce((m, v) => Math.min(m,
         v.edge === s.lane ? v.pos : v.left === s.lane ? this.ghostPos(v) ?? Infinity : v.trail?.edge === s.lane && v.run < LEN ? v.trail.pos + v.run : Infinity), Infinity);
       if (first < LEN + S0 + 1) continue;
+      // (nor where its body, just before the lane's start, would be on another car's way: one there, or about to be)
+      if (!s.lane.ring) {
+        const st = s.lane.locate(0), c = { x: st.p.x - st.d.x * LEN / 2, y: st.p.y - st.d.y * LEN / 2 };
+        if (this.vehicles.some(w => {
+          if (w.edge === s.lane) return false;
+          const { p, d } = this.poseOf(w);
+          for (const t of [0, 0.75, 1.5]) if (Math.hypot(p.x + d.x * w.v * t - c.x, p.y + d.y * w.v * t - c.y) < LEN + 0.5) return true;
+          return false;
+        })) continue;
+      }
       s.next = this.t + this.gap(s.rate);
       // (no faster than it can stop from behind the last car in)
       const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - LEN - S0 - 1)));
@@ -973,6 +994,8 @@ export class SketchSim {
           if (!canStopBefore(hold(zs))) continue;
           // (giving way at a line, it goes when it would be through before the other gets there, with time to spare)
           const tClear = minor ? timeTo(dMe + k.after + LEN, v.v, r.edge.vmax) + GAP : 0;
+          // (already in among the zones this one is part of: it can't stop short of them any more, it goes through first)
+          const meIn = r.edge === v.edge && r.edge.kind === "conn" && this.inRun(r.edge, v.pos, k.at - k.before);
           for (const w of this.vehicles) {
             if (w === v) continue;
             const dW = this.toPlace(w, k.other, k.otherAt, LEN + 1 + k.otherAfter);
@@ -980,6 +1003,11 @@ export class SketchSim {
             const ws = dW - k.otherBefore;
             // (gone through, its back clear of the zone; or far off)
             if (dW + k.otherAfter < -LEN || ws > (minor ? LOOK : 70)) continue;
+            const wIn = ws > 0 && w.edge === k.other && k.other.kind === "conn" && this.inRun(k.other, w.pos, k.otherAt - k.otherBefore);
+            // (in among the zones, it is on its way through: it goes first, unless this one is in among them too)
+            if (wIn && !meIn && !forced) { yields.push({ at: hold(zs), why: `zone ${k.other.key} for car ${w.id}` }); break; }
+            // (this one in among them, the other able to stop short: it waits)
+            if (meIn && !wIn && ws > 0 && ws >= (w.v * w.v) / 8) continue;
             // (stopped short of the zone for something else, the car ahead, keeping another crossing clear,
             // joining a lane: it isn't on its way through here, and waiting for it would lock the junction)
             if (w.v < 0.3 && ws > 0.1 && !w.why?.startsWith(`zone ${r.edge.key}`)) continue;
