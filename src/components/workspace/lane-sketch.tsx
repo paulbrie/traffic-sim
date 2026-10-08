@@ -11,7 +11,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import {
-  LANE_WIDTH, addLane, straightenLanes, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, sketchIndex, boxesMeet, straightenLanes, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -47,13 +47,15 @@ const LAYERS: { id: Layer; label: string; hint: string; page?: boolean }[] = [
   { id: "image", label: "Reference image", hint: "The plan's reference image (V2 plans)", page: true },
 ];
 const ALL_LAYERS = Object.fromEntries(LAYERS.map(l => [l.id, true])) as Layers;
+/** the layers shown at first: all but the grid */
+const DEFAULT_LAYERS: Layers = { ...ALL_LAYERS, grid: false };
 function loadLayers(): Layers {
   try {
-    const saved = JSON.parse(localStorage.getItem("laneSketch:layers") ?? "null");
-    if (saved && typeof saved === "object") return { ...ALL_LAYERS, ...Object.fromEntries(LAYERS.filter(l => typeof saved[l.id] === "boolean").map(l => [l.id, saved[l.id]])) };
+    const saved = JSON.parse(localStorage.getItem("laneSketch:layers:2") ?? "null");
+    if (saved && typeof saved === "object") return { ...DEFAULT_LAYERS, ...Object.fromEntries(LAYERS.filter(l => typeof saved[l.id] === "boolean").map(l => [l.id, saved[l.id]])) };
     // (the road surfaces switch there was before)
-    return { ...ALL_LAYERS, surfaces: localStorage.getItem("laneSketch:surfaces") !== "0" };
-  } catch { return ALL_LAYERS; }
+    return { ...DEFAULT_LAYERS, surfaces: localStorage.getItem("laneSketch:surfaces") !== "0" };
+  } catch { return DEFAULT_LAYERS; }
 }
 const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint: string }[] = [
   { id: "select", key: "V", label: "Select", icon: <MousePointer2 />, hint: "Click a lane, connector or junction (Shift adds) · drag to move · drag points to reshape (Alt-click a lane's point curves it), a connector's ends along their lanes or onto others (double-click a lane, connector or junction edge adds a point, double-click a point removes it) · round handle turns lanes and junctions (Shift: 15°; Q / E) · ⌘C / ⌘X / ⌘V, ⌘D duplicates · double-click a lane selects its road" },
@@ -141,7 +143,8 @@ function exportSketch(sk: Sketch, contents: Map<string, JunctionContents>) {
 /** the lane under `p` (within its width, or 4 px of it) */
 function laneUnder(sk: Sketch, p: Pt, px: number) {
   let best: Sketch["lanes"][number] | null = null, bd = Infinity;
-  for (const l of sk.lanes) { const d = nearestOn(l.shape, p).d - l.width / 2; if (d <= 4 * px && d < bd) { bd = d; best = l; } }
+  // (only the lanes near it: see sketchIndex)
+  for (const id of sketchIndex(sk).near(p, 4 * px + 0.5).lanes) { const l = laneById(sk, id)!, d = nearestOn(l.shape, p).d - l.width / 2; if (d <= 4 * px && d < bd) { bd = d; best = l; } }
   return best;
 }
 
@@ -166,7 +169,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [follow, setFollow] = useState(false);
   /** the layers shown (kept in the browser) */
   const [layers, setLayersState] = useState<Layers>(loadLayers);
-  const setLayers = (l: Layers) => { setLayersState(l); try { localStorage.setItem("laneSketch:layers", JSON.stringify(l)); } catch { /* private mode */ } };
+  const setLayers = (l: Layers) => { setLayersState(l); try { localStorage.setItem("laneSketch:layers:2", JSON.stringify(l)); } catch { /* private mode */ } };
   // (without what is gone, deleted by an undo for instance)
   const sel = useMemo(() => prune(rawSel, sketch), [rawSel, sketch]);
   const contents = useMemo(() => new Map(sketch.junctions.map(j => [j.id, junctionContents(sketch, j)])), [sketch]);
@@ -217,15 +220,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const pick = (p: Pt): Hit | null => {
     const sk = live.current.sketch, px = 1 / view.current.scale;
     let best: Hit | null = null, bd = Infinity;
-    // (connectors hidden: not picked, but for the selected ones)
-    for (const c of live.current.layers.connectors ? sk.connectors : sk.connectors.filter(x => live.current.sel.connectors.includes(x.id))) {
+    // (only what is near it; connectors hidden: not picked, but for the selected ones)
+    const near = sketchIndex(sk).near(p, 6 * px + 0.5), cs = sk.connectors.filter(c => near.conns.has(c.id));
+    for (const c of live.current.layers.connectors ? cs : cs.filter(x => live.current.sel.connectors.includes(x.id))) {
       const pts = connectorPts(sk, c);
       if (!pts) continue;
       const d = nearestOn({ kind: "line", pts }, p).d;
       if (d <= 6 * px && d - 4 * px < bd) { bd = d - 4 * px; best = { connector: c.id }; }
     }
-    for (const l of sk.lanes) {
-      const d = nearestOn(l.shape, p).d - l.width / 2;
+    for (const id of near.lanes) {
+      const l = laneById(sk, id)!, d = nearestOn(l.shape, p).d - l.width / 2;
       if (d <= 4 * px && d < bd) { bd = d; best = { lane: l.id }; }
     }
     if (best) return best;
@@ -236,14 +240,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const c = live.current.contents.get(j.id) ?? { lanes: [], connectors: [], roads: [] };
       return j.smooth ? insideLoops(p, smoothJunction(sk, j, c)) : onBands(junctionBands(sk, c), p);
     };
-    const js = sk.junctions.filter(inJ).sort((a, b) => polygonArea(a.outline) - polygonArea(b.outline));
+    const jn = sketchIndex(sk).near(p, 1).junctions;
+    const js = sk.junctions.filter(j => jn.has(j.id) && inJ(j)).sort((a, b) => polygonArea(a.outline) - polygonArea(b.outline));
     return js.length ? { junction: js[0].id } : null;
   };
   /** a place on the lane under `p` (connectors over it don't hide it), snapped to the lane's ends within 12 px */
   const placeOn = (p: Pt): LaneAt | null => {
     const sk = live.current.sketch, px = 1 / view.current.scale;
     let l = null, bd = Infinity;
-    for (const x of sk.lanes) { const d = nearestOn(x.shape, p).d - x.width / 2; if (d <= 4 * px && d < bd) { bd = d; l = x; } }
+    for (const id of sketchIndex(sk).near(p, 4 * px + 0.5).lanes) { const x = laneById(sk, id)!, d = nearestOn(x.shape, p).d - x.width / 2; if (d <= 4 * px && d < bd) { bd = d; l = x; } }
     if (!l) return null;
     const L = laneLength(l.shape), tol = 12 / view.current.scale;
     let s = nearestOn(l.shape, p).s;
@@ -1412,6 +1417,25 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
   onHover: (h: Hit | null) => void; onZoom: (p: Piece) => void; onCenter: (p: Piece) => void;
 }) {
   const [closed, setClosed] = useState<Set<string>>(() => new Set());
+  // (long lists: the first rows only, more on asking; what is selected always listed)
+  const [limits, setLimits] = useState<Record<string, number>>({});
+  const STEP = 60;
+  const capped = <T,>(key: string, items: T[], chosen: (x: T) => boolean) => {
+    const n = limits[key] ?? STEP, shown = items.slice(0, n);
+    for (const x of items.slice(n)) if (chosen(x)) shown.push(x);
+    return { shown, more: Math.max(0, items.length - n) };
+  };
+  const moreRow = (key: string, more: number) => more > 0 && (
+    <button key={`${key}:more`} className="ml-6 justify-self-start rounded px-1 py-0.5 text-[11px] text-primary hover:underline" onClick={() => setLimits(l => ({ ...l, [key]: (l[key] ?? STEP) + 200 }))}>
+      Show {Math.min(200, more)} more of {more}
+    </button>
+  );
+  // (the junctions each road is joined at, worked out once)
+  const joinedAt = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const j of sketch.junctions) for (const r of contents.get(j.id)?.roads ?? []) m.set(r, [...(m.get(r) ?? []), j.name]);
+    return m;
+  }, [sketch.junctions, contents]);
   const box = useRef<HTMLDivElement>(null);
   // (the row of what was just selected brought into view)
   useEffect(() => { box.current?.querySelector("[data-on='true']")?.scrollIntoView({ block: "nearest" }); }, [sel]);
@@ -1420,6 +1444,13 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
   const inRoad = new Set(sketch.roads.flatMap(r => r.lanes)), cs = [...contents.values()];
   const onJ = new Set(cs.flatMap(c => c.lanes)), connOnJ = new Set([...cs.flatMap(c => c.connectors), ...(sketch.links ?? []).flatMap(k => k.conns)]);
   const looseLanes = sketch.lanes.filter(l => !inRoad.has(l.id) && !onJ.has(l.id)), looseConns = sketch.connectors.filter(c => !connOnJ.has(c.id));
+  // only what is selected, with what it is part of: the roads of its lanes, the junctions (or links) its lanes and connectors are on
+  const sl = new Set(sel.lanes), sc = new Set(sel.connectors), sj = new Set(sel.junctions);
+  const nothing = !sl.size && !sc.size && !sj.size && !sel.road && !sel.link;
+  const roadsShown = sketch.roads.filter(r => sel.road === r.id || r.lanes.some(l => sl.has(l)));
+  const junctionsShown = sketch.junctions.filter(j => { if (sj.has(j.id)) return true; const c = contents.get(j.id); return !!c && (c.connectors.some(id => sc.has(id)) || c.lanes.some(id => sl.has(id))); });
+  const linksShown = (sketch.links ?? []).filter(k => sel.link === k.id || k.conns.some(id => sc.has(id)));
+  const looseLanesShown = looseLanes.filter(l => sl.has(l.id)), looseConnsShown = looseConns.filter(c => sc.has(c.id));
   const roadName = (id: string) => sketch.roads.find(r => r.id === id)?.name ?? id;
   const laneName = (id: string) => { const r = roadOf(sketch, id); return r ? `${id} (${r.name})` : id; };
   const piece = (p: Partial<Piece>): Piece => ({ lanes: p.lanes ?? [], connectors: p.connectors ?? [], junctions: p.junctions ?? [] });
@@ -1468,11 +1499,16 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
 
   return (
     <div ref={box} role="tree" aria-label="Roads and junctions" className="grid gap-px p-2">
-      <p className="px-1 pb-1 text-[11px] text-muted-foreground">{plural(sketch.lanes.length, "lane")} · {plural(sketch.connectors.length, "connector")} · click selects and centres it, ⇧-click adds, double-click zooms to it</p>
+      <p className="px-1 pb-1 text-[11px] text-muted-foreground">
+        {plural(sketch.roads.length, "road")} · {plural(sketch.junctions.length, "junction")} · {plural(sketch.lanes.length, "lane")} · {plural(sketch.connectors.length, "connector")}
+      </p>
+      {nothing
+        ? <p className="px-1 text-xs text-muted-foreground">Select something on the map to see it here, with the road or junction it is part of. Click a row to select it and centre it, ⇧-click to add, double-click to zoom to it.</p>
+        : <p className="px-1 pb-1 text-[11px] text-muted-foreground">The selection, with what it is part of · click selects and centres, ⇧-click adds, double-click zooms</p>}
 
-      {heading("h:roads", "Roads", sketch.roads.length)}
-      {open("h:roads") && (sketch.roads.length ? sketch.roads.flatMap(r => {
-        const js = sketch.junctions.filter(j => contents.get(j.id)?.roads.includes(r.id)).map(j => j.name);
+      {!!roadsShown.length && heading("h:roads", "Roads", roadsShown.length)}
+      {open("h:roads") && (roadsShown.length ? (() => { const { shown, more } = capped("roads", roadsShown, r => sel.road === r.id || r.lanes.some(l => sel.lanes.includes(l))); return [...shown.flatMap(r => {
+        const js = joinedAt.get(r.id) ?? [];
         return [
           row({
             key: `road:${r.id}`, depth: 0, kids: true, on: sel.road === r.id, sel: { ...NO_SEL, lanes: r.lanes, road: r.id }, zoom: piece({ lanes: r.lanes }),
@@ -1480,10 +1516,10 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
           }),
           ...(open(`road:${r.id}`) ? r.lanes.map(id => laneRow(id, 1)) : []),
         ];
-      }) : <p className="px-6 py-0.5 text-xs text-muted-foreground">None yet: select lanes and press G</p>)}
+      }), moreRow("roads", more)]; })() : null)}
 
-      {heading("h:junctions", "Junctions", sketch.junctions.length)}
-      {open("h:junctions") && (sketch.junctions.length ? sketch.junctions.flatMap(j => {
+      {!!junctionsShown.length && heading("h:junctions", "Junctions", junctionsShown.length)}
+      {open("h:junctions") && (junctionsShown.length ? (() => { const { shown, more } = capped("junctions", junctionsShown, j => sel.junctions.includes(j.id)); return [...shown.flatMap(j => {
         const c = contents.get(j.id) ?? { lanes: [], connectors: [], roads: [] }, k = `junction:${j.id}`;
         const group = (key: string, text: string, n: number, kids: React.ReactNode[]) => n ? [
           <div key={key} className="flex items-center gap-1 py-0.5 text-[11px] text-muted-foreground" style={{ paddingLeft: 4 + 12 }}>
@@ -1508,11 +1544,11 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
             ...group(`${k}:conns`, "Connectors", c.connectors.length, c.connectors.map(id => connRow(id, 2, `${k}:`))),
           ] : []),
         ];
-      }) : <p className="px-6 py-0.5 text-xs text-muted-foreground">None yet: draw one with J</p>)}
+      }), moreRow("junctions", more)]; })() : null)}
 
-      {!!sketch.links?.length && <>
-        {heading("h:links", "Links", sketch.links.length)}
-        {open("h:links") && sketch.links.flatMap(k => [
+      {!!linksShown.length && <>
+        {heading("h:links", "Links", linksShown.length)}
+        {open("h:links") && linksShown.flatMap(k => [
           row({
             key: `link:${k.id}`, depth: 0, kids: true, on: sel.link === k.id, hit: { link: k.id }, sel: { ...NO_SEL, link: k.id }, zoom: piece({ connectors: k.conns }),
             label: <span className="font-medium">{roadName(k.a.road)} ↔ {roadName(k.b.road)}</span>, note: plural(k.conns.length, "connector"), title: `Joins ${roadName(k.a.road)} (its ${k.a.end}) to ${roadName(k.b.road)} (its ${k.b.end})`,
@@ -1521,12 +1557,12 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
         ])}
       </>}
 
-      {(looseLanes.length > 0 || looseConns.length > 0) && <>
-        {heading("h:loose", "Loose", looseLanes.length + looseConns.length)}
+      {(looseLanesShown.length > 0 || looseConnsShown.length > 0) && <>
+        {heading("h:loose", "Loose", looseLanesShown.length + looseConnsShown.length)}
         {open("h:loose") && <>
           <p className="px-6 pb-0.5 text-[11px] text-amber-700 dark:text-amber-400">In no road and on no junction</p>
-          {looseLanes.map(l => laneRow(l.id, 0))}
-          {looseConns.map(c => connRow(c.id, 0))}
+          {(() => { const { shown, more } = capped("looseLanes", looseLanesShown, l => sel.lanes.includes(l.id)); return [...shown.map(l => laneRow(l.id, 0)), moreRow("looseLanes", more)]; })()}
+          {(() => { const { shown, more } = capped("looseConns", looseConnsShown, c => sel.connectors.includes(c.id)); return [...shown.map(c => connRow(c.id, 0)), moreRow("looseConns", more)]; })()}
         </>}
       </>}
     </div>
@@ -1556,6 +1592,14 @@ interface PaintState {
   contents: Map<string, JunctionContents>;
 }
 
+/** a marking's box (kept: markings are kept per sketch) */
+const markBoxes = new WeakMap<{ pts: Pt[] }, { x0: number; y0: number; x1: number; y1: number }>();
+function markBox(m: { pts: Pt[] }) {
+  let b = markBoxes.get(m);
+  if (!b) { b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }; for (const p of m.pts) { b.x0 = Math.min(b.x0, p.x); b.x1 = Math.max(b.x1, p.x); b.y0 = Math.min(b.y0, p.y); b.y1 = Math.max(b.y1, p.y); } markBoxes.set(m, b); }
+  return b;
+}
+
 /** where automatic junction surfaces are put together before going on the sketch */
 let scratch: HTMLCanvasElement | null = null;
 
@@ -1578,6 +1622,11 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   ctx.fillRect(0, 0, w, h);
   ctx.setTransform(dpr * v.scale, 0, 0, dpr * v.scale, dpr * (w / 2 - v.cx * v.scale), dpr * (h / 2 - v.cy * v.scale));
   const x0 = v.cx - (w / 2) * px, x1 = v.cx + (w / 2) * px, y0 = v.cy - (h / 2) * px, y1 = v.cy + (h / 2) * px;
+  // what is in view (with a margin for kerbs and labels): only that is drawn
+  const vis = sketchIndex(sk).query({ x0: x0 - 20 * px, y0: y0 - 20 * px, x1: x1 + 20 * px, y1: y1 + 20 * px });
+  const viewBox = { x0, y0, x1, y1 };
+  // far out (under a pixel a metre): less detail, drawn in fewer strokes
+  const far = v.scale < 1;
 
   // the background (V2 plans): the imagery and the reference image
   if (st.bg) drawBackground(ctx, st.bg, { minX: x0, minY: y0, maxX: x1, maxY: y1 }, v.scale * dpr, px);
@@ -1615,7 +1664,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   const jOn = (j: SketchJunction) => selJ.has(j.id), jOver = (j: SketchJunction) => !!hv && "junction" in hv && hv.junction === j.id;
   // links: a strip between the road ends they join
   const linkGeo = (sk.links ?? []).flatMap(k => { const g = linkGeometry(sk, k); return g ? [{ k, g, on: s.link === k.id, over: !!hv && "link" in hv && hv.link === k.id }] : []; });
-  const drawn = sk.junctions.filter(j => j.outline.length >= 3 && j.shape !== "auto"), autos = sk.junctions.filter(j => j.shape === "auto");
+  const drawn = sk.junctions.filter(j => j.outline.length >= 3 && j.shape !== "auto" && vis.junctions.has(j.id)), autos = sk.junctions.filter(j => j.shape === "auto" && vis.junctions.has(j.id));
   const contentsOf = (j: SketchJunction) => st.contents.get(j.id) ?? { lanes: [], connectors: [], roads: [] };
   // (smoothed ones are outlines, like drawn ones; the others bands)
   const loopsOf = new Map(autos.filter(j => j.smooth).map(j => [j.id, smoothJunction(sk, j, contentsOf(j))]));
@@ -1644,23 +1693,29 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   if (st.layers.surfaces) {
     // like the roads: one asphalt surface, the union of the road lanes' bands and the junctions (every
     // kerb first, then all the grey over them, so only the outline of the whole shows)
-    const roadLanes = sk.roads.flatMap(r => r.lanes).map(id => laneById(sk, id)).filter(l => !!l);
+    const roadLanes = sk.roads.flatMap(r => r.lanes).filter(id => vis.lanes.has(id)).map(id => laneById(sk, id)).filter(l => !!l);
     ctx.lineCap = "butt"; ctx.lineJoin = "round";
-    for (const pass of [0, 1]) {
+    // (far out the kerbs are under a pixel: the asphalt only)
+    for (const pass of far ? [1] : [0, 1]) {
       ctx.strokeStyle = ctx.fillStyle = pass ? asphalt : kerb;
       for (const j of drawn) { path(outlinePath(j)); ctx.closePath(); if (pass) ctx.fill(); else { ctx.lineWidth = kerbW; ctx.stroke(); } }
       for (const loops of loopsOf.values()) { loopsPath(loops); if (pass) ctx.fill("evenodd"); else { ctx.lineWidth = kerbW; ctx.stroke(); } }
-      for (const bands of bandsOf.values()) strokeBands(ctx, bands, pass ? 0 : kerbW);
+      if (!far) for (const bands of bandsOf.values()) strokeBands(ctx, bands, pass ? 0 : kerbW);
       // (a link: its sides kerbed, not its ends, where it meets its roads)
       for (const { g } of linkGeo) { if (pass) { path(g.outline); ctx.closePath(); ctx.fill(); } else { ctx.lineWidth = kerbW; for (const side of g.sides) { path(side); ctx.stroke(); } } }
-      for (const l of roadLanes) {
-        path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath();
-        ctx.lineWidth = l.width + (pass ? 0 : kerbW); ctx.stroke();
+      // (the lanes of one width in one go)
+      const byWidth = new Map<number, typeof roadLanes>();
+      for (const l of roadLanes) byWidth.set(l.width, [...(byWidth.get(l.width) ?? []), l]);
+      for (const [wd, ls] of byWidth) {
+        ctx.beginPath();
+        for (const l of ls) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
+        ctx.lineWidth = wd + (pass ? 0 : kerbW); ctx.stroke();
       }
     }
     // the markings, as on the plan's map: dashed lines between lanes, the centre line in its yellow
     ctx.lineCap = "butt";
-    for (const m of st.layers.markings ? roadMarkings(sk) : []) {
+    for (const m of st.layers.markings && v.scale >= 1.5 ? roadMarkings(sk) : []) {
+      if (!boxesMeet(markBox(m), viewBox)) continue;
       path(m.pts);
       ctx.strokeStyle = m.kind === "center" ? pal.divider : pal.mark; ctx.lineWidth = Math.max(0.15, px);
       ctx.setLineDash(m.dashed ? [3, 4] : []); ctx.stroke();
@@ -1708,6 +1763,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   }
   // selection and hover halos under the lanes
   for (const l of sk.lanes) {
+    if (!vis.lanes.has(l.id)) continue;
     const on = selLanes.has(l.id), over = (hv && "lane" in hv && hv.lane === l.id) || (hv && "lanes" in hv && hv.lanes.includes(l.id));
     if (!on && !over) continue;
     path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath();
@@ -1715,8 +1771,18 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     ctx.globalAlpha = 1;
   }
   // lanes: a green line down the middle (on a faint band as wide as the lane), with chevrons along their direction of travel
-  for (const l of sk.lanes) {
-    if (!st.layers.lanes && !selLanes.has(l.id)) continue;
+  // (far out, under a pixel a metre: only the lines, all in one go)
+  if (far) {
+    ctx.beginPath();
+    for (const l of sk.lanes) {
+      if (!vis.lanes.has(l.id) || (!st.layers.lanes && !selLanes.has(l.id))) continue;
+      const pts = samples(l.shape, 2);
+      pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    }
+    ctx.lineCap = "butt"; ctx.lineJoin = "round"; ctx.strokeStyle = col.lane; ctx.lineWidth = Math.max(0.2, 1.5 * px); ctx.stroke();
+  }
+  for (const l of far ? [] : sk.lanes) {
+    if (!vis.lanes.has(l.id) || (!st.layers.lanes && !selLanes.has(l.id))) continue;
     const pts = samples(l.shape, 0.5), closed = isFullCircle(l.shape);
     ctx.lineCap = "butt"; ctx.lineJoin = "round"; ctx.strokeStyle = col.lane;
     path(pts); if (closed) ctx.closePath();
@@ -1780,7 +1846,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   // the signs, as on the plan's map, on the kerb beside the line (one for lanes side by side with the
   // same sign: by the one on the right): a red octagon, a give-way triangle pointing to the junction
   for (const l of st.layers.signs ? sk.lanes : []) {
-    if (!l.control || isFullCircle(l.shape)) continue;
+    if (!l.control || isFullCircle(l.shape) || !vis.lanes.has(l.id)) continue;
     const { p, d } = pointAt(l.shape, laneLength(l.shape)), n = { x: -d.y, y: d.x }, road = roadOf(sk, l.id);
     const besideRight = road?.lanes.some(id => {
       const o = laneById(sk, id);
@@ -1803,7 +1869,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
   }
   // the lines across the lanes' ends
   for (const l of st.layers.signs ? sk.lanes : []) {
-    if (!l.control || isFullCircle(l.shape)) continue;
+    if (!l.control || isFullCircle(l.shape) || !vis.lanes.has(l.id)) continue;
     const { p, d } = pointAt(l.shape, laneLength(l.shape)), n = { x: -d.y, y: d.x }, hw = l.width / 2;
     if (st.layers.surfaces) {
       ctx.strokeStyle = pal.mark; ctx.lineWidth = 0.5; ctx.lineCap = "butt"; ctx.setLineDash(l.control === "yield" ? [0.9, 0.7] : []);
@@ -1835,7 +1901,7 @@ function paint(c: HTMLCanvasElement, st: PaintState) {
     // (a phase's connectors, hovered in the lights' panel: lit green)
     const phase = !!hv && "conns" in hv && hv.conns.includes(cn.id);
     const on = selConns.has(cn.id), over = (hv && "connector" in hv && hv.connector === cn.id) || phase, wd = (on ? 3.5 : over ? 2.5 : 2) * px;
-    if (!st.layers.connectors && !on && !over) continue;
+    if ((!st.layers.connectors || !vis.conns.has(cn.id) || v.scale < 1) && !on && !over) continue;
     path(pts);
     ctx.lineCap = "round"; ctx.lineJoin = "round";
     // (a darker edge under the yellow, so it reads on the light ground)

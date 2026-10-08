@@ -5,6 +5,7 @@
  * together) with the vehicles per hour coming in on it, and each way out with its share of the trips
  * that end there. Cars take the shortest way to the exit they are going to.
  */
+import { useState } from "react";
 import { NumberField } from "@/components/workspace/fields";
 import { cn } from "@/lib/utils";
 import { demandWays, laneInRate, laneOutWeight, laneById, setInRate, setOutWeight, type Sketch } from "@/lib/lane-sketch";
@@ -12,6 +13,8 @@ import { editSketch } from "@/state/lane-sketch";
 
 export function DemandPanel({ sketch, readOnly, onFocus }: { sketch: Sketch; readOnly: boolean; onFocus?: (lanes: string[] | null) => void }) {
   const { entries, exits } = demandWays(sketch);
+  // (long lists: the first ways only, more on asking)
+  const [shown, setShown] = useState({ in: 12, out: 12 });
   if (!entries.length && !exits.length) return null;
   const lane = (id: string) => laneById(sketch, id)!;
   const total = (ids: string[]) => ids.reduce((a, id) => a + laneInRate(lane(id), sketch), 0);
@@ -25,7 +28,7 @@ export function DemandPanel({ sketch, readOnly, onFocus }: { sketch: Sketch; rea
       <p className="text-[11px] text-muted-foreground">Cars come in on the ways in at their rate, go to a way out (more often to those with a larger share), and take the shortest way there.</p>
       <div className="grid gap-1">
         <span className="text-xs font-medium">Ways in <span className="font-normal text-muted-foreground">· veh/h</span></span>
-        {entries.map(w => (
+        {entries.slice(0, shown.in).map(w => (
           <div key={w.key} className={row} onMouseEnter={() => onFocus?.(w.lanes)} onMouseLeave={() => onFocus?.(null)}>
             <span className={cn("min-w-0 flex-1 truncate", !own(w.lanes) && "text-muted-foreground")} title={`${w.name}: ${w.lanes.join(", ")}${own(w.lanes) ? "" : " (the sketch's rate per lane)"}`}>{w.name}</span>
             {readOnly ? <span className="font-mono tabular">{Math.round(total(w.lanes))}</span> : (
@@ -35,9 +38,10 @@ export function DemandPanel({ sketch, readOnly, onFocus }: { sketch: Sketch; rea
           </div>
         ))}
       </div>
+      {entries.length > shown.in && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setShown(x => ({ ...x, in: x.in + 50 }))}>Show {Math.min(50, entries.length - shown.in)} more of {entries.length - shown.in}</button>}
       <div className="grid gap-1">
         <span className="text-xs font-medium">Ways out <span className="font-normal text-muted-foreground">· share of trips</span></span>
-        {exits.map(w => {
+        {exits.slice(0, shown.out).map(w => {
           const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0), pct = sumW > 0 ? Math.round((ws / sumW) * 100) : 0;
           return (
             <div key={w.key} className={row} onMouseEnter={() => onFocus?.(w.lanes)} onMouseLeave={() => onFocus?.(null)}>
@@ -50,6 +54,7 @@ export function DemandPanel({ sketch, readOnly, onFocus }: { sketch: Sketch; rea
             </div>
           );
         })}
+        {exits.length > shown.out && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setShown(x => ({ ...x, out: x.out + 50 }))}>Show {Math.min(50, exits.length - shown.out)} more of {exits.length - shown.out}</button>}
       </div>
     </section>
   );

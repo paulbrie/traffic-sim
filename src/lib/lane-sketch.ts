@@ -1413,6 +1413,74 @@ export const laneInRate = (l: SketchLane, sk: Sketch) => l.inRate ?? sk.traffic?
 /** an exit lane's share of the trips (relative; 0: closed) */
 export const laneOutWeight = (l: SketchLane) => l.outWeight ?? 1;
 
+// ---------------------------------------------------------------- spatial index
+
+/** a rectangle, metres */
+export interface Box { x0: number; y0: number; x1: number; y1: number }
+const boxOf = (pts: Pt[], pad: number): Box => {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of pts) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+  return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };
+};
+export const boxesMeet = (a: Box, b: Box) => a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1;
+
+/**
+ * Where everything of a sketch is, to find what is near a point or in view without looking at all of
+ * it: each lane's, connector's and junction's box, in a grid of `CELL` m squares (kept per sketch).
+ */
+export class SketchIndex {
+  static CELL = 40;
+  readonly lane = new Map<string, Box>();
+  readonly conn = new Map<string, Box>();
+  readonly junction = new Map<string, Box>();
+  private grid = new Map<string, { lanes: string[]; conns: string[]; junctions: string[] }>();
+  constructor(sk: Sketch) {
+    for (const l of sk.lanes) this.add("lanes", l.id, this.lane, boxOf(samples(l.shape, 2), l.width / 2 + 0.5));
+    for (const c of sk.connectors) { const p = connectorPts(sk, c); if (p) this.add("conns", c.id, this.conn, boxOf(p, 3)); }
+    // (an automatic surface reaches a little past its border: the stubs of the roads it joins)
+    for (const j of sk.junctions) if (j.outline.length) this.add("junctions", j.id, this.junction, boxOf(outlinePath(j), j.shape === "auto" ? 6 : 1));
+  }
+  private add(kind: "lanes" | "conns" | "junctions", id: string, into: Map<string, Box>, b: Box) {
+    into.set(id, b);
+    const C = SketchIndex.CELL;
+    for (let i = Math.floor(b.x0 / C); i <= Math.floor(b.x1 / C); i++) for (let k = Math.floor(b.y0 / C); k <= Math.floor(b.y1 / C); k++) {
+      const key = `${i},${k}`;
+      let cell = this.grid.get(key);
+      if (!cell) this.grid.set(key, (cell = { lanes: [], conns: [], junctions: [] }));
+      cell[kind].push(id);
+    }
+  }
+  /** what may be in a rectangle (its box meets it) */
+  query(r: Box): { lanes: Set<string>; conns: Set<string>; junctions: Set<string> } {
+    const C = SketchIndex.CELL, out = { lanes: new Set<string>(), conns: new Set<string>(), junctions: new Set<string>() };
+    const i0 = Math.floor(r.x0 / C), i1 = Math.floor(r.x1 / C), k0 = Math.floor(r.y0 / C), k1 = Math.floor(r.y1 / C);
+    // (a view wider than the grid holds cells: every box checked instead)
+    if ((i1 - i0 + 1) * (k1 - k0 + 1) > this.grid.size) {
+      for (const [id, b] of this.lane) if (boxesMeet(b, r)) out.lanes.add(id);
+      for (const [id, b] of this.conn) if (boxesMeet(b, r)) out.conns.add(id);
+      for (const [id, b] of this.junction) if (boxesMeet(b, r)) out.junctions.add(id);
+      return out;
+    }
+    for (let i = i0; i <= i1; i++) for (let k = k0; k <= k1; k++) {
+      const cell = this.grid.get(`${i},${k}`);
+      if (!cell) continue;
+      for (const id of cell.lanes) if (!out.lanes.has(id) && boxesMeet(this.lane.get(id)!, r)) out.lanes.add(id);
+      for (const id of cell.conns) if (!out.conns.has(id) && boxesMeet(this.conn.get(id)!, r)) out.conns.add(id);
+      for (const id of cell.junctions) if (!out.junctions.has(id) && boxesMeet(this.junction.get(id)!, r)) out.junctions.add(id);
+    }
+    return out;
+  }
+  /** what may be within `r` metres of a point */
+  near(p: Pt, r: number) { return this.query({ x0: p.x - r, y0: p.y - r, x1: p.x + r, y1: p.y + r }); }
+}
+const indexes = new WeakMap<Sketch, SketchIndex>();
+/** the sketch's index (made when first asked for, then kept) */
+export function sketchIndex(sk: Sketch): SketchIndex {
+  let x = indexes.get(sk);
+  if (!x) indexes.set(sk, (x = new SketchIndex(sk)));
+  return x;
+}
+
 // ---------------------------------------------------------------- stored
 
 const num = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
