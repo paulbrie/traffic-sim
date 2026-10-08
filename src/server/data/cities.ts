@@ -6,6 +6,7 @@ import "server-only";
 import { and, asc, desc, eq, or, sql } from "drizzle-orm";
 import type { Named } from "@gdp-ts/core";
 import { db, schema } from "@/db";
+import type { Sketch } from "@/lib/lane-sketch";
 import type { Network } from "@/engine/types";
 import type { CityId, UserId, ViewerId } from "@/lib/ids";
 import type { CanOwnCity, CanViewCity } from "../proofs/policy";
@@ -63,6 +64,9 @@ export async function getCity<U, C>(city: Named<C, CityId>, viewer: Named<U, Vie
       nodes: sql<number>`jsonb_array_length(${schema.plans.network}->'nodes')`,
       links: sql<number>`jsonb_array_length(${schema.plans.network}->'links')`,
       stops: sql<number>`jsonb_array_length(${schema.plans.network}->'stops')`,
+      engine: schema.plans.engine,
+      // (V2 plans: their lane sketch, for the thumbnail; V1 plans: none)
+      sketch: sql<Sketch | null>`case when ${schema.plans.engine} = 'v2' then ${schema.plans.sketch} else null end`.mapWith(schema.plans.sketch),
     })
     .from(schema.plans)
     .where(eq(schema.plans.cityId, city.value))
@@ -97,7 +101,7 @@ export async function duplicateCity<U, C>(city: Named<C, CityId>, owner: Named<U
     const plans = await tx.select().from(schema.plans).where(eq(schema.plans.cityId, city.value)).orderBy(asc(schema.plans.createdAt));
     for (const p of plans) {
       const [plan] = await tx.insert(schema.plans)
-        .values({ cityId: copy.id, name: p.name, description: p.description, network: p.network, settings: p.settings, underlay: p.underlay, sketch: p.sketch })
+        .values({ cityId: copy.id, name: p.name, description: p.description, network: p.network, settings: p.settings, underlay: p.underlay, sketch: p.sketch, engine: p.engine })
         .returning();
       await tx.execute(sql`insert into plan_images (plan_id, mime, data, bytes) select ${plan.id}, mime, data, bytes from plan_images where plan_id = ${p.id}`);
       await recordVersion(tx, plan.id, owner.value, { revision: plan.revision, network: plan.network, settings: plan.settings, underlay: plan.underlay, sketch: plan.sketch }, "create", `Copied from “${src.name} / ${p.name}”`);

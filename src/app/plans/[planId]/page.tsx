@@ -36,6 +36,7 @@ export default async function PlanPage({ params }: PageProps<"/plans/[planId]">)
       user={{ email: user.email, name: user.name, role: user.role }}
       prefs={prefs}
       assistant={user.role === "admin" && assistantEnabled()}
+      engine={plan.engine}
     />
   );
 }

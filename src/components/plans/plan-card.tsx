@@ -1,9 +1,10 @@
 "use client";
 
+import type { Sketch } from "@/lib/lane-sketch";
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Copy, MoreHorizontal, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,10 +13,10 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { deletePlan, duplicatePlan, updatePlanInfo } from "@/server/actions";
+import { convertPlanToV2, deletePlan, duplicatePlan, updatePlanInfo } from "@/server/actions";
 import { timeAgo } from "@/lib/time";
 
-export function PlanCardActions({ plan, canDelete = true }: { plan: { id: string; name: string; description: string }; canDelete?: boolean }) {
+export function PlanCardActions({ plan, canDelete = true }: { plan: { id: string; name: string; description: string; engine?: "v1" | "v2" }; canDelete?: boolean }) {
   const [edit, setEdit] = useState(false);
   const [del, setDel] = useState(false);
   const [pending, start] = useTransition();
@@ -31,6 +32,23 @@ export function PlanCardActions({ plan, canDelete = true }: { plan: { id: string
           <DropdownMenuItem onSelect={() => start(async () => { const id = await duplicatePlan(plan.id); toast.success("Plan duplicated", { action: { label: "Open", onClick: () => router.push(`/plans/${id}`) } }); router.refresh(); })}>
             <Copy /> Duplicate
           </DropdownMenuItem>
+          {plan.engine !== "v2" && (
+            <DropdownMenuItem disabled={pending} title="A new V2 plan next to this one, its roads, junctions, signs, lights and roundabouts as lanes and connectors (this plan stays as it is)"
+              onSelect={() => start(async () => {
+                const t = toast.loading("Converting to V2…");
+                try {
+                  const { id, report: r } = await convertPlanToV2(plan.id);
+                  toast.success("V2 plan made", {
+                    id: t, duration: 12000,
+                    description: `${r.lanes} lanes, ${r.connectors} connectors, ${r.junctions} junctions (${r.lights} with lights, ${r.roundabouts} roundabouts), ${r.signs} signs.${r.skipped.length ? ` Not converted: ${r.skipped.join("; ")}.` : ""}`,
+                    action: { label: "Open", onClick: () => router.push(`/plans/${id}`) },
+                  });
+                  router.refresh();
+                } catch (err) { toast.error(err instanceof Error ? err.message : "Could not convert", { id: t }); }
+              })}>
+              <Sparkles /> Convert to V2
+            </DropdownMenuItem>
+          )}
           {canDelete && <DropdownMenuSeparator />}
           {canDelete && <DropdownMenuItem variant="destructive" onSelect={() => setDel(true)}><Trash2 /> Delete</DropdownMenuItem>}
         </DropdownMenuContent>
@@ -71,10 +89,20 @@ export function PlanCardActions({ plan, canDelete = true }: { plan: { id: string
   );
 }
 
-export function PlanMeta({ nodes, links, stops, updatedAt }: { nodes: number; links: number; stops: number; updatedAt: Date }) {
+/** `sketch`: a V2 plan's lane sketch (its counts shown instead of the V1 network's) */
+/** which engine a plan is built on: V2 (the lane sketch) stands out, V1 is quieter */
+export function EngineBadge({ engine }: { engine: "v1" | "v2" }) {
+  return engine === "v2"
+    ? <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary" title="V2 engine: lanes, connectors and junctions drawn freely">V2</span>
+    : <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground" title="V1 engine (classic)">V1</span>;
+}
+
+export function PlanMeta({ nodes, links, stops, updatedAt, sketch }: { nodes: number; links: number; stops: number; updatedAt: Date; sketch?: Sketch | null }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground tabular">
-      <span>{links} roads</span><span>{nodes} nodes</span><span>{stops} stops</span>
+      {sketch !== undefined
+        ? <><span>{sketch?.roads.length ?? 0} roads</span><span>{sketch?.lanes.length ?? 0} lanes</span><span>{sketch?.junctions.length ?? 0} junctions</span></>
+        : <><span>{links} roads</span><span>{nodes} nodes</span><span>{stops} stops</span></>}
       <span className="ml-auto">Edited {timeAgo(new Date(updatedAt))}</span>
     </div>
   );

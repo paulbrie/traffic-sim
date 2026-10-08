@@ -194,7 +194,7 @@ function SketchButton() {
   );
 }
 
-function SaveIndicator({ planId }: { planId: string }) {
+export function SaveIndicator({ planId }: { planId: string }) {
   const [save] = useDeepSubject(ui, "save");
   const content = {
     saved: <><Check className="size-3.5" /> Saved</>,
@@ -664,7 +664,7 @@ async function pullRemote(planId: string) {
  * Live updates: the server says when the plan's revision changes (Server-Sent Events; polling where the
  * stream doesn't come through), and the newer version is taken in (see pullRemote).
  */
-function useLive(planId: string) {
+export function useLive(planId: string) {
   useEffect(() => {
     let es: EventSource | null = null, poll: ReturnType<typeof setInterval> | null = null, fallback: ReturnType<typeof setTimeout> | null = null;
     let heard = false, stopped = false;
@@ -702,7 +702,7 @@ function queueSave(planId: string) {
   saveTimer = setTimeout(() => { saveTimer = null; void doSave(planId); }, Math.max(0, dirtySince + MAX_WAIT - Date.now()));
 }
 
-function useAutosave(planId: string) {
+export function useAutosave(planId: string) {
   useEffect(() => {
     const onChange = () => { if (ui.getValue().save.status === "dirty") queueSave(planId); };
     // (settings and the reference image change outside the undo history: a change counts as an action too,
