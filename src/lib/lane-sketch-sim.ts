@@ -81,6 +81,8 @@ const FRAME_FIELDS = ["car", "edge", "pos", "v", "exit", "run", "trail", "x", "y
 const KEEP_FRAMES = 30, KEEP_EVENTS = 3000;
 /** seconds kept to replay (every car about every 0.1 s, compactly: a few MB for 50 cars) */
 const KEEP_REPLAY = 600;
+/** at most this many cars and events in a moment copied (the nearest the middle of the view, the nearest in time) */
+const MOMENT_CARS = 400, MOMENT_EVENTS = 1500;
 /** a recorded car, as replayed */
 export interface ReplayCar { id: number; p: Pt; d: Pt; len: number; share: number; kmh: number; edge: string; exit: string | null; why: string | null }
 const r2 = (x: number) => Math.round(x * 100) / 100;
@@ -1141,9 +1143,33 @@ export class SketchSim {
     return i;
   }
 
-  /** the time span that can be replayed (null: nothing kept yet) */
+  /** the time span that can be replayed, the frames kept for it and their size in memory (null: nothing kept yet) */
   replayRange() {
-    return this.replay.length ? { from: this.replay[0].t, to: this.replay[this.replay.length - 1].t } : null;
+    const fr = this.replay;
+    if (!fr.length) return null;
+    let bytes = 0;
+    for (const f of fr) bytes += f.nums.byteLength + f.tags.byteLength + 16;
+    return { from: fr[0].t, to: fr[fr.length - 1].t, frames: fr.length, bytes };
+  }
+  /**
+   * The moment `t` (a replayed one, or now) as it was, to copy: the cars in `box` (the view; null: all) as
+   * the frame kept for it has them, the nearest the middle first, what the lights showed, and what happened
+   * within a minute either side.
+   */
+  moment(t: number, box: { x0: number; y0: number; x1: number; y1: number } | null) {
+    const f = this.replayAt(t), cx = box ? (box.x0 + box.x1) / 2 : 0, cy = box ? (box.y0 + box.y1) / 2 : 0;
+    const inBox = (p: Pt) => !box || (p.x >= box.x0 && p.x <= box.x1 && p.y >= box.y0 && p.y <= box.y1);
+    const cars = (f?.cars ?? []).filter(c => inBox(c.p))
+      .sort((a, b) => Math.hypot(a.p.x - cx, a.p.y - cy) - Math.hypot(b.p.x - cx, b.p.y - cy)).slice(0, MOMENT_CARS)
+      .map(c => ({ car: c.id, x: r2(c.p.x), y: r2(c.p.y), heading: Math.round((Math.atan2(c.d.y, c.d.x) * 180) / Math.PI), kmh: Math.round(c.kmh), edge: c.edge, exit: c.exit, why: c.why }));
+    const at = f?.t ?? t;
+    const lights = this.signals.map(c => {
+      let h = c.history[0];
+      for (const x of c.history) { if (x.t > at) break; h = x; }
+      return { junction: c.plan.junction, phase: h.phase, stage: h.stage, since: r2(at - h.t) };
+    });
+    const events = this.log.filter(e => Math.abs(e.t - at) <= 60).sort((a, b) => Math.abs(a.t - at) - Math.abs(b.t - at)).slice(0, MOMENT_EVENTS).sort((a, b) => a.t - b.t);
+    return { time: r2(at), now: r2(this.t), kept: this.replayRange(), params: this.params, stats: this.stats(), cars, lights, events };
   }
   /** the cars as they were at time `t` (the frame kept just before it) */
   replayAt(t: number): { t: number; cars: ReplayCar[] } | null {

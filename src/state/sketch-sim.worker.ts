@@ -3,7 +3,7 @@
  * The lane sketch's cars off the page's main thread (see sketch-sim-client.ts): owns the SketchSim,
  * steps it at the speed asked for, and posts what the page draws and shows after every step: the cars,
  * the stats, the traffic lights, the car watched, the replay's range. Asked, it answers with the
- * cars as they were at a time (replay), the report to copy, a car's last 10 s.
+ * cars as they were at a time (replay), the report to copy, a moment to copy, a car's last 10 s.
  */
 import { SketchSim, type SimParams } from "@/lib/lane-sketch-sim";
 import type { Sketch } from "@/lib/lane-sketch";
@@ -17,6 +17,7 @@ export type ToSimWorker =
   | { type: "watch"; id: number | null }
   | { type: "replay"; t: number; req: number }
   | { type: "report"; req: number }
+  | { type: "moment"; t: number; box: Parameters<SketchSim["moment"]>[1]; req: number }
   | { type: "car"; id: number; req: number };
 
 export interface SimFrame {
@@ -36,6 +37,7 @@ export type FromSimWorker =
   | SimFrame
   | { type: "replay"; req: number; frame: ReturnType<SketchSim["replayAt"]> }
   | { type: "report"; req: number; report: ReturnType<SketchSim["report"]> }
+  | { type: "moment"; req: number; moment: ReturnType<SketchSim["moment"]> | null }
   | { type: "car"; req: number; frames: ReturnType<SketchSim["carFrames"]>; events: SketchSim["log"] };
 
 let sim: SketchSim | null = null, running = false, speed = 1, watch: number | null = null;
@@ -92,6 +94,7 @@ self.onmessage = (e: MessageEvent<ToSimWorker>) => {
     case "watch": watch = m.id; frame(false); break;
     case "replay": post({ type: "replay", req: m.req, frame: sim?.replayAt(m.t) ?? null }); break;
     case "report": if (sim) post({ type: "report", req: m.req, report: sim.report() }); break;
+    case "moment": post({ type: "moment", req: m.req, moment: sim?.moment(m.t, m.box) ?? null }); break;
     case "car": if (sim) post({ type: "car", req: m.req, frames: sim.carFrames(m.id), events: sim.log.filter(x => x.car === m.id || x.with === m.id).slice(-60) }); break;
   }
 };

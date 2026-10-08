@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, Undo2, Waypoints, X, History, Radio, StepBack, StepForward } from "lucide-react";
+import { Car, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, Undo2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,6 @@ import {
 } from "@/lib/lane-sketch";
 import { DEFAULT_SIM, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
 import { SketchSimClient } from "@/state/sketch-sim-client";
-import { Slider } from "@/components/ui/slider";
 import { laneSketch$, ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { editSketch, recordSketch, redoSketch, setSketchClip, setSketchSim, sketchClip, sketchSim, undoSketch } from "@/state/lane-sketch";
@@ -27,6 +26,7 @@ import { readPalette, speedColor } from "@/render/palette";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
+import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/sketch-replay-bar";
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
 
@@ -142,7 +142,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** replaying what was kept: the moment shown (null: the cars as they are), playing or not, and the span kept */
   const [replayT, setReplayT] = useState<number | null>(null);
   const [replayPlaying, setReplayPlaying] = useState(false);
-  const [replayRange, setReplayRange] = useState<{ from: number; to: number } | null>(() => sketchSim()?.replayRange() ?? null);
+  const [replayRange, setReplayRange] = useState<ReplayKept | null>(() => sketchSim()?.replayRange() ?? null);
   const [follow, setFollow] = useState(false);
   /** the layers shown (kept in the browser) */
   // (shared with the top bar's layers picker on a V2 plan)
@@ -262,6 +262,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const carInfoAt = (id: number, t: number | null) => (t === null ? sim.current?.inspect(id) ?? null : replayInfo(sim.current?.replayAt(t)?.cars.find(c => c.id === id)));
   /** the replay at moment `t` (the view kept on the car picked, if following it) */
   const showAt = (t: number) => {
+    // (going into the replay: the cars pause, where they are)
+    if (live.current.replayT === null) { setRunning(false); setReplayRange(sim.current?.replayRange() ?? null); }
+    live.current.replayT = t;
     setReplayT(t);
     const id = live.current.selCar;
     if (id === null) return;
@@ -269,23 +272,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     setCarInfo(info);
     if (info && live.current.follow) view.current = { ...view.current, cx: info.p.x, cy: info.p.y };
   };
-  const startReplay = () => {
-    const r = sim.current?.replayRange();
-    if (!r) return;
-    setRunning(false); setReplayRange(r); setReplayPlaying(false);
-    showAt(r.to);
-  };
   const goLive = () => {
     setReplayT(null); setReplayPlaying(false);
     const id = live.current.selCar;
     setCarInfo(id !== null ? sim.current?.inspect(id) ?? null : null);
   };
-  /** a step through the replay (seconds; stops playing it) */
+  /** a step through the replay (seconds; stops playing it): from the moment shown, or from now when live */
   const stepReplay = (dt: number) => {
     const r = sim.current?.replayRange(), t = live.current.replayT;
-    if (!r || t === null) return;
+    if (!r) return;
     setReplayPlaying(false);
-    showAt(Math.min(r.to, Math.max(r.from, t + dt)));
+    showAt(Math.min(r.to, Math.max(r.from, (t ?? r.to) + dt)));
   };
   const frame = useRef(0);
   // (the sketch drawn without what moves with the cars, kept between frames: redrawn when something
@@ -390,6 +387,28 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const r = await s.report(), sk = live.current.sketch;
     const text = `Lane sketch simulation at ${clock(r.time)} (${running ? "running" : "paused"}) · ${r.stats.vehicles} cars, ${r.stats.collisions} collisions, ${r.stats.jumps} jumps\n\`\`\`json\n${JSON.stringify({ sketch: exportSketch(sk, live.current.contents), ...r })}\n\`\`\`\n`;
     try { await navigator.clipboard.writeText(text); toast.success("Simulation data copied", { description: `${Math.round(text.length / 1024)} kB: the sketch, the cars now, the jumps, the last minute's events and the last 10 s of every car. Paste it into the conversation.` }); }
+    catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
+  };
+  /** the moment shown (replayed, or now) as text to paste into a conversation, like V1's: the cars in view, the lights, a minute's events */
+  const copyMoment = async () => {
+    const s = sim.current, c = canvas.current;
+    if (!s || !c) return;
+    const v = view.current, m = 20, hw = c.clientWidth / 2 / v.scale + m, hh = c.clientHeight / 2 / v.scale + m;
+    const t = live.current.replayT, at = t ?? s.t;
+    const mo = await s.moment(at, { x0: v.cx - hw, y0: v.cy - hh, x1: v.cx + hw, y1: v.cy + hh });
+    if (!mo) return;
+    const sk = live.current.sketch, u = ui.getValue();
+    const names = new Map(sk.junctions.map(j => [j.id, j.name]));
+    const data = {
+      plan: u.planId, revision: u.save.revision,
+      moment: { time: mo.time, live: t === null, now: mo.now, kept: mo.kept },
+      view: { cx: Math.round(v.cx * 10) / 10, cy: Math.round(v.cy * 10) / 10, width: Math.round(hw * 20) / 10, height: Math.round(hh * 20) / 10 },
+      selection: { ...live.current.sel, car: live.current.selCar }, params: mo.params, stats: mo.stats,
+      cars: mo.cars, lights: mo.lights.map(l => ({ ...l, name: names.get(l.junction) ?? null })),
+      events: mo.events.length ? mo.events : "none within a minute",
+    };
+    const text = `Lane sketch replay at ${clock(mo.time)} (${t === null ? "live" : "replay"}) · plan ${u.planId} rev ${u.save.revision}\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n`;
+    try { await navigator.clipboard.writeText(text); toast.success("Replay data copied", { description: `${Math.round(text.length / 1024)} kB: paste it into the conversation.` }); }
     catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
   };
   const resetCars = () => { sim.current?.reset(); setStats(sim.current?.stats() ?? null); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null); redraw(); };
@@ -822,7 +841,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "q" || k === "e") { rotateSel(((k === "e" ? 1 : -1) * (e.shiftKey ? 1 : 15) * Math.PI) / 180); return; }
     if (k === "f") { fit(); return; }
     if (k === "p") { play(); return; }
-    if ((k === "," || k === ".") && live.current.replayT !== null) { stepReplay(k === "," ? -0.1 : 0.1); return; }
+    // (the replay: a step back or forward; Shift, a second)
+    if (k === "arrowleft" || k === "arrowright" || ((k === "," || k === ".") && live.current.replayT !== null)) {
+      e.preventDefault();
+      stepReplay((k === "arrowleft" || k === "," ? -1 : 1) * (e.shiftKey ? 1 : REPLAY_STEP));
+      return;
+    }
     const t = TOOLS.find(t => t.key.toLowerCase() === k);
     if (t) changeTool(t.id);
   };
@@ -906,25 +930,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <div className="pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
             <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu
           </div>
-          {replayRange && (replayT === null ? (
-            <Button size="sm" variant="outline" className="absolute bottom-6 left-2 h-7 bg-background/90 shadow-sm" onClick={startReplay}
-              title="Replay what the cars did (the last 10 minutes are kept); pauses them">
-              <History /> Replay
-            </Button>
-          ) : (
-            <div className="absolute inset-x-2 bottom-6 flex items-center gap-1.5 rounded-md border bg-background/95 px-2 py-1 text-xs shadow-sm" role="group" aria-label="Replay">
-              <Button size="icon-sm" variant="ghost" aria-label="Step back" title="0.1 s back (,)" onClick={() => stepReplay(-0.1)}><StepBack /></Button>
-              <Button size="icon-sm" variant="ghost" aria-label={replayPlaying ? "Pause the replay" : "Play the replay"} title={replayPlaying ? "Pause" : "Play (at the simulation speed)"}
-                onClick={() => { if (!replayPlaying && replayRange && replayT >= replayRange.to - 0.05) showAt(replayRange.from); setReplayPlaying(!replayPlaying); }}>
-                {replayPlaying ? <Pause /> : <Play />}
-              </Button>
-              <Button size="icon-sm" variant="ghost" aria-label="Step forward" title="0.1 s on (.)" onClick={() => stepReplay(0.1)}><StepForward /></Button>
-              <Slider className="mx-1 flex-1" min={replayRange.from} max={replayRange.to} step={0.1} value={[replayT]} aria-label="Replay position"
-                onValueChange={([t]) => { setReplayPlaying(false); showAt(t); }} />
-              <span className="w-24 text-right font-mono tabular text-muted-foreground" title="The moment replayed / the end of what is kept">{clock(replayT)} / {clock(replayRange.to)}</span>
-              <Button size="sm" className="h-7" onClick={goLive} title="Back to the cars as they are (Run carries on from there)"><Radio /> Live</Button>
-            </div>
-          ))}
+          <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
+            onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} />
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
