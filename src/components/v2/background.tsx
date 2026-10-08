@@ -22,6 +22,7 @@ import { drawSatellite, googleImagery, SAT_ATTRIBUTION, type SatSource } from "@
 import { setUnderlay, ui, underlay$ } from "@/state/store";
 import { editSketch } from "@/state/lane-sketch";
 import { removeUnderlay, underlayImg$, uploadUnderlay } from "@/state/underlay-image";
+import { InspectorPanel } from "./inspector-panel";
 
 /** how the imagery is shown (kept in the browser) */
 export interface SatOptions { brightness: number; source: SatSource }
@@ -121,8 +122,7 @@ export function BackgroundPanel({ sketch, sat, setSat, viewNow, calib, setCalib,
   };
 
   return (
-    <section className="grid gap-2 border-b p-3">
-      <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Background</h3>
+    <InspectorPanel id="background" title="Background">
       {/* where it is */}
       <div className="grid gap-1.5">
         <span className="flex items-center gap-1.5 text-xs"><MapPin className="size-3.5 text-muted-foreground" />
@@ -208,6 +208,6 @@ export function BackgroundPanel({ sketch, sat, setSat, viewNow, calib, setCalib,
           </>
         )}
       </div>
-    </section>
+    </InspectorPanel>
   );
 }

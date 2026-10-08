@@ -27,6 +27,7 @@ import { readPalette, speedColor } from "@/render/palette";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
+import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/sketch-replay-bar";
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
@@ -1095,11 +1096,8 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
   );
   const reason = info ? reasonOf(info.why, info.kmh) : null;
   return (
-    <section className="grid gap-2 border-b bg-muted/30 p-3">
-      <h3 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-        <Car className="size-3.5" /> <span className="flex-1">Car {id}</span>
-        <button className="rounded p-0.5 hover:bg-muted" aria-label="Stop inspecting the car" title="Stop inspecting (Esc)" onClick={onClose}><X className="size-3.5" /></button>
-      </h3>
+    <InspectorPanel id="car" title={`Car ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
+      actions={<button className="rounded p-0.5 hover:bg-muted" aria-label="Stop inspecting the car" title="Stop inspecting (Esc)" onClick={onClose}><X className="size-3.5" /></button>}>
       {!info ? <p className="text-xs text-muted-foreground">{replayT !== null ? "Not on the sketch at this moment." : "It has left the sketch."}</p> : replayT !== null ? (
         <>
           {row("At", <span className="font-mono tabular">{clock(replayT)} (replay)</span>)}
@@ -1129,7 +1127,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
           {!running && <p className="text-[11px] text-muted-foreground">Paused: Run to watch it.</p>}
         </>
       )}
-    </section>
+    </InspectorPanel>
   );
 }
 
@@ -1486,10 +1484,9 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
     body = <p className="text-xs text-muted-foreground">Draw lanes (L, A for arcs, O for a ring) and connectors (C, with bends where you click), group lanes into roads (G), and draw junctions (J): a surface taking in the lanes and connectors on it.</p>;
   }
   return (
-    <section className="grid gap-2 border-b p-3">
-      <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{link ? `Link ${link.id}` : road ? "Road" : junction ? `Junction ${junction.id}` : lane ? `Lane ${lane.id}` : conn ? `Connector ${conn.id}` : "Selection"}</h3>
+    <InspectorPanel id="selection" title={link ? `Link ${link.id}` : road ? "Road" : junction ? `Junction ${junction.id}` : lane ? `Lane ${lane.id}` : conn ? `Connector ${conn.id}` : "Selection"}>
       {body}
-    </section>
+    </InspectorPanel>
   );
 }
 
@@ -1500,11 +1497,8 @@ function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; rea
   const set = (patch: Partial<Omit<SketchCrossing, "id">>) => editSketch(sk => updateCrossing(sk, x.id, patch));
   const len = dist(x.a, x.b);
   return (
-    <section className="grid gap-2 border-b p-3">
-      <div className="flex items-center gap-2">
-        <h3 className="flex-1 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Zebra crossing {x.id}</h3>
-        {!readOnly && <Button size="icon-sm" variant="ghost" aria-label="Delete the zebra crossing" title="Delete it (Del)" onClick={onDelete}><Trash2 /></Button>}
-      </div>
+    <InspectorPanel id="crossing" title={`Zebra crossing ${x.id}`}
+      actions={!readOnly && <Button size="icon-sm" variant="ghost" aria-label="Delete the zebra crossing" title="Delete it (Del)" onClick={onDelete}><Trash2 /></Button>}>
       <p className="text-xs text-muted-foreground">{fmtM(len)} from kerb to kerb</p>
       <div className="grid grid-cols-2 gap-2">
         <NumberField id="sk-xw" label="Width (along the traffic)" unit="m" value={x.width} min={1.5} max={12} step={0.1} digits={1} onCommit={width => set({ width })} />
@@ -1526,7 +1520,7 @@ function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; rea
           ))}
         </div>
       ) : <p className="text-xs text-muted-foreground">Run the cars to see its pedestrians.</p>}
-    </section>
+    </InspectorPanel>
   );
 }
 
@@ -1539,8 +1533,7 @@ function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats,
     <div className={cn("flex justify-between gap-2 text-xs", cls)}><span className="text-muted-foreground">{label}</span><span className="font-mono tabular">{value}</span></div>
   );
   return (
-    <section className="grid gap-2 border-b p-3">
-      <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Traffic</h3>
+    <InspectorPanel id="traffic" title="Traffic">
       <p className="text-[11px] text-muted-foreground">
         {entries
           ? `Cars come in at the start of the ${entries === 1 ? "lane" : `${entries} lanes`} nothing joins near their start (at each one's rate in Demand, or the one below), head for a lane end nothing leaves (by their shares of the trips) and take the shortest way there. Joining cars give way; cars at a stop or yield line give way to those without one; elsewhere, where connectors cross, the first there goes first.`
@@ -1551,7 +1544,7 @@ function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats,
         <NumberField id="sk-speed" label="Speed" unit="km/h" digits={0} value={params.speed} min={10} max={130} step={5} onCommit={speed => setParams({ ...params, speed })} />
       </div>
       <ToggleGroup type="single" value={String(simSpeed)} onValueChange={v => v && setSimSpeed(Number(v))} aria-label="Simulation speed" className="w-full">
-        {[1, 2, 4, 8].map(n => <ToggleGroupItem key={n} value={String(n)} className="h-7 flex-1 text-xs">{n}×</ToggleGroupItem>)}
+        {[1, 3, 10, 30].map(n => <ToggleGroupItem key={n} value={String(n)} className="h-7 flex-1 text-xs">{n}×</ToggleGroupItem>)}
       </ToggleGroup>
       {stats && (
         <div className="grid gap-0.5">
@@ -1573,7 +1566,7 @@ function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats,
           </Button>
         </div>
       )}
-    </section>
+    </InspectorPanel>
   );
 }
 

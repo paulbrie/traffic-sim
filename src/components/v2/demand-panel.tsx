@@ -10,6 +10,7 @@ import { NumberField } from "@/components/workspace/fields";
 import { cn } from "@/lib/utils";
 import { demandWays, laneInRate, laneOutWeight, laneById, setInRate, setOutWeight, type Sketch } from "@/lib/lane-sketch";
 import { editSketch } from "@/state/lane-sketch";
+import { InspectorPanel } from "./inspector-panel";
 
 export function DemandPanel({ sketch, readOnly, onFocus }: { sketch: Sketch; readOnly: boolean; onFocus?: (lanes: string[] | null) => void }) {
   const { entries, exits } = demandWays(sketch);
@@ -23,8 +24,7 @@ export function DemandPanel({ sketch, readOnly, onFocus }: { sketch: Sketch; rea
   const sumW = exits.reduce((a, w) => a + w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0), 0);
   const row = "flex items-center gap-2 rounded px-1 text-xs hover:bg-muted";
   return (
-    <section className="grid gap-2 border-b p-3">
-      <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Demand</h3>
+    <InspectorPanel id="demand" title="Demand">
       <p className="text-[11px] text-muted-foreground">Cars come in on the ways in at their rate, go to a way out (more often to those with a larger share), and take the shortest way there.</p>
       <div className="grid gap-1">
         <span className="text-xs font-medium">Ways in <span className="font-normal text-muted-foreground">· veh/h</span></span>
@@ -56,6 +56,6 @@ export function DemandPanel({ sketch, readOnly, onFocus }: { sketch: Sketch; rea
         })}
         {exits.length > shown.out && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setShown(x => ({ ...x, out: x.out + 50 }))}>Show {Math.min(50, exits.length - shown.out)} more of {exits.length - shown.out}</button>}
       </div>
-    </section>
+    </InspectorPanel>
   );
 }
