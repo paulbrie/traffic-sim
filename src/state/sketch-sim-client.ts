@@ -20,9 +20,18 @@ export class SketchSimClient {
   t = 0;
   /** simulated seconds per real second reached while running */
   rate = 0;
+  /** frames the worker sent a second (how often the cars' places are known) */
+  updates = 0;
+  private counted = 0;
+  private countSince = performance.now();
   /** the traffic lights, as the worker last said they are (with what they were, for the replay) */
   signals: SignalController[] = [];
   private last: SimFrame | null = null;
+  // (the frame before, and when each came: the cars are drawn on their way from one to the other)
+  private prevPoses = new Map<number, SimFrame["poses"][number]>();
+  private prevAt = 0;
+  private lastAt = 0;
+  private running = false;
   private lastStats: SimStats | null = null;
   private watching: number | null = null;
   private watched: { id: number; info: ReturnType<SketchSim["inspect"]> } | null = null;
@@ -45,6 +54,10 @@ export class SketchSimClient {
 
   private receive(m: FromSimWorker) {
     if (m.type === "frame") {
+      if (this.last) { this.prevPoses = new Map(this.last.poses.map(c => [c.id, c])); this.prevAt = this.lastAt; }
+      this.lastAt = performance.now();
+      this.counted++;
+      if (this.lastAt - this.countSince >= 1000) { this.updates = (this.counted * 1000) / (this.lastAt - this.countSince); this.counted = 0; this.countSince = this.lastAt; }
       this.last = m; this.t = m.t; this.rate = m.rate;
       if (m.stats) this.lastStats = m.stats;
       if (m.watched) this.watched = m.watched;
@@ -71,8 +84,25 @@ export class SketchSimClient {
   setParams(p: SimParams) { this.params = p; this.send({ type: "params", params: p }); }
   reset() { this.replays.clear(); this.replayAsked.clear(); this.lastReplay = null; for (const c of this.signals) c.reset(); this.send({ type: "reset" }); }
   /** run (at `speed` simulated seconds per real second) or pause */
-  run(running: boolean, speed: number) { this.send({ type: "run", running, speed }); }
-  poses(): SimFrame["poses"] { return this.last?.poses ?? []; }
+  run(running: boolean, speed: number) { this.running = running; this.send({ type: "run", running, speed }); }
+  /**
+   * The cars to draw: while running, each on its way from where it was in the frame before to where it
+   * is in the last, as far along as the time since the last frame came is of the time between the two
+   * (so they move smoothly at the page's frame rate however often frames come; drawn one frame behind).
+   */
+  poses(): SimFrame["poses"] {
+    const L = this.last;
+    if (!L) return [];
+    const span = this.lastAt - this.prevAt;
+    if (!this.running || !this.prevPoses.size || span <= 0 || span > 2000) return L.poses;
+    const k = Math.min(1, (performance.now() - this.lastAt) / span);
+    return L.poses.map(c => {
+      const a = this.prevPoses.get(c.id);
+      if (!a || Math.hypot(c.p.x - a.p.x, c.p.y - a.p.y) > 30) return c;
+      const dx = a.d.x + (c.d.x - a.d.x) * k, dy = a.d.y + (c.d.y - a.d.y) * k, n = Math.hypot(dx, dy) || 1;
+      return { ...c, p: { x: a.p.x + (c.p.x - a.p.x) * k, y: a.p.y + (c.p.y - a.p.y) * k }, d: { x: dx / n, y: dy / n } };
+    });
+  }
   stats(): SimStats | null { return this.lastStats; }
   replayRange() { return this.last?.replayRange ?? null; }
   /** a car to follow: what `inspect` answers for it comes with every frame */

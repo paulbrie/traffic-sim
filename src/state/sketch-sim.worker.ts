@@ -56,19 +56,25 @@ function frame(withStats: boolean) {
   });
 }
 
-/** one go: the time passed since the last (at most a quarter of a second, a slow step not making a big jump), stepped in tenths */
+/**
+ * One go: the simulated time owed since the last (the real time passed, times the speed asked for) stepped
+ * in tenths, for at most `BUDGET` ms, then a frame posted, so frames keep coming however slow a step is.
+ * What a go can't step stays owed (up to a second of it: a sim slower than asked falls behind, the page doesn't).
+ */
+const BUDGET = 25;
+let owed = 0;
 function tick() {
   timer = null;
   if (!sim || !running) return;
   const now = performance.now();
-  let dt = Math.min(0.25, (now - last) / 1000) * speed;
+  owed = Math.min(Math.max(1, speed), owed + ((now - last) / 1000) * speed);
   last = now;
   const t0 = sim.t;
-  while (dt > 1e-6) { const h = Math.min(0.1, dt); sim.step(h); dt -= h; }
+  while (owed > 1e-6 && performance.now() - now < BUDGET) { const h = Math.min(0.1, owed); sim.step(h); owed -= h; }
   rateSim += sim.t - t0;
   if (now - rateSince > 1000) { rate = rateSim / ((now - rateSince) / 1000); rateSim = 0; rateSince = now; }
   frame(false);
-  timer = setTimeout(tick, 16);
+  timer = setTimeout(tick, owed > 0.1 ? 0 : 16);
 }
 
 self.onmessage = (e: MessageEvent<ToSimWorker>) => {
@@ -80,7 +86,7 @@ self.onmessage = (e: MessageEvent<ToSimWorker>) => {
     case "reset": sim?.reset(); frame(true); break;
     case "run":
       speed = m.speed;
-      if (m.running && !running) { running = true; last = performance.now(); rateSince = last; rateSim = 0; if (!timer) timer = setTimeout(tick, 0); }
+      if (m.running && !running) { running = true; last = performance.now(); owed = 0; rateSince = last; rateSim = 0; if (!timer) timer = setTimeout(tick, 0); }
       if (!m.running) { running = false; rate = 0; frame(true); }
       break;
     case "watch": watch = m.id; frame(false); break;

@@ -9,6 +9,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UserMenu, type MenuUser } from "@/components/auth/user-menu";
 import { HistoryButton } from "@/components/workspace/history-dialog";
 import { LaneSketch } from "@/components/workspace/lane-sketch";
+import { FrameRate, SketchLayerPicker } from "./top-bar-tools";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
 import { loadPlan } from "@/state/store";
 import { startUnderlayImage } from "@/state/underlay-image";
@@ -37,7 +38,10 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
             ? <span className="flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground" title="You can simulate and try things, but nothing is saved"><Eye className="size-3.5" /> View only</span>
             : <SaveIndicator planId={plan.id} />}
           <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} />
-          <div className="ml-auto flex items-center gap-2">
+          <Separator orientation="vertical" className="!h-5" />
+          <SketchLayerPicker />
+          <div className="ml-auto flex items-center gap-3">
+            <FrameRate />
             <UserMenu user={user} />
           </div>
         </header>

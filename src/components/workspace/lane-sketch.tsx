@@ -21,6 +21,7 @@ import { DEFAULT_SIM, type ReplayCar, type SimParams, type SimStats, type Sketch
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { Slider } from "@/components/ui/slider";
 import { laneSketch$, ui, underlay$ } from "@/state/store";
+import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { editSketch, recordSketch, redoSketch, setSketchClip, setSketchSim, sketchClip, sketchSim, undoSketch } from "@/state/lane-sketch";
 import { readPalette, speedColor } from "@/render/palette";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
@@ -31,33 +32,8 @@ import { underlayImg$ } from "@/state/underlay-image";
 
 type Tool = "select" | "lane" | "arc" | "circle" | "connector" | "junction" | "slice";
 /** what can be shown on the sketch, or hidden (kept in the browser) */
-type Layer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names" | "demand" | "satellite" | "image";
-type Layers = Record<Layer, boolean>;
-/** (`page`: only on a V2 plan's full-page editor) */
-const LAYERS: { id: Layer; label: string; hint: string; page?: boolean }[] = [
-  { id: "surfaces", label: "Road surfaces", hint: "Asphalt under the roads and junctions, as on the plan's map" },
-  { id: "markings", label: "Markings", hint: "Lane lines and centre lines on the road surfaces" },
-  { id: "lanes", label: "Lanes", hint: "Each lane's green line and its direction of travel (the selected ones always show)" },
-  { id: "connectors", label: "Connectors", hint: "The yellow connectors between lanes (the selected ones always show)" },
-  { id: "signs", label: "Stop and yield lines", hint: "The lines at the ends of lanes with a sign" },
-  { id: "cars", label: "Cars", hint: "The cars, while the simulation is on" },
-  { id: "names", label: "Names", hint: "Road and junction names" },
-  { id: "demand", label: "Ways in and out", hint: "Where traffic comes in (vehicles per hour) and leaves (share of trips)" },
-  { id: "grid", label: "Grid", hint: "A line every metre close up, every 10 m stronger" },
-  { id: "satellite", label: "Satellite imagery", hint: "The imagery where the plan is on the map (V2 plans placed on the map)", page: true },
-  { id: "image", label: "Reference image", hint: "The plan's reference image (V2 plans)", page: true },
-];
-const ALL_LAYERS = Object.fromEntries(LAYERS.map(l => [l.id, true])) as Layers;
-/** the layers shown at first: all but the grid */
-const DEFAULT_LAYERS: Layers = { ...ALL_LAYERS, grid: false };
-function loadLayers(): Layers {
-  try {
-    const saved = JSON.parse(localStorage.getItem("laneSketch:layers:2") ?? "null");
-    if (saved && typeof saved === "object") return { ...DEFAULT_LAYERS, ...Object.fromEntries(LAYERS.filter(l => typeof saved[l.id] === "boolean").map(l => [l.id, saved[l.id]])) };
-    // (the road surfaces switch there was before)
-    return { ...DEFAULT_LAYERS, surfaces: localStorage.getItem("laneSketch:surfaces") !== "0" };
-  } catch { return DEFAULT_LAYERS; }
-}
+type Layers = SketchLayers;
+const LAYERS = SKETCH_LAYERS, ALL_LAYERS = ALL_SKETCH_LAYERS;
 const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint: string }[] = [
   { id: "select", key: "V", label: "Select", icon: <MousePointer2 />, hint: "Click a lane, connector or junction (Shift adds) · drag to move · drag points to reshape (Alt-click a lane's point curves it), a connector's ends along their lanes or onto others (double-click a lane, connector or junction edge adds a point, double-click a point removes it) · round handle turns lanes and junctions (Shift: 15°; Q / E) · ⌘C / ⌘X / ⌘V, ⌘D duplicates · double-click a lane selects its road" },
   { id: "lane", key: "L", label: "Lane", icon: <Spline />, hint: "Click the lane's points in the direction of travel · double-click or Enter to finish · Backspace takes the last point back · Esc cancels" },
@@ -169,8 +145,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [replayRange, setReplayRange] = useState<{ from: number; to: number } | null>(() => sketchSim()?.replayRange() ?? null);
   const [follow, setFollow] = useState(false);
   /** the layers shown (kept in the browser) */
-  const [layers, setLayersState] = useState<Layers>(loadLayers);
-  const setLayers = (l: Layers) => { setLayersState(l); try { localStorage.setItem("laneSketch:layers:2", JSON.stringify(l)); } catch { /* private mode */ } };
+  // (shared with the top bar's layers picker on a V2 plan)
+  const [layers] = useSubject(sketchLayers$);
+  const setLayers = setSketchLayers;
   // (without what is gone, deleted by an undo for instance)
   const sel = useMemo(() => prune(rawSel, sketch), [rawSel, sketch]);
   const contents = useMemo(() => new Map(sketch.junctions.map(j => [j.id, junctionContents(sketch, j)])), [sketch]);
@@ -373,6 +350,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   useEffect(() => { sim.current?.setParams(params); }, [params]);
   // the cars run in the worker, at the speed picked (it sends a frame after each go: see onSimFrame)
   useEffect(() => { sim.current?.run(running, simSpeed); }, [running, simSpeed]);
+  // (while they run, the cars drawn at every frame of the page: on their way between the worker's frames)
+  useEffect(() => {
+    if (!running) return;
+    let raf = 0;
+    const loop = () => { redraw(false); raf = requestAnimationFrame(loop); };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
   // playing the replay (at the simulation speed picked), stopping at the end of what is kept
   useEffect(() => {
     if (!replayPlaying) return;
@@ -868,6 +854,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <Button size="icon-sm" variant="ghost" aria-label="Clear the cars" title="Take the cars off and start the clock again" disabled={!stats} onClick={resetCars}><RotateCcw /></Button>
           <Button size="icon-sm" variant="ghost" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" onClick={undoSketch}><Undo2 /></Button>
           <Button size="icon-sm" variant="ghost" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Y)" onClick={redoSketch}><Redo2 /></Button>
+          {/* (a V2 plan: the layers are picked in the top bar) */}
+          {!page && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="icon-sm" variant={LAYERS.every(l => layers[l.id]) ? "ghost" : "secondary"} aria-label="Layers" title="Layers: what to show on the sketch"><LayersIcon /></Button>
@@ -886,6 +874,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+          )}
           <Button size="icon-sm" variant="ghost" aria-label="Fit to view" title="Fit the sketch in view (F)" onClick={fit}><Maximize /></Button>
           {!page && <Button size="icon-sm" variant="ghost" aria-label="Close" title="Close (the sketch stays with the plan)" onClick={() => { ui.getValue().sketch = false; }}><X /></Button>}
         </div>
