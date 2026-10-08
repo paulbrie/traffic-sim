@@ -914,6 +914,51 @@ export function reshape(sk: Sketch, id: string, shape: LaneShape, width?: number
   };
 }
 
+/**
+ * Line lanes with fewer points: only their ends (`tol` undefined: straight), or (`tol` metres) the
+ * points that keep them within `tol` of where they ran (Douglas-Peucker; curved points kept curved).
+ * Rings and arcs are left as they are, and lanes following a lead (side by side). Connectors on them
+ * stay where they were (at the nearest place on the new shape; at a start or an end, there).
+ */
+export function straightenLanes(sk: Sketch, ids: Iterable<string>, tol?: number): Sketch {
+  const want = new Set(ids), changed = new Map<string, { old: LaneShape; shape: LaneShape }>();
+  for (const l of sk.lanes) {
+    const sh = l.shape;
+    if (!want.has(l.id) || sh.kind !== "line" || sh.closed || sh.pts.length <= 2 || leadOf(sk, l.id)) continue;
+    let keep: number[];
+    if (tol === undefined) keep = [0, sh.pts.length - 1];
+    else {
+      // (kept: the points the run strays from by more than `tol` without them)
+      const pts = sh.pts, k = new Uint8Array(pts.length), stack: [number, number][] = [[0, pts.length - 1]];
+      k[0] = k[pts.length - 1] = 1;
+      while (stack.length) {
+        const [i0, i1] = stack.pop()!, A = pts[i0], B = pts[i1], dx = B.x - A.x, dy = B.y - A.y, L = Math.hypot(dx, dy) || 1;
+        let best = -1, bd = tol;
+        for (let i = i0 + 1; i < i1; i++) { const d = Math.abs((pts[i].x - A.x) * dy - (pts[i].y - A.y) * dx) / L; if (d > bd) { bd = d; best = i; } }
+        if (best >= 0) { k[best] = 1; stack.push([i0, best], [best, i1]); }
+      }
+      keep = [...k.keys()].filter(i => k[i]);
+    }
+    if (keep.length === sh.pts.length) continue;
+    const curved = keep.map(i => !!sh.curved?.[i]);
+    const shape: LaneShape = { kind: "line", pts: keep.map(i => sh.pts[i]), ...(curved.some(Boolean) ? { curved } : {}) };
+    changed.set(l.id, { old: sh, shape });
+  }
+  if (!changed.size) return sk;
+  const place = (a: LaneAt) => {
+    const c = changed.get(a.lane);
+    if (!c) return a;
+    const L0 = laneLength(c.old), L1 = laneLength(c.shape);
+    const s = a.s <= 0.01 ? 0 : a.s >= L0 - 0.01 ? L1 : nearestOn(c.shape, pointAt(c.old, a.s).p).s;
+    return { ...a, s: Number(s.toFixed(2)) };
+  };
+  return {
+    ...sk,
+    lanes: sk.lanes.map(l => { const c = changed.get(l.id); return c ? { ...l, shape: c.shape } : l; }),
+    connectors: sk.connectors.map(c => (changed.has(c.from.lane) || changed.has(c.to.lane) ? { ...c, from: place(c.from), to: place(c.to) } : c)),
+  };
+}
+
 // ---------------------------------------------------------------- junctions
 
 export function insidePolygon(p: Pt, poly: Pt[]) {
