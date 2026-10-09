@@ -51,7 +51,7 @@ process; a restart drops them: the page reconnects, the agent pairs again).
 | `type` | `{ role?, name?, selector?, text, submit?: boolean }` | `{ typed }` |
 | `key` | `{ key: string }` (e.g. `"Control+k"`, `"Escape"`) | `{}` |
 | `navigate` | `{ url }` (same origin) | `{ url }` |
-| `app` | `{ action, args }`: `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `replay` `{ t }`, `restart`; on a V2 plan also `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
+| `app` | `{ action, args }`: `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30…), `replay` `{ t }`, `restart`; on a V2 plan also `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
 
 Targets by role and name follow Playwright's `getByRole` (name: case-insensitive substring unless `exact`).
 Every command is shown to the user in the activity log; `click` / `type` / `key` move the agent's cursor there first
@@ -90,6 +90,10 @@ Changes an agent may ask for (`app`; no others, nothing written by path):
 | `sort` | `{ table: "junctions" \| "roads", by, flip?, editor? }` | a results table sorted: `name`, `rate`, `delay`, `queue`, and `fuel` (junctions) or `speed` (roads); `flip`: the other way |
 
 `editor`: `plan` or `scratch` (the Sketch window, if open); without it, the editor the user is at.
+
+Every action's arguments are checked as they are given: `true` or `false` for a switch (not `"yes"` or `1`), a string
+for a name or text (not `42`), a number for a number; anything else, an unknown panel or layer, or a missing argument,
+is an error saying what was expected, and nothing is changed.
 
 - `state { keys: ["ui"] }`: all of it (also in the default answer with no keys).
 - `state { path: "editors.plan.selection" }` (dots or slashes): one part. A path that isn't there is an error naming
