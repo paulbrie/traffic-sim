@@ -57,6 +57,9 @@ between them who goes first and tell Alice.
 - **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser work with Vercel's
   agent-browser (`/usr/bin/agent-browser`), not Playwright scripts, so the admin's /chrome page can show it; close
   its sessions after a run. If something can't be done with it, ask Alice before using anything else.
+  Start it as `agent-browser --session <YourName> --args "--no-sandbox,--remote-debugging-port=0" …` (this box has no
+  usable Chrome sandbox; the session name tells the admin whose browser it is). Because the sandbox is off, open only
+  our own apps and trusted pages with it, never arbitrary sites.
 - **Alice** does no task herself (the user's rule: "don't do tasks, supervise"), checks every DONE (git, files,
   screenshots) before telling the user, and alone edits `docs/tasks.md`, in commits of their own ("tasks: …").
 
