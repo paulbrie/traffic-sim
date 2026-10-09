@@ -17,6 +17,7 @@ export type ToSimWorker =
   | { type: "watch"; id: number | null }
   | { type: "replay"; t: number; req: number }
   | { type: "report"; req: number }
+  | { type: "problems"; req: number }
   | { type: "moment"; t: number; box: Parameters<SketchSim["moment"]>[1]; req: number }
   | { type: "car"; id: number; req: number }
   | { type: "breakDown"; id: number }
@@ -41,6 +42,7 @@ export type FromSimWorker =
   | SimFrame
   | { type: "replay"; req: number; frame: ReturnType<SketchSim["replayAt"]> }
   | { type: "report"; req: number; report: ReturnType<SketchSim["report"]> }
+  | ({ type: "problems"; req: number } & ReturnType<SketchSim["problems"]>)
   | { type: "moment"; req: number; moment: ReturnType<SketchSim["moment"]> | null }
   | { type: "car"; req: number; frames: ReturnType<SketchSim["carFrames"]>; events: SketchSim["log"] };
 
@@ -100,6 +102,7 @@ self.onmessage = (e: MessageEvent<ToSimWorker>) => {
     case "tow": sim?.tow(m.id); frame(true); break;
     case "replay": post({ type: "replay", req: m.req, frame: sim?.replayAt(m.t) ?? null }); break;
     case "report": if (sim) post({ type: "report", req: m.req, report: sim.report() }); break;
+    case "problems": post({ type: "problems", req: m.req, ...(sim?.problems() ?? { problems: [], stuck: [] }) }); break;
     case "moment": post({ type: "moment", req: m.req, moment: sim?.moment(m.t, m.box) ?? null }); break;
     case "car": if (sim) post({ type: "car", req: m.req, frames: sim.carFrames(m.id), events: sim.log.filter(x => x.car === m.id || x.with === m.id).slice(-60) }); break;
   }

@@ -85,12 +85,16 @@ export interface SimStats {
   pedsWaiting: number;
   /** the journeys' results (when the sketch has journeys) */
   journeys?: JourneyStats[];
+  /** vehicles still for STUCK_AFTER seconds or more */
+  stuck: number;
   /** turning shares: the vehicles that have gone each way, by `junction|way in|road out` (when the sketch has any) */
   turns?: Record<string, number>;
   /** fuel burnt since the start (see `FuelStats`) */
   fuel: FuelStats;
   /** each junction's results since the start (see `JunctionStats`) */
   junctions: JunctionStats[];
+  /** each road's results since the start (see `RoadStats`) */
+  roads: RoadStats[];
   /** vehicles broken down so far (at random, or by hand), and those towed away */
   breakdowns: number;
   towed: number;
@@ -105,6 +109,12 @@ export interface SimStats {
  * want) on the last `APPROACH` metres of its ways in and on it, in vehicle-seconds; the vehicles standing there, on
  * average and at most; the fuel burnt there (L). Only counted: the run is the same with or without them.
  */
+/**
+ * A road's results since the start: vehicles come onto it from outside it, km driven and hours spent on its lanes (their
+ * mean speed: the one over the other), the vehicle-seconds lost against the speed each wanted there, and the most
+ * standing on it at once.
+ */
+export interface RoadStats { id: string; through: number; vehKm: number; vehHours: number; delay: number; queueMax: number }
 export interface JunctionStats { id: string; through: number; delay: number; queueMean: number; queueMax: number; fuel: number }
 /** metres of a way in counted as the junction's */
 const APPROACH = 100;
@@ -128,6 +138,16 @@ export interface PedView { id: string; waiting: number; crossing: number; progre
 
 /** something that happened in the run */
 export type SimEvent = { t: number; what: "in" | "onto" | "out" | "gone" | "jump" | "collision" | "deadlock" | "edit" | "params" | "change" | "reroute" | "breakdown" | "towed"; car?: number } & Record<string, unknown>;
+/**
+ * A problem the run had, for the console (as v1's): when, what, the car (and the other one), where (its front then) and
+ * on what edge, and a line saying it. Kept apart from the log, which the cars' comings and goings soon fill.
+ */
+export interface SimProblem { t: number; kind: "collision" | "jump" | "deadlock" | "breakdown" | "towed"; car: number; other?: number; x: number; y: number; edge: string; detail: string }
+/** a car stuck a long while (SimStats.stuck), where it is and what it waits for */
+export interface StuckCar { car: number; x: number; y: number; edge: string; still: number; why: string | null }
+/** a car still this long (s) is stuck */
+export const STUCK_AFTER = 60;
+const KEEP_PROBLEMS = 2000;
 /** a car's state as kept and copied */
 interface CarState { edge: string; pos: number; v: number; exit: string | null; run: number; trail: string | null; x: number; y: number; heading: number; why: string | null }
 const FRAME_FIELDS = ["car", "edge", "pos", "v", "exit", "run", "trail", "x", "y", "heading", "why"] as const;
@@ -464,6 +484,9 @@ export class SketchSim {
   private jOn = new Map<Edge, number>();
   private jIn = new Map<Edge, number>();
   private jSince = 0;
+  /** per road: its tally, and the road each of its lanes is in */
+  private rTally: (RoadStats & { now: number })[] = [];
+  private rOn = new Map<Edge, number>();
   private breakdowns = 0;
   private towed = 0;
   /** pairs of cars overlapping last step ("a-b") */
@@ -496,6 +519,22 @@ export class SketchSim {
     this.posed = null;
     this.note({ what: "edit", lanes: sk.lanes.length, connectors: sk.connectors.length });
     this.build();
+  }
+
+  /** the problems so far (see SimProblem) */
+  private problemList: SimProblem[] = [];
+  private problem(kind: SimProblem["kind"], v: SimVehicle, detail: string, other?: SimVehicle) {
+    const { p } = this.posed?.get(v) ?? this.poseOf(v);
+    this.problemList.push({ t: r2(this.t), kind, car: v.id, ...(other ? { other: other.id } : {}), x: r2(p.x), y: r2(p.y), edge: v.edge.key, detail });
+    if (this.problemList.length > KEEP_PROBLEMS) this.problemList.splice(0, this.problemList.length - KEEP_PROBLEMS);
+  }
+  /** the problems so far, and the cars stuck now (for the console) */
+  problems(): { problems: SimProblem[]; stuck: StuckCar[] } {
+    const stuck = this.vehicles.filter(v => v.still >= STUCK_AFTER).map(v => {
+      const { p } = this.posed?.get(v) ?? this.poseOf(v);
+      return { car: v.id, x: r2(p.x), y: r2(p.y), edge: v.edge.key, still: Math.round(v.still), why: v.why };
+    });
+    return { problems: this.problemList, stuck };
   }
 
   private note(e: Omit<SimEvent, "t">) {
@@ -674,6 +713,16 @@ export class SketchSim {
         for (const a of junctionApproaches(sk, c)) for (const id of a.lanes) { const e = edges.get(`lane:${id}`); if (e && !this.jOn.has(e)) this.jIn.set(e, k); }
       }
     }
+    // roads: the road each lane is in (their tallies kept by id)
+    {
+      const oldR = new Map(this.rTally.map(r => [r.id, r]));
+      this.rTally = []; this.rOn = new Map();
+      for (const r of sk.roads) {
+        const k = this.rTally.length;
+        this.rTally.push(oldR.get(r.id) ?? { id: r.id, through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0 });
+        for (const id of r.lanes) { const e = edges.get(`lane:${id}`); if (e) this.rOn.set(e, k); }
+      }
+    }
     this.buildCrossings(sk, edges);
     this.vehicles = this.vehicles.flatMap(v => {
       const e = edges.get(v.edge.key);
@@ -713,7 +762,7 @@ export class SketchSim {
   reset() {
     this.posed = null;
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
-    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, { through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
+    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.problemList = []; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, { through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 }); for (const r of this.rTally) Object.assign(r, { through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0 }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
     this.replay = []; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
     for (const x of this.crossings) x.ped = newPed();
@@ -814,6 +863,7 @@ export class SketchSim {
     if (!v || v.broken !== null) return false;
     v.broken = this.t; this.breakdowns++;
     this.note({ what: "breakdown", car: v.id, edge: v.edge.key, at: r2(v.pos) });
+    this.problem("breakdown", v, `broke down, ${r2(v.pos)} m along`);
     return true;
   }
   /** car `id` (broken down, or any) towed away now */
@@ -829,6 +879,7 @@ export class SketchSim {
   private towAway(v: SimVehicle, gone: Set<SimVehicle>) {
     gone.add(v); this.towed++;
     this.note({ what: "towed", car: v.id, edge: v.edge.key, ...(v.broken !== null ? { after: r2(this.t - v.broken) } : {}) });
+    this.problem("towed", v, v.broken !== null ? `towed away, ${Math.round(this.t - v.broken)} s after breaking down` : "towed away");
   }
   /** seconds to a journey's next vehicle */
   private jGap(rate: number) { return rate > 0 ? (-Math.log(1 - this.jRnd()) * 3600) / rate : Infinity; }
@@ -1170,6 +1221,7 @@ export class SketchSim {
       pick.forceUntil = this.t + 6; pick.forced++;
       this.deadlocks++;
       this.note({ what: "deadlock", car: pick.id, ring: ring.map(x => x.id), why: pick.why });
+      this.problem("deadlock", pick, `deadlock of ${ring.length} broken: let go first (it waited for ${pick.why ?? "nothing said"})`);
     }
   }
 
@@ -1310,6 +1362,8 @@ export class SketchSim {
       (byEdge.get(s.lane) ?? byEdge.set(s.lane, []).get(s.lane)!).push(v);
       if (spawnGrid) toGrid(v);
       this.spawned++;
+      // (come in on a road: onto it from outside)
+      { const r = this.rOn.get(s.lane); if (r !== undefined) this.rTally[r].through++; }
     }
 
     // cars just changed lane, their bodies still partly over the lane they left; and cars waiting to change lane, where they would be on the other
@@ -1662,6 +1716,7 @@ export class SketchSim {
     const gone = new Set<SimVehicle>(), drove = new Map<SimVehicle, number>();
     const T = this.tuning, F = this.fuel;
     for (const J of this.jTally) J.now = 0;
+    for (const R of this.rTally) R.now = 0;
     for (const v of this.vehicles) {
       const nv = Math.max(0, v.v + acc.get(v)! * dt);
       let move = (v.v + nv) * 0.5 * dt;
@@ -1679,6 +1734,13 @@ export class SketchSim {
         J.delay += dt * Math.max(0, 1 - nv / Math.max(1, v.edge.vmax * v.vf)); J.fuel += mL / 1000;
         if (nv < 0.5) J.now++;
       }
+      // (a road's: on one of its lanes)
+      const rk = this.rOn.get(v.edge);
+      if (rk !== undefined) {
+        const R = this.rTally[rk];
+        R.vehKm += move / 1000; R.vehHours += dt / 3600; R.delay += dt * Math.max(0, 1 - nv / Math.max(1, v.edge.vmax * v.vf));
+        if (nv < 0.5) R.now++;
+      }
       v.v = nv;
       v.still = nv < 0.1 ? v.still + dt : 0;
       v.held = nv < 0.1 && !v.why?.startsWith("signal") ? v.held + dt : nv < 0.1 ? v.held : 0;
@@ -1690,6 +1752,8 @@ export class SketchSim {
           v.trail = this.trailOf(v, e, e.len);
           v.edge = e.to!.lane; v.pos = e.to!.s; v.run = 0; v.stopped = false;
           { const a = this.jOn.get(v.edge); if (a !== undefined && a !== this.jOn.get(e)) this.jTally[a].through++; }
+          // (onto a road from outside it: not from one of its own lanes)
+          { const r = this.rOn.get(v.edge); if (r !== undefined && this.rOn.get(e.from!.lane) !== r) this.rTally[r].through++; }
           this.plan(v);
           this.note({ what: "onto", car: v.id, from: e.key, to: v.edge.key, at: r2(v.pos), exit: v.exit?.key ?? null });
           continue;
@@ -1716,6 +1780,7 @@ export class SketchSim {
     }
     // (the junctions' queues: how many stand there now, over the time so far)
     for (const J of this.jTally) { J.queueSum += J.now * dt; if (J.now > J.queueMax) J.queueMax = J.now; }
+    for (const R of this.rTally) if (R.now > R.queueMax) R.queueMax = R.now;
     this.jSince += dt;
     // (broken down long enough: towed away)
     for (const v of this.vehicles) if (v.broken !== null && this.t - v.broken >= this.tuning.brokenTowAfter) this.towAway(v, gone);
@@ -1820,6 +1885,7 @@ export class SketchSim {
           const f = this.frames[this.frames.length - 1], row = f && this.frameRows(f, v.id)[0];
           const before = row ? (Object.fromEntries(FRAME_FIELDS.slice(1).map((k, i) => [k, row[i + 1]])) as unknown as CarState) : undefined;
           this.jumps++; this.note({ what: "jump", car: v.id, moved: r2(moved), drove: r2(m), before, after: this.stateOf(v, posed.get(v)) });
+          this.problem("jump", v, `moved ${r2(moved)} m in a step, having driven ${r2(m)} m`);
         }
       }
       v.seenX = x; v.seenY = y;
@@ -1881,6 +1947,7 @@ export class SketchSim {
       if (!this.touching.has(key)) {
         this.collisions++;
         this.note({ what: "collision", car: a.v.id, with: b.v.id, a: this.drawn.get(a.v.id), b: this.drawn.get(b.v.id) });
+        this.problem("collision", a.v, `ran into car ${b.v.id} (${b.v.edge.key})`, b.v);
       }
     }
     this.touching = now;
@@ -1922,7 +1989,8 @@ export class SketchSim {
     return {
       t: this.t, vehicles: n, spawned: this.spawned, finished: this.finished, overlaps,
       meanSpeed: n ? (this.vehicles.reduce((a, v) => a + v.v, 0) / n) * 3.6 : 0,
-      waiting: this.vehicles.filter(v => v.still >= 20).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes, fuel: { ...this.fuel },
+      waiting: this.vehicles.filter(v => v.still >= 20).length, stuck: this.vehicles.filter(v => v.still >= STUCK_AFTER).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes, fuel: { ...this.fuel },
+      roads: this.rTally.map(r => ({ id: r.id, through: r.through, vehKm: r.vehKm, vehHours: r.vehHours, delay: r.delay, queueMax: r.queueMax })),
       junctions: this.jTally.map(j => ({ id: j.id, through: j.through, delay: j.delay, queueMean: this.jSince > 0 ? j.queueSum / this.jSince : 0, queueMax: j.queueMax, fuel: j.fuel })),
       breakdowns: this.breakdowns, towed: this.towed,
       pedsCrossed: this.crossings.reduce((a, x) => a + x.ped.crossed, 0), pedsWaiting: this.crossings.reduce((a, x) => a + x.ped.waiting, 0),
