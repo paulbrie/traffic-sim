@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, CircleDashed, FlaskConical, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Car, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -651,6 +651,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (s.lanes.length || s.junctions.length) place(copyPart(sk, s), 4, 4);
   };
   const fit = () => { const sk = live.current.sketch; zoomTo({ lanes: sk.lanes.map(l => l.id), connectors: [], junctions: sk.junctions.map(j => j.id) }); };
+  /** zoomed in (f > 1) or out about the middle of the view, within the wheel's limits */
+  const zoomBy = (f: number) => { const v = view.current; view.current = { ...v, scale: Math.min(80, Math.max(0.3, v.scale * f)) }; redraw(); };
   /** the view fitted round a piece of the sketch */
   const zoomTo = (piece: Piece) => {
     cancelAnimationFrame(glide.current);
@@ -1167,6 +1169,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "r") { reverseSel(); return; }
     if (k === "q" || k === "e") { rotateSel(((k === "e" ? 1 : -1) * (e.shiftKey ? 1 : 15) * Math.PI) / 180); return; }
     if (k === "f") { fit(); return; }
+    if (k === "+" || k === "=") { e.preventDefault(); zoomBy(1.25); return; }
+    if (k === "-" || k === "_") { e.preventDefault(); zoomBy(1 / 1.25); return; }
     if (k === "p") { play(); return; }
     // (the replay: a step back or forward; Shift, a second)
     // (not on a slider: the replay's own thumb steps it already, and once is enough)
@@ -1306,6 +1310,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             onGo={goTo} onClose={() => { setSearchShown(false); panel.current?.focus(); }} />}
           <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
             onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0} />
+          {/* (zoom in and out about the middle, and the whole sketch in view: + − F) */}
+          <div className="absolute right-2 z-20 flex flex-col overflow-hidden rounded-md border bg-background/95 shadow-sm" style={{ bottom: (consoleOpen ? CONSOLE_HEIGHT : 0) + 8 }}>
+            <Button size="icon-sm" variant="ghost" className="rounded-none" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomBy(1.25)}><Plus /></Button>
+            <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoomBy(1 / 1.25)}><Minus /></Button>
+            <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Fit the sketch in view" title="The whole sketch in view (F)" onClick={fit}><Maximize /></Button>
+          </div>
           <ProblemConsole open={consoleOpen} onOpen={setConsoleOpen} sim={() => sim.current} stats={stats} sketch={sketch} contents={contents} replayFrom={replayRange?.from ?? null} onReplay={showAt}
             onGo={(p, car) => { if (sim.current?.poses().some(c => c.id === car)) { setSel(NO_SEL); setSelCar(car); } centerOnPts([p], true); redraw(); }} />
         </div>
@@ -2901,5 +2911,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.font = "10px ui-monospace, monospace"; ctx.fillStyle = dark ? "#a1a1aa" : "#78716c"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
-  ctx.fillText(`${cur ? `${cur.p.x.toFixed(1)}, ${cur.p.y.toFixed(1)} m · ` : ""}${v.scale.toFixed(1)} px/m`, 8, h - 6);
+  // (where the pointer is: metres, and on Earth where the sketch has a place there)
+  const ll = cur && sk.geo ? unproject(sk.geo, cur.p) : null;
+  ctx.fillText(`${cur ? `${cur.p.x.toFixed(1)}, ${cur.p.y.toFixed(1)} m · ` : ""}${ll ? `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)} · ` : ""}${v.scale.toFixed(1)} px/m`, 8, h - 6);
 }
