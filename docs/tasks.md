@@ -15,7 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T59 | Fixes from T50: bridge input checks (panel ids, strict types), docs, a one-off empty Sketch window, the window's Console under the replay bar | Tatiana | 2026-10-09 | |
+| T60 | Re-test of T59 and T52 | Ramona | 2026-10-09 | after T55 |
 | T58 | Admin: team recipes, a Teams page to start or stop a whole team with one button (docs/team.md as the first recipe) | Alex | 2026-10-09 | design first |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | |
 | T55 | Re-run Bistrița seeds 1–3 with T46 (readings at 5, 10, 15 min) | Ramona | 2026-10-09 | after T50 |
@@ -26,6 +26,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
 | T50 | Re-test of T48 plus a Next.js 16.4 smoke test: all pass; 3 bridge input-check bugs, a one-off glitch | Ramona | 2026-10-09 | /tmp/ramona/t50/ → T59 |
+| T59 | Fixes from T50: one argument validator for the bridge's actions, known panel ids only, docs, the editors' reset survives a remount, the replay bar leaves the map's buttons clear | Tatiana | 2026-10-09 | 72def88, 57f3147, ef48624, 2173ed8 |
 | T57 | Agents City Table: labels on OverlayLabel (no removeChild) | Tom | 2026-10-09 | admin: ee5e444 |
 | T49 | Next.js 16.4.0 in trafficsim and the admin | Alex | 2026-10-09 | b086f22; admin: ee5e444 (deployed) |
 | T54 | Agents City: collapsible side panel and sections | Tom | 2026-10-09 | admin: ee5e444 |
