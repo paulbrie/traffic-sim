@@ -15,11 +15,12 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | |
+| T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | after T68, T72 |
 | T72 | Re-test of T69 | Ramona | 2026-10-09 | after T68 |
 | T70 | Admin: a Team menu (Comms, Agents City, Tasks) and a Kanban task dashboard | Alex | 2026-10-09 | after T69 |
 | T68 | Bistrița with repeatable runs (7b27441): repeatability check, every collision with seed and time, deadlocks per place | Ramona | 2026-10-09 | after T66 |
 | T65 | Agents City Table: a round table | Tom | 2026-10-09 | |
-| T62 | The 3D view in V2, phase 1: Plan / 3D toggle, orbit camera, ground and imagery, roads, junctions, markings, levels, cars, live lights, picking | Tatiana | 2026-10-09 | plan first |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | |
 
 ## Done
@@ -32,6 +33,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T69 | History from file: Restore keeps what the file lacks, cleared fields in red, the dialog after a conflict, "Applied from file" | Alex | 2026-10-09 | 7c39383 |
 | T66 | Test of History from file: Apply passes; Restore with Copy JSON drops geo and journeys; conflict dialog stale | Ramona | 2026-10-09 | /tmp/ramona/t66/ → T69 |
 | T60 | Re-test of T59 and T52: all pass; more bridge arguments accepted; same seed not repeating after Clear the cars | Ramona | 2026-10-09 | /tmp/ramona/t60/ → T67, T56 |
+| T62 | The 3D view in V2, phase 1: toggle, orbit camera, imagery, roads, junctions, markings, bridges, cars, live lights, picking with overlays at their height; bridge mode and 3D screenshots | Tatiana | 2026-10-09 | 6cd84df, 1507df6, 3b20b0b, 119d579 |
 | T71 | Admin /chrome: the stream fixed (direct DevTools capture; the global Playwright it called was missing), pipe instances explained, owners, failure messages | Alex | 2026-10-09 | admin-dev, deploy pending |
 | T67 | Fixes from T60: strict bridge arguments (required, ranges, ids that exist), editors open on Select, the lat/lon readout on a pill | Tatiana | 2026-10-09 | fad11f8 |
 | T64 | V2 History: "Apply changes from file" (partial, by id, nothing removed) and "Restore from file", with summaries, a note, conflict check, server-side merge | Alex | 2026-10-09 | 7e8757c |
