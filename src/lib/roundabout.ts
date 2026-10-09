@@ -54,6 +54,16 @@ export function stampRoundabout(sk: Sketch, c: Pt, r: number, reach = 30): { ske
     if (inward && db <= outer + reach) { if (db <= outer + 0.5) inside.push(l.id); else ins.push(l); }
     else if (outward && da <= outer + reach) { if (da <= outer + 0.5) inside.push(l.id); else outs.push(l); }
   }
+  // (not a lane already leading somewhere else at that end — to the next junction, say — only one leading across to another of
+  // the ways in or out, the junction the ring replaces)
+  {
+    const inSet = new Set(ins.map(l => l.id)), outSet = new Set(outs.map(l => l.id));
+    const endOf = new Map(sk.lanes.map(l => [l.id, laneLength(l.shape)]));
+    const elsewhereIn = (id: string) => !forceIn.has(id) && sk.connectors.some(k => k.from.lane === id && k.from.s >= (endOf.get(id) ?? 0) - 1 && !outSet.has(k.to.lane));
+    const elsewhereOut = (id: string) => !forceOut.has(id) && sk.connectors.some(k => k.to.lane === id && k.to.s <= 1 && !inSet.has(k.from.lane));
+    for (let i = ins.length - 1; i >= 0; i--) if (elsewhereIn(ins[i].id)) ins.splice(i, 1);
+    for (let i = outs.length - 1; i >= 0; i--) if (elsewhereOut(outs[i].id)) outs.splice(i, 1);
+  }
   // the ring: anticlockwise, starting east
   const ringId = nextId("l", sk.lanes.map(l => l.id));
   const ring: SketchLane = { id: ringId, shape: { kind: "arc", c: { x: round(c.x), y: round(c.y) }, r: round(R), a0: 0, sweep: -TAU }, width: LANE_WIDTH };
