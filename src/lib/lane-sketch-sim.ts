@@ -37,7 +37,7 @@
  * connector and leaving; every car's state over the last 30 s; and "jumps", where a car is drawn
  * further from where it was drawn a step before than it drove.
  */
-import {
+import { speedLimitOf,
   CHANGE_COST, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
   onCrossing, crossingFrame,
   type LaneControl, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
@@ -314,6 +314,8 @@ const NEAR = 2.4;
 let YIELD_V = 4;
 /** seconds a car giving way at a line wants between clearing the path and the next car getting there */
 let GAP = 1.5;
+/** seconds after a lane change before a car changes again to overtake; how much more room (m) the lane beside must have; the gap in time joining a ring */
+let LC_PAUSE = 5, OVERTAKE_ROOM = 10, RING_GAP = 2;
 /**
  * The settings a simulation runs with, put in place (they are the module's: set again at the start of every
  * step, so simulations with different settings in one place each run with their own)
@@ -323,6 +325,7 @@ function applyTuning(t: Tuning) {
   PATIENCE = t.patience; REROUTE = t.rerouteAfter; GAP = t.yieldGap; YIELD_V = t.yieldSpeed;
   PED_WALK = t.pedWalk; PED_YIELD = t.pedYield; PED_V = t.pedSpeed;
   TRUCK_A = t.truckAccel; TRUCK_HW = t.truckHeadway;
+  LC_PAUSE = t.laneChangePause; OVERTAKE_ROOM = t.overtakeRoom; RING_GAP = t.ringGap;
 }
 /** seconds a car takes to move over to the lane it changes to */
 const SHIFT_T = 2;
@@ -373,7 +376,8 @@ function minRadius(pts: Pt[]) {
   }
   return r;
 }
-const bendSpeed = (r: number, v0: number) => Math.max(3, Math.min(v0, Math.sqrt(A_LAT * r)));
+/** m/s: the speed to take a bend of radius `r` at, no faster than `v0`; `f`: how fast drivers take bends (the settings', 1 as it was) */
+const bendSpeed = (r: number, v0: number, f = 1) => Math.max(3, Math.min(v0, Math.sqrt(A_LAT * r) * f));
 
 function bounds(pts: Pt[]) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -559,7 +563,9 @@ export class SketchSim {
     const sk = this.sketch;
     // (where it is drawn moves with the lanes: an edit isn't a jump)
     this.drawn.clear(); this.unseen = true;
-    const v0 = this.params.speed / 3.6, edges = new Map<string, Edge>(), paths = new Map<string, Pt[]>();
+    const v0 = this.params.speed / 3.6, edges = new Map<string, Edge>(), paths = new Map<string, Pt[]>(), bf = this.tuning.bendSpeed;
+    // (each lane's speed limit: its road's, or its own, else the sketch's)
+    const limit = (lane: string) => { const k = speedLimitOf(sk, lane); return k !== undefined ? k / 3.6 : v0; };
     // (lanes into a junction with lights: those, not lines; the lights carried on as they were)
     const prevSignals = this.signals;
     this.signals = signalPlans(sk).map(p => new SignalController(p, prevSignals.find(o => o.plan.junction === p.junction)));
@@ -577,7 +583,7 @@ export class SketchSim {
         key: `lane:${l.id}`, kind: "lane", id: l.id, len, ring, z: null, outs: [], ins: [], from: null, to: null, siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
         control: ring || signals.has(l.id) ? null : l.control ?? null, minor: null, signal: ring ? null : signals.get(l.id) ?? null, atEnd: false,
         // (bends slow it down: arcs, and lines with curved points or closed round; a sharp drawn corner doesn't slow a whole lane)
-        vmax: sh.kind === "arc" ? bendSpeed(sh.r, v0) : sh.curved?.some(Boolean) || ring ? bendSpeed(minRadius(samples(sh, 1)), v0) : v0,
+        vmax: (lv => (sh.kind === "arc" ? bendSpeed(sh.r, lv, bf) : sh.curved?.some(Boolean) || ring ? bendSpeed(minRadius(samples(sh, 1)), lv, bf) : lv))(limit(l.id)),
         locate: pos => pointAt(sh, ring ? ((pos % len) + len) % len : pos),
       });
     }
@@ -590,7 +596,7 @@ export class SketchSim {
       const e: Edge = {
         key: `conn:${c.id}`, kind: "conn", id: c.id, len: Math.max(pl.len, 0.1), ring: false, z: null, outs: [], ins: [], siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
         control: null, minor: from.control && c.from.s >= from.len - 1 ? from.control : null, signal: null, atEnd: c.from.s >= from.len - 1,
-        from: { lane: from, s: Math.min(c.from.s, from.len) }, to: { lane: to, s: Math.min(c.to.s, to.len) }, vmax: bendSpeed(minRadius(pts), v0), locate: pl.locate,
+        from: { lane: from, s: Math.min(c.from.s, from.len) }, to: { lane: to, s: Math.min(c.to.s, to.len) }, vmax: bendSpeed(minRadius(pts), limit(c.to.lane), bf), locate: pl.locate,
       };
       edges.set(e.key, e);
       paths.set(e.key, pts);
@@ -1396,7 +1402,7 @@ export class SketchSim {
       // (no faster than it can stop from behind the last car in, nor than it can stop before the first crossing on its lane)
       const zone = s.lane.conflicts.reduce((m, k) => (k.join || k.at - k.before < 0 ? m : Math.min(m, k.at - k.before)), Infinity);
       const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - S0 - 1)), Math.sqrt(2 * B_COMF * Math.max(0, zone - 1)));
-      const v: SimVehicle = { id: this.nextId++, seenX: NaN, seenY: NaN, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : 1, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, turn: null, born: this.t, fuel: 0, broken: null };
+      const v: SimVehicle = { id: this.nextId++, seenX: NaN, seenY: NaN, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : this.tuning.speedVsLimit, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, turn: null, born: this.t, fuel: 0, broken: null };
       if (jw) this.journeys.find(j => j.def.id === jw.journey)!.sent++;
       else s.truck = undefined;
       // (speeds varying: its own share of the lanes' speed; no random number drawn when they don't, so runs stay as they were)
@@ -1605,7 +1611,7 @@ export class SketchSim {
                 if (w.exit && this.along(t.lane, w.pos, this.exitS(w.exit)) < u) continue;
                 // (told to go: only one right there stops it)
                 if (forced && u >= laneZone + v.len + 1) continue;
-                if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, 2 * w.v)) { yields.push({ at: hold(z), why: `merge ${t.lane.key} for car ${w.id}` }); break; }
+                if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v)) { yields.push({ at: hold(z), why: `merge ${t.lane.key} for car ${w.id}` }); break; }
               }
             }
           }
@@ -1756,14 +1762,14 @@ export class SketchSim {
           continue;
         }
         const g = v.goal;
-        if (!g || this.t - v.changedAt < 5 || v.blocking || gap > 40 || lead > 0.7 * e.vmax || v.v > 0.85 * e.vmax) continue;
+        if (!g || this.t - v.changedAt < LC_PAUSE || v.blocking || gap > 40 || lead > 0.7 * e.vmax || v.v > 0.85 * e.vmax) continue;
         if (!(v.why ?? "").startsWith("car ")) continue;
         // (far enough from where it leaves to come back)
         if ((g.conn ? this.exitS(g.conn) : e.len) - v.pos < 80) continue;
         const best = e.neighbors
           .filter(n => n.a1 - v.pos > 60)
           .map(n => ({ n, q: this.room(v, n, byEdge, ghosts) }))
-          .filter(x => x.q && x.q.ahead > gap + 10)
+          .filter(x => x.q && x.q.ahead > gap + OVERTAKE_ROOM)
           .sort((a, b) => b.q!.ahead - a.q!.ahead)[0];
         if (best) this.changeIn(byEdge, ghosts, v, best.n);
       }

@@ -6,7 +6,8 @@
  */
 
 export type TuneKey = "accel" | "brake" | "headway" | "minGap" | "speedSpread" | "patience" | "yieldGap" | "yieldSpeed" | "pedWalk" | "pedYield" | "pedSpeed"
-  | "rerouteAfter" | "breakdownsPerHour" | "brokenTowAfter" | "fuelIdleCar" | "fuelIdleTruck" | "stopStartShare" | "truckShare" | "truckLength" | "truckAccel" | "truckHeadway" | "truckSpeed";
+  | "rerouteAfter" | "breakdownsPerHour" | "brokenTowAfter" | "fuelIdleCar" | "fuelIdleTruck" | "stopStartShare" | "truckShare" | "truckLength" | "truckAccel" | "truckHeadway" | "truckSpeed"
+  | "speedVsLimit" | "laneChangePause" | "overtakeRoom" | "bendSpeed" | "ringGap";
 export type Tuning = Record<TuneKey, number>;
 export type TuneGroup = "Drivers" | "Trucks" | "Junctions" | "Pedestrians" | "Breakdowns" | "Fuel";
 export interface TuneInfo { key: TuneKey; group: TuneGroup; label: string; unit: string; min: number; max: number; step: number; def: number; help: string }
@@ -17,6 +18,9 @@ export const TUNING: TuneInfo[] = [
   { key: "brake", group: "Drivers", label: "Comfortable braking", unit: "m/s²", min: 1, max: 5, step: 0.1, def: 2, help: "How hard cars brake when they see a stop coming (they brake harder if they must)." },
   { key: "headway", group: "Drivers", label: "Time gap to the car ahead", unit: "s", min: 0.8, max: 3, step: 0.1, def: 1.2, help: "The gap in time a driver keeps on the move. Shorter gaps carry more traffic." },
   { key: "minGap", group: "Drivers", label: "Gap when stopped", unit: "m", min: 2, max: 6, step: 0.1, def: 2, help: "Distance kept to the car ahead in a queue (at least 2 m: closer, cars queued on tight bends would touch)." },
+  { key: "speedVsLimit", group: "Drivers", label: "Speed vs the limit", unit: "×", min: 0.7, max: 1.3, step: 0.01, def: 1, help: "The speed drivers want, as a share of the limit (each road's, or the sketch's). Trucks have their own (Truck speed)." },
+  { key: "laneChangePause", group: "Drivers", label: "Pause between lane changes", unit: "s", min: 1, max: 15, step: 0.5, def: 5, help: "How long after changing lane a driver waits before changing again to overtake (changing to where it is going isn't held back)." },
+  { key: "overtakeRoom", group: "Drivers", label: "Room needed to overtake", unit: "m", min: 0, max: 40, step: 1, def: 10, help: "How much more room ahead the lane beside must have than its own for a driver held up by a slower car to move over." },
   { key: "speedSpread", group: "Drivers", label: "Speeds vary by", unit: "%", min: 0, max: 30, step: 1, def: 0, help: "Each car wants a speed within this much of the speed set (some slower, some faster), so faster ones catch up and overtake." },
   { key: "truckShare", group: "Trucks", label: "Share of trucks", unit: "%", min: 0, max: 50, step: 1, def: 0, help: "Of the vehicles coming in, this many are trucks: longer, slower to speed up, keeping a longer gap." },
   { key: "truckLength", group: "Trucks", label: "Truck length", unit: "m", min: 7, max: 18, step: 0.5, def: 12, help: "How long a truck is (a car is 4.5 m)." },
@@ -26,6 +30,8 @@ export const TUNING: TuneInfo[] = [
   { key: "patience", group: "Junctions", label: "Let in after waiting", unit: "s", min: 2, max: 30, step: 1, def: 6, help: "A car kept waiting this long to join a queued lane is let in by the next car along (zip merging)." },
   { key: "yieldGap", group: "Junctions", label: "Gap wanted at a give-way line", unit: "s", min: 0.5, max: 5, step: 0.1, def: 1.5, help: "A car at a stop or yield line goes when it would be through this long before the next car gets there." },
   { key: "yieldSpeed", group: "Junctions", label: "Speed up to a yield line", unit: "m/s", min: 1, max: 12, step: 0.5, def: 4, help: "How fast cars come up to a yield line (they go on without stopping if it is clear)." },
+  { key: "bendSpeed", group: "Junctions", label: "Speed through bends and junctions", unit: "×", min: 0.6, max: 1.5, step: 0.05, def: 1, help: "How fast drivers take bends, roundabouts and turns at junctions, against the speed at which the bend pushes them sideways as hard as is comfortable." },
+  { key: "ringGap", group: "Junctions", label: "Roundabout gap accepted", unit: "s", min: 1, max: 5, step: 0.1, def: 2, help: "The gap in time a car joining a roundabout's ring wants before the next car on the ring (at least 8 m)." },
   { key: "rerouteAfter", group: "Junctions", label: "Look for another way after", unit: "s", min: 10, max: 300, step: 5, def: 40, help: "A driver kept waiting this long where it turns off looks for another way to where it is going (once at each place)." },
   { key: "pedWalk", group: "Pedestrians", label: "Walk time at a red", unit: "s", min: 3, max: 20, step: 1, def: 8, help: "At lights: seconds at the start of the traffic's red in which people may step onto the crossing." },
   { key: "pedYield", group: "Pedestrians", label: "Gap left for cars at zebras", unit: "s", min: 0, max: 20, step: 1, def: 5, help: "At zebras: after a group crosses, seconds before the next may step out." },
