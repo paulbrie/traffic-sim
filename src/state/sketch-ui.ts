@@ -214,6 +214,12 @@ export function offerSketchUiToBridge() {
       t.by = by; t.flip = !!a.flip;
       return { ...t };
     }),
+    // the Sketch window over the plan opened or closed: { open }, as the top bar's Sketch button does
+    bridgeApp.register("sketchWindow", a => {
+      const open = a.open === undefined ? !ui.getValue().sketch : !!a.open;
+      ui.getValue().sketch = open;
+      return { open };
+    }),
     // the search box (Cmd/Ctrl+K): { open, query?, editor? }
     bridgeApp.register("search", a => {
       const d = editorFor(a).dialogs.search;
