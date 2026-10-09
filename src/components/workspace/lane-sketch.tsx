@@ -38,6 +38,7 @@ import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/sketch-replay-bar";
 import { ProblemConsole } from "@/components/v2/problem-console";
+import { bridgeApp, bridgeState, setBridgeCanvas, setBridgeToWorld } from "@/state/bridge-registry";
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
 import { stampRoundabout } from "@/lib/roundabout";
@@ -672,6 +673,46 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     setSel({ ...NO_SEL, lanes: [a.lane] });
     setSelPt({ lane: a.lane, i: shape.pts.findIndex(x => x === a.p) });
   };
+
+  // ------------------------------------------------------------ the Claude bridge (docs/claude-bridge.md): what this editor offers an agent
+  // (registered again after each render, so they see the editor as it is; taken away when it goes)
+  useEffect(() => {
+    const sk = () => live.current.sketch;
+    const offs = [
+      setBridgeCanvas(() => canvas.current),
+      setBridgeToWorld((x, y) => { const c = canvas.current, r = c?.getBoundingClientRect(); return c && r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? toWorld({ clientX: x, clientY: y }) : null; }),
+      bridgeApp.register("select", a => { goTo(a as SearchTarget); }),
+      bridgeApp.register("goTo", a => { goTo(a as SearchTarget); }),
+      bridgeApp.register("view", a => { centerOnPts([{ x: Number(a.x), y: Number(a.y) }], a.scale === undefined); if (a.scale !== undefined) { view.current = { ...view.current, scale: Number(a.scale) }; redraw(); } }),
+      bridgeApp.register("run", () => { setRunning(true); }),
+      bridgeApp.register("pause", () => { setRunning(false); }),
+      bridgeApp.register("speed", a => { setSimSpeed(Number(a.speed) || 1); }),
+      bridgeApp.register("replay", a => { showAt(Number(a.t)); }),
+      bridgeApp.register("restart", () => { resetCars(); }),
+      bridgeState.register("sketch", () => {
+        const s = sk();
+        return { lanes: s.lanes.length, connectors: s.connectors.length, roads: s.roads.length, junctions: s.junctions.length, crossings: s.crossings?.length ?? 0, links: s.links?.length ?? 0,
+          roadNames: s.roads.slice(0, 200).map(r => `${r.id} ${r.name}`), junctionNames: s.junctions.slice(0, 200).map(j => `${j.id} ${j.name}`) };
+      }),
+      bridgeState.register("sketchJson", () => sk()),
+      bridgeState.register("selection", () => ({ ...live.current.sel, car: live.current.selCar })),
+      bridgeState.register("stats", () => sim.current?.stats() ?? null),
+      bridgeState.register("problems", () => sim.current?.problems() ?? null),
+      bridgeState.register("view", () => ({ ...view.current })),
+      bridgeState.register("run", () => ({ running, speed: simSpeed, t: sim.current?.t ?? 0, replayT: live.current.replayT })),
+      bridgeState.register("simT", () => sim.current?.t),
+      // (what is at a point of the map, within `r` px: for an annotation)
+      bridgeState.register("hitTest", a => {
+        const p = { x: Number(a.x), y: Number(a.y) }, s = sk(), tol = (Number(a.r) || 6) / view.current.scale, near = sketchIndex(s).near(p, tol);
+        const lanes = [...near.lanes].filter(id => { const l = laneById(s, id); return l && nearestOn(l.shape, p).d - l.width / 2 <= tol; });
+        const conns = s.connectors.filter(c => near.conns.has(c.id)).filter(c => { const pts = connectorPts(s, c); return pts && nearestOn({ kind: "line", pts }, p).d <= tol; }).map(c => c.id);
+        const junctions = s.junctions.filter(j => near.junctions.has(j.id) && insidePolygon(p, outlinePath(j))).map(j => j.id);
+        const car = sim.current?.carAt(p, tol) ?? null;
+        return { lanes, connectors: conns, junctions, ...(car !== null ? { car } : {}) };
+      }),
+    ];
+    return () => { for (const off of offs) off(); };
+  });
 
   // ------------------------------------------------------------ pointer
   /** the middle of the view and how much it shows, metres */

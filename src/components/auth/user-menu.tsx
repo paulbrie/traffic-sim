@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { KeyRound, LogOut, Users } from "lucide-react";
+import { Bot, KeyRound, LogOut, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { logout } from "@/server/auth-actions";
+import { bridgeStore } from "@/state/bridge-client";
 
 export interface MenuUser { email: string; name: string; role: "admin" | "user" }
 
@@ -28,6 +29,9 @@ export function UserMenu({ user }: { user: MenuUser }) {
         <DropdownMenuSeparator />
         {user.role === "admin" && (
           <DropdownMenuItem asChild><Link href="/admin/users"><Users /> Admin</Link></DropdownMenuItem>
+        )}
+        {user.role === "admin" && (
+          <DropdownMenuItem onSelect={() => bridgeStore.show(true)}><Bot /> Connect Claude</DropdownMenuItem>
         )}
         <DropdownMenuItem asChild><Link href="/account/password"><KeyRound /> Change password</Link></DropdownMenuItem>
         <DropdownMenuSeparator />
