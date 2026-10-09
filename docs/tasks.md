@@ -17,15 +17,15 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T39 | Agents City: playful Desk mode (clay avatars, the cities as miniatures on a desk, activity acted out, City / Desk toggle) | Tom | 2026-10-09 | in progress, admin-dev |
 | T34 | Test "Test in Sketch" independently | Ramona | 2026-10-09 | |
-| T42 | Admin: agents3d-view.tsx back to its own style (after a formatter run), Desk toggle re-applied, production build check before deploy | Alex, Tom | 2026-10-09 | in progress |
 | T43 | Agents City: React "synchronously unmount a root" warning (32× per load, drei Html labels) | Alex | 2026-10-09 | after T42 |
-| T41 | Claude bridge "agent tabs": agents open their own labelled tabs of the app in the user's browser (a hub page, per-agent codes, a popup prompt, Take over) | Bob | 2026-10-09 | in progress |
 
 ## Done
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
 | T37 | Bistrița rev 89 follow-ups: false crossings between chained lanes fixed (J574, j747); J593 a phantom (optional removal); J356 is capacity | Bob | 2026-10-09 | 5e8d5b7 |
+| T42 | Admin tree ready to deploy: agents3d-view.tsx back to its own style, Desk toggle re-applied (hidden behind ?desk=1), full production build check | Alex, Tom | 2026-10-09 | admin-dev |
+| T41 | Claude bridge "agent tabs": a hub page, per-agent codes and tokens, labelled agent tabs (title, favicon, frame, Take over), popup prompt, 3 tabs per agent | Bob | 2026-10-09 | a4af1b2 |
 | T40 | Fixed agent colours by name, shared by Comms, City and Desk | Alex | 2026-10-09 | admin-dev |
 | T38 | Small UI leftovers: search keys typed while it opens, panel header overflow, compass names in a junction's roads (the font 404 is Next's own, skipped) | Tatiana | 2026-10-09 | 7eb4653 |
 | T36 | Proposal and sample avatar for the Desk mode | Tom | 2026-10-09 | approved by the user |
