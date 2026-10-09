@@ -13,7 +13,7 @@
 import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 import { DeepSubject } from "subjecto";
 import type { Piece } from "@/lib/lane-sketch";
-import { bridgeApp, setBridgeUi } from "@/state/bridge-registry";
+import { argOf, bridgeApp, setBridgeUi } from "@/state/bridge-registry";
 import { ui } from "@/state/store";
 import { SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
@@ -86,6 +86,8 @@ const editor = (tool: Tool): EditorUi => ({
 });
 export const freshEditor = (): EditorUi => editor("lane");
 
+/** the inspector's panels (their ids): the only ones that can be folded away */
+export const PANEL_IDS = ["selection", "car", "crossing", "test-in-sketch", "background", "traffic", "fuel", "junction-results", "road-results", "demand"];
 // (kept in the browser: the panels folded away, Test in Sketch's options)
 const PANELS_KEY = "trafficsim:v2-closed-panels", TEST_KEY = "laneSketch:testInSketch";
 const stored = <T,>(key: string, fallback: T): T => {
@@ -97,7 +99,8 @@ const store = (key: string, v: unknown) => { try { localStorage.setItem(key, JSO
 export const sketchUi = new DeepSubject<SketchUiState>({
   active: "plan",
   editors: { plan: freshEditor(), scratch: freshEditor(), whole: freshEditor() },
-  panels: { closed: stored<Record<string, true>>(PANELS_KEY, {}) },
+  // (only known panels: anything else kept there is let go)
+  panels: { closed: Object.fromEntries(Object.keys(stored<Record<string, true>>(PANELS_KEY, {})).filter(id => PANEL_IDS.includes(id)).map(id => [id, true as const])) },
   sketchWindow: { open: false, test: stored<TestOptions>(TEST_KEY, { cut: 70, mode: "replace", run: true }), lastPiece: null },
   layers: sketchLayers$.getValue(),
   background: typeof localStorage === "undefined" ? { brightness: 0.85, source: "esri" } : loadSatOptions(),
@@ -106,6 +109,8 @@ sketchUi.subscribe("background", v => saveSatOptions(JSON.parse(JSON.stringify(v
 // (the layers: sketch-layers.ts's, as they change)
 sketchLayers$.subscribe(l => { sketchUi.getValue().layers = { ...l }; });
 sketchUi.subscribe("panels/closed", v => store(PANELS_KEY, v), { skipInitialCall: true });
+// (and kept so: what was let go on loading goes from the browser too)
+if (typeof localStorage !== "undefined" && Object.keys(stored<Record<string, true>>(PANELS_KEY, {})).some(id => !PANEL_IDS.includes(id))) store(PANELS_KEY, sketchUi.getValue().panels.closed);
 sketchUi.subscribe("sketchWindow/test", v => store(TEST_KEY, v), { skipInitialCall: true });
 // (the Sketch window opens and closes through V1's ui, as before: shown here too)
 ui.subscribe("sketch", v => { const w = sketchUi.getValue().sketchWindow; if (w.open !== !!v) w.open = !!v; });
@@ -165,7 +170,7 @@ export function sketchUiSnapshot(): Record<string, unknown> {
 const CONSOLE_KINDS = ["all", "stuck", "collision", "jump", "deadlock", "breakdown", "towed"];
 /** the editor an action is for: `editor` if given, else the one the user is at */
 const editorFor = (a: Record<string, unknown>): EditorUi => {
-  const k = a.editor === undefined ? sketchUi.getValue().active : String(a.editor);
+  const k = argOf(a, "editor", "string") ?? sketchUi.getValue().active;
   if (k !== "plan" && k !== "scratch") throw new Error(`no editor "${k}": plan or scratch`);
   if (k === "scratch" && !sketchUi.getValue().sketchWindow.open) throw new Error("the Sketch window isn't open");
   return sketchUi.getValue().editors[k];
@@ -179,8 +184,8 @@ export function offerSketchUiToBridge() {
     }),
     // a panel of the inspector folded away or opened: { id, open }
     bridgeApp.register("panel", a => {
-      const id = String(a.id ?? ""), open = a.open !== false;
-      if (!id) throw new Error("which panel? { id, open }");
+      const id = argOf(a, "id", "string", true)!, open = argOf(a, "open", "boolean") ?? true;
+      if (!PANEL_IDS.includes(id)) throw new Error(`no panel "${id}": ${PANEL_IDS.join(", ")}`);
       const p = sketchUi.getValue().panels, next = { ...p.closed };
       if (open) delete next[id]; else next[id] = true;
       p.closed = next;
@@ -188,10 +193,12 @@ export function offerSketchUiToBridge() {
     }),
     // the problem console: { open?, kind?, text?, editor? }
     bridgeApp.register("console", a => {
+      const kind = argOf(a, "kind", "string"), text = argOf(a, "text", "string"), open = argOf(a, "open", "boolean");
+      if (kind !== undefined && !CONSOLE_KINDS.includes(kind)) throw new Error(`kind: one of ${CONSOLE_KINDS.join(", ")}`);
       const d = editorFor(a).dialogs.console;
-      if (a.kind !== undefined) { const k = String(a.kind); if (!CONSOLE_KINDS.includes(k)) throw new Error(`kind: one of ${CONSOLE_KINDS.join(", ")}`); d.kind = k; }
-      if (a.text !== undefined) d.text = String(a.text);
-      if (a.open !== undefined) d.open = !!a.open;
+      if (kind !== undefined) d.kind = kind;
+      if (text !== undefined) d.text = text;
+      if (open !== undefined) d.open = open;
       return { ...d };
     }),
     // layers shown or not: { set: { id: boolean } } (ids as in `layers`)
@@ -200,31 +207,33 @@ export function offerSketchUiToBridge() {
       if (!set || typeof set !== "object") throw new Error(`which? { set: { id: true|false } }, ids: ${ids.join(", ")}`);
       const bad = Object.keys(set).filter(k => !ids.includes(k));
       if (bad.length) throw new Error(`no layer ${bad.join(", ")}: ${ids.join(", ")}`);
-      const next = { ...sketchLayers$.getValue(), ...Object.fromEntries(Object.entries(set).map(([k, v]) => [k, !!v])) } as SketchLayers;
+      for (const k of Object.keys(set)) argOf(set, k, "boolean", true);
+      const next = { ...sketchLayers$.getValue(), ...set } as SketchLayers;
       setSketchLayers(next);
       return next;
     }),
     // a results table sorted: { table: "junctions" | "roads", by, flip?, editor? }
     bridgeApp.register("sort", a => {
-      const table = String(a.table), by = String(a.by);
+      const table = argOf(a, "table", "string", true)!, by = argOf(a, "by", "string", true)!, flip = argOf(a, "flip", "boolean") ?? false;
       const cols: Record<string, string[]> = { junctions: ["name", "rate", "delay", "queue", "fuel"], roads: ["name", "rate", "speed", "delay", "queue"] };
       if (!cols[table]) throw new Error("table: junctions or roads");
       if (!cols[table].includes(by)) throw new Error(`by: one of ${cols[table].join(", ")}`);
       const t = editorFor(a).tables[table as "junctions" | "roads"];
-      t.by = by; t.flip = !!a.flip;
+      t.by = by; t.flip = flip;
       return { ...t };
     }),
     // the Sketch window over the plan opened or closed: { open }, as the top bar's Sketch button does
     bridgeApp.register("sketchWindow", a => {
-      const open = a.open === undefined ? !ui.getValue().sketch : !!a.open;
+      const open = argOf(a, "open", "boolean") ?? !ui.getValue().sketch;
       ui.getValue().sketch = open;
       return { open };
     }),
     // the search box (Cmd/Ctrl+K): { open, query?, editor? }
     bridgeApp.register("search", a => {
+      const query = argOf(a, "query", "string"), open = argOf(a, "open", "boolean");
       const d = editorFor(a).dialogs.search;
-      if (a.query !== undefined) d.query = String(a.query);
-      if (a.open !== undefined) d.open = !!a.open;
+      if (query !== undefined) d.query = query;
+      if (open !== undefined) d.open = open;
       return { ...d };
     }),
   ];

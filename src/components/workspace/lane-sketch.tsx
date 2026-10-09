@@ -42,7 +42,7 @@ import { describeHover, SketchHoverCard, type HoverHit } from "@/components/v2/s
 import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar } from "@/components/v2/sketch-replay-bar";
 import { CONSOLE_HEIGHT, ProblemConsole } from "@/components/v2/problem-console";
-import { bridgeApp, bridgeState, setBridgeCanvas, setBridgeToWorld } from "@/state/bridge-registry";
+import { argOf, bridgeApp, bridgeState, setBridgeCanvas, setBridgeToWorld } from "@/state/bridge-registry";
 import { BackgroundPanel, drawBackground, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
 import { stampRoundabout } from "@/lib/roundabout";
@@ -782,6 +782,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     setSelPt({ lane: a.lane, i: shape.pts.findIndex(x => x === a.p) });
   };
 
+  /** an agent's select/goTo: { kind, id }, checked (a car's id a number, the others' a string) */
+  const target = (a: Record<string, unknown>): SearchTarget => {
+    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "car"];
+    if (!kinds.includes(kind)) throw new Error(`kind: one of ${kinds.join(", ")}`);
+    return kind === "car" ? { kind, id: argOf(a, "id", "number", true)! } : { kind: kind as Exclude<SearchTarget["kind"], "car">, id: argOf(a, "id", "string", true)! };
+  };
   // ------------------------------------------------------------ the Claude bridge (docs/claude-bridge.md): what this editor offers an agent
   // (registered again after each render, so they see the editor as it is; taken away when it goes)
   useEffect(() => {
@@ -789,16 +795,20 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const offs = [
       setBridgeCanvas(() => canvas.current),
       setBridgeToWorld((x, y) => { const c = canvas.current, r = c?.getBoundingClientRect(); return c && r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? toWorld({ clientX: x, clientY: y }) : null; }),
-      bridgeApp.register("select", a => { goTo(a as SearchTarget); }),
-      bridgeApp.register("goTo", a => { goTo(a as SearchTarget); }),
-      bridgeApp.register("view", a => { centerOnPts([{ x: Number(a.x), y: Number(a.y) }], a.scale === undefined); if (a.scale !== undefined) { view.current = { ...view.current, scale: Number(a.scale) }; redraw(); } }),
+      bridgeApp.register("select", a => { goTo(target(a)); }),
+      bridgeApp.register("goTo", a => { goTo(target(a)); }),
+      bridgeApp.register("view", a => {
+        const x = argOf(a, "x", "number", true)!, y = argOf(a, "y", "number", true)!, scale = argOf(a, "scale", "number");
+        centerOnPts([{ x, y }], scale === undefined);
+        if (scale !== undefined) { view.current = { ...view.current, scale }; redraw(); }
+      }),
       // (as the Run button: the cars made the first time, out of the replay; running already, left so)
       bridgeApp.register("run", () => { if (!running) play(); return { running: true }; }),
       bridgeApp.register("pause", () => { setRunning(false); return { running: false }; }),
-      bridgeApp.register("speed", a => { const v = Number(a.speed) || 1; setSimSpeed(v); return { speed: v }; }),
+      bridgeApp.register("speed", a => { const v = argOf(a, "speed", "number", true)!; if (v <= 0) throw new Error("\"speed\" must be more than 0"); setSimSpeed(v); return { speed: v }; }),
       bridgeApp.register("replay", a => {
         if (!sim.current || !replayRange) throw new Error("nothing kept to replay yet: run the cars first");
-        const t = Math.max(replayRange.from, Math.min(replayRange.to, Number(a.t)));
+        const t = Math.max(replayRange.from, Math.min(replayRange.to, argOf(a, "t", "number", true)!));
         showAt(t);
         return { t };
       }),
@@ -1374,7 +1384,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
           {stats ? <RoadResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "road", id })} /> : null}
-          <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys}
+          <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} heldBack={stats?.heldBackBy}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
@@ -2018,8 +2028,8 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
 }) {
   // where cars come in
   const entries = entryLanes(sketch).length;
-  const row = (label: string, value: React.ReactNode, cls?: string) => (
-    <div className={cn("flex justify-between gap-2 text-xs", cls)}><span className="text-muted-foreground">{label}</span><span className="font-mono tabular">{value}</span></div>
+  const row = (label: string, value: React.ReactNode, cls?: string, title?: string) => (
+    <div className={cn("flex justify-between gap-2 text-xs", cls)} title={title}><span className="text-muted-foreground">{label}</span><span className="font-mono tabular">{value}</span></div>
   );
   return (
     <InspectorPanel id="traffic" title="Traffic">
@@ -2041,6 +2051,8 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
           {row("Time", clock(stats.t))}
           {row("Cars on the sketch", stats.vehicles)}
           {row("Came in / drove off", `${stats.spawned} / ${stats.finished}`)}
+          {(stats.heldBack ?? 0) > 0 && row("Couldn't come in", stats.heldBack, "text-amber-700 dark:text-amber-400",
+            "Arrivals due while there was no room where their lane starts (a queue back to it, or a crossing there kept clear): lost, so less traffic came in than asked")}
           {row("Through", stats.t > 60 ? `${Math.round((stats.finished / stats.t) * 3600)} veh/h` : "…")}
           {row("Mean speed", `${stats.meanSpeed.toFixed(0)} km/h`)}
           {row("Waiting 20 s+", stats.waiting, stats.waiting ? "text-amber-700 dark:text-amber-400" : undefined)}
