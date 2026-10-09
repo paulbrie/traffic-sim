@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T48 | V2 central UI store, read by the Claude bridge (moved over in slices; the base for the 3D port) | Tatiana | 2026-10-09 | |
 | T46 | Regressions after 5e8d5b7: a deadlock loop at J21 (Strada Sigmirului), collisions on l1945 after J574 | Bob | 2026-10-09 | from T45 |
 | T39 | Agents City: playful Desk mode (clay avatars, the cities as miniatures on a desk, activity acted out, City / Desk toggle) | Tom | 2026-10-09 | in progress, admin-dev |
 | T43 | Agents City: React "synchronously unmount a root" warning (32× per load, drei Html labels) | Alex | 2026-10-09 | after T42 |
