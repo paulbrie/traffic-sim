@@ -26,6 +26,8 @@ export const NO_SEL: Sel = { lanes: [], connectors: [], junctions: [], road: nul
 
 /** an editor's state: the plan's (`plan`; a V1 plan's sketch window: `whole`) or the Sketch window's (`scratch`) */
 export interface EditorUi {
+  /** how its map shows: the plan from above, or in 3D (the editor stays up under it) */
+  mode: "plan" | "3d";
   tool: Tool;
   selection: Sel;
   /** a line lane's point picked (to curve or delete) */
@@ -81,7 +83,7 @@ export interface SketchUiState {
 }
 
 const editor = (tool: Tool): EditorUi => ({
-  tool, selection: NO_SEL, point: null, car: null, follow: false, view: { cx: 0, cy: 0, scale: 6 },
+  mode: "plan", tool, selection: NO_SEL, point: null, car: null, follow: false, view: { cx: 0, cy: 0, scale: 6 },
   run: { running: false, speed: 1, t: 0, replayT: null, playing: false, kept: null },
   dialogs: { search: { open: false, query: "" }, console: { open: false, kind: "all", text: "", clearedAt: -1 }, settings: false, optimizer: { open: false, junction: null, chosen: [], effort: "quick", stage: "setup" } },
   tables: { junctions: { by: "delay", flip: false, shown: 12 }, roads: { by: "delay", flip: false, shown: 12 } },
@@ -241,6 +243,14 @@ export function offerSketchUiToBridge() {
       const t = editorFor(a).tables[table as "junctions" | "roads"];
       t.by = by; t.flip = flip;
       return { ...t };
+    }),
+    // the plan's map from above or in 3D: { mode: "plan" | "3d", editor? } (the plan's editor only, for now)
+    bridgeApp.register("mode", a => {
+      const mode = argOf(a, "mode", "string", true)!, ed = argOf(a, "editor", "string") ?? "plan";
+      if (mode !== "plan" && mode !== "3d") throw new Error("mode: plan or 3d");
+      if (ed !== "plan") throw new Error("only the plan's editor has a 3D view for now");
+      sketchUi.getValue().editors.plan.mode = mode;
+      return { mode };
     }),
     // the Sketch window over the plan opened or closed: { open }, as the top bar's Sketch button does
     bridgeApp.register("sketchWindow", a => {

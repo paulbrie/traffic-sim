@@ -39,6 +39,7 @@ import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
 import { describeHover, SketchHoverCard, type HoverHit } from "@/components/v2/sketch-hover-card";
+import { View3DV2 } from "@/components/v2/view-3d-v2";
 import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar } from "@/components/v2/sketch-replay-bar";
 import { CONSOLE_HEIGHT, ProblemConsole } from "@/components/v2/problem-console";
@@ -160,6 +161,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (the editor's own state, in the V2 UI store where agents (the Claude bridge) and other views can read it: src/state/sketch-ui.ts)
   const ek: EditorKind = store.kind;
   const [tool, setTool] = useEditorState(ek, "tool");
+  // (the plan's map in 3D: over the map, this editor staying up under it; the plan's editor only, for now)
+  const [mode] = useEditorState(ek, "mode");
+  const in3d = page && mode === "3d";
+  /** the 3D view's canvas while it shows (the bridge's screenshot) */
+  const canvas3d = useRef<(() => HTMLCanvasElement | null) | null>(null);
   const [rawSel, setSel] = useEditorState(ek, "selection");
   /** a line lane's point picked (to curve or delete) */
   const [selPt, setSelPt] = useEditorState(ek, "point");
@@ -796,7 +802,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   useEffect(() => {
     const sk = () => live.current.sketch;
     const offs = [
-      setBridgeCanvas(() => canvas.current),
+      setBridgeCanvas(() => (in3d && canvas3d.current ? canvas3d.current() : canvas.current)),
       setBridgeToWorld((x, y) => { const c = canvas.current, r = c?.getBoundingClientRect(); return c && r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? toWorld({ clientX: x, clientY: y }) : null; }),
       bridgeApp.register("select", a => { goTo(target(a)); }),
       bridgeApp.register("goTo", a => { goTo(target(a)); }),
@@ -1339,9 +1345,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
             onPointerLeave={() => { cursor.current = null; hover.current = null; hoverOff(); redraw(); }}
             onDoubleClick={onDoubleClick} onContextMenu={e => e.preventDefault()} />
-          <div className="pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
+          <div className={cn("pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm", in3d && "hidden")}>
             <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
+          {in3d && (
+            <View3DV2 sketch={sketch} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
+              satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
+          )}
           {hoverCard && (() => {
             const info = describeHover(hoverCard.hit, sketch, contents, stats, hoverCard.car);
             return info ? <SketchHoverCard info={info} x={hoverCard.x} y={hoverCard.y} /> : null;
