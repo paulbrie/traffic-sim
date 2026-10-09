@@ -68,7 +68,7 @@ export function networkToSketch(net: Network): { sketch: Sketch; report: Convert
   for (const e of c.edges) for (const lp of e.lanes) {
     const id = `l${++ln}`, pts = simplify(polyPts(lp.poly));
     if (pts.length < 2 || lp.len < 0.5) continue;
-    const lane: SketchLane = { id, shape: { kind: "line", pts }, width: r2(e.lw) };
+    const lane: SketchLane = { id, shape: { kind: "line", pts }, width: r2(e.lw), ...(e.link.level ? { level: e.link.level } : {}) };
     sk.lanes.push(lane);
     laneId.set(key(e, lp.lane), id); laneLen.set(id, lp.len);
     const road = byLink.get(e.link.id) ?? { id: `r${++rn}`, name: e.link.name || `Road ${rn}`, lanes: [] };
@@ -102,7 +102,7 @@ export function networkToSketch(net: Network): { sketch: Sketch; report: Convert
         const pp = polyPts(ring[0].pass.poly), a0 = Math.atan2(pp[0].y - c.y, pp[0].x - c.x), a1 = Math.atan2(pp[pp.length - 1].y - c.y, pp[pp.length - 1].x - c.x);
         const turn = Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0));
         const id = `l${++ln}`;
-        sk.lanes.push({ id, shape: { kind: "arc", c: { x: r2(c.x), y: r2(c.y) }, r: r2(radius), a0: r2(a0), sweep: turn < 0 ? -2 * Math.PI : 2 * Math.PI }, width: 4.5 });
+        sk.lanes.push({ id, shape: { kind: "arc", c: { x: r2(c.x), y: r2(c.y) }, r: r2(radius), a0: r2(a0), sweep: turn < 0 ? -2 * Math.PI : 2 * Math.PI }, width: 4.5, ...(n.level ? { level: n.level } : {}) });
         ringIds.push(id);
         for (let k = 0; k < 24; k++) { const a = (k / 24) * 2 * Math.PI; extra.push({ x: c.x + radius * Math.cos(a), y: c.y + radius * Math.sin(a) }); }
       }

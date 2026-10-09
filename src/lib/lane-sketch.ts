@@ -8,6 +8,7 @@
  * anywhere, a roundabout's ring for instance, and follow the lanes when they move. In between they
  * go through the bend points they were drawn with, if any.
  */
+import { sanitizeTuning, type Tuning } from "./sketch-tuning";
 
 export interface Pt { x: number; y: number }
 /**
@@ -25,6 +26,12 @@ export interface SketchLane {
   inRate?: number;
   /** an exit lane: its share of the trips that end there, relative to the others (default 1; 0: closed) */
   outWeight?: number;
+  /**
+   * Elevation, as v1's roads: 0 the ground (missing), 1, 2, … bridges and flyovers above it, -1, … underpasses and
+   * tunnels. Lanes only meet by their connectors, so one passes over or under another it crosses at another level;
+   * its ends ramp to the level of the lanes it joins there (see `zAt`).
+   */
+  level?: number;
 }
 /** a place on a lane, `s` metres from its start */
 export interface LaneAt { lane: string; s: number }
@@ -44,17 +51,52 @@ export interface SketchJunction { id: string; name: string; outline: Pt[]; /** c
   smooth?: number;
   /** traffic lights on the ways in (instead of signs; see `JunctionLights`) */
   lights?: JunctionLights;
+  /**
+   * Turning shares, as v1's: for a way in (`from`: its road's id, or `lane:<id>` for a lane in no road), the relative
+   * share of the traffic on it that goes on to each road out (by the same keys). Ways in without one: each car its own way.
+   */
+  splits?: JunctionSplit[];
 }
+export interface JunctionSplit { from: string; shares: Record<string, number> }
 export interface Sketch {
   lanes: SketchLane[]; connectors: SketchConnector[]; roads: SketchRoad[]; junctions: SketchJunction[];
   /** road ends joined so the road carries on (see `SketchLink`) */
   links?: SketchLink[];
-  /** the cars run on it: vehicles per hour at each entry, and the speed on straight lanes (km/h) */
-  traffic?: { rate: number; speed: number };
+  /** the cars run on it: vehicles per hour at each entry, the speed on straight lanes (km/h), the random numbers' seed, the simulation settings changed (see sketch-tuning.ts) */
+  traffic?: { rate: number; speed: number; seed?: number; tune?: Partial<Tuning> };
   /** where it is on Earth: the latitude / longitude of its origin (x east, y south, metres; as a V1 plan's `geo`), for the satellite imagery under it */
   geo?: { lat: number; lon: number };
   /** zebra crossings drawn by hand (see `SketchCrossing`) */
   crossings?: SketchCrossing[];
+  /** journeys between a particular way in and way out (see `SketchJourney`) */
+  journeys?: SketchJourney[];
+  /** junctions' lights run together (see `SketchSignalGroup`) */
+  signalGroups?: SketchSignalGroup[];
+  /** a V2 plan's ideas sketched apart (its Sketch window, as V1's): saved with the plan, never part of it */
+  scratch?: Sketch;
+}
+/**
+ * Journeys, as V1's transit flows: `rate` vehicles an hour coming in on the way in that lane `from` is one of
+ * (an entry lane; its road's entry lanes there with it) and going to the way out that lane `to` is one of,
+ * `trucks` per cent of them trucks; on top of the traffic coming in at each way's own rate.
+ */
+export interface SketchJourney { id: string; from: string; to: string; rate: number; trucks?: number }
+export const JOURNEY_RATE = 100;
+/** a new journey from the way in with lane `from` to the way out with lane `to` (the next free id) */
+export function addJourney(sk: Sketch, from: string, to: string): [Sketch, SketchJourney] {
+  const used = new Set((sk.journeys ?? []).map(x => x.id));
+  let n = used.size + 1;
+  while (used.has(`j${n}`)) n++;
+  const j: SketchJourney = { id: `j${n}`, from, to, rate: JOURNEY_RATE };
+  return [{ ...sk, journeys: [...(sk.journeys ?? []), j] }, j];
+}
+export function updateJourney(sk: Sketch, id: string, patch: Partial<Omit<SketchJourney, "id">>): Sketch {
+  return { ...sk, journeys: (sk.journeys ?? []).map(x => (x.id === id ? { ...x, ...patch } : x)) };
+}
+export function deleteJourney(sk: Sketch, id: string): Sketch {
+  const rest = (sk.journeys ?? []).filter(x => x.id !== id);
+  const { journeys: _, ...out } = sk;
+  return rest.length ? { ...out, journeys: rest } : out;
 }
 /**
  * A zebra crossing, as V1's: from one kerb `a` to the other `b`, `width` metres along the traffic, `peds`
@@ -187,12 +229,21 @@ export function removeCorner(j: SketchJunction, i: number): SketchJunction {
   return { ...j, outline: j.outline.filter((_, k) => k !== i), ...(j.curved ? { curved: j.curved.filter((_, k) => k !== i) } : {}) };
 }
 
+// (how far along a polyline each of its points is: kept, so a place on a long lane is found by halving)
+const runs = new WeakMap<Pt[], Float64Array>();
+function runOf(pts: Pt[]): Float64Array {
+  let r = runs.get(pts);
+  if (r) return r;
+  r = new Float64Array(Math.max(1, pts.length));
+  for (let i = 1; i < pts.length; i++) r[i] = r[i - 1] + dist(pts[i - 1], pts[i]);
+  runs.set(pts, r);
+  return r;
+}
+
 export function laneLength(s: LaneShape): number {
   if (s.kind === "arc") return Math.abs(s.sweep) * s.r;
   const pts = linePath(s);
-  let L = 0;
-  for (let i = 1; i < pts.length; i++) L += dist(pts[i - 1], pts[i]);
-  return L;
+  return pts.length > 1 ? runOf(pts)[pts.length - 1] : 0;
 }
 
 /** the point `s` metres along the lane and the direction of travel there (unit vector) */
@@ -204,15 +255,13 @@ export function pointAt(sh: LaneShape, s: number): { p: Pt; d: Pt } {
     return { p: { x: sh.c.x + sh.r * Math.cos(a), y: sh.c.y + sh.r * Math.sin(a) }, d: { x: -sg * Math.sin(a), y: sg * Math.cos(a) } };
   }
   const pts = linePath(sh);
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1], b = pts[i], l = dist(a, b);
-    if (s <= l || i === pts.length - 1) {
-      const t = l ? Math.min(1, s / l) : 0, d = l ? { x: (b.x - a.x) / l, y: (b.y - a.y) / l } : { x: 1, y: 0 };
-      return { p: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }, d };
-    }
-    s -= l;
-  }
-  return { p: pts[0] ?? { x: 0, y: 0 }, d: { x: 1, y: 0 } };
+  if (pts.length < 2) return { p: pts[0] ?? { x: 0, y: 0 }, d: { x: 1, y: 0 } };
+  // (the first piece ending at or past `s`)
+  const run = runOf(pts);
+  let lo = 1, hi = pts.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (run[m] >= s) hi = m; else lo = m + 1; }
+  const a = pts[lo - 1], b = pts[lo], l = run[lo] - run[lo - 1], t = l ? Math.min(1, (s - run[lo - 1]) / l) : 0, d = l ? { x: (b.x - a.x) / l, y: (b.y - a.y) / l } : { x: 1, y: 0 };
+  return { p: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }, d };
 }
 
 /** the lane as a polyline, points about `step` metres apart on arcs */
@@ -852,7 +901,111 @@ export interface JunctionLights {
 export const DEFAULT_LIGHTS: JunctionLights = { green: 18, amber: 3, allRed: 2, mode: "pairs", minGreen: 6, actuated: true };
 export const MAX_PHASES = 8;
 export interface SignalPhase { name: string; ways: string[]; lanes: string[]; conns: string[]; start: number; green: number; minGreen: number }
-export interface SignalPlan { junction: string; cycle: number; amber: number; allRed: number; actuated: boolean; custom: boolean; phases: SignalPhase[]; /** every connector the lights hold (the ways in), green in a phase or not */ controlled: string[] }
+export interface SignalPlan {
+  junction: string; cycle: number; amber: number; allRed: number; actuated: boolean; custom: boolean; phases: SignalPhase[];
+  /** every connector the lights hold (the ways in), green in a phase or not */ controlled: string[];
+  /** in a signal group: its id, the coordinated phase (it starts the cycle) and when, in the group's cycle, it turns green; the cycle its phases need when the group's is too short */
+  coord?: { group: string; groupName: string; phase: number; offset: number; stretched?: number };
+}
+
+/** a junction in a signal group: when its coordinated phase turns green in the group's cycle (s), which phase that is, its share of the green */
+export interface SignalGroupMember { junction: string; offset: number; phase: number; share: number }
+/**
+ * Lights run together, as V1's signal groups: every member on the group's fixed `cycle`, its coordinated
+ * phase green first at its own offset into it (a green wave when the offsets follow the driving time
+ * between the junctions at `speed` km/h); members in corridor order. Members don't run actuated.
+ */
+export interface SketchSignalGroup { id: string; name: string; cycle: number; speed: number; members: SignalGroupMember[] }
+export const GROUP_CYCLE = 90, GROUP_SPEED = 50, GROUP_SHARE = 0.5;
+/** the group junction `id` is in */
+export const groupOf = (sk: Sketch, id: string) => (sk.signalGroups ?? []).find(g => g.members.some(m => m.junction === id)) ?? null;
+const withGroups = (sk: Sketch, gs: SketchSignalGroup[]): Sketch => { const { signalGroups: _, ...rest } = sk; const keep = gs.filter(g => g.members.length); return keep.length ? { ...rest, signalGroups: keep } : rest; };
+/** junction `id` out of its group (a group left empty goes) */
+export function leaveGroup(sk: Sketch, id: string): Sketch {
+  return withGroups(sk, (sk.signalGroups ?? []).map(g => ({ ...g, members: g.members.filter(m => m.junction !== id) })));
+}
+/** junction `id` into group `gid` (at its end), or into a new group (null); out of any other first */
+export function joinGroup(sk: Sketch, id: string, gid: string | null): [Sketch, SketchSignalGroup] {
+  const out = leaveGroup(sk, id), gs = out.signalGroups ?? [], m: SignalGroupMember = { junction: id, offset: 0, phase: 0, share: GROUP_SHARE };
+  if (gid) {
+    const g = gs.find(x => x.id === gid);
+    if (g) { const n = { ...g, members: [...g.members, m] }; return [withGroups(out, gs.map(x => (x === g ? n : x))), n]; }
+  }
+  const used = new Set(gs.map(g => g.id));
+  let k = gs.length + 1;
+  while (used.has(`g${k}`)) k++;
+  const g: SketchSignalGroup = { id: `g${k}`, name: `Signal group ${k}`, cycle: GROUP_CYCLE, speed: GROUP_SPEED, members: [m] };
+  return [withGroups(out, [...gs, g]), g];
+}
+export function updateGroup(sk: Sketch, gid: string, patch: Partial<Omit<SketchSignalGroup, "id" | "members">>): Sketch {
+  return withGroups(sk, (sk.signalGroups ?? []).map(g => (g.id === gid ? { ...g, ...patch } : g)));
+}
+export function deleteGroup(sk: Sketch, gid: string): Sketch { return withGroups(sk, (sk.signalGroups ?? []).filter(g => g.id !== gid)); }
+export function updateMember(sk: Sketch, id: string, patch: Partial<Omit<SignalGroupMember, "junction">>): Sketch {
+  return withGroups(sk, (sk.signalGroups ?? []).map(g => ({ ...g, members: g.members.map(m => (m.junction === id ? { ...m, ...patch } : m)) })));
+}
+/** junction `id` one place earlier (-1) or later (1) in its group's corridor */
+export function moveMember(sk: Sketch, id: string, by: -1 | 1): Sketch {
+  return withGroups(sk, (sk.signalGroups ?? []).map(g => {
+    const i = g.members.findIndex(m => m.junction === id), k = i + by;
+    if (i < 0 || k < 0 || k >= g.members.length) return g;
+    const ms = [...g.members];
+    [ms[i], ms[k]] = [ms[k], ms[i]];
+    return { ...g, members: ms };
+  }));
+}
+/**
+ * Metres by road from junction `a` to junction `b`: from where `a`'s connectors lead out, along lanes and
+ * connectors, to the end of one of `b`'s ways in (the shortest such way; null: none within 5 km)
+ */
+export function junctionDistance(sk: Sketch, a: SketchJunction, b: SketchJunction): number | null {
+  const ca = junctionContents(sk, a), cb = junctionContents(sk, b);
+  const goal = new Set(junctionApproaches(sk, cb).flatMap(w => w.lanes)), inA = new Set(ca.lanes), conns = new Set(ca.connectors);
+  const outs = new Map<string, SketchConnector[]>();
+  for (const c of sk.connectors) (outs.get(c.from.lane) ?? outs.set(c.from.lane, []).get(c.from.lane)!).push(c);
+  const plen = (ps: Pt[] | null) => { let d = 0; if (ps) for (let i = 1; i < ps.length; i++) d += dist(ps[i - 1], ps[i]); return d; };
+  const best = new Map<string, number>(), todo: { lane: string; s: number; d: number }[] = [];
+  for (const c of sk.connectors) if (conns.has(c.id) && !inA.has(c.to.lane)) todo.push({ lane: c.to.lane, s: c.to.s, d: 0 });
+  let found: number | null = null;
+  while (todo.length) {
+    todo.sort((p, q) => p.d - q.d);
+    const { lane, s, d } = todo.shift()!;
+    if (found !== null && d >= found) break;
+    const key = `${lane}@${s.toFixed(1)}`;
+    if ((best.get(key) ?? Infinity) <= d) continue;
+    best.set(key, d);
+    const l = laneById(sk, lane);
+    if (!l) continue;
+    const len = laneLength(l.shape);
+    if (goal.has(lane)) { found = Math.min(found ?? Infinity, d + Math.max(0, len - s)); continue; }
+    for (const c of outs.get(lane) ?? []) {
+      if (c.from.s < s - 0.5) continue;
+      const nd = d + (c.from.s - s) + plen(connectorPts(sk, c));
+      if (nd < 5000) todo.push({ lane: c.to.lane, s: c.to.s, d: nd });
+    }
+  }
+  return found;
+}
+/** a green wave: every member's offset from the one before it plus the driving time between them at the group's speed (the first's kept); and those distances */
+export function greenWave(sk: Sketch, g: SketchSignalGroup): { offsets: number[]; gaps: (number | null)[] } {
+  const v = g.speed / 3.6, offsets: number[] = [], gaps: (number | null)[] = [];
+  const J = (id: string) => sk.junctions.find(j => j.id === id);
+  g.members.forEach((m, i) => {
+    if (i === 0) { offsets.push(m.offset); gaps.push(null); return; }
+    const a = J(g.members[i - 1].junction), b = J(m.junction);
+    const d = a && b ? junctionDistance(sk, a, b) ?? junctionDistance(sk, b, a) : null;
+    gaps.push(d);
+    offsets.push(Math.round((((offsets[i - 1] + (d === null ? 0 : d / v)) % g.cycle) + g.cycle) % g.cycle));
+  });
+  return { offsets, gaps };
+}
+export function applyGreenWave(sk: Sketch, gid: string): Sketch {
+  const g = (sk.signalGroups ?? []).find(x => x.id === gid);
+  if (!g) return sk;
+  const { offsets } = greenWave(sk, g);
+  return updateGroupMembers(sk, gid, g.members.map((m, i) => ({ ...m, offset: offsets[i] })));
+}
+const updateGroupMembers = (sk: Sketch, gid: string, members: SignalGroupMember[]) => withGroups(sk, (sk.signalGroups ?? []).map(g => (g.id === gid ? { ...g, members } : g)));
 export type SignalState = "green" | "amber" | "red";
 
 /** the connectors leaving a junction's ways in at their ends (what its lights hold), by way */
@@ -898,6 +1051,22 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
     }
     raw = groups.map((g, i) => ({ name: `Phase ${i + 1}`, ways: g.map(key), lanes: g.flatMap(k => ways[k].lanes), conns: g.flatMap(k => conns[k]), green: L.green, minGreen }));
   }
+  // (in a signal group: the group's cycle, its coordinated phase first with its share of the green, the others sharing the rest; fixed, from its offset)
+  const g = groupOf(sk, j.id), m = g?.members.find(x => x.junction === j.id);
+  if (g && m && raw.length >= 2) {
+    const n = raw.length, lost = n * (L.amber + L.allRed), c = Math.min(Math.max(0, m.phase), n - 1);
+    const avail = Math.max(g.cycle - lost, n * 5), mine = Math.max(5, avail * m.share), rest = Math.max(5, (avail - mine) / (n - 1));
+    const r1 = (x: number) => Math.round(x * 10) / 10;
+    raw = raw.map((p, i) => ({ ...p, green: r1(i === c ? mine : rest), minGreen: r1(i === c ? mine : rest) }));
+    let t = 0;
+    const starts = new Array<number>(n);
+    for (let k = 0; k < n; k++) { const i = (c + k) % n; starts[i] = t; t += raw[i].green + L.amber + L.allRed; }
+    const phases = raw.map((p, i) => ({ ...p, start: starts[i] }));
+    return {
+      junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: false, custom: !!L.phases?.length, phases, controlled,
+      coord: { group: g.id, groupName: g.name, phase: c, offset: m.offset, ...(t > g.cycle + 0.05 ? { stretched: t } : {}) },
+    };
+  }
   let t = 0;
   const phases = raw.map(p => { const out = { ...p, start: t }; t += p.green + L.amber + L.allRed; return out; });
   return { junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: L.actuated ?? DEFAULT_LIGHTS.actuated, custom: !!L.phases?.length, phases, controlled };
@@ -906,7 +1075,7 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
 /** the light a lane has at time `t` in the fixed cycle (green if any of its connectors is), or null if the lights don't hold it */
 export function signalAt(plan: SignalPlan, lane: string, t: number): SignalState | null {
   if (!plan.phases.some(p => p.lanes.includes(lane))) return null;
-  const into = ((t % plan.cycle) + plan.cycle) % plan.cycle;
+  const t0 = t - (plan.coord?.offset ?? 0), into = ((t0 % plan.cycle) + plan.cycle) % plan.cycle;
   const p = plan.phases.find(x => x.lanes.includes(lane) && into >= x.start && into < x.start + x.green + plan.amber);
   return !p ? "red" : into < p.start + p.green ? "green" : "amber";
 }
@@ -926,9 +1095,21 @@ export class SignalController {
     // (the same lights edited: carrying on where they were)
     if (prev && prev.plan.junction === plan.junction && prev.phase < plan.phases.length) {
       this.phase = prev.phase; this.stage = prev.stage; this.into = prev.into; this.history = prev.history;
-    }
+    } else if (plan.coord) this.reset();
   }
-  reset() { this.phase = 0; this.stage = "green"; this.into = 0; this.history = [{ t: 0, phase: 0, stage: "green" }]; }
+  reset() {
+    const c = this.plan.coord ? this.clock(0) : { phase: 0, stage: "green" as const, into: 0 };
+    this.phase = c.phase; this.stage = c.stage; this.into = c.into; this.history = [{ t: 0, phase: c.phase, stage: c.stage }];
+  }
+  /** in a signal group: the phase on at time `t` by the group's clock, its stage and how long it has been on */
+  private clock(t: number): { phase: number; stage: "green" | "amber" | "allRed"; into: number } {
+    const P = this.plan, x = ((((t - P.coord!.offset) % P.cycle) + P.cycle) % P.cycle);
+    for (let i = 0; i < P.phases.length; i++) {
+      const p = P.phases[i], a = x - p.start;
+      if (a >= 0 && a < p.green + P.amber + P.allRed) return { phase: i, stage: a < p.green ? "green" : a < p.green + P.amber ? "amber" : "allRed", into: a < p.green ? a : a < p.green + P.amber ? a - p.green : a - p.green - P.amber };
+    }
+    return { phase: P.coord!.phase, stage: "green", into: 0 };
+  }
   private go(t: number, phase: number, stage: "green" | "amber" | "allRed") {
     this.phase = phase; this.stage = stage; this.into = 0;
     this.history.push({ t, phase, stage });
@@ -938,6 +1119,13 @@ export class SignalController {
   step(t: number, dt: number, demand: (conns: string[]) => boolean) {
     const P = this.plan, n = P.phases.length;
     if (!n) return;
+    // (in a signal group: by the group's clock)
+    if (P.coord) {
+      const c = this.clock(t);
+      if (c.phase !== this.phase || c.stage !== this.stage) this.go(t, c.phase, c.stage);
+      this.into = c.into;
+      return;
+    }
     this.into += dt;
     const ph = P.phases[this.phase];
     if (this.stage === "green") {
@@ -1525,7 +1713,7 @@ function holesOf(sk: Sketch, c: JunctionContents, roadLanes: SketchLane[]): Pt[]
  * has a lane each way, a double solid line where it has more). Found where a lane has another of its
  * road beside it on its left, edge to edge (within half a metre).
  */
-export interface Marking { pts: Pt[]; kind: "lane" | "center"; dashed: boolean }
+export interface Marking { pts: Pt[]; kind: "lane" | "center"; dashed: boolean; /** the level of the lane it runs beside (drawn with it) */ level?: number }
 const markings = new WeakMap<Sketch, Marking[]>();
 /** a polyline moved `o` metres to its left (each point along the normal there) */
 function offsetPolyline(pts: Pt[], o: number): Pt[] {
@@ -1551,9 +1739,10 @@ export function roadMarkings(sk: Sketch): Marking[] {
       let run: Pt[] = [], runWith: { b: SketchLane; same: boolean } | null = null;
       const flush = () => {
         if (runWith && run.length >= 2) {
-          if (runWith.same) out.push({ pts: run, kind: "lane", dashed: true });
-          else if (lanes.length <= 2) out.push({ pts: run, kind: "center", dashed: true });
-          else for (const o of [-0.15, 0.15]) out.push({ pts: offsetPolyline(run, o), kind: "center", dashed: false });
+          const lv = a.level ? { level: a.level } : {};
+          if (runWith.same) out.push({ pts: run, kind: "lane", dashed: true, ...lv });
+          else if (lanes.length <= 2) out.push({ pts: run, kind: "center", dashed: true, ...lv });
+          else for (const o of [-0.15, 0.15]) out.push({ pts: offsetPolyline(run, o), kind: "center", dashed: false, ...lv });
         }
         run = []; runWith = null;
       };
@@ -1889,7 +2078,8 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     }
     if (!str(l?.id) || !shape || lanes.some(x => x.id === l.id)) continue;
     lanes.push({ id: l.id, shape, width: num(l.width) ? Math.min(8, Math.max(2, l.width)) : LANE_WIDTH, ...(l.control === "stop" || l.control === "yield" ? { control: l.control } : {}),
-      ...(num(l.inRate) && l.inRate >= 0 ? { inRate: Math.min(5000, l.inRate) } : {}), ...(num(l.outWeight) && l.outWeight >= 0 ? { outWeight: Math.min(100, l.outWeight) } : {}) });
+      ...(num(l.inRate) && l.inRate >= 0 ? { inRate: Math.min(5000, l.inRate) } : {}), ...(num(l.outWeight) && l.outWeight >= 0 ? { outWeight: Math.min(100, l.outWeight) } : {}),
+      ...(num(l.level) && Math.round(l.level) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(l.level))) } : {}) });
   }
   const ids = new Set(lanes.map(l => l.id));
   // (a place a hair before a lane's start, from rounding, is its start)
@@ -1915,12 +2105,13 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const outline = pts(j?.outline, 3);
     if (!str(j?.id) || !outline || junctions.some(x => x.id === j.id)) continue;
     const curved = Array.isArray(j.curved) && j.curved.length === outline.length ? { curved: (j.curved as unknown[]).map(Boolean) } : {};
-    junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...lightsOf(j.lights) });
+    junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...lightsOf(j.lights), ...splitsOf(j.splits) });
   }
   const g = o.geo as Sketch["geo"];
   const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;
   const t = o.traffic as Sketch["traffic"];
-  const traffic = t && num(t.rate) && num(t.speed) ? { rate: Math.min(3000, Math.max(0, t.rate)), speed: Math.min(130, Math.max(10, t.speed)) } : undefined;
+  const tune = t ? sanitizeTuning(t.tune) : null, seed = t && num(t.seed) ? Math.round(Math.min(1e9, Math.max(1, t.seed))) : undefined;
+  const traffic = t && num(t.rate) && num(t.speed) ? { rate: Math.min(3000, Math.max(0, t.rate)), speed: Math.min(130, Math.max(10, t.speed)), ...(seed !== undefined ? { seed } : {}), ...(tune ? { tune } : {}) } : undefined;
   const end = (e: unknown): RoadEnd | null => { const x = e as RoadEnd; return x && roads.some(r => r.id === x.road) && (x.end === "start" || x.end === "end") ? { road: x.road, end: x.end } : null; };
   const links: SketchLink[] = [];
   for (const k of Array.isArray(o.links) ? o.links : []) {
@@ -1935,6 +2126,163 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     crossings.push({ id: x.id, a: ab[0], b: ab[1], width: num(x.width) ? Math.min(12, Math.max(1.5, x.width)) : CROSSING_WIDTH, peds: num(x.peds) ? Math.round(Math.min(5000, Math.max(0, x.peds))) : CROSSING_PEDS });
   }
   // (nothing drawn and nowhere placed: no sketch)
-  if (!lanes.length && !junctions.length && !geo && !crossings.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}) };
+  const journeys: SketchJourney[] = [];
+  for (const j of Array.isArray(o.journeys) ? o.journeys : []) {
+    if (!str(j?.id) || !str(j?.from) || !str(j?.to) || !num(j?.rate) || journeys.some(y => y.id === j.id)) continue;
+    const trucks = num(j.trucks) ? Math.round(Math.min(100, Math.max(0, j.trucks))) : 0;
+    journeys.push({ id: j.id, from: j.from, to: j.to, rate: Math.round(Math.min(5000, Math.max(0, j.rate))), ...(trucks ? { trucks } : {}) });
+  }
+  const signalGroups: SketchSignalGroup[] = [], grouped = new Set<string>();
+  for (const g of Array.isArray(o.signalGroups) ? o.signalGroups : []) {
+    if (!str(g?.id) || signalGroups.some(y => y.id === g.id) || !Array.isArray(g.members)) continue;
+    const cycle = num(g.cycle) ? Math.round(Math.min(240, Math.max(20, g.cycle))) : GROUP_CYCLE;
+    const members: SignalGroupMember[] = [];
+    for (const m of g.members as unknown[]) {
+      const x = m as SignalGroupMember;
+      if (!str(x?.junction) || grouped.has(x.junction) || !junctions.some(j => j.id === x.junction)) continue;
+      grouped.add(x.junction);
+      members.push({ junction: x.junction, offset: num(x.offset) ? Math.min(cycle, Math.max(0, x.offset)) : 0, phase: num(x.phase) ? Math.max(0, Math.min(MAX_PHASES - 1, Math.round(x.phase))) : 0, share: num(x.share) ? Math.min(0.85, Math.max(0.2, x.share)) : GROUP_SHARE });
+    }
+    if (members.length) signalGroups.push({ id: g.id, name: typeof g.name === "string" && g.name.trim() ? g.name.trim().slice(0, 80) : g.id, cycle, speed: num(g.speed) ? Math.min(130, Math.max(10, g.speed)) : GROUP_SPEED, members });
+  }
+  // (the ideas sketched apart: a sketch of their own, without ideas of theirs)
+  const sc = o.scratch && typeof o.scratch === "object" ? sanitizeSketch({ ...(o.scratch as object), scratch: undefined }) : null;
+  const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length) ? sc : null;
+  if (!lanes.length && !junctions.length && !geo && !crossings.length && !scratch) return null;
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(scratch ? { scratch } : {}) };
 }
+
+// ---------------------------------------------------------------- elevation (as v1's)
+
+/** the levels a lane can be at: tunnels below the ground, bridges above it */
+export const LEVELS = { min: -3, max: 5 };
+/** metres of lane it takes to climb one level (as v1: 6 m in 100 m) */
+export const RAMP_PER_LEVEL = 100;
+export const laneLevel = (l: SketchLane | undefined) => l?.level ?? 0;
+
+/** the lanes' levels set (0: on the ground) */
+export function setLevel(sk: Sketch, ids: Iterable<string>, level: number): Sketch {
+  const want = new Set(ids), lv = Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(level)));
+  let changed = false;
+  const lanes = sk.lanes.map(l => {
+    if (!want.has(l.id) || laneLevel(l) === lv) return l;
+    changed = true;
+    const next = { ...l };
+    if (lv) next.level = lv; else delete next.level;
+    return next;
+  });
+  return changed ? { ...sk, lanes } : sk;
+}
+
+/**
+ * Each lane's levels: its own, and at its start and its end the lowest of its own and those of the lanes its
+ * connectors join there (as v1's junctions: at the lowest level of the roads meeting there). Kept per sketch.
+ */
+const levelsKept = new WeakMap<Sketch, Map<string, { L: number; a: number; b: number; len: number }>>();
+function levelsOf(sk: Sketch) {
+  let m = levelsKept.get(sk);
+  if (m) return m;
+  m = new Map();
+  for (const l of sk.lanes) { const L = laneLevel(l); m.set(l.id, { L, a: L, b: L, len: laneLength(l.shape) }); }
+  if (hasLevels(sk)) for (const c of sk.connectors) {
+    const f = m.get(c.from.lane), t = m.get(c.to.lane);
+    if (!f || !t) continue;
+    // (a connector leaving near a lane's end, or joining near the next one's start: they meet there)
+    if (f.len - c.from.s < 1) f.b = Math.min(f.b, t.L);
+    if (c.to.s < 1) t.a = Math.min(t.a, f.L);
+  }
+  levelsKept.set(sk, m);
+  return m;
+}
+
+/**
+ * The elevation (in levels) `s` metres along a lane: from the level at each end it climbs (smoothly, over at most
+ * 45% of the lane each side, a level per RAMP_PER_LEVEL metres) to its own level and stays there, so a bridge joining
+ * ground lanes rises out of them and comes back down (as v1's linkZ).
+ */
+export function zAt(sk: Sketch, lane: string, s: number): number {
+  const x = levelsOf(sk).get(lane);
+  if (!x) return 0;
+  const { L, a, b, len } = x;
+  if (a === L && b === L) return L;
+  const d = Math.min(len, Math.max(0, s)), sm = (u: number) => u * u * (3 - 2 * u);
+  const ra = Math.min(0.45 * len, RAMP_PER_LEVEL * Math.abs(L - a)), rb = Math.min(0.45 * len, RAMP_PER_LEVEL * Math.abs(L - b));
+  if (ra > 0 && d < ra) return a + (L - a) * sm(d / ra);
+  if (rb > 0 && d > len - rb) return b + (L - b) * sm((len - d) / rb);
+  return L;
+}
+/** a connector's level: where it leaves and where it joins, the lower (as v1's junction paths, at the junction's level) */
+export const connectorLevel = (sk: Sketch, c: SketchConnector) => Math.min(zAt(sk, c.from.lane, c.from.s), zAt(sk, c.to.lane, c.to.s));
+/** a junction's level: the lowest of what is on it (its lanes and connectors), as v1's; 0 with nothing on it */
+export function junctionLevel(sk: Sketch, c: JunctionContents): number {
+  if (!hasLevels(sk)) return 0;
+  let lv = Infinity;
+  for (const id of c.lanes) lv = Math.min(lv, laneLevel(laneById(sk, id)));
+  for (const id of c.connectors) { const x = connectorById(sk, id); if (x) lv = Math.min(lv, Math.round(connectorLevel(sk, x))); }
+  return Number.isFinite(lv) ? lv : 0;
+}
+/** is any lane off the ground? (most sketches: none, and nothing to work out) */
+const leveled = new WeakMap<SketchLane[], boolean>();
+export function hasLevels(sk: Sketch) {
+  let x = leveled.get(sk.lanes);
+  if (x === undefined) leveled.set(sk.lanes, (x = sk.lanes.some(l => l.level)));
+  return x;
+}
+/** a connector by its id (an index kept per list of connectors) */
+const connIndexKept = new WeakMap<SketchConnector[], Map<string, SketchConnector>>();
+export function connectorById(sk: Sketch, id: string) {
+  let m = connIndexKept.get(sk.connectors);
+  if (!m) connIndexKept.set(sk.connectors, (m = new Map(sk.connectors.map(c => [c.id, c]))));
+  return m.get(id);
+}
+
+// ---------------------------------------------------------------- turning shares (as v1's)
+
+/** a way in or a road out, as turning shares name them: its road's id, or `lane:<id>` for a lane in no road */
+export const wayKey = (sk: Sketch, lane: string) => roadOf(sk, lane)?.id ?? `lane:${lane}`;
+/** turning shares as saved, kept only if they make sense (non-negative numbers, some way in) */
+function splitsOf(raw: unknown): { splits?: JunctionSplit[] } {
+  if (!Array.isArray(raw)) return {};
+  const out: JunctionSplit[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== "object" || typeof (x as JunctionSplit).from !== "string" || !(x as JunctionSplit).shares || typeof (x as JunctionSplit).shares !== "object") continue;
+    const shares: Record<string, number> = {};
+    for (const [k, v] of Object.entries((x as JunctionSplit).shares)) if (typeof v === "number" && Number.isFinite(v) && v >= 0) shares[k.slice(0, 80)] = Math.min(1000, v);
+    if (Object.keys(shares).length) out.push({ from: (x as JunctionSplit).from.slice(0, 80), shares });
+  }
+  return out.length ? { splits: out } : {};
+}
+/** a road out of a junction from a way in: its key and name, and which way it turns (from the way in's lanes' direction at their end) */
+export interface SplitExit { key: string; name: string; turn: "L" | "S" | "R" | "U" }
+/** the roads out a way in leads to through a junction (by its connectors from the way in's lanes) */
+export function splitExits(sk: Sketch, c: JunctionContents, a: Approach): SplitExit[] {
+  const lanes = new Set(a.lanes), out = new Map<string, SplitExit>();
+  for (const id of c.connectors) {
+    const cn = connectorById(sk, id);
+    if (!cn || !lanes.has(cn.from.lane)) continue;
+    const to = laneById(sk, cn.to.lane), from = laneById(sk, cn.from.lane);
+    if (!to || !from) continue;
+    const key = wayKey(sk, to.id);
+    if (out.has(key)) continue;
+    // (the turn: the angle between going into the junction and coming out of it)
+    const d0 = pointAt(from.shape, cn.from.s).d, d1 = pointAt(to.shape, cn.to.s).d, ang = Math.atan2(d0.x * d1.y - d0.y * d1.x, d0.x * d1.x + d0.y * d1.y);
+    const turn = Math.abs(ang) < 0.5 ? "S" : Math.abs(ang) > 2.6 ? "U" : ang > 0 ? "R" : "L";
+    out.set(key, { key, name: roadOf(sk, to.id)?.name ?? `Lane ${to.id}`, turn });
+  }
+  return [...out.values()];
+}
+/** a way in's turning shares set (null: taken away, each car its own way) */
+export function setSplit(sk: Sketch, junction: string, from: string, shares: Record<string, number> | null): Sketch {
+  return {
+    ...sk,
+    junctions: sk.junctions.map(j => {
+      if (j.id !== junction) return j;
+      const rest = (j.splits ?? []).filter(x => x.from !== from), splits = shares ? [...rest, { from, shares }] : rest;
+      const next = { ...j };
+      if (splits.length) next.splits = splits; else delete next.splits;
+      return next;
+    }),
+  };
+}
+/** the way in a lane is part of, as turning shares name it */
+export const approachKey = (a: Approach) => a.road ?? `lane:${a.lanes[0]}`;

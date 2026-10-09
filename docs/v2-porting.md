@@ -23,7 +23,7 @@ noted), **todo**, or **n/a** (not needed in V2).
 | Converting a V1 plan to V2 | `lib/v1-to-v2.ts`, `convertPlanToV2` (server action), plan card menu | done: lanes along V1's centrelines, roads, every lane-to-lane path as a connector, automatic junctions, signs (and all-way stops), lights with their phases (green per connector) and timings, roundabouts as true circles, zebra crossings, place and reference image. Not converted: bus stops / lines, buildings, parking, demand, junction shapes drawn by hand (automatic surfaces instead) |
 | Sample district template | `server/actions.ts` (`sampleTown`) | todo (V2 starts blank) |
 | Walkthrough | `walkthrough.tsx`, `lib/walkthrough.ts` | todo |
-| Search palette | `search-palette.tsx` | todo (the structure tree covers part of it) |
+| Search palette | `search-palette.tsx` | done (Cmd/Ctrl+K: roads, junctions, lanes, connectors, links, crossings, cars; `components/v2/sketch-search.tsx`) |
 | Assistant chat | `assistant-chat.tsx`, `server/assistant.ts` | todo |
 | Settings menu, layers | `workspace.tsx` (`SettingsMenu`, `LayerPicker`) | partial: V2 has its own layers menu; no settings menu yet |
 
@@ -38,11 +38,11 @@ noted), **todo**, or **n/a** (not needed in V2).
 | Junction templates and library | `junction-library.tsx`, `server/data/templates.ts` | todo |
 | Splitter islands, medians | `splitter-island.tsx`, `state/islands.ts` | todo |
 | Junction groups | `state/groups.ts`, `group-inspector.tsx` | todo |
-| Roundabouts | `state/roundabouts.ts`, `state/rings.ts`, `ring-inspector.tsx` | partial: rings drawn and reshaped by hand; to do: a roundabout tool (ring + entries/exits in one go) |
+| Roundabouts | `state/roundabouts.ts`, `state/rings.ts`, `ring-inspector.tsx` | done: rings drawn and reshaped by hand, and a Roundabout tool (U) that stamps a ring joined to the lanes round it, yields and a surface, leaving only ordinary pieces (`lib/roundabout.ts`) |
 | Stop / yield signs, all-way stop | `engine/sim/junctions.ts`, `inspector.tsx` | done |
 | Traffic lights: fixed / actuated, min green, phases worked out or by hand | `engine/signals.ts`, `engine/sim/signals.ts`, `phase-editor.tsx` | done (green per connector) |
-| Signal groups, green waves | `signal-groups.tsx`, `engine/signals.ts` (`greenWaveOffsets`) | todo |
-| Signal optimizer | `engine/optimize.ts`, `optimize-dialog.tsx` | todo |
+| Signal groups, green waves | `signal-groups.tsx`, `engine/signals.ts` (`greenWaveOffsets`) | done: groups on one fixed cycle, a coordinated phase with its share of green and offset, corridor order, Green wave from the distance by road, a timeline per group (`components/v2/signal-groups-v2.tsx`) |
+| Signal optimizer | `engine/optimize.ts`, `optimize-dialog.tsx` | done: greens, actuated or fixed, the phases' arrangement, simulated round the chosen junctions on several seeds, checked on fresh seeds (`lib/sketch-optimize.ts`, `components/v2/optimize-dialog-v2.tsx`); not ported: control type and lane arrows |
 | Reversible lanes | `engine/sim/reversible.ts`, `reversible-lane.tsx` | todo |
 | Bus stops and lines | `lines-panel.tsx`, engine `stops` / `lines` | todo |
 | Pedestrians, zebra crossings | `engine/crossings.ts`, `render/pedestrians.ts`, `crossing-parking.tsx` | done: X tool, pedestrians in the sim and the replay; converted from V1 (drawn crossings, and one across each road of a junction with pedestrians) |
@@ -57,14 +57,17 @@ noted), **todo**, or **n/a** (not needed in V2).
 |---|---|---|
 | Car following, priority, crossings, merges | `engine/sim/*` | done (lane sketch sim) |
 | Lane changes | `engine/sim/*` | done |
-| Demand: buildings, zones, OD flows | `engine/buildings.ts`, `engine/sim/demand.ts`, `zones.tsx`, `flows.tsx` | partial: vehicles per hour per way in, a share of the trips per way out (Demand panel, "Ways in and out" layer); to do: OD flows between given ways, buildings / zones |
-| Routing, route tracer | `engine/route.ts`, `engine/sim/routing.ts`, `route-tracer.tsx` | partial: each car heads for an exit drawn by the shares and takes the shortest way (`RouteTable`; lane changes count 25 m); to do: route tracer, routes by time (congestion) |
+| Demand: buildings, zones, OD flows | `engine/buildings.ts`, `engine/sim/demand.ts`, `zones.tsx`, `flows.tsx` | partial: vehicles per hour per way in, a share of the trips per way out (Demand panel, "Ways in and out" layer); journeys between a given way in and way out (V1's transit flows, with their results); not ported: buildings / zones |
+| Routing, route tracer | `engine/route.ts`, `engine/sim/routing.ts`, `route-tracer.tsx` | partial: each car heads for an exit drawn by the shares and takes the shortest way (`RouteTable`; lane changes count 25 m); rerouting when kept waiting where it turns off (as V1's, after a time in Simulation settings); to do: route tracer, routes by time (congestion) |
 | Turning proportions per approach | `engine/types.ts` (`splitF` / `splitB`) | todo |
-| Simulation in a web worker | `state/sim.worker.ts`, `sim-controller.ts` | todo (V2 runs on the main thread) |
+| Simulation in a web worker | `state/sim.worker.ts`, `sim-controller.ts` | done (`state/sketch-sim.worker.ts`, `sketch-sim-client.ts`) |
 | Speed, run / pause, restart | `workspace.tsx` | done (in the editor's header) |
-| Replay | `engine/sim/recorder.ts`, `replay-bar.tsx` | done (10 min) |
+| Replay | `engine/sim/recorder.ts`, `replay-bar.tsx` | done (10 min; V1's replay bar) |
 | Stats, console, perf, data tables, hover info | `problem-console.tsx`, `perf-panel.tsx`, `dataview.tsx`, `hover-info.tsx` | partial: traffic panel and car inspector; to do: console, data tables |
-| Fuel / emissions | `engine/fuel.ts`, `fuel.tsx` | todo |
+| Fuel / emissions | `engine/fuel.ts`, `fuel.tsx` | done: V1's fuel model for the whole sketch, with CO₂ (`components/v2/fuel-panel.tsx`); to do: per junction |
+| Simulation settings, seed | `engine/params.ts`, `sim-settings.tsx` | done: drivers, trucks, junctions, pedestrians, breakdowns, fuel (`lib/sketch-tuning.ts`, `components/v2/sim-settings-v2.tsx`); a seed, Restart replays the run |
+| Trucks | `engine/params.ts` (Trucks), `engine/sim/*` | done: a share of the traffic, 12 m, cab and trailer, own acceleration / gap / speed |
+| Breakdowns and towing | `engine/sim/index.ts`, `motion.ts` | done: at random or by hand, hazard lights, others go round, towed after a time or by hand; not ported: towing every vehicle stuck a while (V2 breaks deadlocks instead) |
 
 ## Map and views
 
@@ -78,8 +81,8 @@ noted), **todo**, or **n/a** (not needed in V2).
 ## Suggested order
 
 1. ~~Satellite / reference image under the sketch, with real scale~~ (done).
-2. ~~Demand (where cars come from and go to) and routing over the network~~ (done: rates, shares, shortest routes; OD flows next).
-3. Signal groups and green waves, then the optimizer.
+2. ~~Demand (where cars come from and go to) and routing over the network~~ (done: rates, shares, shortest routes, journeys, rerouting; trucks, fuel, breakdowns).
+3. ~~Signal groups and green waves, then the optimizer~~ (done).
 4. Buses, pedestrians and crossings, parking.
-5. Per-object live merge; simulation in a worker for large plans.
+5. Per-object live merge; ~~simulation in a worker for large plans~~ (done).
 6. 3D view, assistant, OSM import, data tables.

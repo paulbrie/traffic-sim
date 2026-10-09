@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, Undo2, Waypoints, X } from "lucide-react";
+import { Car, CircleDashed, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,26 +14,31 @@ import { unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, addLane, contentsOf, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
-  roadOf, rotation, samples, setControl, junctionHoles, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
+  roadOf, rotation, samples, setControl, junctionHoles, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
-  type Band, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
+  type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
 import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
 import { SketchSimClient } from "@/state/sketch-sim-client";
-import { laneSketch$, ui, underlay$ } from "@/state/store";
+import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
-import { editSketch, recordSketch, redoSketch, setSketchClip, setSketchSim, sketchClip, sketchSim, undoSketch } from "@/state/lane-sketch";
+import { setSketchClip, sketchClip, useSketchStore } from "@/state/lane-sketch";
 import { readPalette, speedColor } from "@/render/palette";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
-import { NumberField } from "./fields";
+import { NumberField, Stepper } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
+import { FuelPanel, fmtFuel } from "@/components/v2/fuel-panel";
+import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
+import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
+import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/sketch-replay-bar";
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
+import { stampRoundabout } from "@/lib/roundabout";
 
-type Tool = "select" | "lane" | "arc" | "circle" | "connector" | "junction" | "slice" | "crossing";
+type Tool = "select" | "lane" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing";
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
 const LAYERS = SKETCH_LAYERS, ALL_LAYERS = ALL_SKETCH_LAYERS;
@@ -42,6 +47,7 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
   { id: "lane", key: "L", label: "Lane", icon: <Spline />, hint: "Click the lane's points in the direction of travel · double-click or Enter to finish · Backspace takes the last point back · Esc cancels" },
   { id: "arc", key: "A", label: "Arc", icon: <Waypoints />, hint: "Click the centre, then where the lane starts, then move round the way it goes and click where it ends" },
   { id: "circle", key: "O", label: "Ring", icon: <Circle />, hint: "Click the centre, then the radius: a full ring of lane, anticlockwise (Shift: clockwise)" },
+  { id: "roundabout", key: "U", label: "Roundabout", icon: <CircleDashed />, hint: "Click the centre, then the radius: a ring joined to the lanes ending and starting within 30 m outside it (dashed), yield on the ways in, a surface over it; what went straight across taken out. Then all ordinary pieces, to edit as any other; one undo takes it back" },
   { id: "connector", key: "C", label: "Connector", icon: <Milestone />, hint: "Click the lane traffic leaves, then click bend points anywhere (Alt: over a lane too), then the lane it joins · Backspace takes the last bend back · Esc cancels" },
   { id: "slice", key: "K", label: "Slice", icon: <Scissors />, hint: "Click a road to cut it across there into two roads (Shift: keep them linked, so the road carries on; Alt: only the lane under the pointer) · its connectors stay with the piece they are on" },
   { id: "crossing", key: "X", label: "Zebra crossing", icon: <Footprints />, hint: "Click one kerb, then the other: the zebra runs between them (4 m wide, 300 pedestrians an hour; set them in its panel) · Esc cancels" },
@@ -62,6 +68,7 @@ type Draft =
   | { kind: "lane"; pts: Pt[] }
   | { kind: "arc"; c: Pt; start: { r: number; a0: number; sweep: number; last: number } | null }
   | { kind: "circle"; c: Pt }
+  | { kind: "roundabout"; c: Pt }
   | { kind: "connector"; from: LaneAt; via: Pt[] }
   | { kind: "junction"; pts: Pt[] }
   | { kind: "crossing"; a: Pt };
@@ -139,7 +146,10 @@ function laneUnder(sk: Sketch, p: Pt, px: number) {
  */
 export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const { panel, style, placed, start, reset } = useFloatingBox("laneSketch:box", 480, 320);
-  const [sketch] = useSubject(laneSketch$);
+  // (what it works on: the plan's sketch, or the ideas sketched apart; see SketchStore)
+  const store = useSketchStore();
+  const { edit: editSketch, undo: undoSketch, redo: redoSketch, record: recordSketch } = store, sketchSim = store.sim;
+  const [sketch] = useSubject(store.sketch$);
   const [tool, setTool] = useState<Tool>("lane");
   const [rawSel, setSel] = useState<Sel>(NO_SEL);
   /** a line lane's point picked (to curve or delete) */
@@ -177,7 +187,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [simSpeed, setSimSpeed] = useState(1);
   // (saved with the sketch: changing them isn't an undo step)
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
-  const setParams = (p: SimParams) => laneSketch$.next({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed } });
+  const setParams = (p: SimParams) => store.show({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}) } });
   const [readOnly] = useDeepSubject(ui, "readOnly");
   // the background (V2 plans): how the imagery shows, the image, a scale being set by two clicks
   const [sat, setSatState] = useState<SatOptions>(loadSatOptions);
@@ -223,12 +233,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const d = nearestOn({ kind: "line", pts }, p).d;
       if (d <= 6 * px && d < bd) { bd = d; best = { connector: c.id }; }
     }
-    // (connectors are over the lanes: one under the pointer is picked before the lane it is on)
-    if (best) return best;
+    // (connectors are over the lanes: one under the pointer is picked before the lane it is on; but a lane a level
+    // above, a bridge, is over what passes beneath it: the highest under the pointer is picked)
+    const leveled = hasLevels(sk), cLevel = best && "connector" in best ? (leveled ? connectorLevel(sk, sk.connectors.find(x => x.id === (best as { connector: string }).connector)!) : 0) : -Infinity;
+    if (best && !leveled) return best;
+    let lane: string | null = null, ld = Infinity, lLevel = -Infinity;
     for (const id of near.lanes) {
-      const l = laneById(sk, id)!, d = nearestOn(l.shape, p).d - l.width / 2;
-      if (d <= 4 * px && d < bd) { bd = d; best = { lane: l.id }; }
+      const l = laneById(sk, id)!, q = nearestOn(l.shape, p), d = q.d - l.width / 2, lv = leveled ? zAt(sk, id, q.s) : 0;
+      if (d <= 4 * px && (lv > lLevel + 0.25 || (Math.abs(lv - lLevel) <= 0.25 && d < ld))) { ld = d; lane = l.id; lLevel = lv; }
     }
+    if (lane && (!best || lLevel > cLevel + 0.25)) return { lane };
     if (best) return best;
     // (a link's surface, between the road ends it joins)
     for (const k of sk.links ?? []) { const g = linkGeometry(sk, k); if (g && insidePolygon(p, g.outline)) return { link: k.id }; }
@@ -402,7 +416,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replayPlaying, simSpeed]);
   const play = () => {
-    if (!sim.current) { sim.current = new SketchSimClient(live.current.sketch, params, onSimFrame); setSketchSim(sim.current); }
+    if (!sim.current) { sim.current = new SketchSimClient(live.current.sketch, params, onSimFrame); store.setSim(sim.current); }
     // (running carries on from now: out of the replay)
     if (live.current.replayT !== null) goLive();
     setRunning(r => !r);
@@ -554,12 +568,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
    */
   const glide = useRef(0);
   const centerOn = (piece: Piece) => centerOnPts(piecePoints(live.current.sketch, piece));
-  /** …or round some points */
-  const centerOnPts = (pts: Pt[]) => {
+  /** …or round some points (`close`: zoomed in to them too, not only out) */
+  const centerOnPts = (pts: Pt[], close = false) => {
     const c = canvas.current, b = boundsOfPts(pts);
     if (!c || !b) return;
     const from = { ...view.current }, fit = Math.min(c.clientWidth / (b.maxX - b.minX + 30), c.clientHeight / (b.maxY - b.minY + 30));
-    const to = { cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, scale: Math.max(0.5, Math.min(from.scale, fit)) };
+    const to = { cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, scale: Math.max(0.5, close ? fit : Math.min(from.scale, fit)) };
     cancelAnimationFrame(glide.current);
     const t0 = performance.now(), T = 350;
     const step = (now: number) => {
@@ -594,6 +608,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // Cmd/Ctrl+K from anywhere on the page, typing included: the search
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      // (the page's and a sketch window over it: the window's while it has the focus, the page's otherwise)
+      const mine = !!panel.current?.contains(document.activeElement), other = !mine && !!(document.activeElement as HTMLElement | null)?.closest?.('[aria-label="Lane sketch"]');
+      if (page ? other : !mine) return;
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault(); e.stopPropagation();
         const cars = sim.current?.poses().map(c => ({ id: c.id })) ?? [];
@@ -602,7 +619,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, []);
+  }, [page, panel]);
   /** a point added to a selected connector (a bend) or junction (a corner) where it was double-clicked; on a point, the point taken out */
   const editPoints = (p: Pt) => {
     const sk = live.current.sketch, s = live.current.sel, h = handleAt(p);
@@ -777,6 +794,24 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         if (r >= 1) addShape({ kind: "arc", c: d.c, r: Number(r.toFixed(2)), a0: Math.atan2(p.y - d.c.y, p.x - d.c.x), sweep: e.shiftKey ? 2 * Math.PI : -2 * Math.PI });
         break;
       }
+      case "roundabout": {
+        const p = snap(raw).p;
+        if (d?.kind !== "roundabout") { draft.current = { kind: "roundabout", c: p }; break; }
+        const r = dist(d.c, p);
+        draft.current = null;
+        if (r < 4) { toast("Too small for a roundabout", { description: "Its ring needs a radius of 4 m or more." }); break; }
+        let made: ReturnType<typeof stampRoundabout> | null = null;
+        editSketch(s => { made = stampRoundabout(s, d.c, r); return made.sketch; });
+        const m = made as ReturnType<typeof stampRoundabout> | null;
+        if (m) {
+          setSel(junctionSel(live.current.sketch, [m.junction]));
+          const R = m.report;
+          toast.success(`Roundabout: ${R.ins} way${R.ins === 1 ? "" : "s"} in, ${R.outs} out`, {
+            description: [R.removedConnectors ? `${R.removedConnectors} connectors straight across taken out` : "", R.removedJunctions ? "the junction it replaces taken out" : "", R.inside.length ? `lanes ending inside the ring left as they were: ${R.inside.join(", ")}` : "", "⌘Z takes it all back"].filter(Boolean).join(" · "),
+          });
+        }
+        break;
+      }
       case "arc": {
         const p = snap(raw).p;
         if (d?.kind !== "arc") { draft.current = { kind: "arc", c: p, start: null }; break; }
@@ -875,10 +910,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     drag.current = null;
     if (hand !== "") setHand(space.current ? "grab" : "");
     // (the drag's result made the plan's sketch: undo records it just below)
-    if (dragSk.current) { const sk = dragSk.current; dragSk.current = null; laneSketch$.next(sk); }
+    if (dragSk.current) { const sk = dragSk.current; dragSk.current = null; store.show(sk); }
     // a right click (not a right drag): the menu for the lane under it, or the lanes selected
     if (g?.kind === "pan" && g.right && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) { openMenu(e); return; }
-    if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || (g?.kind === "crossing" && laneSketch$.getValue() !== g.base)) recordSketch(g.base);
+    if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || (g?.kind === "crossing" && store.sketch$.getValue() !== g.base)) recordSketch(g.base);
     if (g?.kind === "box" && dist(g.a, g.b) * view.current.scale > 3) {
       const sk = live.current.sketch, x0 = Math.min(g.a.x, g.b.x), x1 = Math.max(g.a.x, g.b.x), y0 = Math.min(g.a.y, g.b.y), y1 = Math.max(g.a.y, g.b.y);
       const inside = (pts: Pt[] | null) => !!pts?.length && pts.every(p => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1);
@@ -979,7 +1014,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       {!page && <ResizeEdges start={start} />}
       <div className={cn("flex items-center gap-2 border-b px-3 py-1.5 select-none", !page && "cursor-move touch-none")} title={page ? undefined : "Drag to move · double-click to put back"}
         onPointerDown={e => { if (!page && !(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!page && !(e.target as HTMLElement).closest("button")) reset(); }}>
-        {!page && <span className="text-sm font-medium">Lane sketch <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "saved with the plan"}</span></span>}
+        {!page && <span className="text-sm font-medium">{store.kind === "scratch" ? "Sketch" : "Lane sketch"} <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : store.kind === "scratch" ? "ideas apart from the plan, saved with it" : "saved with the plan"}</span></span>}
         <ToggleGroup type="single" value={tool} onValueChange={v => v && changeTool(v as Tool)} aria-label="Drawing tool" className="ml-2">
           {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={tip(t)} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
         </ToggleGroup>
@@ -1012,7 +1047,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           </DropdownMenu>
           )}
           <Button size="icon-sm" variant="ghost" aria-label="Fit to view" title="Fit the sketch in view (F)" onClick={fit}><Maximize /></Button>
-          {!page && <Button size="icon-sm" variant="ghost" aria-label="Close" title="Close (the sketch stays with the plan)" onClick={() => { ui.getValue().sketch = false; }}><X /></Button>}
+          {!page && <Button size="icon-sm" variant="ghost" aria-label="Close" title={store.kind === "scratch" ? "Close (the ideas stay, saved with the plan)" : "Close (the sketch stays with the plan)"} onClick={() => { ui.getValue().sketch = false; }}><X /></Button>}
         </div>
       </div>
       <div className="flex min-h-0 flex-1">
@@ -1036,7 +1071,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                   <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => editSketch(s => straightenLanes(s, menu.lanes, 0.5))}>
                     Fewer points <span className="ml-auto text-[11px] text-muted-foreground">within 0.5 m</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => makeCurve(menu.lanes)}>
+                  <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => makeCurve(editSketch, menu.lanes)}>
                     Make a curve <span className="ml-auto text-[11px] text-muted-foreground">2 ends, 1 curved point</span>
                   </DropdownMenuItem>
                   <DropdownMenuItem disabled={readOnly || !menu.ring} onSelect={() => editSketch(s => circleLanes(s, menu.lanes))}>
@@ -1070,6 +1105,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
             <CarPanel info={carInfo} id={selCar} follow={follow} running={running} replayT={replayT}
+              onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
               onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
               onCopy={async () => {
                 const s = sim.current, info = s?.inspect(selCar);
@@ -1085,11 +1121,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           ) : (
             <SelectionPanel sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
               selPt={selPt} onCurvePoint={curvePoint} onDeletePoint={deletePoint}
-              onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} />
+              onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} now={stats?.t ?? null} />
           )}
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
-          <TrafficPanel sketch={sketch} params={params} setParams={setParams} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
-          <DemandPanel sketch={sketch} readOnly={readOnly} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
+          <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
+          {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
+          <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys}
+            onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
             <Button size="sm" variant="ghost" aria-label="Clear the sketch" title="Clear the sketch (undo brings it back)" disabled={empty}
@@ -1130,7 +1168,7 @@ function reasonOf(why: string | null, kmh: number): { text: string; car?: number
  * Lanes made one curve each, their two ends and a curved point (see curveLanes); a warning for one that
  * bends more than one curve can follow (straying more than half a lane's width from where it ran).
  */
-function makeCurve(ids: string[]) {
+function makeCurve(editSketch: (f: (s: Sketch) => Sketch) => void, ids: string[]) {
   let off: { lane: string; off: number }[] = [];
   editSketch(s => { const r = curveLanes(s, ids); off = r.off; return r.sketch; });
   if (!off.length) { toast("Nothing to make a curve of", { description: "Only open lanes of more than two points are (not rings or arcs, nor a road's lanes that follow its lead lane)." }); return; }
@@ -1140,11 +1178,13 @@ function makeCurve(ids: string[]) {
 
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
-  return { id: c.id, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, p: c.p, d: c.d, route: [] };
+  return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
-function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClose, onCopy }: {
+function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
   info: ReturnType<SketchSim["inspect"]>; id: number; follow: boolean; running: boolean; replayT: number | null;
+  /** its engine fails now; it is towed away now */
+  onBreakDown: () => void; onTow: () => void;
   onFollow: (on: boolean) => void; onPick: (id: number) => void; onClose: () => void; onCopy: () => void;
 }) {
   const row = (label: string, value: React.ReactNode) => (
@@ -1152,7 +1192,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
   );
   const reason = info ? reasonOf(info.why, info.kmh) : null;
   return (
-    <InspectorPanel id="car" title={`Car ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
+    <InspectorPanel id="car" title={`${info?.truck ? "Truck" : "Car"} ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
       actions={<button className="rounded p-0.5 hover:bg-muted" aria-label="Stop inspecting the car" title="Stop inspecting (Esc)" onClick={onClose}><X className="size-3.5" /></button>}>
       {!info ? <p className="text-xs text-muted-foreground">{replayT !== null ? "Not on the sketch at this moment." : "It has left the sketch."}</p> : replayT !== null ? (
         <>
@@ -1167,13 +1207,23 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
         </>
       ) : (
         <>
+          {info.truck && row("Truck", <span className="font-mono tabular">{info.length.toFixed(1)} m long</span>)}
           {row("On", <span className="font-mono">{edgeName(info.edge)} · {info.pos.toFixed(1)}{info.ring ? "" : ` of ${info.len.toFixed(1)}`} m</span>)}
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h <span className="text-muted-foreground">of {info.desiredKmh.toFixed(0)}</span></span>)}
           {info.changeTo && row("Changing to", <span className="font-mono">{edgeName(info.changeTo)}</span>)}
           {row("Heading for", info.dest ? `the exit at the end of lane ${info.dest}` : "anywhere (no exit it can reach)")}
           {row("Going", info.goal ? (info.goal.startsWith("end:") ? `off the end of ${edgeName(info.goal.slice(4))}` : edgeName(info.goal)) : info.leaves ? `off the end of ${edgeName(info.edge)}` : info.exit ? `${edgeName(info.exit)}, then ${edgeName(info.then ?? "")}` : info.then ? `onto ${edgeName(info.then)}` : "round the ring")}
           {row("Now", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          {Number.isFinite(info.fuel) && row("Fuel so far", <span className="font-mono tabular">{fmtFuel(info.fuel / 1000)}</span>)}
+          {info.journey && row("Journey", <span className="font-mono">{info.journey}</span>)}
+          {info.reroutes > 0 && row("Went another way", `${info.reroutes} time${info.reroutes === 1 ? "" : "s"}`)}
           {info.still >= 1 && row("Stopped for", <span className="font-mono tabular">{info.still.toFixed(0)} s</span>)}
+          {info.broken !== null && row("Broken down", <span className="font-mono tabular text-amber-700 dark:text-amber-400">{info.broken.toFixed(0)} s ago</span>)}
+          <div className="flex gap-1.5">
+            {info.broken === null
+              ? <Button size="sm" variant="outline" className="h-7 flex-1" onClick={onBreakDown} title="Its engine fails now: it stops where it is, hazard lights on, until towed away (Simulation settings: Breakdowns)"><TriangleAlert /> Break down</Button>
+              : <Button size="sm" variant="outline" className="h-7 flex-1" onClick={onTow} title="Tow it away now"><Truck /> Tow away</Button>}
+          </div>
           <div className="flex gap-1.5">
             <Button size="sm" variant={follow ? "secondary" : "outline"} className="h-7 flex-1" aria-pressed={follow} onClick={() => onFollow(!follow)} title="Keep the view on the car while the cars run">
               <Crosshair /> {follow ? "Following" : "Follow"}
@@ -1192,6 +1242,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
  * lane of it that ends there, and the whole junction at once (an all-way stop: the first there goes first).
  */
 function JunctionSigns({ sketch, contents }: { sketch: Sketch; contents: JunctionContents }) {
+  const { edit: editSketch } = useSketchStore();
   const ways = junctionApproaches(sketch, contents);
   if (!ways.length) return <p className="text-[11px] text-muted-foreground">Signs: no lane ends into it (signs go where a lane&apos;s connectors leave its end).</p>;
   const all = (control: LaneControl | null) => editSketch(sk => setSigns(sk, ways.flatMap(w => w.lanes), control));
@@ -1219,11 +1270,53 @@ function JunctionSigns({ sketch, contents }: { sketch: Sketch; contents: Junctio
 }
 
 /**
+ * Turning shares, as v1's: for each way into the junction leading to two roads or more, the share of its traffic
+ * going on to each (relative weights; off: each car its own way), and while the cars run, the share that has.
+ */
+function TurnSharesPanel({ sketch, junction, contents, now }: { sketch: Sketch; junction: SketchJunction; contents: JunctionContents; now: number | null }) {
+  const { edit: editSketch, sim } = useSketchStore();
+  const turns = now !== null ? sim()?.stats()?.turns : undefined;
+  const ways = junctionApproaches(sketch, contents).map(a => ({ a, key: approachKey(a), exits: splitExits(sketch, contents, a) })).filter(w => w.exits.length >= 2);
+  if (!ways.length) return null;
+  const turnName = { L: "Left", S: "Ahead", R: "Right", U: "U-turn" } as const;
+  return (
+    <div className="grid gap-2">
+      <span className="text-xs font-medium">Turning shares</span>
+      {ways.map(({ a, key, exits }) => {
+        const split = junction.splits?.find(x => x.from === key)?.shares ?? null;
+        const set = (shares: Record<string, number> | null) => editSketch(s => setSplit(s, junction.id, key, shares));
+        const counted = exits.map(x => turns?.[`${junction.id}|${key}|${x.key}`] ?? 0), total = counted.reduce((x, y) => x + y, 0);
+        return (
+          <div key={key} className="grid gap-1.5 rounded-md border p-2">
+            <label className="flex items-center justify-between gap-2 text-xs">
+              <span className="truncate">From {a.name}</span>
+              <Switch checked={!!split} aria-label={`Turning shares from ${a.name}`}
+                onCheckedChange={on => set(on ? Object.fromEntries(exits.map(x => [x.key, Math.round(100 / exits.length)])) : null)} />
+            </label>
+            {split ? exits.map((x, i) => (
+              <div key={x.key} className="grid grid-cols-[1fr_2.5rem_5rem] items-center gap-2">
+                <span className="truncate text-xs" title={x.name}>{turnName[x.turn]} · {x.name}</span>
+                <span className="text-right font-mono text-[10px] text-muted-foreground tabular-nums" title="The share that has gone this way in the running simulation">{total >= 5 ? `${Math.round((100 * counted[i]) / total)}%` : ""}</span>
+                <NumberField id={`sk-split-${junction.id}-${key}-${x.key}`} label={`Share turning ${turnName[x.turn]} to ${x.name}`} hideLabel value={split[x.key] ?? 0} min={0} max={1000} step={5} digits={0}
+                  onCommit={n => set({ ...split, [x.key]: Math.max(0, n) })} />
+              </div>
+            )) : <p className="text-[11px] text-muted-foreground">Each car its own way, to where it is going. Switch on to set the share going to each road; cars then re-plan from the road they draw.</p>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * A junction's traffic lights, as on the plan: their times, actuated or not, and the phases: worked
  * out (ways facing each other together, or one at a time) or set by hand, each with its own green and
  * the connectors that have green in it (hovering a phase lights them up on the sketch).
  */
-function JunctionLightsPanel({ sketch, junction, contents, onHover }: { sketch: Sketch; junction: SketchJunction; contents: JunctionContents; onHover: (h: Hover | null) => void }) {
+function JunctionLightsPanel({ sketch, junction, contents, onHover, now, onPick }: {
+  sketch: Sketch; junction: SketchJunction; contents: JunctionContents; onHover: (h: Hover | null) => void; now: number | null; onPick: (id: string) => void;
+}) {
+  const { edit: editSketch } = useSketchStore();
   const L = junction.lights!, plan = signalPlan(sketch, junction, contents);
   const set = (patch: Partial<JunctionLights>) => editSketch(sk => ({ ...sk, junctions: sk.junctions.map(x => (x.id === junction.id ? { ...x, lights: { ...L, ...patch } } : x)) }));
   const name = (key: string) => (key.startsWith("lane:") ? `Lane ${key.slice(5)}` : sketch.roads.find(r => r.id === key)?.name ?? key);
@@ -1308,7 +1401,28 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover }: { sketch: 
           )}
         </div>
       )}
-      <p className="text-[11px] text-muted-foreground">{L.actuated ? `Up to ${plan.cycle} s round` : `A cycle of ${plan.cycle} s`}. Turning cars give way where their paths cross on green.</p>
+      <p className="text-[11px] text-muted-foreground">{plan.coord ? `A cycle of ${plan.cycle} s, in ${plan.coord.groupName}` : L.actuated ? `Up to ${plan.cycle} s round` : `A cycle of ${plan.cycle} s`}. Turning cars give way where their paths cross on green.</p>
+      {plan.phases.length >= 2 && <div><OptimizeLightsButton junction={junction.id} /></div>}
+      <SignalGroupSection sketch={sketch} junction={junction} plan={plan} now={now} onPick={onPick} />
+    </div>
+  );
+}
+
+/** the level of a lane, or of a road's lanes (as v1's road Level): a bridge over what it crosses, or an underpass below it */
+function LevelRow({ sketch, lanes }: { sketch: Sketch; lanes: string[] }) {
+  const { edit: editSketch } = useSketchStore();
+  const lv = laneLevel(laneById(sketch, lanes[0])), mixed = lanes.some(id => laneLevel(laneById(sketch, id)) !== lv);
+  return (
+    <div className="grid gap-1">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs">Level{mixed ? " (its lanes differ)" : ""}</span>
+        <Stepper label="levels" value={lv} min={LEVELS.min} max={LEVELS.max} onChange={v => editSketch(s => setLevel(s, lanes, v))} />
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        {lv > 0 ? `A bridge, ${lv} level${lv === 1 ? "" : "s"} up: drawn over the lanes it crosses, which cars on it pass over; where it joins lanes on the ground it ramps down to them.`
+          : lv < 0 ? "Below ground (an underpass or tunnel): drawn faded, under the lanes it crosses."
+            : "Ground level. Raise it to make a bridge over the lanes it crosses, or lower it for an underpass. Lanes only meet by their connectors, never where they cross at different levels."}
+      </p>
     </div>
   );
 }
@@ -1320,6 +1434,7 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover }: { sketch: 
  * it about its start; a new end moves that end (its connectors stay where they were on it).
  */
 function GeometrySection({ sketch, lanes, lead }: { sketch: Sketch; lanes: string[]; lead: string }) {
+  const { edit: editSketch } = useSketchStore();
   const l = laneById(sketch, lead);
   if (!l || isFullCircle(l.shape) || (l.shape.kind === "line" && l.shape.closed)) return null;
   const sh = l.shape, L = laneLength(sh), A = pointAt(sh, 0).p, B = pointAt(sh, L).p;
@@ -1357,11 +1472,14 @@ function GeometrySection({ sketch, lanes, lead }: { sketch: Sketch; lanes: strin
   );
 }
 
-function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover }: {
+function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover, now = null }: {
   sketch: Sketch; sel: Sel; setSel: (s: Sel) => void; contents: Map<string, JunctionContents>; junctionSel: (ids: string[]) => Sel;
   selPt: { lane: string; i: number } | null; onCurvePoint: (lane: string, i: number) => void; onDeletePoint: (lane: string, i: number) => void;
   onGroup: () => void; onJunctionAround: () => void; onReverse: () => void; onDelete: () => void; onHover: (h: Hover | null) => void;
+  /** the cars' time while they run (marked on a signal group's timeline) */
+  now?: number | null;
 }) {
+  const { edit: editSketch, show } = useSketchStore();
   const road = sel.road ? sketch.roads.find(r => r.id === sel.road) : null;
   const link = sel.link ? sketch.links?.find(k => k.id === sel.link) : null;
   const junction = sel.junctions.length === 1 ? sketch.junctions.find(j => j.id === sel.junctions[0]) : null;
@@ -1370,7 +1488,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
   const where = (a: LaneAt) => { const l = laneById(sketch, a.lane); return `${a.lane} at ${l ? (a.s < 0.01 ? "its start" : a.s > laneLength(l.shape) - 0.01 ? "its end" : fmtM(a.s)) : "?"}`; };
   const junctionOf = (kind: "lanes" | "connectors", id: string) => sketch.junctions.find(j => contents.get(j.id)?.[kind].includes(id));
   const roadName = (id: string) => sketch.roads.find(r => r.id === id)?.name ?? id;
-  const rename = <K extends "roads" | "junctions">(kind: K, id: string, name: string) => laneSketch$.next({ ...sketch, [kind]: sketch[kind].map(x => (x.id === id ? { ...x, name } : x)) });
+  const rename = <K extends "roads" | "junctions">(kind: K, id: string, name: string) => show({ ...sketch, [kind]: sketch[kind].map(x => (x.id === id ? { ...x, name } : x)) });
 
   let body: React.ReactNode;
   // (roads the selected lanes are in: two of them can be linked)
@@ -1415,6 +1533,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           </div>
         )}
         <GeometrySection sketch={sketch} lanes={road.align ? [road.align.ref] : road.lanes} lead={road.align?.ref ?? road.lanes[0]} />
+        <LevelRow sketch={sketch} lanes={road.lanes} />
         <div className="flex gap-1.5">
           <Button size="sm" variant="outline" className="flex-1" onClick={() => editSketch(sk => ({ ...sk, roads: sk.roads.filter(r => r.id !== road.id) }))}>Ungroup</Button>
           <Button size="sm" variant="ghost" onClick={onDelete} aria-label="Delete the road's lanes" title="Delete the road and its lanes"><Trash2 /></Button>
@@ -1468,7 +1587,8 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             <ToggleGroupItem value="lights" className="h-7 flex-1 text-xs" title="Traffic lights: each way in gets green in turn">Traffic lights</ToggleGroupItem>
           </ToggleGroup>
         </div>
-        {junction.lights ? <JunctionLightsPanel sketch={sketch} junction={junction} contents={c} onHover={onHover} /> : <JunctionSigns sketch={sketch} contents={c} />}
+        {junction.lights ? <JunctionLightsPanel sketch={sketch} junction={junction} contents={c} onHover={onHover} now={now} onPick={id => setSel(junctionSel([id]))} /> : <JunctionSigns sketch={sketch} contents={c} />}
+        <TurnSharesPanel sketch={sketch} junction={junction} contents={c} now={now} />
         <div className="flex gap-1.5">
           <Button size="sm" variant="outline" className="flex-1" title="Take the surface away; its lanes and connectors stay" onClick={() => { editSketch(sk => remove(sk, { junctions: [junction.id] })); setSel(NO_SEL); }}>Remove surface</Button>
           <Button size="sm" variant="ghost" onClick={onDelete} aria-label="Delete the junction and what is on it" title="Delete the junction and its lanes and connectors (Del)"><Trash2 /></Button>
@@ -1508,7 +1628,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             <Button size="sm" variant="outline" title="Only its two ends: a straight lane (its connectors stay where they are)" onClick={() => editSketch(s => straightenLanes(s, [lane.id]))}>Straighten</Button>
             <Button size="sm" variant="outline" title="Leave out the points it doesn't need, keeping it within half a metre of where it runs" onClick={() => editSketch(s => straightenLanes(s, [lane.id], 0.5))}>Fewer points</Button>
             {!(sh.pts.length === 3 && sh.curved?.[1]) && (
-              <Button size="sm" variant="outline" className="col-span-2" title="Its two ends and one curved point between them, where the curve keeps closest to where it runs (drag the point to bend it; its connectors move to the nearest place)" onClick={() => makeCurve([lane.id])}><Spline /> Make a curve</Button>
+              <Button size="sm" variant="outline" className="col-span-2" title="Its two ends and one curved point between them, where the curve keeps closest to where it runs (drag the point to bend it; its connectors move to the nearest place)" onClick={() => makeCurve(editSketch, [lane.id])}><Spline /> Make a curve</Button>
             )}
           </div>
         )}
@@ -1518,6 +1638,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           {sh.kind === "arc" && <NumberField id="sk-sw" label="Sweep" unit="°" digits={0} value={deg(sh.sweep)} min={-360} max={360} onCommit={d => set({ ...sh, sweep: (d * Math.PI) / 180 })} />}
         </div>
         {!lead && <GeometrySection sketch={sketch} lanes={[lane.id]} lead={lane.id} />}
+        <LevelRow sketch={sketch} lanes={inRoad?.align ? inRoad.lanes : [lane.id]} />
         {sh.kind === "arc" && !lead && (
           <Button size="sm" variant="outline" title="Make it curved points along the same circle, to drag, add and curve like a drawn lane (a ring stays a ring); its connectors stay where they are"
             onClick={() => editSketch(s => arcToPoints(s, lane.id))}><Spline /> Edit as points</Button>
@@ -1570,7 +1691,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           {sel.lanes.length > 0 && <>
             <Button size="sm" variant="outline" title="The selected lanes with only their two ends: straight (rings, arcs and lanes following a lead are left; connectors stay where they are)" onClick={() => editSketch(s => straightenLanes(s, sel.lanes))}>Straighten</Button>
             <Button size="sm" variant="outline" title="The selected lanes without the points they don't need, each kept within half a metre of where it runs" onClick={() => editSketch(s => straightenLanes(s, sel.lanes, 0.5))}>Fewer points</Button>
-            <Button size="sm" variant="outline" title="Each selected lane as its two ends and one curved point, the curve kept closest to where it runs (rings, arcs and lanes following a lead are left)" onClick={() => makeCurve(sel.lanes)}><Spline /> Make a curve</Button>
+            <Button size="sm" variant="outline" title="Each selected lane as its two ends and one curved point, the curve kept closest to where it runs (rings, arcs and lanes following a lead are left)" onClick={() => makeCurve(editSketch, sel.lanes)}><Spline /> Make a curve</Button>
             <Button size="sm" variant="outline" title="Each selected ring of points as a true circle, the one that fits it best, running the same way (its connectors stay where they are)" onClick={() => editSketch(s => circleLanes(s, sel.lanes))}><Circle /> Make a circle</Button>
           </>}
         </div>
@@ -1596,6 +1717,7 @@ const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60))
 
 /** a zebra crossing: where its kerbs are, how wide, how busy, and its pedestrians while the cars run (as V1's) */
 function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; readOnly: boolean; onDelete: () => void; live: PedView | null }) {
+  const { edit: editSketch } = useSketchStore();
   const set = (patch: Partial<Omit<SketchCrossing, "id">>) => editSketch(sk => updateCrossing(sk, x.id, patch));
   const len = dist(x.a, x.b);
   return (
@@ -1626,8 +1748,8 @@ function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; rea
   );
 }
 
-function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats, onCopy }: {
-  sketch: Sketch; params: SimParams; setParams: (p: SimParams) => void; simSpeed: number; setSimSpeed: (n: number) => void; stats: SimStats | null; onCopy: () => void;
+function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpeed, stats, onCopy }: {
+  sketch: Sketch; params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean; simSpeed: number; setSimSpeed: (n: number) => void; stats: SimStats | null; onCopy: () => void;
 }) {
   // where cars come in
   const entries = entryLanes(sketch).length;
@@ -1645,6 +1767,7 @@ function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats,
         <NumberField id="sk-rate" label="Each entry" unit="veh/h" digits={0} value={params.rate} min={0} max={3000} step={50} onCommit={rate => setParams({ ...params, rate })} />
         <NumberField id="sk-speed" label="Speed" unit="km/h" digits={0} value={params.speed} min={10} max={130} step={5} onCommit={speed => setParams({ ...params, speed })} />
       </div>
+      <SimSettingsButton params={params} setParams={setParams} readOnly={readOnly} />
       <ToggleGroup type="single" value={String(simSpeed)} onValueChange={v => v && setSimSpeed(Number(v))} aria-label="Simulation speed" className="w-full">
         {[1, 3, 10, 30].map(n => <ToggleGroupItem key={n} value={String(n)} className="h-7 flex-1 text-xs">{n}×</ToggleGroupItem>)}
       </ToggleGroup>
@@ -1659,6 +1782,8 @@ function TrafficPanel({ sketch, params, setParams, simSpeed, setSimSpeed, stats,
           {stats.overlaps > 0 && row("Overlapping", stats.overlaps, "text-destructive")}
           {row("Collisions", stats.collisions ?? 0, stats.collisions ? "text-destructive" : undefined)}
           {(stats.laneChanges ?? 0) > 0 && row("Lane changes", stats.laneChanges)}
+          {(stats.reroutes ?? 0) > 0 && row("Went another way", stats.reroutes)}
+          {(stats.breakdowns ?? 0) > 0 && row("Broken down / towed away", `${stats.breakdowns} / ${stats.towed}`, "text-amber-700 dark:text-amber-400")}
           {(stats.deadlocks ?? 0) > 0 && row("Deadlocks broken", stats.deadlocks, "text-amber-700 dark:text-amber-400")}
           {row("Jumps", stats.jumps, stats.jumps ? "text-destructive" : undefined)}
           {(sketch.crossings?.length ?? 0) > 0 && row("Pedestrians crossed / waiting", `${stats.pedsCrossed ?? 0} / ${stats.pedsWaiting ?? 0}`)}
@@ -1861,7 +1986,7 @@ interface PaintState {
   placeOn: (p: Pt) => LaneAt | null;
   selPt: { lane: string; i: number } | null;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
-  cars: { p: Pt; d: Pt; len: number; share: number }[] | null;
+  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean }[] | null;
   /** the time of the cars shown (live or replayed), for the traffic lights; null with no cars */
   simT: number | null;
   /** the traffic lights as they run with the cars (null: worked out from the fixed cycle) */
@@ -1886,6 +2011,8 @@ function markBox(m: { pts: Pt[] }) {
   return b;
 }
 
+/** how far a lane one level up casts its shadow (m, the sun from the upper left: as v1) */
+const SHADOW = { x: 1.2, y: 1.8 };
 /** where automatic junction surfaces are put together before going on the sketch */
 let scratch: HTMLCanvasElement | null = null;
 
@@ -1961,7 +2088,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   const loopsOf = new Map(autos.filter(j => j.smooth).map(j => [j.id, smoothJunction(sk, j, contentsOf(j))]));
   const bandsOf = new Map(autos.filter(j => !j.smooth).map(j => [j.id, junctionBands(sk, contentsOf(j))]));
   // (the ground they shut in: paved too; far out, a pixel or two, left out)
-  const holesOf = far ? [] : autos.flatMap(j => junctionHoles(sk, contentsOf(j)));
+  const holesOf = new Map(autos.map(j => [j.id, far ? [] : junctionHoles(sk, contentsOf(j))]));
   const loopsPath = (loops: Pt[][]) => { ctx.beginPath(); for (const l of loops) { l.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); } };
   const strokeBands = (g: CanvasRenderingContext2D, bands: Band[], extra: number) => {
     for (const b of bands) {
@@ -1989,32 +2116,53 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     // (every lane, in a road or not: a lane taken out of its road keeps its asphalt)
     const roadLanes = sk.lanes.filter(l => vis.lanes.has(l.id));
     ctx.lineCap = "butt"; ctx.lineJoin = "round";
-    // (far out the kerbs are under a pixel: the asphalt only)
-    for (const pass of far ? [1] : [0, 1]) {
-      ctx.strokeStyle = ctx.fillStyle = pass ? asphalt : kerb;
-      for (const j of drawn) { path(outlinePath(j)); ctx.closePath(); if (pass) ctx.fill(); else { ctx.lineWidth = kerbW; ctx.stroke(); } }
-      for (const loops of loopsOf.values()) { loopsPath(loops); if (pass) ctx.fill("evenodd"); else { ctx.lineWidth = kerbW; ctx.stroke(); } }
-      if (!far) for (const bands of bandsOf.values()) strokeBands(ctx, bands, pass ? 0 : kerbW);
-      if (pass && holesOf.length) { loopsPath(holesOf); ctx.fill("nonzero"); }
-      // (a link: its sides kerbed, not its ends, where it meets its roads)
-      for (const { g } of linkGeo) { if (pass) { path(g.outline); ctx.closePath(); ctx.fill(); } else { ctx.lineWidth = kerbW; for (const side of g.sides) { path(side); ctx.stroke(); } } }
-      // (the lanes of one width in one go)
-      const byWidth = new Map<number, typeof roadLanes>();
-      for (const l of roadLanes) byWidth.set(l.width, [...(byWidth.get(l.width) ?? []), l]);
-      for (const [wd, ls] of byWidth) {
-        ctx.beginPath();
-        for (const l of ls) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
-        ctx.lineWidth = wd + (pass ? 0 : kerbW); ctx.stroke();
+    // level by level, lowest first (as v1): a bridge, with its shadow, covers what passes beneath; one below the
+    // ground drawn faded. (Most sketches: one level, the ground)
+    const leveled = hasLevels(sk), jLevel = (j: SketchJunction) => (leveled ? junctionLevel(sk, contentsOf(j)) : 0);
+    const kLevel = (k: SketchLink) => (leveled ? Math.min(...[k.a.road, k.b.road].flatMap(id => sk.roads.find(r => r.id === id)?.lanes ?? []).map(id => laneLevel(laneById(sk, id)))) : 0);
+    const levels = leveled ? [...new Set([0, ...roadLanes.map(laneLevel), ...drawn.map(jLevel), ...autos.map(jLevel)])].sort((x, y) => x - y) : [0];
+    const marks = st.layers.markings && v.scale >= 1.5 ? roadMarkings(sk) : [];
+    for (const lv of levels) {
+      const at = <T,>(xs: T[], f: (x: T) => number) => (leveled ? xs.filter(x => f(x) === lv) : xs);
+      const js = at(drawn, jLevel), as = at(autos, jLevel), ks = at(linkGeo, x => kLevel(x.k)), ls = at(roadLanes, laneLevel);
+      ctx.globalAlpha = lv < 0 ? 0.55 : 1;
+      // (its shadow, cast further the higher it is: its lanes and junctions moved by it, in a shade of black)
+      if (lv > 0 && !far) {
+        ctx.save(); ctx.translate(SHADOW.x * lv, SHADOW.y * lv); ctx.globalAlpha = 0.28; ctx.strokeStyle = ctx.fillStyle = "#000";
+        for (const l of ls) { path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath(); ctx.lineWidth = l.width + kerbW; ctx.stroke(); }
+        for (const j of js) { path(outlinePath(j)); ctx.closePath(); ctx.fill(); }
+        ctx.restore();
       }
+      // (far out the kerbs are under a pixel: the asphalt only)
+      for (const pass of far ? [1] : [0, 1]) {
+        ctx.strokeStyle = ctx.fillStyle = pass ? asphalt : kerb;
+        for (const j of js) { path(outlinePath(j)); ctx.closePath(); if (pass) ctx.fill(); else { ctx.lineWidth = kerbW; ctx.stroke(); } }
+        for (const j of as) { const loops = loopsOf.get(j.id); if (loops) { loopsPath(loops); if (pass) ctx.fill("evenodd"); else { ctx.lineWidth = kerbW; ctx.stroke(); } } }
+        if (!far) for (const j of as) { const bands = bandsOf.get(j.id); if (bands) strokeBands(ctx, bands, pass ? 0 : kerbW); }
+        const holes = as.flatMap(j => holesOf.get(j.id) ?? []);
+        if (pass && holes.length) { loopsPath(holes); ctx.fill("nonzero"); }
+        // (a link: its sides kerbed, not its ends, where it meets its roads)
+        for (const { g } of ks) { if (pass) { path(g.outline); ctx.closePath(); ctx.fill(); } else { ctx.lineWidth = kerbW; for (const side of g.sides) { path(side); ctx.stroke(); } } }
+        // (the lanes of one width in one go)
+        const byWidth = new Map<number, typeof roadLanes>();
+        for (const l of ls) byWidth.set(l.width, [...(byWidth.get(l.width) ?? []), l]);
+        for (const [wd, lw] of byWidth) {
+          ctx.beginPath();
+          for (const l of lw) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
+          ctx.lineWidth = wd + (pass ? 0 : kerbW); ctx.stroke();
+        }
+      }
+      // the markings, as on the plan's map: dashed lines between lanes, the centre line in its yellow
+      ctx.lineCap = "butt";
+      for (const m of marks) {
+        if ((leveled && (m.level ?? 0) !== lv) || !boxesMeet(markBox(m), viewBox)) continue;
+        path(m.pts);
+        ctx.strokeStyle = m.kind === "center" ? pal.divider : pal.mark; ctx.lineWidth = Math.max(0.15, px);
+        ctx.setLineDash(m.dashed ? [3, 4] : []); ctx.stroke();
+      }
+      ctx.setLineDash([]);
     }
-    // the markings, as on the plan's map: dashed lines between lanes, the centre line in its yellow
-    ctx.lineCap = "butt";
-    for (const m of st.layers.markings && v.scale >= 1.5 ? roadMarkings(sk) : []) {
-      if (!boxesMeet(markBox(m), viewBox)) continue;
-      path(m.pts);
-      ctx.strokeStyle = m.kind === "center" ? pal.divider : pal.mark; ctx.lineWidth = Math.max(0.15, px);
-      ctx.setLineDash(m.dashed ? [3, 4] : []); ctx.stroke();
-    }
+    ctx.globalAlpha = 1;
     ctx.setLineDash([]);
     // (the junction or link selected or under the pointer, outlined)
     for (const { g, on, over } of linkGeo) if (on || over) { path(g.outline); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.globalAlpha = on ? 1 : 0.6; ctx.lineWidth = 2 * px; ctx.stroke(); ctx.globalAlpha = 1; }
@@ -2235,17 +2383,52 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     for (let i = 0; i < Math.min(q.crossing, 9); i++) person(0.6 + q.progress * (f.len - 1.2) - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
     for (let i = 0; i < Math.min(q.waiting, 9); i++) person(-GAP - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
   }
-  // cars as on the plan's map (cut corners, a windscreen), in its speed colours: green at their desired speed to red when stopped
-  for (const car of st.layers.cars && D ? st.cars ?? [] : []) {
-    const { p, d } = car, hl = Math.max(car.len, 5 * px) / 2, hw = Math.max(1.8, 3 * px) / 2, r = Math.min(0.7, hw);
+  // cars as on the plan's map (cut corners, a windscreen), in its speed colours: green at their desired speed to red when stopped;
+  // a truck's cab so, its trailer behind it a pale box (with a dark edge, so it shows on light ground)
+  const vehicleBody = (p: Pt, d: Pt, len: number, fill: string, cab: boolean, edge: string) => {
+    const hl = Math.max(len, (cab ? 5 : 3) * px) / 2, hw = Math.max(cab ? 1.8 : 2, 3 * px) / 2, r = Math.min(cab ? 0.7 : 0.25, hw);
     const at2 = (x: number, y: number): [number, number] => [p.x + d.x * x - d.y * y, p.y + d.y * x + d.x * y];
     const body: [number, number][] = [[hl - r, -hw], [hl, -hw + r], [hl, hw - r], [hl - r, hw], [-hl + r, hw], [-hl, hw - r], [-hl, -hw + r], [-hl + r, -hw]];
     ctx.beginPath(); body.forEach(([x, y], i) => { const [X, Y] = at2(x, y); if (i) ctx.lineTo(X, Y); else ctx.moveTo(X, Y); }); ctx.closePath();
-    ctx.fillStyle = speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15); ctx.fill();
-    ctx.strokeStyle = "rgba(20,28,34,0.45)"; ctx.lineWidth = Math.min(0.15, px); ctx.stroke();
+    ctx.fillStyle = fill; ctx.fill();
+    ctx.strokeStyle = edge; ctx.lineWidth = Math.min(0.15, px); ctx.stroke();
+    if (!cab) return;
     const ws = [at2(hl * 0.55, -hw * 0.75), at2(hl * 0.2, -hw * 0.75), at2(hl * 0.2, hw * 0.75), at2(hl * 0.55, hw * 0.75)];
     ctx.beginPath(); ws.forEach(([X, Y], i) => (i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y))); ctx.closePath();
     ctx.fillStyle = "rgba(20,28,34,0.55)"; ctx.fill();
+  };
+  // (a bridge over the cars beneath it, as v1: those below its level first, its lanes drawn again over them, then those on it)
+  const carsNow = st.layers.cars && D ? st.cars ?? [] : [], zOfCar = (c: object) => ("z" in c && typeof c.z === "number" ? c.z : 0);
+  const raised = hasLevels(sk) && carsNow.some(c => zOfCar(c) >= 0.5) ? sk.lanes.filter(l => laneLevel(l) >= 1 && vis.lanes.has(l.id)) : [];
+  const overBridges = raised.length ? carsNow.filter(c => zOfCar(c) >= 0.5) : [];
+  const drawRaised = () => {
+    ctx.lineCap = "butt"; ctx.lineJoin = "round";
+    for (const pass of [0, 1]) for (const l of raised) {
+      path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath();
+      ctx.strokeStyle = pass ? pal.asphalt : pal.curb; ctx.lineWidth = l.width + (pass ? 0 : Math.max(0.6, 3 * px)); ctx.stroke();
+    }
+    if (st.layers.markings && v.scale >= 1.5) for (const m of roadMarkings(sk)) {
+      if ((m.level ?? 0) < 1) continue;
+      path(m.pts); ctx.strokeStyle = m.kind === "center" ? pal.divider : pal.mark; ctx.lineWidth = Math.max(0.15, px); ctx.setLineDash(m.dashed ? [3, 4] : []); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    if (st.layers.lanes) for (const l of raised) { path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath(); ctx.strokeStyle = col.lane; ctx.lineWidth = Math.max(0.2, 1.5 * px); ctx.stroke(); }
+  };
+  for (const [k, car] of [...carsNow.filter(c => !overBridges.includes(c)), ...overBridges].entries()) {
+    if (raised.length && k === carsNow.length - overBridges.length) drawRaised();
+    const t = car.trailer;
+    if (t) vehicleBody(t.p, t.d, t.len, "#e9e6dd", false, "rgba(20,28,34,0.7)");
+    vehicleBody(car.p, car.d, car.len, speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15), true, "rgba(20,28,34,0.45)");
+    // (broken down: hazard lights flashing at its four corners, dim between flashes so they show when paused)
+    if (car.broken) {
+      const { p, d } = car, back = t ?? car, bl = t ? t.len : car.len, r = Math.max(0.35, 2.5 * px);
+      const corners = [[car.p, car.len / 2], [back.p, -bl / 2]].flatMap(([q, a]) => [-1, 1].map(side => {
+        const c = q as Pt, k = a as number, dd = q === p ? d : back.d;
+        return { x: c.x + dd.x * k - dd.y * side * 0.8, y: c.y + dd.y * k + dd.x * side * 0.8 };
+      }));
+      ctx.fillStyle = Math.floor(performance.now() / 400) % 2 ? "#a86f00" : "#ffb000";
+      for (const c of corners) { ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.fill(); }
+    }
   }
   // the car picked: the way it will go, and a ring round it
   if (D && st.car) {
@@ -2353,6 +2536,11 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       path(f.corners); ctx.closePath(); ctx.globalAlpha = 0.25; ctx.fill(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.stroke();
     }
     square(d.a);
+  } else if (d?.kind === "roundabout" && cur) {
+    const r = dist(d.c, cur.p);
+    ctx.beginPath(); ctx.arc(d.c.x, d.c.y, r, 0, Math.PI * 2); ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.stroke(); ctx.globalAlpha = 1;
+    // (how far out it looks for the ways in and out)
+    ctx.beginPath(); ctx.arc(d.c.x, d.c.y, r + LANE_WIDTH / 2 + 30, 0, Math.PI * 2); ctx.lineWidth = 1.5 * px; ctx.setLineDash([6 * px, 5 * px]); ctx.stroke(); ctx.setLineDash([]);
   } else if (d?.kind === "circle" && cur) {
     ctx.beginPath(); ctx.arc(d.c.x, d.c.y, dist(d.c, cur.p), 0, Math.PI * 2); ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.stroke(); ctx.globalAlpha = 1;
   } else if (d?.kind === "arc") {
