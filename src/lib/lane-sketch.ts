@@ -60,6 +60,8 @@ export interface Sketch {
   journeys?: SketchJourney[];
   /** junctions' lights run together (see `SketchSignalGroup`) */
   signalGroups?: SketchSignalGroup[];
+  /** a V2 plan's ideas sketched apart (its Sketch window, as V1's): saved with the plan, never part of it */
+  scratch?: Sketch;
 }
 /**
  * Journeys, as V1's transit flows: `rate` vehicles an hour coming in on the way in that lane `from` is one of
@@ -2129,6 +2131,9 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     }
     if (members.length) signalGroups.push({ id: g.id, name: typeof g.name === "string" && g.name.trim() ? g.name.trim().slice(0, 80) : g.id, cycle, speed: num(g.speed) ? Math.min(130, Math.max(10, g.speed)) : GROUP_SPEED, members });
   }
-  if (!lanes.length && !junctions.length && !geo && !crossings.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}) };
+  // (the ideas sketched apart: a sketch of their own, without ideas of theirs)
+  const sc = o.scratch && typeof o.scratch === "object" ? sanitizeSketch({ ...(o.scratch as object), scratch: undefined }) : null;
+  const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length) ? sc : null;
+  if (!lanes.length && !junctions.length && !geo && !crossings.length && !scratch) return null;
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(scratch ? { scratch } : {}) };
 }

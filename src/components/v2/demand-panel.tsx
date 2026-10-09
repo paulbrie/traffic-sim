@@ -14,7 +14,7 @@ import { NumberField } from "@/components/workspace/fields";
 import { cn } from "@/lib/utils";
 import { addJourney, deleteJourney, demandWays, laneInRate, laneOutWeight, laneById, setInRate, setOutWeight, updateJourney, type DemandWay, type Sketch, type SketchJourney } from "@/lib/lane-sketch";
 import type { JourneyStats } from "@/lib/lane-sketch-sim";
-import { editSketch } from "@/state/lane-sketch";
+import { useSketchStore } from "@/state/lane-sketch";
 import { InspectorPanel } from "./inspector-panel";
 
 export function DemandPanel({ sketch, readOnly, onFocus, results }: {
@@ -22,6 +22,7 @@ export function DemandPanel({ sketch, readOnly, onFocus, results }: {
   /** the journeys' results so far, while the cars run (by journey id) */
   results?: JourneyStats[] | null;
 }) {
+  const { edit: editSketch } = useSketchStore();
   const { entries, exits } = demandWays(sketch);
   // (long lists: the first ways only, more on asking)
   const [shown, setShown] = useState({ in: 12, out: 12 });
@@ -76,6 +77,7 @@ const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).
 function Journeys({ sketch, entries, exits, readOnly, onFocus, results }: {
   sketch: Sketch; entries: DemandWay[]; exits: DemandWay[]; readOnly: boolean; onFocus?: (lanes: string[] | null) => void; results?: JourneyStats[] | null;
 }) {
+  const { edit: editSketch } = useSketchStore();
   const js = sketch.journeys ?? [];
   const wayOf = (ways: DemandWay[], lane: string) => ways.find(w => w.lanes.includes(lane)) ?? null;
   const set = (j: SketchJourney, patch: Partial<Omit<SketchJourney, "id">>) => editSketch(s => updateJourney(s, j.id, patch));

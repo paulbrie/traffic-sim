@@ -9,7 +9,7 @@ import {
   applyGreenWave, deleteGroup, greenWave, groupOf, joinGroup, junctionContents, leaveGroup, moveMember, signalPlan, updateGroup, updateMember,
   type SignalPlan, type Sketch, type SketchJunction, type SketchSignalGroup,
 } from "@/lib/lane-sketch";
-import { editSketch } from "@/state/lane-sketch";
+import { useSketchStore } from "@/state/lane-sketch";
 
 const NEW = "__new__", NONE = "__none__";
 
@@ -21,6 +21,7 @@ const NEW = "__new__", NONE = "__none__";
 export function SignalGroupSection({ sketch, junction, plan, now, onPick }: {
   sketch: Sketch; junction: SketchJunction; plan: SignalPlan; now: number | null; onPick: (id: string) => void;
 }) {
+  const { edit: editSketch } = useSketchStore();
   const group = groupOf(sketch, junction.id), groups = sketch.signalGroups ?? [];
   if (plan.phases.length < 2) return null;
   const pick = (v: string) => {
@@ -48,6 +49,7 @@ export function SignalGroupSection({ sketch, junction, plan, now, onPick }: {
 function GroupEditor({ sketch, junction, plan, group, now, onPick }: {
   sketch: Sketch; junction: SketchJunction; plan: SignalPlan; group: SketchSignalGroup; now: number | null; onPick: (id: string) => void;
 }) {
+  const { edit: editSketch } = useSketchStore();
   const me = group.members.find(m => m.junction === junction.id)!, idx = group.members.indexOf(me);
   const wave = greenWave(sketch, group), c = plan.coord;
   const seq = c ? plan.phases.map((p, i) => ({ p, i })).sort((a, b) => a.p.start - b.p.start) : [];

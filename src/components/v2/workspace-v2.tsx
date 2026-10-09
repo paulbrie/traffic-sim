@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useDeepSubject } from "subjecto/react";
 import Link from "next/link";
-import { ArrowLeft, Eye } from "lucide-react";
+import { ArrowLeft, Eye, PenLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -11,13 +12,15 @@ import { HistoryButton } from "@/components/workspace/history-dialog";
 import { LaneSketch } from "@/components/workspace/lane-sketch";
 import { FrameRate, SketchLayerPicker } from "./top-bar-tools";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
-import { loadPlan } from "@/state/store";
+import { loadPlan, ui } from "@/state/store";
+import { planSketch, scratchSketch, SketchStoreContext } from "@/state/lane-sketch";
 import { startUnderlayImage } from "@/state/underlay-image";
 
 /**
  * A plan on the V2 engine: the lane sketch is the plan, its editor the whole page (drawing, the cars,
  * the structure tree and the inspector), saved, versioned and shared as V1 plans are (its V1 network
- * stays empty).
+ * stays empty). Its Sketch button opens V1's sketch window over it, for ideas sketched apart from the plan
+ * (saved with it, in the sketch's `scratch`).
  */
 export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
   // load once per mount (keyed by plan id), before the editor reads the stores
@@ -39,16 +42,42 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
             : <SaveIndicator planId={plan.id} />}
           <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} />
           <Separator orientation="vertical" className="!h-5" />
+          <SketchButton />
           <SketchLayerPicker />
           <div className="ml-auto flex items-center gap-3">
             <FrameRate />
             <UserMenu user={user} />
           </div>
         </header>
-        <main className="min-h-0 flex-1">
-          <LaneSketch page />
+        <main className="relative min-h-0 flex-1">
+          <SketchStoreContext.Provider value={planSketch}>
+            <LaneSketch page />
+          </SketchStoreContext.Provider>
+          <SketchWindow />
         </main>
       </div>
     </TooltipProvider>
+  );
+}
+
+/** opens the sketch window, as V1's: lanes, rings and connectors drawn freely, apart from the plan */
+function SketchButton() {
+  const [open] = useDeepSubject(ui, "sketch");
+  return (
+    <Button size="sm" variant={open ? "secondary" : "ghost"} className="h-8" aria-pressed={open} onClick={() => { ui.getValue().sketch = !open; }}
+      title="Sketch: try ideas in a window of their own (lanes, rings, connectors, junctions, cars), apart from the plan; saved with it. Copy and paste between them.">
+      <PenLine /> Sketch
+    </Button>
+  );
+}
+
+/** the sketch window over the plan, on the ideas sketched apart */
+function SketchWindow() {
+  const [open] = useDeepSubject(ui, "sketch");
+  if (!open) return null;
+  return (
+    <SketchStoreContext.Provider value={scratchSketch}>
+      <LaneSketch />
+    </SketchStoreContext.Provider>
   );
 }

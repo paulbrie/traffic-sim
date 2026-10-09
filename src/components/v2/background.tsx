@@ -20,7 +20,7 @@ import type { Underlay } from "@/lib/underlay";
 import { unproject } from "@/lib/osm/area";
 import { drawSatellite, googleImagery, SAT_ATTRIBUTION, type SatSource } from "@/render/satellite";
 import { setUnderlay, ui, underlay$ } from "@/state/store";
-import { editSketch } from "@/state/lane-sketch";
+import { useSketchStore } from "@/state/lane-sketch";
 import { removeUnderlay, underlayImg$, uploadUnderlay } from "@/state/underlay-image";
 import { InspectorPanel } from "./inspector-panel";
 
@@ -81,6 +81,7 @@ export function BackgroundPanel({ sketch, sat, setSat, viewNow, calib, setCalib,
   calib: Calibration | null; setCalib: (c: Calibration | null) => void;
   readOnly: boolean;
 }) {
+  const { edit: editSketch } = useSketchStore();
   const [u] = useSubject(underlay$);
   const [img] = useSubject(underlayImg$);
   const [q, setQ] = useState(""), [places, setPlaces] = useState<Place[] | null>(null), [searching, setSearching] = useState(false);
