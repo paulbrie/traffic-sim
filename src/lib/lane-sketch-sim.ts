@@ -1527,6 +1527,8 @@ export class SketchSim {
     const acc = new Map<SimVehicle, number>(), held = new Map<SimVehicle, { gap: number; lead: number }>();
     // (what each was waiting for as this step began: those decided before another in it mustn't change what that one sees)
     const whyWas = new Map(this.vehicles.map(v => [v, v.why]));
+    let carIds: Map<number, SimVehicle> | null = null;
+    const carById = (id: number) => (carIds ??= new Map(this.vehicles.map(w => [w.id, w]))).get(id);
     for (const v of this.vehicles) {
       // (broken down: rolls to a stop where it is, an obstacle in its lane)
       if (v.broken !== null) { acc.set(v, v.v > 0 ? -Math.min(2.5, v.v / dt) : 0); held.set(v, { gap: Infinity, lead: 0 }); v.why = "broken down"; v.blocking = false; continue; }
@@ -1736,14 +1738,15 @@ export class SketchSim {
             // way clear; else the one with the lower number — the same from either side)
             const wWhy = whyWas.get(w) ?? null;
             if (ws > 0.1 && w.v < 0.3 && wWhy?.endsWith(`for car ${v.id}`) && this.goesFirst(v, w)) continue;
+            // (stopped short of the zone for something else, the car ahead, keeping another crossing clear,
+            // joining a lane: it isn't on its way through here, and waiting for it would lock the junction; one held by
+            // nothing is setting off. So too in among zones running on along a connector: queued there, it is no nearer
+            // going through)
+            if (w.v < 0.3 && ws > 0.1 && wWhy !== null && !wWhy.startsWith(`zone ${r.edge.key}`)) continue;
             // (in among the zones, it is on its way through: it goes first, unless this one is in among them too)
             if (wIn && !meIn && !forced) { yields.push({ at: hold(zs), why: `zone ${k.other.key} for car ${w.id}` }); break; }
             // (this one in among them, the other able to stop short: it waits)
             if (meIn && !wIn && ws > 0 && ws >= (w.v * w.v) / 8) continue;
-            // (stopped short of the zone for something else, the car ahead, keeping another crossing clear,
-            // joining a lane: it isn't on its way through here, and waiting for it would lock the junction; one held by
-            // nothing is setting off)
-            if (w.v < 0.3 && ws > 0.1 && wWhy !== null && !wWhy.startsWith(`zone ${r.edge.key}`)) continue;
             // (one from a line goes after those without one, unless it is past its line and can't stop any more)
             const wMinor = !!k.other.minor, committed = w.edge === k.other && ws < Math.max(0.1, (w.v * w.v) / 8 - 1);
             const first = ws <= 0
@@ -1753,8 +1756,11 @@ export class SketchSim {
         }
       }
       // keeping clear: not going into a zone it couldn't get its body out of, the car ahead (slow) just past it
-      // (zones overlapping one another are one: past the first it is in the next)
-      if (lead < 3 && !forced) {
+      // (zones overlapping one another are one: past the first it is in the next); or the car ahead held up itself,
+      // giving way or at a line: still moving, it is about to stop there, and one following it in would stop in the zone
+      const ahead = /^car (-?\d+)$/.exec(why ?? ""), leadWhy = ahead ? whyWas.get(carById(Number(ahead[1]))!) : null;
+      const leadHeld = !!leadWhy && /^(zone |merge |keeping clear|signal |stop |pedestrians)/.test(leadWhy);
+      if ((lead < 3 || leadHeld) && !forced) {
         const runs: { s: number; e: number }[] = [];
         for (const z of [...zones].sort((p, q) => p.s - q.s)) {
           const last = runs[runs.length - 1];
