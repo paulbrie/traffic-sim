@@ -6,14 +6,30 @@
  * for when wanted.
  */
 import { signalPlans, SignalController, type Pt, type Sketch } from "@/lib/lane-sketch";
-import type { SimParams, SimStats, SketchSim } from "@/lib/lane-sketch-sim";
+import type { Body, SimParams, SimStats, SketchSim } from "@/lib/lane-sketch-sim";
 import type { FromSimWorker, SimFrame, ToSimWorker } from "./sketch-sim.worker";
 
 /** a message without its request number (each kind of message on its own) */
 type WithoutReq<T> = T extends unknown ? Omit<T, "req"> : never;
 
-/** half a car's width and its length (as the sim has them), to find the car under a point */
+/** half a car's width (as the sim has it), to find the car under a point */
 const HALF_W = 0.9;
+/** how far `p` is from the middle of a car drawn as `q` (its body or a truck's trailer) if on it or within `tol` metres (as the sim's `bodyHit`; kept here so the sim stays in its worker) */
+function bodyHit(p: Pt, q: Body & { trailer?: Body }, tol: number): number | null {
+  let best: number | null = null;
+  for (const b of q.trailer ? [q, q.trailer] : [q]) {
+    const dx = p.x - b.p.x, dy = p.y - b.p.y, along = Math.abs(dx * b.d.x + dy * b.d.y), side = Math.abs(dx * b.d.y - dy * b.d.x);
+    if (along > b.len / 2 + tol || side > HALF_W + tol) continue;
+    const dd = Math.hypot(dx, dy);
+    if (best === null || dd < best) best = dd;
+  }
+  return best;
+}
+/** a body `k` of the way from `a` to `b` */
+function lerpBody(a: Body, b: Body, k: number): Body {
+  const dx = a.d.x + (b.d.x - a.d.x) * k, dy = a.d.y + (b.d.y - a.d.y) * k, n = Math.hypot(dx, dy) || 1;
+  return { p: { x: a.p.x + (b.p.x - a.p.x) * k, y: a.p.y + (b.p.y - a.p.y) * k }, d: { x: dx / n, y: dy / n }, len: b.len };
+}
 
 export class SketchSimClient {
   private worker: Worker;
@@ -100,7 +116,8 @@ export class SketchSimClient {
       const a = this.prevPoses.get(c.id);
       if (!a || Math.hypot(c.p.x - a.p.x, c.p.y - a.p.y) > 30) return c;
       const dx = a.d.x + (c.d.x - a.d.x) * k, dy = a.d.y + (c.d.y - a.d.y) * k, n = Math.hypot(dx, dy) || 1;
-      return { ...c, p: { x: a.p.x + (c.p.x - a.p.x) * k, y: a.p.y + (c.p.y - a.p.y) * k }, d: { x: dx / n, y: dy / n } };
+      const t = c.trailer && a.trailer ? lerpBody(a.trailer, c.trailer, k) : c.trailer;
+      return { ...c, p: { x: a.p.x + (c.p.x - a.p.x) * k, y: a.p.y + (c.p.y - a.p.y) * k }, d: { x: dx / n, y: dy / n }, ...(t ? { trailer: t } : {}) };
     });
   }
   stats(): SimStats | null { return this.lastStats; }
@@ -117,10 +134,8 @@ export class SketchSimClient {
   carAt(p: Pt, tol: number): number | null {
     let best: number | null = null, bd = Infinity;
     for (const c of this.poses()) {
-      const dx = p.x - c.p.x, dy = p.y - c.p.y, along = Math.abs(dx * c.d.x + dy * c.d.y), side = Math.abs(dx * c.d.y - dy * c.d.x);
-      if (along > c.len / 2 + tol || side > HALF_W + tol) continue;
-      const dd = Math.hypot(dx, dy);
-      if (dd < bd) { bd = dd; best = c.id; }
+      const dd = bodyHit(p, c, tol);
+      if (dd !== null && dd < bd) { bd = dd; best = c.id; }
     }
     return best;
   }
@@ -143,10 +158,8 @@ export class SketchSimClient {
   replayCarAt(t: number, p: Pt, tol: number): number | null {
     let best: number | null = null, bd = Infinity;
     for (const c of this.replayAt(t)?.cars ?? []) {
-      const dx = p.x - c.p.x, dy = p.y - c.p.y, along = Math.abs(dx * c.d.x + dy * c.d.y), side = Math.abs(dx * c.d.y - dy * c.d.x);
-      if (along > c.len / 2 + tol || side > HALF_W + tol) continue;
-      const dd = Math.hypot(dx, dy);
-      if (dd < bd) { bd = dd; best = c.id; }
+      const dd = bodyHit(p, c, tol);
+      if (dd !== null && dd < bd) { bd = dd; best = c.id; }
     }
     return best;
   }

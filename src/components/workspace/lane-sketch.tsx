@@ -1141,7 +1141,7 @@ function makeCurve(ids: string[]) {
 
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
-  return { id: c.id, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, p: c.p, d: c.d, route: [] };
+  return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, p: c.p, d: c.d, route: [] };
 }
 
 function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClose, onCopy }: {
@@ -1153,7 +1153,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
   );
   const reason = info ? reasonOf(info.why, info.kmh) : null;
   return (
-    <InspectorPanel id="car" title={`Car ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
+    <InspectorPanel id="car" title={`${info?.truck ? "Truck" : "Car"} ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
       actions={<button className="rounded p-0.5 hover:bg-muted" aria-label="Stop inspecting the car" title="Stop inspecting (Esc)" onClick={onClose}><X className="size-3.5" /></button>}>
       {!info ? <p className="text-xs text-muted-foreground">{replayT !== null ? "Not on the sketch at this moment." : "It has left the sketch."}</p> : replayT !== null ? (
         <>
@@ -1168,6 +1168,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
         </>
       ) : (
         <>
+          {info.truck && row("Truck", <span className="font-mono tabular">{info.length.toFixed(1)} m long</span>)}
           {row("On", <span className="font-mono">{edgeName(info.edge)} · {info.pos.toFixed(1)}{info.ring ? "" : ` of ${info.len.toFixed(1)}`} m</span>)}
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h <span className="text-muted-foreground">of {info.desiredKmh.toFixed(0)}</span></span>)}
           {info.changeTo && row("Changing to", <span className="font-mono">{edgeName(info.changeTo)}</span>)}
@@ -1863,7 +1864,7 @@ interface PaintState {
   placeOn: (p: Pt) => LaneAt | null;
   selPt: { lane: string; i: number } | null;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
-  cars: { p: Pt; d: Pt; len: number; share: number }[] | null;
+  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number } }[] | null;
   /** the time of the cars shown (live or replayed), for the traffic lights; null with no cars */
   simT: number | null;
   /** the traffic lights as they run with the cars (null: worked out from the fixed cycle) */
@@ -2237,17 +2238,24 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     for (let i = 0; i < Math.min(q.crossing, 9); i++) person(0.6 + q.progress * (f.len - 1.2) - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
     for (let i = 0; i < Math.min(q.waiting, 9); i++) person(-GAP - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
   }
-  // cars as on the plan's map (cut corners, a windscreen), in its speed colours: green at their desired speed to red when stopped
-  for (const car of st.layers.cars && D ? st.cars ?? [] : []) {
-    const { p, d } = car, hl = Math.max(car.len, 5 * px) / 2, hw = Math.max(1.8, 3 * px) / 2, r = Math.min(0.7, hw);
+  // cars as on the plan's map (cut corners, a windscreen), in its speed colours: green at their desired speed to red when stopped;
+  // a truck's cab so, its trailer behind it a pale box (with a dark edge, so it shows on light ground)
+  const vehicleBody = (p: Pt, d: Pt, len: number, fill: string, cab: boolean, edge: string) => {
+    const hl = Math.max(len, (cab ? 5 : 3) * px) / 2, hw = Math.max(cab ? 1.8 : 2, 3 * px) / 2, r = Math.min(cab ? 0.7 : 0.25, hw);
     const at2 = (x: number, y: number): [number, number] => [p.x + d.x * x - d.y * y, p.y + d.y * x + d.x * y];
     const body: [number, number][] = [[hl - r, -hw], [hl, -hw + r], [hl, hw - r], [hl - r, hw], [-hl + r, hw], [-hl, hw - r], [-hl, -hw + r], [-hl + r, -hw]];
     ctx.beginPath(); body.forEach(([x, y], i) => { const [X, Y] = at2(x, y); if (i) ctx.lineTo(X, Y); else ctx.moveTo(X, Y); }); ctx.closePath();
-    ctx.fillStyle = speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15); ctx.fill();
-    ctx.strokeStyle = "rgba(20,28,34,0.45)"; ctx.lineWidth = Math.min(0.15, px); ctx.stroke();
+    ctx.fillStyle = fill; ctx.fill();
+    ctx.strokeStyle = edge; ctx.lineWidth = Math.min(0.15, px); ctx.stroke();
+    if (!cab) return;
     const ws = [at2(hl * 0.55, -hw * 0.75), at2(hl * 0.2, -hw * 0.75), at2(hl * 0.2, hw * 0.75), at2(hl * 0.55, hw * 0.75)];
     ctx.beginPath(); ws.forEach(([X, Y], i) => (i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y))); ctx.closePath();
     ctx.fillStyle = "rgba(20,28,34,0.55)"; ctx.fill();
+  };
+  for (const car of st.layers.cars && D ? st.cars ?? [] : []) {
+    const t = car.trailer;
+    if (t) vehicleBody(t.p, t.d, t.len, "#e9e6dd", false, "rgba(20,28,34,0.7)");
+    vehicleBody(car.p, car.d, car.len, speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15), true, "rgba(20,28,34,0.45)");
   }
   // the car picked: the way it will go, and a ring round it
   if (D && st.car) {
