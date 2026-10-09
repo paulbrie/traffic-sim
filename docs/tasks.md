@@ -15,7 +15,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T63 | Admin terminals: remember each one's position and size, and bring it back into view if it's outside | Alex | 2026-10-09 | |
 | T62 | The 3D view in V2, phase 1: Plan / 3D toggle, orbit camera, ground and imagery, roads, junctions, markings, levels, cars, live lights, picking | Tatiana | 2026-10-09 | plan first |
 | T61 | Agents City Table: speech bubbles for messages, laptop-to-file links, poses for thinking (leaning back) and idle (coffee, pencil…) | Tom | 2026-10-09 | |
 | T60 | Re-test of T59 and T52 | Ramona | 2026-10-09 | after T55 |
@@ -28,6 +27,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T50 | Re-test of T48 plus a Next.js 16.4 smoke test: all pass; 3 bridge input-check bugs, a one-off glitch | Ramona | 2026-10-09 | /tmp/ramona/t50/ → T59 |
 | T52 | V1→V2 quick wins: per-road speed limits, hover cards, zoom keys and lat/lon, a colour-by-speed switch, five sim settings (identical runs at the defaults) | Tatiana | 2026-10-09 | 9a32774, cf4a7d8, cad3d57, 6949407, de8031e |
+| T63 | Admin terminals: position and size remembered per terminal, kept inside the viewport (not while dragging), bad values ignored | Alex | 2026-10-09 | admin-dev, deploy pending |
 | T58 | Admin: team recipes and a Teams page (start, stop with STATUS requests, restart, close; recipe checks; live check with a throwaway Haiku team) | Alex | 2026-10-09 | admin-dev, deploy pending |
 | T59 | Fixes from T50: one argument validator for the bridge's actions, known panel ids only, docs, the editors' reset survives a remount, the replay bar leaves the map's buttons clear | Tatiana | 2026-10-09 | 72def88, 57f3147, ef48624, 2173ed8 |
 | T57 | Agents City Table: labels on OverlayLabel (no removeChild) | Tom | 2026-10-09 | admin: ee5e444 |
