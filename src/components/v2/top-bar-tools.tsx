@@ -7,42 +7,82 @@
 import { useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
 import { ChevronDown, Layers } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, toggleSketchLayer, type SketchLayers } from "@/state/sketch-layers";
+import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, toggleSketchLayer, type SketchLayer, type SketchLayers } from "@/state/sketch-layers";
 import { sketchSim } from "@/state/lane-sketch";
+
+/** the keys of the layers, in the menu's order: 1–9, then 0 (the rest have none) */
+const LAYER_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+const keyOf = (id: SketchLayer) => { const i = SKETCH_LAYERS.findIndex(l => l.id === id); return i >= 0 && i < LAYER_KEYS.length ? LAYER_KEYS[i] : null; };
+const KEYS_HINT = "Shift+L opens this · 1–9, 0: a layer on or off · Shift+digit: that layer only · ` (backtick): all on or off";
+/** what changed, said once (a toast replaced, not one for each key) */
+const say = (text: string) => { toast(text, { id: "sketch-layers", duration: 1500 }); };
+
+/** all the layers on, or (all on already) all off */
+function allOnOff() {
+  const cur = sketchLayers$.getValue(), all = SKETCH_LAYERS.every(l => cur[l.id]);
+  setSketchLayers(all ? (Object.fromEntries(SKETCH_LAYERS.map(l => [l.id, false])) as SketchLayers) : ALL_SKETCH_LAYERS);
+  say(all ? "All layers off" : "All layers on");
+}
 
 export function SketchLayerPicker() {
   const [layers] = useSubject(sketchLayers$);
+  const [open, setOpen] = useState(false);
   const on = SKETCH_LAYERS.filter(l => layers[l.id]), all = on.length === SKETCH_LAYERS.length;
   const label = all ? "All layers" : on.length === 0 ? "No layers" : on.length === 1 ? on[0].label : `${on.length} layers`;
   // (the menu stays open while switching layers on and off)
   const keep = (e: Event) => e.preventDefault();
+  // the keys, on the page (before the editor's own: Shift+L would be its lane tool): not while typing, in a dialog or
+  // another menu, nor with Ctrl, Cmd or Alt (the browser's and the editor's)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+      const t = e.target instanceof HTMLElement ? e.target : null;
+      if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))) return;
+      if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return;
+      const menu = t?.closest('[role="menu"]');
+      if (menu && !menu.hasAttribute("data-layers-menu")) return;
+      if (e.code === "KeyL" && e.shiftKey) { e.preventDefault(); e.stopPropagation(); setOpen(true); return; }
+      if (e.code === "Backquote" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); allOnOff(); return; }
+      const digit = /^Digit([0-9])$/.exec(e.code)?.[1], i = digit === undefined ? -1 : LAYER_KEYS.indexOf(digit), l = SKETCH_LAYERS[i];
+      if (!l) return;
+      e.preventDefault(); e.stopPropagation();
+      toggleSketchLayer(l.id, e.shiftKey);
+      say(e.shiftKey ? `Only ${l.label}` : `${l.label} ${sketchLayers$.getValue()[l.id] ? "on" : "off"}`);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 w-44 justify-start font-normal" aria-label={`Layers: what the map shows (${label})`}>
+        <Button variant="outline" size="sm" className="h-8 w-44 justify-start font-normal" aria-label={`Layers: what the map shows (${label})`} title={`What the map shows · ${KEYS_HINT}`}>
           <Layers className="size-3.5 text-muted-foreground" />
           <span className="flex-1 text-left">{label}</span>
           <ChevronDown className="size-4 opacity-50" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuCheckboxItem checked={all} onSelect={keep}
-          onCheckedChange={() => setSketchLayers(all ? (Object.fromEntries(SKETCH_LAYERS.map(l => [l.id, false])) as SketchLayers) : ALL_SKETCH_LAYERS)}>
+      <DropdownMenuContent align="start" className="w-72" data-layers-menu>
+        <DropdownMenuCheckboxItem checked={all} onSelect={keep} onCheckedChange={allOnOff}>
           All layers
+          <kbd className="ml-auto rounded border px-1 font-mono text-[10px] text-muted-foreground">`</kbd>
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
         {SKETCH_LAYERS.map(l => (
           <DropdownMenuCheckboxItem key={l.id} className="group" checked={layers[l.id]} title={l.hint} onCheckedChange={() => toggleSketchLayer(l.id)} onSelect={keep}>
             <span className={cn(l.id === "markings" && !layers.surfaces && "text-muted-foreground")}>{l.label}</span>
-            <button type="button" className="ml-auto rounded px-1 text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 group-focus:opacity-100 hover:bg-background hover:text-foreground"
-              onClick={e => { e.stopPropagation(); e.preventDefault(); toggleSketchLayer(l.id, true); }} aria-label={`Only ${l.label}`}>only</button>
+            <span className="ml-auto flex items-center gap-1">
+              {keyOf(l.id) && <kbd className="rounded border px-1 font-mono text-[10px] text-muted-foreground" title={`${keyOf(l.id)}: on or off · Shift+${keyOf(l.id)}: only this`}>{keyOf(l.id)}</kbd>}
+              <button type="button" className="rounded px-1 text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 group-focus:opacity-100 hover:bg-background hover:text-foreground"
+                onClick={e => { e.stopPropagation(); e.preventDefault(); toggleSketchLayer(l.id, true); }} aria-label={`Only ${l.label}`}>only</button>
+            </span>
           </DropdownMenuCheckboxItem>
         ))}
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">Only the layers that are on are drawn. Markings show on the road surfaces only.</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">Only the layers that are on are drawn. Markings show on the road surfaces only. {KEYS_HINT}.</DropdownMenuLabel>
       </DropdownMenuContent>
     </DropdownMenu>
   );
