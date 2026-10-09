@@ -62,15 +62,24 @@ async function main() {
     }
   });
 
-  await t("restore: warns about every top-level field not kept as it is", () => {
-    const { scratch: _s, journeys: _j, ...rest } = base;
-    const s = summary(JSON.stringify({ ...rest, signalGroups: [] , links: [] }), "restore");
-    assert.deepEqual(s.fields, [{ field: "journeys", change: "missing in file" }, { field: "scratch", change: "kept from the current version" }]);
-    assert.ok(s.sketch.scratch, "the Sketch window's ideas kept");
-    assert.equal(s.same, false);
-    const g = summary(JSON.stringify({ ...base, geo: { lat: 47, lon: 24 }, traffic: { rate: 900, speed: 50 } }), "restore");
-    assert.equal(g.geo, true);
-    assert.equal(g.traffic, true);
+  await t("restore: every top-level field the file lacks is kept, and said so (T69)", () => {
+    // as the editor's Copy JSON: no geo, traffic, journeys or scratch; lane b moved
+    const { scratch: _s, journeys: _j, geo: _g, traffic: _t, crossings: _c, ...copy } = base;
+    const s = summary(JSON.stringify({ ...copy, lanes: [line("a", 0, 50), line("b", 62, 120), line("c", 0, -50)] }), "restore");
+    assert.deepEqual([s.sketch.geo, s.sketch.traffic, s.sketch.journeys, s.sketch.scratch, s.sketch.crossings], [cur.geo, cur.traffic, cur.journeys, cur.scratch, cur.crossings]);
+    assert.deepEqual(s.fields, ["crossings", "geo", "journeys", "scratch", "traffic"].map(field => ({ field, change: "kept from the current version" })));
+    assert.deepEqual(s.kinds.lanes, { added: [], removed: [], changed: ["b"] });
+    assert.equal(s.geo || s.traffic, false);
+    for (const k of ["connectors", "roads", "junctions", "crossings"] as const) assert.deepEqual(s.kinds[k].removed, [], k);
+    // nothing else changes: the same file as the plan is "the same"
+    assert.equal(summary(JSON.stringify(copy), "restore").same, true);
+  });
+
+  await t("restore: only a field present in the file replaces; one it empties is cleared (red)", () => {
+    const s = summary(JSON.stringify({ ...base, journeys: [], geo: { lat: 47, lon: 24 } }), "restore");
+    assert.deepEqual(s.fields, [{ field: "geo", change: "differs" }, { field: "journeys", change: "cleared by the file" }]);
+    assert.equal(s.sketch.journeys, undefined);
+    assert.equal(s.geo, true);
   });
 
   await t("restore: reports what the server's checks leave out", () => {
@@ -151,7 +160,7 @@ async function main() {
     assert.deepEqual(r, { ok: true, revision: 8 });
     const s = m.saves[0];
     assert.equal(s.revision, 7);
-    assert.deepEqual(s.restore, { note: "Restored from the file bistrita-fix.json: Bob's fix for J1" });
+    assert.deepEqual(s.restore, { note: "Restored from the file bistrita-fix.json: Bob's fix for J1", kind: "restore" });
     assert.deepEqual(s.sketch.lanes.map(l => l.id), ["a", "b", "c", "e"]);
     assert.deepEqual([s.network, s.settings, s.underlay], [{ nodes: [] }, { s: 1 }, null]);
   });
@@ -165,7 +174,16 @@ async function main() {
     assert.deepEqual(s.lanes.map(l => l.id), ["a", "b", "c", "f"]);
     assert.deepEqual(s.lanes[1].shape, { kind: "line", pts: [{ x: 60, y: 0 }, { x: 130, y: 0 }] });
     assert.deepEqual([s.scratch, s.journeys, s.connectors, s.roads], [cur.scratch, cur.journeys, cur.connectors, cur.roads]);
-    assert.equal(m.saves[0].restore.note, "Applied changes from the file patch.json");
+    // recorded as an apply, not a restore (History: "Applied from file", T69)
+    assert.deepEqual(m.saves[0].restore, { note: "Applied changes from the file patch.json", kind: "apply" });
+  });
+
+  await t("restore on the server keeps what the file lacks, from the stored sketch", async () => {
+    const { geo: _g, traffic: _t, journeys: _j, ...copy } = base;
+    const m = deps();
+    await restoreFromFile({ mode: "restore", file: copy, revision: 7 }, m.d);
+    const s = m.saves[0].sketch;
+    assert.deepEqual([s.geo, s.traffic, s.journeys], [cur.geo, cur.traffic, cur.journeys]);
   });
 
   await t("someone saved in between: refused, with the new revision", async () => {

@@ -145,11 +145,12 @@ export type SaveResult = { ok: true; revision: number; savedAt: string } | { ok:
  * Saves the plan if nobody else saved in between (optimistic concurrency on `revision`, unless `force`), and
  * records it in the history as `author`'s. With `keepBuildings` the client left the (unchanged) buildings out
  * of `network`, and the ones already stored are kept, so large imported plans save quickly. With `restore` it is
- * a restore (from a file): its own version in the history, with that note, never grouped with the autosaves.
+ * a restore or an apply from a file (`kind`): its own version in the history, with that note, never grouped
+ * with the autosaves.
  */
 export async function savePlan<U, P>(
   plan: Named<P, PlanId>, author: Named<U, ViewerId>,
-  input: { network: unknown; keepBuildings?: boolean; settings: unknown; underlay?: unknown; sketch?: unknown; revision: number; force?: boolean; restore?: { note: string } },
+  input: { network: unknown; keepBuildings?: boolean; settings: unknown; underlay?: unknown; sketch?: unknown; revision: number; force?: boolean; restore?: { note: string; kind?: "restore" | "apply" } },
   _proof: CanEditPlan<U, P>,
 ): Promise<SaveResult> {
   const id = plan.value;
@@ -171,7 +172,7 @@ export async function savePlan<U, P>(
       .where(where)
       .returning({ revision: schema.plans.revision, cityId: schema.plans.cityId });
     if (!r) return null;
-    if (input.restore) await recordVersion(tx, id, author.value, { revision: r.revision, network, settings, underlay, sketch }, "restore", input.restore.note);
+    if (input.restore) await recordVersion(tx, id, author.value, { revision: r.revision, network, settings, underlay, sketch }, input.restore.kind ?? "restore", input.restore.note);
     else await recordVersion(tx, id, author.value, { revision: r.revision, network, settings, underlay, sketch }, "save");
     await tx.update(schema.cities).set({ updatedAt: now }).where(eq(schema.cities.id, r.cityId));
     return r;

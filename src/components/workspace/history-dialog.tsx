@@ -15,10 +15,10 @@ import { readSketchFile, SKETCH_FILE_MAX_BYTES, SKETCH_KINDS, type FileMode, typ
 import { ui } from "@/state/store";
 import { timeAgo } from "@/lib/time";
 
-const KIND: Record<string, string> = { create: "Created", baseline: "Start of history", save: "Edited", restore: "Restored" };
+const KIND: Record<string, string> = { create: "Created", baseline: "Start of history", save: "Edited", restore: "Restored", apply: "Applied from file" };
 const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-type FromFile = { mode: FileMode; fileName: string; summary: FileSummary; payload: unknown; revision: number };
+type FromFile = { mode: FileMode; fileName: string; text: string; summary: FileSummary; payload: unknown; revision: number };
 const MODE_TITLE: Record<FileMode, string> = { apply: "Apply changes from", restore: "Restore from" };
 
 /**
@@ -45,31 +45,49 @@ export function HistoryButton({ planId, canRestore, fromFile = true }: { planId:
   const [file, setFile] = useState<FromFile | null>(null);
   const [note, setNote] = useState("");
   const [fileError, setFileError] = useState("");
+  // (its own flag rather than the transition's, so a refusal can never leave the button spinning)
+  const [fileBusy, setFileBusy] = useState(false);
 
+  /** read `text` for `mode` against the plan as it is saved now */
+  const summarise = async (mode: FileMode, fileName: string, text: string): Promise<FromFile | string> => {
+    const cur = await fetchPlanState(planId);
+    if (!cur) return "Couldn't load the plan";
+    const read = readSketchFile(text, mode, cur.sketch);
+    return read.ok ? { mode, fileName, text, summary: read.summary, payload: read.payload, revision: cur.revision } : read.error;
+  };
   const choose = (mode: FileMode) => { fileMode.current = mode; fileInput.current?.click(); };
-  const pickFile = (f: File | undefined) => start(async () => {
+  const pickFile = async (f: File | undefined) => {
     if (!f) return;
     const mode = fileMode.current;
     if (f.size > SKETCH_FILE_MAX_BYTES) { toast.error("The file is too large", { description: `A sketch file can be at most ${SKETCH_FILE_MAX_BYTES / 1024 / 1024} MB.` }); return; }
+    setFileBusy(true);
     try {
-      const text = await f.text();
-      const cur = await fetchPlanState(planId);
-      if (!cur) { toast.error("Couldn't load the plan"); return; }
-      const read = readSketchFile(text, mode, cur.sketch);
-      if (!read.ok) { toast.error(read.error); return; }
+      const x = await summarise(mode, f.name, await f.text());
+      if (typeof x === "string") { toast.error(x); return; }
       setNote(""); setFileError("");
-      setFile({ mode, fileName: f.name, summary: read.summary, payload: read.payload, revision: cur.revision });
+      setFile(x);
     } catch (e) { toast.error(e instanceof Error ? e.message : "Couldn't read the file"); }
-  });
-  const restoreFile = (x: FromFile) => start(async () => {
+    finally { setFileBusy(false); }
+  };
+  const restoreFile = async (x: FromFile) => {
+    setFileBusy(true);
     try {
       const r = await restorePlanFromFile(planId, { mode: x.mode, file: x.payload, revision: x.revision, note, fileName: x.fileName });
-      if (!r.ok) { setFileError(r.error); return; }
-      toast.success(x.mode === "apply" ? "Changes applied from the file" : "Restored from the file", { description: "It is a new version in the history, so you can undo it the same way." });
-      // reload so the editor, simulation and undo stack start from the restored state
-      location.reload();
-    } catch (e) { setFileError(e instanceof Error ? e.message : "Couldn't restore"); }
-  });
+      if (r.ok) {
+        toast.success(x.mode === "apply" ? "Changes applied from the file" : "Restored from the file", { description: "It is a new version in the history, so you can undo it the same way." });
+        // reload so the editor, simulation and undo stack start from the restored state
+        location.reload();
+        return;
+      }
+      if (r.revision === undefined) { setFileError(r.error); return; }
+      // saved by someone else in between: the summary again, against what is saved now
+      const y = await summarise(x.mode, x.fileName, x.text);
+      if (typeof y === "string") { setFileError(y); return; }
+      setFile(y);
+      setFileError(`The plan was saved by someone else in the meantime (now rev. ${y.revision}). The summary above is against that version: check it and confirm again.`);
+    } catch (e) { setFileError(e instanceof Error ? e.message : "Couldn't save"); }
+    finally { setFileBusy(false); }
+  };
   const restore = (v: VersionRow) => start(async () => {
     try {
       const r = await restorePlanVersion(planId, v.id);
@@ -94,11 +112,11 @@ export function HistoryButton({ planId, canRestore, fromFile = true }: { planId:
           </DialogHeader>
           {canRestore && fromFile && (
             <div className="flex items-center gap-2">
-              <input ref={fileInput} type="file" accept=".json,application/json" className="hidden" onChange={e => { pickFile(e.target.files?.[0]); e.target.value = ""; }} />
-              <Button size="sm" variant="outline" disabled={pending || busy} onClick={() => choose("apply")} title={busy ? "Wait for the current changes to save" : "Items in a .json file replace the plan's with the same id, new ones are added, nothing is removed"}>
+              <input ref={fileInput} type="file" accept=".json,application/json" className="hidden" onChange={e => { void pickFile(e.target.files?.[0]); e.target.value = ""; }} />
+              <Button size="sm" variant="outline" disabled={pending || busy || fileBusy} onClick={() => choose("apply")} title={busy ? "Wait for the current changes to save" : "Items in a .json file replace the plan's with the same id, new ones are added, nothing is removed"}>
                 <FilePlus2 /> Apply changes from file…
               </Button>
-              <Button size="sm" variant="ghost" disabled={pending || busy} onClick={() => choose("restore")} title={busy ? "Wait for the current changes to save" : "A whole sketch in a .json file replaces the plan's"}>
+              <Button size="sm" variant="ghost" disabled={pending || busy || fileBusy} onClick={() => choose("restore")} title={busy ? "Wait for the current changes to save" : "A whole sketch in a .json file replaces the plan's"}>
                 <FileUp /> Restore from file…
               </Button>
             </div>
@@ -156,7 +174,7 @@ export function HistoryButton({ planId, canRestore, fromFile = true }: { planId:
             <AlertDialogDescription>
               {file?.mode === "apply"
                 ? "The file's items replace the plan's with the same id and new ones are added; nothing is removed and everything else stays as it is. "
-                : "The file's sketch replaces the plan's. "}
+                : "The file's sketch replaces the plan's; whatever the file lacks (its place on Earth, traffic, journeys, …) is kept from the current version. "}
               Compared with the current version (rev. {file?.revision}). It is saved as a new version for everyone who opens the plan; the current state stays in the history, so you can switch back.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -165,8 +183,8 @@ export function HistoryButton({ planId, canRestore, fromFile = true }: { planId:
           {fileError && <p className="text-sm text-destructive" role="alert">{fileError}</p>}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction disabled={pending || busy || !!file?.summary.same} onClick={e => { e.preventDefault(); if (file) restoreFile(file); }}>
-              {pending && <Loader2 className="animate-spin" />} {file?.mode === "apply" ? "Apply" : "Restore"}
+            <AlertDialogAction disabled={fileBusy || busy || !!file?.summary.same} onClick={e => { e.preventDefault(); if (file) void restoreFile(file); }}>
+              {fileBusy && <Loader2 className="animate-spin" />} {file?.mode === "apply" ? "Apply" : "Restore"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -190,7 +208,12 @@ function FileSummaryView({ s }: { s: FileSummary }) {
   const removed = s.mode === "apply" ? SKETCH_KINDS.filter(k => s.kinds[k].removed.length) : [];
   const kinds = SKETCH_KINDS.filter(k => s.kinds[k].added.length || s.kinds[k].removed.length || s.kinds[k].changed.length);
   const goes = s.mode === "restore" ? SKETCH_KINDS.reduce((n, k) => n + s.kinds[k].removed.length, 0) : 0;
-  const differs = (d: boolean, now: unknown, word: string) => (!d ? "same" : <span className="font-medium text-foreground">{now === undefined ? "missing in file" : word}</span>);
+  const cleared = s.fields.filter(f => f.change === "cleared by the file").map(f => f.field);
+  const field = (name: string) => {
+    const f = s.fields.find(x => x.field === name);
+    return !f ? "same" : <span className={f.change === "cleared by the file" ? "font-medium text-destructive" : f.change === "kept from the current version" ? "" : "font-medium text-foreground"}>{f.change}</span>;
+  };
+  const others = s.fields.filter(f => f.field !== "geo" && f.field !== "traffic");
   return (
     <div className="max-h-[50vh] space-y-3 overflow-y-auto text-sm">
       {s.mode === "apply" && (
@@ -230,20 +253,24 @@ function FileSummaryView({ s }: { s: FileSummary }) {
         </table>
       )}
       <p className="text-xs text-muted-foreground">
-        Place on Earth (geo): {differs(s.geo, s.sketch.geo, "differs")} · Traffic settings: {differs(s.traffic, s.sketch.traffic, "differ")}
+        Place on Earth (geo): {field("geo")} · Traffic settings: {field("traffic")}
       </p>
-      {s.fields.length > 0 && (
+      {others.length > 0 && (
         <ul className="space-y-0.5 text-xs">
-          {s.fields.map(f => (
-            <li key={f.field} className={f.change === "kept from the current version" ? "text-muted-foreground" : "text-amber-600 dark:text-amber-400"}>
+          {others.map(f => (
+            <li key={f.field} className={f.change === "kept from the current version" ? "text-muted-foreground" : f.change === "cleared by the file" ? "text-destructive" : "text-amber-600 dark:text-amber-400"}>
               <span className="font-mono">{f.field}</span>: {f.change}
             </li>
           ))}
         </ul>
       )}
-      {goes > 0 && (
+      {(goes > 0 || cleared.length > 0) && (
         <p className="rounded border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-          Restoring removes {goes} item{goes === 1 ? "" : "s"} the plan has now (see Removed). If the file holds only the items to change, use &quot;Apply changes from file&quot; instead.
+          {s.mode === "restore" ? "Restoring" : "Applying"}
+          {goes > 0 && ` removes ${goes} item${goes === 1 ? "" : "s"} the plan has now (see Removed)`}
+          {goes > 0 && cleared.length > 0 && " and"}
+          {cleared.length > 0 && ` clears ${cleared.join(", ")}`}.
+          {s.mode === "restore" && " If the file holds only the items to change, use \"Apply changes from file\" instead."}
         </p>
       )}
       {removed.length > 0 && (

@@ -85,8 +85,9 @@ function merge(cur: Sketch | null, patch: SketchPatch): Sketch | null {
 }
 
 export type KindDiff = { added: string[]; removed: string[]; changed: string[] };
-/** a top-level field of the sketch that the result doesn't keep as it is */
-export type FieldDiff = { field: string; change: "differs" | "missing in file" | "only in file" | "kept from the current version" };
+/** a top-level field of the sketch that the result doesn't keep as it is, or keeps because the file lacks it */
+export type FieldChange = "differs" | "cleared by the file" | "only in file" | "kept from the current version";
+export type FieldDiff = { field: string; change: FieldChange };
 /** an item the file touches, for "apply": what it was and what it becomes */
 export type ItemChange = { kind: SketchKind; id: string; change: "added" | "replaced" | "unchanged" | "left out (invalid)" | "left out (invalid; the current one stays)"; before?: string; after?: string };
 
@@ -98,7 +99,7 @@ export type FileSummary = {
   kinds: Record<SketchKind, KindDiff>;
   geo: boolean;
   traffic: boolean;
-  /** every other top-level field that differs, is missing or is kept */
+  /** every top-level field (geo and traffic too, and an item list the file lacks) that differs, is cleared or is kept */
   fields: FieldDiff[];
   /** "apply": each item in the file */
   items: ItemChange[];
@@ -140,27 +141,42 @@ function kindDiffs(cur: Sketch | null, next: Sketch) {
   return out;
 }
 
-/** the other top-level fields: what the result doesn't keep as it is (the Sketch window's ideas are kept when the file has none) */
-function fieldDiffs(cur: Sketch | null, next: Sketch, keptScratch: boolean): FieldDiff[] {
-  const skip = new Set<string>([...SKETCH_KINDS, "geo", "traffic"]);
+/**
+ * The top-level fields (item lists apart, which are compared item by item, unless the file lacks the list):
+ * what the result keeps because the file lacks it, and what it doesn't keep as it is.
+ */
+function fieldDiffs(cur: Sketch | null, next: Sketch, kept: string[]): FieldDiff[] {
+  const items = new Set<string>(SKETCH_KINDS);
   const c = (cur ?? {}) as Record<string, unknown>, n = next as unknown as Record<string, unknown>;
   const out: FieldDiff[] = [];
   for (const f of [...new Set([...Object.keys(c), ...Object.keys(n)])].sort()) {
-    if (skip.has(f)) continue;
-    if (f === "scratch" && keptScratch) { out.push({ field: f, change: "kept from the current version" }); continue; }
-    if (c[f] !== undefined && n[f] === undefined) out.push({ field: f, change: "missing in file" });
+    if (kept.includes(f)) { out.push({ field: f, change: "kept from the current version" }); continue; }
+    if (items.has(f)) continue;
+    if (c[f] !== undefined && n[f] === undefined) out.push({ field: f, change: "cleared by the file" });
     else if (c[f] === undefined && n[f] !== undefined) out.push({ field: f, change: "only in file" });
     else if (!same(c[f], n[f])) out.push({ field: f, change: "differs" });
   }
   return out;
 }
 
-/** a whole sketch replacing the plan's; a file without the Sketch window's ideas keeps the plan's */
-export function restoreSketch(cur: Sketch | null, file: Sketch): Sketch {
-  return !file.scratch && cur?.scratch ? { ...file, scratch: cur.scratch } : file;
+/**
+ * A whole sketch replacing the plan's. Only what the file has replaces the current: a top-level field it
+ * lacks (geo, traffic, journeys, signal groups, the Sketch window's ideas, an item list, …) is kept from
+ * `cur` (`kept`). The editor's Copy JSON leaves some out, so its export restores without losing them.
+ */
+export function restoreSketch(cur: Sketch | null, file: Sketch, raw: Record<string, unknown>): { sketch: Sketch; kept: string[] } {
+  if (!cur) return { sketch: file, kept: [] };
+  const out: Record<string, unknown> = { ...file }, kept: string[] = [];
+  for (const [k, v] of Object.entries(cur)) {
+    if (v === undefined || raw[k] !== undefined) continue;
+    const empty = Array.isArray(v) && !v.length;
+    out[k] = v;
+    if (!empty) kept.push(k);
+  }
+  return { sketch: sanitizeSketch(out) ?? file, kept: kept.sort() };
 }
 
-export type FileResult = { ok: true; sketch: Sketch; keptScratch: boolean; file: Sketch | null; patch: SketchPatch; leftOut?: Set<string> } | { ok: false; error: string };
+export type FileResult = { ok: true; sketch: Sketch; kept: string[]; file: Sketch | null; patch: SketchPatch; leftOut?: Set<string> } | { ok: false; error: string };
 
 /**
  * The sketch that would be saved from a file's JSON (`raw`) for `mode`, on top of `cur`. The client and the
@@ -171,13 +187,14 @@ export function fileResult(raw: unknown, mode: FileMode, cur: Sketch | null): Fi
   if (!patch) return { ok: false, error: "The file has no sketch items (lanes, connectors, roads, junctions, links or crossings, each with an id)." };
   if (mode === "apply") {
     const { sketch, leftOut } = applyPatchDetail(cur, patch);
-    return sketch ? { ok: true, sketch, keptScratch: false, file: null, patch, leftOut } : { ok: false, error: "Nothing usable is left once the file's items are checked." };
+    return sketch ? { ok: true, sketch, kept: [], file: null, patch, leftOut } : { ok: false, error: "Nothing usable is left once the file's items are checked." };
   }
   const b = body(raw);
   if (!isObj(b) || !Array.isArray(b.lanes)) return { ok: false, error: "The file isn't a whole V2 sketch (no lanes list). Use \"Apply changes from file\" for a file with only some items." };
   const file = sanitizeSketch(b);
   if (!file || !file.lanes.length) return { ok: false, error: "The sketch in the file has no usable lanes." };
-  return { ok: true, sketch: restoreSketch(cur, file), keptScratch: !file.scratch && !!cur?.scratch, file, patch };
+  const { sketch, kept } = restoreSketch(cur, file, b);
+  return { ok: true, sketch, kept, file, patch };
 }
 
 /** what the client sends for `mode`: the whole sketch, or only the items to apply */
@@ -218,7 +235,7 @@ export function readSketchFile(text: string, mode: FileMode, cur: Sketch | null)
       if (lost) dropped[k] = lost;
     }
   }
-  const kinds = kindDiffs(cur, sketch), fields = fieldDiffs(cur, sketch, r.keptScratch);
+  const kinds = kindDiffs(cur, sketch), fields = fieldDiffs(cur, sketch, r.kept);
   const geo = !same(cur?.geo, sketch.geo), traffic = !same(cur?.traffic, sketch.traffic);
   const moved = SKETCH_KINDS.some(k => kinds[k].added.length || kinds[k].removed.length || kinds[k].changed.length);
   const sameAll = !moved && !geo && !traffic && !fields.some(f => f.change !== "kept from the current version");
