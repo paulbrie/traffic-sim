@@ -42,7 +42,8 @@ between them who goes first and tell Alice.
 
 ## 3. Rules
 
-- **Credentials.** Never read `.env` files or anyone's credentials. Use only a login the user typed into your own
+- **Credentials.** Never read `.env` files or anyone's credentials (one exception: trafficsim's `DATABASE_URL`, see
+  Database). Use only a login the user typed into your own
   session (testers have their own test accounts). Test logins for the dev apps are kept together in `/home/genie/team/credentials.md`
   (outside git; the user's decision: dev server, dev database). Add or update your own line when you set a password;
   use another account only when Alice or the user asks. Never put these in a repo, a message or a log.
