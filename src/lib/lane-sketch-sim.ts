@@ -1138,7 +1138,8 @@ export class SketchSim {
     const offLane = new Map<Edge, SimVehicle[]>(), tailOn = new Map<Edge, SimVehicle[]>();
     for (const v of this.vehicles) {
       if (v.left) { const l = offLane.get(v.left); if (l) l.push(v); else offLane.set(v.left, [v]); }
-      if (v.trail) { const l = tailOn.get(v.trail.edge); if (l) l.push(v); else tailOn.set(v.trail.edge, [v]); }
+      // (every edge its trail goes back over, a little past its body: on a short lane, the one before the connector before)
+      for (let t = v.trail, run = v.run; t && run < v.len + 30; run += t.run, t = t.before) { const l = tailOn.get(t.edge); if (!l) tailOn.set(t.edge, [v]); else if (l[l.length - 1] !== v) l.push(v); }
     }
     for (const s of this.sources) {
       const jw = s.wait?.[0];
@@ -1150,10 +1151,21 @@ export class SketchSim {
       const share = this.tuning.truckShare / 100;
       if (!jw && share > 0 && s.truck === undefined) s.truck = this.rnd() < share;
       const truck = jw ? jw.truck : share > 0 && !!s.truck, len = truck ? this.tuning.truckLength : LEN;
-      // (where the back of the last one in is: of those on its lane, over it from changing lane off it, or with their backs on it)
+      // (where the back of the last one in is, along the lane and on from its end: of those on it, over it from changing lane off it, on a
+      // connector leaving it, or gone on with their backs on it or not far past it; on a short way in, that one may be two edges on)
+      const outS = new Map(s.lane.outs.map(o => [o.conn, o.s]));
+      const backAlong = (v: SimVehicle) => {
+        if (v.edge === s.lane) return v.pos - v.len;
+        if (v.left === s.lane) { const g = this.ghostPos(v); return g === null ? Infinity : g - v.len; }
+        if (outS.has(v.edge)) return outS.get(v.edge)! + v.pos - v.len;
+        for (let t = v.trail, run = v.run; t && run < v.len + 30; run += t.run, t = t.before) {
+          if (t.edge === s.lane) return t.pos + run - v.len;
+          if (outS.has(t.edge)) return outS.get(t.edge)! + t.pos + run - v.len;
+        }
+        return Infinity;
+      };
       let first = Infinity;
-      for (const l of [byEdge.get(s.lane), offLane.get(s.lane), tailOn.get(s.lane)]) if (l) for (const v of l)
-        first = Math.min(first, (v.edge === s.lane ? v.pos : v.left === s.lane ? this.ghostPos(v) ?? Infinity : v.trail?.edge === s.lane && v.run < v.len ? v.trail.pos + v.run : Infinity) - v.len);
+      for (const l of [byEdge.get(s.lane), offLane.get(s.lane), tailOn.get(s.lane), ...s.lane.outs.flatMap(o => [byEdge.get(o.conn), tailOn.get(o.conn)])]) if (l) for (const v of l) first = Math.min(first, backAlong(v));
       if (first < S0 + 1) continue;
       // (nor where its body, just before the lane's start, would be on another car's way: one there, or about to be)
       if (!s.lane.ring) {
@@ -1840,7 +1852,10 @@ export class SketchSim {
     if (!t && !v.edge.ring && v.pos < dist) { const s0 = v.edge.locate(0); return { p: { x: s0.p.x - s0.d.x * (dist - v.pos), y: s0.p.y - s0.d.y * (dist - v.pos) }, d: s0.d }; }
     if (rest <= 0 || !t) return v.edge.locate(v.pos - dist);
     while (t.before && rest > t.run) { rest -= t.run; t = t.before; }
-    return t.edge.locate(t.pos - rest);
+    // (back past the start of a lane it came in on, nothing before it: still on the way in, behind the lane's start)
+    const x = t.pos - rest;
+    if (x < 0 && !t.before && !t.edge.ring) { const s0 = t.edge.locate(0); return { p: { x: s0.p.x + s0.d.x * x, y: s0.p.y + s0.d.y * x }, d: s0.d }; }
+    return t.edge.locate(x);
   }
 
   /**
