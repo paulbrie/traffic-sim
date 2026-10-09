@@ -12,11 +12,13 @@ interface Item { kind: string; title: string; sub: string; id: string; to: Searc
 
 const MAX = 60;
 const fmt = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toFixed(m < 10 ? 1 : 0)} m`);
+/** lower case without accents, so "garii" finds "Gării" and "sos" finds "Șoș" */
+const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 
 /** everything on the sketch (and the cars running now), as search entries */
 function catalogue(sk: Sketch, contents: Map<string, JunctionContents>, cars: { id: number; edge?: string; kmh?: number }[]): Item[] {
   const out: Item[] = [];
-  const add = (kind: string, title: string, sub: string, id: string, to: SearchTarget) => out.push({ kind, title, sub, id, to, hay: `${kind} ${title} ${sub} ${id}`.toLowerCase() });
+  const add = (kind: string, title: string, sub: string, id: string, to: SearchTarget) => out.push({ kind, title, sub, id, to, hay: fold(`${kind} ${title} ${sub} ${id}`) });
   const roadOf = new Map(sk.roads.flatMap(r => r.lanes.map(id => [id, r] as const)));
   const junctionsOf = new Map<string, string[]>(), junctionOfLane = new Map<string, string>(), junctionOfConn = new Map<string, string>();
   for (const j of sk.junctions) {
@@ -26,10 +28,18 @@ function catalogue(sk: Sketch, contents: Map<string, JunctionContents>, cars: { 
     for (const id of c?.connectors ?? []) junctionOfConn.set(id, j.name);
   }
   for (const j of sk.junctions) {
-    const c = contents.get(j.id), roads = [...new Set((c?.roads ?? []).map(id => sk.roads.find(r => r.id === id)?.name ?? id))];
+    // (each road name once: "Strada Gării ×3" where three of its roads meet)
+    const c = contents.get(j.id), names = new Map<string, number>();
+    for (const id of c?.roads ?? []) { const n = sk.roads.find(r => r.id === id)?.name ?? id; names.set(n, (names.get(n) ?? 0) + 1); }
+    const roads = [...names].map(([n, k]) => (k > 1 ? `${n} ×${k}` : n));
     add("Junction", j.name, [j.lights ? "lights" : "", roads.length ? roads.join(", ") : `${c?.connectors.length ?? 0} connectors`].filter(Boolean).join(" · "), j.id, { kind: "junction", id: j.id });
   }
-  for (const r of sk.roads) add("Road", r.name, `${r.lanes.length} lane${r.lanes.length === 1 ? "" : "s"}${junctionsOf.get(r.id)?.length ? ` · joined at ${junctionsOf.get(r.id)!.join(", ")}` : ""}`, r.id, { kind: "road", id: r.id });
+  // (a road's length, its longest lane's, and the junctions it meets tell apart roads of the same name)
+  const laneOf = new Map(sk.lanes.map(l => [l.id, l]));
+  for (const r of sk.roads) {
+    const len = Math.max(0, ...r.lanes.map(id => { const l = laneOf.get(id); return l ? laneLength(l.shape) : 0; }));
+    add("Road", r.name, `${r.lanes.length} lane${r.lanes.length === 1 ? "" : "s"} · ${fmt(len)}${junctionsOf.get(r.id)?.length ? ` · joined at ${junctionsOf.get(r.id)!.join(", ")}` : ""}`, r.id, { kind: "road", id: r.id });
+  }
   for (const l of sk.lanes) {
     const r = roadOf.get(l.id), j = junctionOfLane.get(l.id);
     add("Lane", r ? `${l.id} · ${r.name}` : l.id, [isFullCircle(l.shape) ? "ring" : "", fmt(laneLength(l.shape)), r ? "" : j ? `on ${j}` : "in no road", l.control ?? ""].filter(Boolean).join(" · "), l.id, { kind: "lane", id: l.id });
@@ -49,13 +59,13 @@ function catalogue(sk: Sketch, contents: Map<string, JunctionContents>, cars: { 
 
 /** the entries matching every word typed, best first: an exact id or name, then those starting with it */
 function search(items: Item[], q: string): Item[] {
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const words = fold(q).split(/\s+/).filter(Boolean);
   if (!words.length) return [];
   // (a car by #number: its number alone matches too)
-  const ql = q.trim().toLowerCase().replace(/^#/, ""), hits: { it: Item; score: number }[] = [];
+  const ql = fold(q.trim()).replace(/^#/, ""), hits: { it: Item; score: number }[] = [];
   for (const it of items) {
     if (!words.every(w => it.hay.includes(w.replace(/^#(?=\d)/, "")) || it.hay.includes(w))) continue;
-    const t = it.title.toLowerCase().replace(/^#/, ""), id = it.id.toLowerCase();
+    const t = fold(it.title).replace(/^#/, ""), id = it.id.toLowerCase();
     const score = id === ql || t === ql ? 0 : t.startsWith(ql) || id.startsWith(ql) ? 1 : 2;
     hits.push({ it, score });
     if (hits.length > 5000) break;
