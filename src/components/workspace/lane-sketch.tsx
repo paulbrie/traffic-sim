@@ -40,6 +40,7 @@ import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
 import { describeHover, SketchHoverCard, type HoverHit } from "@/components/v2/sketch-hover-card";
 import { View3DV2 } from "@/components/v2/view-3d-v2";
+import { RoutePanel } from "@/components/v2/route-panel";
 import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar } from "@/components/v2/sketch-replay-bar";
 import { CONSOLE_HEIGHT, ProblemConsole } from "@/components/v2/problem-console";
@@ -163,6 +164,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [tool, setTool] = useEditorState(ek, "tool");
   // (the plan's map in 3D: over the map, this editor staying up under it; the plan's editor only, for now)
   const [mode] = useEditorState(ek, "mode");
+  // (the route traced: its lanes and connectors drawn over the map)
+  const [route, setRoute] = useEditorState(ek, "route");
+  const routeShown = useMemo(() => (route.result?.ok ? { lanes: new Set(route.result.steps.flatMap(x => (x.kind === "lane" ? [x.id] : []))), conns: new Set(route.result.steps.flatMap(x => (x.kind === "connector" ? [x.id] : []))) } : null), [route.result]);
   const in3d = page && mode === "3d";
   /** the 3D view's canvas while it shows (the bridge's screenshot), and what its keys and buttons ask of it */
   const canvas3d = useRef<(() => HTMLCanvasElement | null) | null>(null);
@@ -228,7 +232,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown });
 
   // ------------------------------------------------------------ coordinates, snapping, picking
   const toWorld = (e: { clientX: number; clientY: number }): Pt => {
@@ -412,8 +416,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (a render: the kept image drawn again only if something it shows changed, not for the cars' stats)
   const shownBy = useRef<unknown[]>([]);
   useEffect(() => {
-    live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d };
-    const now = [sketch, sel, tool, contents, selPt, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d];
+    live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown };
+    const now = [sketch, sel, tool, contents, selPt, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown];
     const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
     shownBy.current = now;
     redraw(changed);
@@ -1361,6 +1365,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                     Make a circle <span className="ml-auto text-[11px] text-muted-foreground">a ring, made round</span>
                   </DropdownMenuItem>
                 </>}
+                {page && menu.lanes.length === 1 && <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setRoute(r => ({ ...r, from: menu.lanes[0] }))}>Route from here <span className="ml-auto text-[11px] text-muted-foreground">lane {menu.lanes[0]}</span></DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setRoute(r => ({ ...r, to: menu.lanes[0] }))}>Route to here <span className="ml-auto text-[11px] text-muted-foreground">lane {menu.lanes[0]}</span></DropdownMenuItem>
+                </>}
                 {canTest && (menu.lanes.length > 0 || hasSel(sel)) && <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onSelect={() => testInSketch(hasSel(sel) ? undefined : { ...NO_SEL, lanes: menu.lanes })}>
@@ -1439,6 +1448,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
           {stats ? <RoadResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "road", id })} /> : null}
+          {page && <RoutePanel sketch={sketch} onGo={x => goTo({ kind: x.kind, id: x.id })} />}
           <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} heldBack={stats?.heldBackBy}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
@@ -2324,6 +2334,8 @@ interface PaintState {
   selPt: { lane: string; i: number } | null;
   /** the cars coloured by their speed (else all one colour, a truck's cab its own) */
   bySpeed: boolean;
+  /** the route traced (its lanes and connectors), drawn over the map */
+  route: { lanes: Set<string>; conns: Set<string> } | null;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
   cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean }[] | null;
   /** the time of the cars shown (live or replayed), for the traffic lights; null with no cars */
@@ -2620,6 +2632,13 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     if (!on && !over) continue;
     path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath();
     ctx.strokeStyle = col.sel; ctx.globalAlpha = on ? 0.9 : 0.35; ctx.lineWidth = l.width + 5 * px; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  // the route traced: an orange band under its lanes and along its connectors
+  if (S && st.route) {
+    ctx.strokeStyle = "#f97316"; ctx.globalAlpha = 0.55; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    for (const l of sk.lanes) { if (!st.route.lanes.has(l.id) || !vis.lanes.has(l.id)) continue; path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath(); ctx.lineWidth = l.width + 3 * px; ctx.stroke(); }
+    for (const c of sk.connectors) { if (!st.route.conns.has(c.id)) continue; const pts = connectorPts(sk, c); if (!pts) continue; path(pts); ctx.lineWidth = Math.max(1.6, 6 * px); ctx.stroke(); }
     ctx.globalAlpha = 1;
   }
   // lanes: a green line down the middle (on a faint band as wide as the lane), with chevrons along their direction of travel

@@ -77,7 +77,8 @@ Editor = { mode: "plan" | "3d",                  // the map from above or in 3D 
            run: { running, speed, t, replayT, playing, kept },   // t: at most 4 times a second
            dialogs: { search: { open, query }, console: { open, kind, text, clearedAt }, settings,
                       optimizer: { open, junction, chosen, effort, stage } },
-           tables: { junctions: { by, flip, shown }, roads: { by, flip, shown } } }   // the results tables' sort
+           tables: { junctions: { by, flip, shown }, roads: { by, flip, shown } },   // the results tables' sort
+           route: { from, to, result: { ok, steps, length, freeTime } | { ok: false, reason } | null } }   // the route tracer
 ```
 
 Changes an agent may ask for (`app`; no others, nothing written by path):
@@ -87,6 +88,7 @@ Changes an agent may ask for (`app`; no others, nothing written by path):
 | `panel` | `{ id, open }` | folds an inspector panel away or opens it (ids: `selection`, `traffic`, `fuel`, `demand`, `junction-results`, `road-results`, `test-in-sketch`, `background`, `car`, `crossing`) |
 | `console` | `{ open?, kind?, text?, editor? }` | the problem console: open or close it, show one kind (`all`, `stuck`, `collision`, `jump`, `deadlock`, `breakdown`, `towed`), filter its lines |
 | `search` | `{ open, query?, editor? }` | the search box (Cmd/Ctrl+K), with what is typed in it |
+| `route` | `{ from, to, editor? }` or `{ clear: true }` | the route tracer from a lane to an exit lane; the page works it out (read `editors.<editor>.route.result`: the steps in order, metres, seconds at the speed limits; or why there is none) |
 | `mode` | `{ mode: "plan" \| "3d", editor? }` | the plan's map from above or in 3D, as the header's Plan / 3D switch (the plan's editor only, for now) |
 | `sketchWindow` | `{ open? }` | the Sketch window over the plan opened or closed (without `open`: the other way), as the top bar's Sketch button does |
 | `layers` | `{ set: { [id]: boolean } }` | layers shown or hidden (ids as in `layers`), kept in the browser as the user's own are |

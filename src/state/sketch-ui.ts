@@ -59,10 +59,18 @@ export interface EditorUi {
     /** Optimise timings: open (from that junction's lights), the lights chosen, the effort, where it is */
     optimizer: { open: boolean; junction: string | null; chosen: string[]; effort: string; stage: "setup" | "running" | "done" | "error" };
   };
+  /** the route tracer: from a lane to an exit lane, the way the cars would go (or why there is none) */
+  route: RouteUi;
   /** the results tables: sorted by which column (or "name"), the other way or not, how many rows shown */
   tables: { junctions: TableUi; roads: TableUi };
 }
 export interface TableUi { by: string; flip: boolean; shown: number }
+export interface RouteUi {
+  /** the lane it starts on and the exit lane it ends on (null: not chosen) */
+  from: string | null; to: string | null;
+  /** what was found: the steps in order (lanes, connectors, lane changes), its length (m) and its time at the speed limits (s); or why there is none */
+  result: { ok: true; steps: ({ kind: "lane" | "connector"; id: string } | { kind: "change"; from: string; to: string })[]; length: number; freeTime: number } | { ok: false; reason: string } | null;
+}
 export type EditorKind = "plan" | "scratch" | "whole";
 /** Test in Sketch's options (kept in the browser): how far out roads are cut, replacing what is in the Sketch or adding beside it, running at once */
 export interface TestOptions { cut: number; mode: "replace" | "add"; run: boolean }
@@ -87,11 +95,12 @@ const editor = (tool: Tool): EditorUi => ({
   run: { running: false, speed: 1, t: 0, replayT: null, playing: false, kept: null },
   dialogs: { search: { open: false, query: "" }, console: { open: false, kind: "all", text: "", clearedAt: -1 }, settings: false, optimizer: { open: false, junction: null, chosen: [], effort: "quick", stage: "setup" } },
   tables: { junctions: { by: "delay", flip: false, shown: 12 }, roads: { by: "delay", flip: false, shown: 12 } },
+  route: { from: null, to: null, result: null },
 });
 export const freshEditor = (): EditorUi => editor("select");
 
 /** the inspector's panels (their ids): the only ones that can be folded away */
-export const PANEL_IDS = ["selection", "car", "crossing", "test-in-sketch", "background", "traffic", "fuel", "junction-results", "road-results", "demand"];
+export const PANEL_IDS = ["selection", "car", "crossing", "test-in-sketch", "background", "traffic", "fuel", "junction-results", "road-results", "demand", "route"];
 // (kept in the browser: the panels folded away, Test in Sketch's options)
 const PANELS_KEY = "trafficsim:v2-closed-panels", TEST_KEY = "laneSketch:testInSketch", DISPLAY_KEY = "v2:display";
 const stored = <T,>(key: string, fallback: T): T => {
@@ -251,6 +260,13 @@ export function offerSketchUiToBridge() {
       if (ed !== "plan") throw new Error("only the plan's editor has a 3D view for now");
       sketchUi.getValue().editors.plan.mode = mode;
       return { mode };
+    }),
+    // the route tracer: { from, to, editor? } (lanes: the one it starts on, the exit lane), or { clear: true }
+    bridgeApp.register("route", a => {
+      const r = editorFor(a).route;
+      if (argOf(a, "clear", "boolean")) { r.from = null; r.to = null; r.result = null; return { cleared: true }; }
+      r.from = argOf(a, "from", "string", true)!; r.to = argOf(a, "to", "string", true)!;
+      return { from: r.from, to: r.to, note: "the route is worked out by the page: read editors.<editor>.route.result" };
     }),
     // the Sketch window over the plan opened or closed: { open }, as the top bar's Sketch button does
     bridgeApp.register("sketchWindow", a => {
