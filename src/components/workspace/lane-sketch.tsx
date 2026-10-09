@@ -22,7 +22,7 @@ import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStat
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
-import { EditorKindContext, NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, useUiPath, type TestOptions, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
+import { EditorKindContext, editorBack, NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, useUiPath, type TestOptions, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
 import { clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
 import { testPiece } from "@/lib/test-piece";
 import { readPalette, speedColor } from "@/render/palette";
@@ -357,6 +357,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (a new editor starts as one: its state put back when it goes (the Sketch window closed, the page left); the
   // replay kept by cars that stay, as before; the editor the user is at, for agents)
   useEffect(() => {
+    editorBack(ek, ui.getValue().planId);
     const r = sketchSim()?.replayRange();
     if (r) setReplayRange(r);
     const el = panel.current, m = mirrored.current, at = () => { const u = sketchUi.getValue(), a = ek === "scratch" ? "scratch" : "plan"; if (u.active !== a) u.active = a; };

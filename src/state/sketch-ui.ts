@@ -154,8 +154,24 @@ const OBJ = "\u0000obj:";
 const at = (path: string): unknown => path.split("/").reduce<unknown>((o, k) => (o !== null && typeof o === "object" ? (o as Record<string, unknown>)[k] : undefined), sketchUi.getValue());
 /** an editor's state now (outside React: handlers, frames) */
 export const editorUi = (kind: EditorKind) => sketchUi.getValue().editors[kind];
-/** an editor's state back to how a new one starts (it went: the Sketch window closed, the page left) */
-export function resetEditor(kind: EditorKind) { sketchUi.getValue().editors[kind] = freshEditor(); }
+/**
+ * An editor's state back to how a new one starts, once it has gone (the Sketch window closed, the page left): a moment
+ * later, and not if the same editor is back by then (a remount: React's double start in development, a hot reload),
+ * which keeps what it had
+ */
+const resetting = new Map<EditorKind, ReturnType<typeof setTimeout>>();
+export function resetEditor(kind: EditorKind) {
+  clearTimeout(resetting.get(kind));
+  resetting.set(kind, setTimeout(() => { resetting.delete(kind); sketchUi.getValue().editors[kind] = freshEditor(); }, 100));
+}
+/** the plan each editor was last on */
+const onPlan = new Map<EditorKind, string>();
+/** an editor (back) on the page, on plan `plan`: a reset it was due is called off; on another plan than before, it starts afresh now */
+export function editorBack(kind: EditorKind, plan: string) {
+  clearTimeout(resetting.get(kind)); resetting.delete(kind);
+  if (onPlan.has(kind) && onPlan.get(kind) !== plan) sketchUi.getValue().editors[kind] = freshEditor();
+  onPlan.set(kind, plan);
+}
 
 // ---------------------------------------------------------------- what the bridge sees
 
