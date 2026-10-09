@@ -27,6 +27,7 @@ import { readPalette, speedColor } from "@/render/palette";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
+import { FuelPanel, fmtFuel } from "@/components/v2/fuel-panel";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
@@ -1090,6 +1091,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           )}
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
+          {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
@@ -1141,7 +1143,7 @@ function makeCurve(ids: string[]) {
 
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
-  return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, p: c.p, d: c.d, route: [] };
+  return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, p: c.p, d: c.d, route: [] };
 }
 
 function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClose, onCopy }: {
@@ -1175,6 +1177,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
           {row("Heading for", info.dest ? `the exit at the end of lane ${info.dest}` : "anywhere (no exit it can reach)")}
           {row("Going", info.goal ? (info.goal.startsWith("end:") ? `off the end of ${edgeName(info.goal.slice(4))}` : edgeName(info.goal)) : info.leaves ? `off the end of ${edgeName(info.edge)}` : info.exit ? `${edgeName(info.exit)}, then ${edgeName(info.then ?? "")}` : info.then ? `onto ${edgeName(info.then)}` : "round the ring")}
           {row("Now", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          {Number.isFinite(info.fuel) && row("Fuel so far", <span className="font-mono tabular">{fmtFuel(info.fuel / 1000)}</span>)}
           {info.journey && row("Journey", <span className="font-mono">{info.journey}</span>)}
           {info.reroutes > 0 && row("Went another way", `${info.reroutes} time${info.reroutes === 1 ? "" : "s"}`)}
           {info.still >= 1 && row("Stopped for", <span className="font-mono tabular">{info.still.toFixed(0)} s</span>)}

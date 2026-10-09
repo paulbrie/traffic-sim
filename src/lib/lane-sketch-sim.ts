@@ -43,6 +43,7 @@ import {
   type LaneControl, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
 } from "./lane-sketch";
 import { resolveTuning, type Tuning } from "./sketch-tuning";
+import { FUEL_STILL, fuelRate, hasStopStart } from "../engine/fuel";
 
 export interface SimParams {
   /** vehicles per hour coming in on each lane where traffic starts */
@@ -84,7 +85,17 @@ export interface SimStats {
   pedsWaiting: number;
   /** the journeys' results (when the sketch has journeys) */
   journeys?: JourneyStats[];
+  /** fuel burnt since the start (see `FuelStats`) */
+  fuel: FuelStats;
 }
+/**
+ * Fuel, by V1's model (engine/fuel.ts: from each vehicle's speed and acceleration): litres burnt, the part
+ * standing still in traffic (and the vehicle-seconds of it), km driven, trips finished and their fuel, and
+ * the CO₂ (kg: 2.31 a litre of petrol for cars, 2.64 of diesel for trucks)
+ */
+export interface FuelStats { total: number; idle: number; idleTime: number; km: number; trips: number; tripFuel: number; co2: number }
+const CO2_PETROL = 2.31, CO2_DIESEL = 2.64;
+const noFuel = (): FuelStats => ({ total: 0, idle: 0, idleTime: 0, km: 0, trips: 0, tripFuel: 0, co2: 0 });
 /** a journey's results so far: vehicles sent in, arrived at its way out (their mean trip, s), driving now, waiting to come in; those that had no way there */
 export interface JourneyStats { id: string; sent: number; arrived: number; meanTrip: number; driving: number; waiting: number; noRoute: number }
 /** a journey as the sim runs it: its ways' lanes, the next arrival, those waiting to come in (at a lane, going to a lane), and its counts */
@@ -210,6 +221,8 @@ export interface SimVehicle {
   truck: boolean;
   /** its length, metres */
   len: number;
+  /** fuel it has burnt, mL */
+  fuel: number;
   /** the journey it is on (going to that journey's way out), and when it came in */
   journey: string | null;
   born: number;
@@ -405,6 +418,7 @@ export class SketchSim {
   private deadlocks = 0;
   private changes = 0;
   private reroutes = 0;
+  private fuel = noFuel();
   /** pairs of cars overlapping last step ("a-b") */
   private touching = new Set<string>();
   /** the zebras, and where they run over each lane and connector */
@@ -609,7 +623,7 @@ export class SketchSim {
   reset() {
     this.posed = null;
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
-    this.log = []; this.frames = []; this.drawn.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0;
+    this.log = []; this.frames = []; this.drawn.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel();
     this.replay = []; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
     for (const x of this.crossings) x.ped = newPed();
@@ -1039,7 +1053,7 @@ export class SketchSim {
       if (s.wait && !s.wait.length) delete s.wait;
       // (no faster than it can stop from behind the last car in)
       const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - S0 - 1)));
-      const v: SimVehicle = { id: this.nextId++, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : 1, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, born: this.t };
+      const v: SimVehicle = { id: this.nextId++, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : 1, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, born: this.t, fuel: 0 };
       if (jw) this.journeys.find(j => j.def.id === jw.journey)!.sent++;
       else s.truck = undefined;
       // (speeds varying: its own share of the lanes' speed; no random number drawn when they don't, so runs stay as they were)
@@ -1380,10 +1394,17 @@ export class SketchSim {
     }
 
     const gone = new Set<SimVehicle>(), drove = new Map<SimVehicle, number>();
+    const T = this.tuning, F = this.fuel;
     for (const v of this.vehicles) {
       const nv = Math.max(0, v.v + acc.get(v)! * dt);
       let move = (v.v + nv) * 0.5 * dt;
       drove.set(v, move);
+      // (fuel: idling standing still, unless its engine stops; more with speed and speeding up)
+      const vAvg = (v.v + nv) / 2, still = vAvg < FUEL_STILL;
+      const idle = still && hasStopStart(v.id, T.stopStartShare) ? 0 : (v.truck ? T.fuelIdleTruck : T.fuelIdleCar) / 3.6;
+      const mL = fuelRate(v.truck ? "truck" : "car", vAvg, (nv - v.v) / dt, idle) * dt;
+      v.fuel += mL; F.total += mL / 1000; F.km += move / 1000; F.co2 += (mL / 1000) * (v.truck ? CO2_DIESEL : CO2_PETROL);
+      if (still) { F.idle += mL / 1000; F.idleTime += dt; }
       v.v = nv;
       v.still = nv < 0.1 ? v.still + dt : 0;
       v.held = nv < 0.1 && !v.why?.startsWith("signal") ? v.held + dt : nv < 0.1 ? v.held : 0;
@@ -1410,6 +1431,7 @@ export class SketchSim {
         if (e.ring) v.pos %= e.len;
         else if (v.pos >= e.len) {
           gone.add(v); this.finished++; this.note({ what: "out", car: v.id, lane: e.key });
+          F.trips++; F.tripFuel += v.fuel / 1000;
           const j = v.journey ? this.journeys.find(x => x.def.id === v.journey) : null;
           if (j && j.to.includes(e.id)) { j.arrived++; j.tripSum += this.t - v.born; }
         }
@@ -1588,7 +1610,7 @@ export class SketchSim {
     return {
       t: this.t, vehicles: n, spawned: this.spawned, finished: this.finished, overlaps,
       meanSpeed: n ? (this.vehicles.reduce((a, v) => a + v.v, 0) / n) * 3.6 : 0,
-      waiting: this.vehicles.filter(v => v.still >= 20).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes,
+      waiting: this.vehicles.filter(v => v.still >= 20).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes, fuel: { ...this.fuel },
       pedsCrossed: this.crossings.reduce((a, x) => a + x.ped.crossed, 0), pedsWaiting: this.crossings.reduce((a, x) => a + x.ped.waiting, 0),
       ...(this.journeys.length ? { journeys: this.journeys.map(j => ({
         id: j.def.id, sent: j.sent, arrived: j.arrived, meanTrip: j.arrived ? j.tripSum / j.arrived : 0, noRoute: j.noRoute,
@@ -1638,7 +1660,7 @@ export class SketchSim {
       /** the exit it is going to (by the shortest way), or null (wandering) */
       dest: v.dest,
       changeTo: this.hop(v)?.n.lane.key ?? null, goal: v.goal && v.goal.lane !== v.edge ? v.goal.conn?.key ?? `end:${v.goal.lane.key}` : null,
-      why: v.why, still: v.still, reroutes: v.reroutes, journey: v.journey, p: pose.p, d: pose.d, route,
+      why: v.why, still: v.still, reroutes: v.reroutes, journey: v.journey, fuel: v.fuel, p: pose.p, d: pose.d, route,
     };
   }
 

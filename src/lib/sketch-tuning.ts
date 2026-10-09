@@ -6,12 +6,12 @@
  */
 
 export type TuneKey = "accel" | "brake" | "headway" | "minGap" | "speedSpread" | "patience" | "yieldGap" | "yieldSpeed" | "pedWalk" | "pedYield" | "pedSpeed"
-  | "rerouteAfter" | "truckShare" | "truckLength" | "truckAccel" | "truckHeadway" | "truckSpeed";
+  | "rerouteAfter" | "fuelIdleCar" | "fuelIdleTruck" | "stopStartShare" | "truckShare" | "truckLength" | "truckAccel" | "truckHeadway" | "truckSpeed";
 export type Tuning = Record<TuneKey, number>;
-export type TuneGroup = "Drivers" | "Trucks" | "Junctions" | "Pedestrians";
+export type TuneGroup = "Drivers" | "Trucks" | "Junctions" | "Pedestrians" | "Fuel";
 export interface TuneInfo { key: TuneKey; group: TuneGroup; label: string; unit: string; min: number; max: number; step: number; def: number; help: string }
 
-export const TUNE_GROUPS: TuneGroup[] = ["Drivers", "Trucks", "Junctions", "Pedestrians"];
+export const TUNE_GROUPS: TuneGroup[] = ["Drivers", "Trucks", "Junctions", "Pedestrians", "Fuel"];
 export const TUNING: TuneInfo[] = [
   { key: "accel", group: "Drivers", label: "Acceleration", unit: "m/s²", min: 1, max: 4, step: 0.1, def: 1.5, help: "How hard cars speed up when the road is clear." },
   { key: "brake", group: "Drivers", label: "Comfortable braking", unit: "m/s²", min: 1, max: 5, step: 0.1, def: 2, help: "How hard cars brake when they see a stop coming (they brake harder if they must)." },
@@ -29,6 +29,9 @@ export const TUNING: TuneInfo[] = [
   { key: "rerouteAfter", group: "Junctions", label: "Look for another way after", unit: "s", min: 10, max: 300, step: 5, def: 40, help: "A driver kept waiting this long where it turns off looks for another way to where it is going (once at each place)." },
   { key: "pedWalk", group: "Pedestrians", label: "Walk time at a red", unit: "s", min: 3, max: 20, step: 1, def: 8, help: "At lights: seconds at the start of the traffic's red in which people may step onto the crossing." },
   { key: "pedYield", group: "Pedestrians", label: "Gap left for cars at zebras", unit: "s", min: 0, max: 20, step: 1, def: 5, help: "At zebras: after a group crosses, seconds before the next may step out." },
+  { key: "fuelIdleCar", group: "Fuel", label: "Car idling", unit: "L/h", min: 0.3, max: 2.5, step: 0.05, def: 0.8, help: "Fuel a car burns standing still with its engine running (modern petrol cars about 0.6–1 L/h). Driving adds to this with speed and acceleration." },
+  { key: "fuelIdleTruck", group: "Fuel", label: "Truck idling", unit: "L/h", min: 0.5, max: 6, step: 0.1, def: 2.5, help: "Fuel a truck burns standing still with its engine running." },
+  { key: "stopStartShare", group: "Fuel", label: "Vehicles with stop-start", unit: "%", min: 0, max: 100, step: 1, def: 0, help: "Share of vehicles whose engine switches off while they stand still (at a red light, in a queue): they burn nothing then." },
   { key: "pedSpeed", group: "Pedestrians", label: "Walking speed", unit: "m/s", min: 0.6, max: 2, step: 0.1, def: 1.2, help: "How fast people cross." },
 ];
 export const DEFAULT_TUNING: Tuning = Object.fromEntries(TUNING.map(t => [t.key, t.def])) as Tuning;
