@@ -18,7 +18,9 @@ export type ToSimWorker =
   | { type: "replay"; t: number; req: number }
   | { type: "report"; req: number }
   | { type: "moment"; t: number; box: Parameters<SketchSim["moment"]>[1]; req: number }
-  | { type: "car"; id: number; req: number };
+  | { type: "car"; id: number; req: number }
+  | { type: "breakDown"; id: number }
+  | { type: "tow"; id: number };
 
 export interface SimFrame {
   type: "frame";
@@ -94,6 +96,8 @@ self.onmessage = (e: MessageEvent<ToSimWorker>) => {
       if (!m.running) { running = false; rate = 0; frame(true); }
       break;
     case "watch": watch = m.id; frame(false); break;
+    case "breakDown": sim?.breakDown(m.id); frame(true); break;
+    case "tow": sim?.tow(m.id); frame(true); break;
     case "replay": post({ type: "replay", req: m.req, frame: sim?.replayAt(m.t) ?? null }); break;
     case "report": if (sim) post({ type: "report", req: m.req, report: sim.report() }); break;
     case "moment": post({ type: "moment", req: m.req, moment: sim?.moment(m.t, m.box) ?? null }); break;

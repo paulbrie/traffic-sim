@@ -87,6 +87,9 @@ export interface SimStats {
   journeys?: JourneyStats[];
   /** fuel burnt since the start (see `FuelStats`) */
   fuel: FuelStats;
+  /** vehicles broken down so far (at random, or by hand), and those towed away */
+  breakdowns: number;
+  towed: number;
 }
 /**
  * Fuel, by V1's model (engine/fuel.ts: from each vehicle's speed and acceleration): litres burnt, the part
@@ -111,7 +114,7 @@ interface SimCrossing { def: SketchCrossing; len: number; on: { edge: Edge; s0: 
 export interface PedView { id: string; waiting: number; crossing: number; progress: number; /** (live only) crossed so far, and their mean wait (s) */ crossed?: number; avgWait?: number }
 
 /** something that happened in the run */
-export type SimEvent = { t: number; what: "in" | "onto" | "out" | "gone" | "jump" | "collision" | "deadlock" | "edit" | "params" | "change" | "reroute"; car?: number } & Record<string, unknown>;
+export type SimEvent = { t: number; what: "in" | "onto" | "out" | "gone" | "jump" | "collision" | "deadlock" | "edit" | "params" | "change" | "reroute" | "breakdown" | "towed"; car?: number } & Record<string, unknown>;
 /** a car's state as kept and copied */
 interface CarState { edge: string; pos: number; v: number; exit: string | null; run: number; trail: string | null; x: number; y: number; heading: number; why: string | null }
 const FRAME_FIELDS = ["car", "edge", "pos", "v", "exit", "run", "trail", "x", "y", "heading", "why"] as const;
@@ -121,7 +124,7 @@ const KEEP_REPLAY = 600;
 /** at most this many cars and events in a moment copied (the nearest the middle of the view, the nearest in time) */
 const MOMENT_CARS = 400, MOMENT_EVENTS = 1500;
 /** a recorded car, as replayed */
-export interface ReplayCar { id: number; p: Pt; d: Pt; len: number; trailer?: Body; share: number; kmh: number; edge: string; exit: string | null; why: string | null }
+export interface ReplayCar { id: number; p: Pt; d: Pt; len: number; trailer?: Body; share: number; broken?: boolean; kmh: number; edge: string; exit: string | null; why: string | null }
 const r2 = (x: number) => Math.round(x * 100) / 100;
 /** seconds for a vehicle going `v` to cover `d` metres, speeding up as it can (`acc`, up to `vmax`) */
 function timeTo(d: number, v: number, vmax: number, acc = A_MAX) {
@@ -223,6 +226,8 @@ export interface SimVehicle {
   len: number;
   /** fuel it has burnt, mL */
   fuel: number;
+  /** when its engine failed (it rolls to a stop and stays, hazard lights on, until towed away); null: running */
+  broken: number | null;
   /** the journey it is on (going to that journey's way out), and when it came in */
   journey: string | null;
   born: number;
@@ -399,8 +404,9 @@ export class SketchSim {
     /** vehicles on journeys waiting to come in here (before the lane's own next one) */ wait?: { journey: string; dest: string; truck: boolean }[];
   }[] = [];
   private journeys: SimJourney[] = [];
-  /** the journeys' own random numbers (so runs without journeys stay as they were) */
+  /** the journeys' own random numbers (so runs without journeys stay as they were); and the breakdowns' */
   private jRnd: () => number;
+  private bRnd: () => number;
   /** the shortest ways to the exits, and the exits' shares of the trips */
   private routes: RouteTable | null = null;
   private exitWeights = new Map<string, number>();
@@ -419,6 +425,8 @@ export class SketchSim {
   private changes = 0;
   private reroutes = 0;
   private fuel = noFuel();
+  private breakdowns = 0;
+  private towed = 0;
   /** pairs of cars overlapping last step ("a-b") */
   private touching = new Set<string>();
   /** the zebras, and where they run over each lane and connector */
@@ -435,6 +443,7 @@ export class SketchSim {
     this.rnd = mulberry32(this.seed);
     this.pedRnd = mulberry32((this.seed * 7919) ^ 0x9ed5);
     this.jRnd = mulberry32((this.seed * 104729) ^ 0x3c6e);
+    this.bRnd = mulberry32((this.seed * 15485863) ^ 0x7f4a);
     this.tuning = resolveTuning(params.tune);
     applyTuning(this.tuning);
     this.sketch = sk;
@@ -623,12 +632,12 @@ export class SketchSim {
   reset() {
     this.posed = null;
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
-    this.log = []; this.frames = []; this.drawn.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel();
+    this.log = []; this.frames = []; this.drawn.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); this.breakdowns = 0; this.towed = 0;
     this.replay = []; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
     for (const x of this.crossings) x.ped = newPed();
     // (from the start again: the same random numbers, the same run)
-    this.rnd = mulberry32(this.seed); this.pedRnd = mulberry32((this.seed * 7919) ^ 0x9ed5); this.jRnd = mulberry32((this.seed * 104729) ^ 0x3c6e);
+    this.rnd = mulberry32(this.seed); this.pedRnd = mulberry32((this.seed * 7919) ^ 0x9ed5); this.jRnd = mulberry32((this.seed * 104729) ^ 0x3c6e); this.bRnd = mulberry32((this.seed * 15485863) ^ 0x7f4a);
     for (const s of this.sources) { s.next = this.gap(s.rate); delete s.wait; }
     for (const j of this.journeys) Object.assign(j, { next: this.jGap(j.def.rate), sent: 0, arrived: 0, tripSum: 0, noRoute: 0 });
   }
@@ -718,6 +727,28 @@ export class SketchSim {
     return { waiting: p.waiting, crossing: p.crossing, crossed: p.crossed, avgWait: p.crossed ? p.waitSum / p.crossed : 0, lights: x.lit.length > 0, over: x.on.map(o => o.edge.key) };
   }
 
+  /** the engine of car `id` fails: it rolls to a stop and stays there, hazard lights on, until towed away (false: no such car, or broken already) */
+  breakDown(id: number): boolean {
+    const v = this.vehicles.find(x => x.id === id);
+    if (!v || v.broken !== null) return false;
+    v.broken = this.t; this.breakdowns++;
+    this.note({ what: "breakdown", car: v.id, edge: v.edge.key, at: r2(v.pos) });
+    return true;
+  }
+  /** car `id` (broken down, or any) towed away now */
+  tow(id: number): boolean {
+    const v = this.vehicles.find(x => x.id === id);
+    if (!v) return false;
+    const gone = new Set<SimVehicle>();
+    this.towAway(v, gone);
+    this.vehicles = this.vehicles.filter(x => !gone.has(x));
+    this.posed = null;
+    return true;
+  }
+  private towAway(v: SimVehicle, gone: Set<SimVehicle>) {
+    gone.add(v); this.towed++;
+    this.note({ what: "towed", car: v.id, edge: v.edge.key, ...(v.broken !== null ? { after: r2(this.t - v.broken) } : {}) });
+  }
   /** seconds to a journey's next vehicle */
   private jGap(rate: number) { return rate > 0 ? (-Math.log(1 - this.jRnd()) * 3600) / rate : Infinity; }
   /** seconds to the next vehicle at a source */
@@ -860,6 +891,8 @@ export class SketchSim {
       if (w === v) continue;
       const d = pos - m;
       if (d >= 0) {
+        // (never onto a lane only to stop behind one broken down there)
+        if (w.broken !== null && d < 60) return null;
         const gap = d - w.len;
         if (gap < 1 || this.idm(v.v, L.vmax, gap, w.v, accOf(v), hwOf(v)) < -B_SAFE) return null;
         if (gap < 80) ahead = Math.min(ahead, gap);
@@ -1009,6 +1042,12 @@ export class SketchSim {
     applyTuning(this.tuning);
     this.t += dt;
     if (Math.floor(this.t) !== Math.floor(this.t - dt)) this.breakDeadlocks();
+    // engines failing at random (one moving on a lane; none drawn while there are none, so runs stay as they were)
+    const bph = this.tuning.breakdownsPerHour;
+    if (bph > 0 && this.bRnd() < (bph * dt) / 3600) {
+      const can = this.vehicles.filter(v => v.broken === null && v.edge.kind === "lane" && v.v > 3);
+      if (can.length) this.breakDown(can[Math.floor(this.bRnd() * can.length)].id);
+    }
     // lights (those that respond to traffic: is a car within 50 m of a connector they hold?)
     for (const c of this.signals) c.step(this.t, dt, conns => this.vehicles.some(v => v.edge.signal === c && !!v.exit && conns.includes(v.exit.id) && this.exitS(v.exit) - v.pos < 50));
     const byEdge = new Map<Edge, SimVehicle[]>();
@@ -1053,7 +1092,7 @@ export class SketchSim {
       if (s.wait && !s.wait.length) delete s.wait;
       // (no faster than it can stop from behind the last car in)
       const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - S0 - 1)));
-      const v: SimVehicle = { id: this.nextId++, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : 1, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, born: this.t, fuel: 0 };
+      const v: SimVehicle = { id: this.nextId++, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : 1, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, born: this.t, fuel: 0, broken: null };
       if (jw) this.journeys.find(j => j.def.id === jw.journey)!.sent++;
       else s.truck = undefined;
       // (speeds varying: its own share of the lanes' speed; no random number drawn when they don't, so runs stay as they were)
@@ -1097,6 +1136,8 @@ export class SketchSim {
 
     const acc = new Map<SimVehicle, number>(), held = new Map<SimVehicle, { gap: number; lead: number }>();
     for (const v of this.vehicles) {
+      // (broken down: rolls to a stop where it is, an obstacle in its lane)
+      if (v.broken !== null) { acc.set(v, v.v > 0 ? -Math.min(2.5, v.v / dt) : 0); held.set(v, { gap: Infinity, lead: 0 }); v.why = "broken down"; v.blocking = false; continue; }
       const route = this.route(v);
       let gap = Infinity, lead = 0, vmax = v.edge.vmax * v.vf, why: string | null = null;
       const behind = (g: number, speed: number, reason: string) => { if (g < gap) { gap = g; lead = speed; why = reason; } };
@@ -1342,7 +1383,7 @@ export class SketchSim {
     const rt = this.routes;
     if (rt) for (const v of this.vehicles) {
       const x = v.exit, dest = v.dest;
-      if (!x || !dest || v.held < REROUTE || this.t - v.rerouteT < REROUTE || v.gaveUp?.includes(x) || v.edge.kind !== "lane" || this.along(v.edge, v.pos, this.exitS(x)) > 10) continue;
+      if (!x || !dest || v.broken !== null || v.held < REROUTE || this.t - v.rerouteT < REROUTE || v.gaveUp?.includes(x) || v.edge.kind !== "lane" || this.along(v.edge, v.pos, this.exitS(x)) > 10) continue;
       // (nor queued behind another on its lane: the one at the head looks)
       const ahead = /^car (\d+)/.exec(v.why ?? ""), lead = ahead && this.vehicles.find(w => w.id === Number(ahead[1]));
       if (lead && lead.edge === v.edge) continue;
@@ -1364,7 +1405,7 @@ export class SketchSim {
     // or to overtake, a slower car in its way and clearly more room on the other
     for (const v of this.vehicles) {
       const e = v.edge;
-      if (e.kind !== "lane" || !e.neighbors.length || v.run < v.len || this.t - v.changedAt < SHIFT_T + 1) continue;
+      if (e.kind !== "lane" || !e.neighbors.length || v.broken !== null || v.run < v.len || this.t - v.changedAt < SHIFT_T + 1) continue;
       const h = this.hop(v), { gap, lead } = held.get(v)!;
       if (h) {
         if (v.pos > h.n.a1 - 1) { this.plan(v); continue; }
@@ -1379,6 +1420,13 @@ export class SketchSim {
         if (!q || (h.by - v.pos > 60 && q.ahead < Math.min(gap, 50) - 5)) continue;
         this.changeIn(byEdge, ghosts, v, h.n);
       } else {
+        // (stopped behind one broken down in its lane: any lane beside with room will do, to get round it)
+        const m = gap < 60 && v.v < 3 ? /^car (\d+)/.exec(v.why ?? "") : null, lw = m && this.vehicles.find(w => w.id === Number(m[1]));
+        if (lw && lw.broken !== null && lw.edge === e) {
+          const n = e.neighbors.find(n => n.a1 - v.pos > 10 && this.room(v, n, byEdge, ghosts));
+          if (n) this.changeIn(byEdge, ghosts, v, n);
+          continue;
+        }
         const g = v.goal;
         if (!g || this.t - v.changedAt < 5 || v.blocking || gap > 40 || lead > 0.7 * e.vmax || v.v > 0.85 * e.vmax) continue;
         if (!(v.why ?? "").startsWith("car ")) continue;
@@ -1401,7 +1449,7 @@ export class SketchSim {
       drove.set(v, move);
       // (fuel: idling standing still, unless its engine stops; more with speed and speeding up)
       const vAvg = (v.v + nv) / 2, still = vAvg < FUEL_STILL;
-      const idle = still && hasStopStart(v.id, T.stopStartShare) ? 0 : (v.truck ? T.fuelIdleTruck : T.fuelIdleCar) / 3.6;
+      const idle = v.broken !== null || (still && hasStopStart(v.id, T.stopStartShare)) ? 0 : (v.truck ? T.fuelIdleTruck : T.fuelIdleCar) / 3.6;
       const mL = fuelRate(v.truck ? "truck" : "car", vAvg, (nv - v.v) / dt, idle) * dt;
       v.fuel += mL; F.total += mL / 1000; F.km += move / 1000; F.co2 += (mL / 1000) * (v.truck ? CO2_DIESEL : CO2_PETROL);
       if (still) { F.idle += mL / 1000; F.idleTime += dt; }
@@ -1437,6 +1485,8 @@ export class SketchSim {
         }
       }
     }
+    // (broken down long enough: towed away)
+    for (const v of this.vehicles) if (v.broken !== null && this.t - v.broken >= this.tuning.brokenTowAfter) this.towAway(v, gone);
     if (gone.size) this.vehicles = this.vehicles.filter(v => !gone.has(v));
     this.record(drove);
   }
@@ -1503,7 +1553,7 @@ export class SketchSim {
     const f = fr[lo], n = f.tags.length / 3, cars: ReplayCar[] = [];
     for (let i = 0; i < n; i++) {
       const a = f.nums.subarray(i * 8, i * 8 + 8), g = f.tags.subarray(i * 3, i * 3 + 3);
-      cars.push({ id: a[0], p: { x: a[1], y: a[2] }, d: { x: a[3], y: a[4] }, len: a[7], kmh: a[5] * 3.6, share: a[6], edge: this.tags[g[0]], exit: this.tags[g[1]] || null, why: this.tags[g[2]] || null });
+      cars.push({ id: a[0], p: { x: a[1], y: a[2] }, d: { x: a[3], y: a[4] }, len: a[7], kmh: a[5] * 3.6, share: Math.max(0, a[6]), ...(a[6] < 0 ? { broken: true } : {}), edge: this.tags[g[0]], exit: this.tags[g[1]] || null, why: this.tags[g[2]] || null });
     }
     const tr = f.trailers;
     if (tr) for (let i = 0; i < tr.length; i += 6) cars[tr[i]].trailer = { p: { x: tr[i + 1], y: tr[i + 2] }, d: { x: tr[i + 3], y: tr[i + 4] }, len: tr[i + 5] };
@@ -1571,7 +1621,8 @@ export class SketchSim {
       const nums = new Float32Array(cars.length * 8), tags = new Uint32Array(cars.length * 3);
       const trailers: number[] = [];
       cars.forEach(({ v, p, d, len, trailer: t }, i) => {
-        nums.set([v.id, p.x, p.y, d.x, d.y, v.v, v.v / Math.max(1, v.edge.vmax), len], i * 8);
+        // (broken down: its share kept as -1)
+        nums.set([v.id, p.x, p.y, d.x, d.y, v.v, v.broken !== null ? -1 : v.v / Math.max(1, v.edge.vmax), len], i * 8);
         if (t) trailers.push(i, t.p.x, t.p.y, t.d.x, t.d.y, t.len);
         tags.set([this.tag(v.edge.key), this.tag(v.exit?.key ?? null), this.tag(v.why)], i * 3);
       });
@@ -1610,7 +1661,7 @@ export class SketchSim {
     return {
       t: this.t, vehicles: n, spawned: this.spawned, finished: this.finished, overlaps,
       meanSpeed: n ? (this.vehicles.reduce((a, v) => a + v.v, 0) / n) * 3.6 : 0,
-      waiting: this.vehicles.filter(v => v.still >= 20).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes, fuel: { ...this.fuel },
+      waiting: this.vehicles.filter(v => v.still >= 20).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes, fuel: { ...this.fuel }, breakdowns: this.breakdowns, towed: this.towed,
       pedsCrossed: this.crossings.reduce((a, x) => a + x.ped.crossed, 0), pedsWaiting: this.crossings.reduce((a, x) => a + x.ped.waiting, 0),
       ...(this.journeys.length ? { journeys: this.journeys.map(j => ({
         id: j.def.id, sent: j.sent, arrived: j.arrived, meanTrip: j.arrived ? j.tripSum / j.arrived : 0, noRoute: j.noRoute,
@@ -1624,7 +1675,7 @@ export class SketchSim {
    * from while it isn't all on this one), and its speed as a share of its desired speed.
    */
   poses() {
-    return this.vehicles.map(v => ({ id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax) }));
+    return this.vehicles.map(v => ({ id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax), ...(v.broken !== null ? { broken: true } : {}) }));
   }
 
   /** the car under `p` (on its body, or within `tol` metres of it): the nearest; null if none */
@@ -1660,7 +1711,7 @@ export class SketchSim {
       /** the exit it is going to (by the shortest way), or null (wandering) */
       dest: v.dest,
       changeTo: this.hop(v)?.n.lane.key ?? null, goal: v.goal && v.goal.lane !== v.edge ? v.goal.conn?.key ?? `end:${v.goal.lane.key}` : null,
-      why: v.why, still: v.still, reroutes: v.reroutes, journey: v.journey, fuel: v.fuel, p: pose.p, d: pose.d, route,
+      why: v.why, still: v.still, reroutes: v.reroutes, journey: v.journey, fuel: v.fuel, broken: v.broken !== null ? this.t - v.broken : null, p: pose.p, d: pose.d, route,
     };
   }
 

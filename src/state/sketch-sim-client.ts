@@ -129,6 +129,9 @@ export class SketchSimClient {
     if (this.watching !== id) { this.watching = id; this.send({ type: "watch", id }); return null; }
     return this.watched?.id === id ? this.watched.info : null;
   }
+  /** car `id`'s engine fails now (it stops where it is until towed away); or it is towed away now */
+  breakDown(id: number) { this.send({ type: "breakDown", id }); }
+  tow(id: number) { this.send({ type: "tow", id }); }
   unwatch() { if (this.watching !== null) { this.watching = null; this.watched = null; this.send({ type: "watch", id: null }); } }
   /** the car under `p` (on its body, or within `tol` metres), from the cars last sent */
   carAt(p: Pt, tol: number): number | null {

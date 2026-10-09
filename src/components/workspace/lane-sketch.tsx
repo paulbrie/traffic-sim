@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, Undo2, Waypoints, X } from "lucide-react";
+import { Car, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1072,6 +1072,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
             <CarPanel info={carInfo} id={selCar} follow={follow} running={running} replayT={replayT}
+              onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
               onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
               onCopy={async () => {
                 const s = sim.current, info = s?.inspect(selCar);
@@ -1143,11 +1144,13 @@ function makeCurve(ids: string[]) {
 
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
-  return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, p: c.p, d: c.d, route: [] };
+  return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
-function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClose, onCopy }: {
+function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
   info: ReturnType<SketchSim["inspect"]>; id: number; follow: boolean; running: boolean; replayT: number | null;
+  /** its engine fails now; it is towed away now */
+  onBreakDown: () => void; onTow: () => void;
   onFollow: (on: boolean) => void; onPick: (id: number) => void; onClose: () => void; onCopy: () => void;
 }) {
   const row = (label: string, value: React.ReactNode) => (
@@ -1181,6 +1184,12 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
           {info.journey && row("Journey", <span className="font-mono">{info.journey}</span>)}
           {info.reroutes > 0 && row("Went another way", `${info.reroutes} time${info.reroutes === 1 ? "" : "s"}`)}
           {info.still >= 1 && row("Stopped for", <span className="font-mono tabular">{info.still.toFixed(0)} s</span>)}
+          {info.broken !== null && row("Broken down", <span className="font-mono tabular text-amber-700 dark:text-amber-400">{info.broken.toFixed(0)} s ago</span>)}
+          <div className="flex gap-1.5">
+            {info.broken === null
+              ? <Button size="sm" variant="outline" className="h-7 flex-1" onClick={onBreakDown} title="Its engine fails now: it stops where it is, hazard lights on, until towed away (Simulation settings: Breakdowns)"><TriangleAlert /> Break down</Button>
+              : <Button size="sm" variant="outline" className="h-7 flex-1" onClick={onTow} title="Tow it away now"><Truck /> Tow away</Button>}
+          </div>
           <div className="flex gap-1.5">
             <Button size="sm" variant={follow ? "secondary" : "outline"} className="h-7 flex-1" aria-pressed={follow} onClick={() => onFollow(!follow)} title="Keep the view on the car while the cars run">
               <Crosshair /> {follow ? "Following" : "Follow"}
@@ -1668,6 +1677,7 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
           {row("Collisions", stats.collisions ?? 0, stats.collisions ? "text-destructive" : undefined)}
           {(stats.laneChanges ?? 0) > 0 && row("Lane changes", stats.laneChanges)}
           {(stats.reroutes ?? 0) > 0 && row("Went another way", stats.reroutes)}
+          {(stats.breakdowns ?? 0) > 0 && row("Broken down / towed away", `${stats.breakdowns} / ${stats.towed}`, "text-amber-700 dark:text-amber-400")}
           {(stats.deadlocks ?? 0) > 0 && row("Deadlocks broken", stats.deadlocks, "text-amber-700 dark:text-amber-400")}
           {row("Jumps", stats.jumps, stats.jumps ? "text-destructive" : undefined)}
           {(sketch.crossings?.length ?? 0) > 0 && row("Pedestrians crossed / waiting", `${stats.pedsCrossed ?? 0} / ${stats.pedsWaiting ?? 0}`)}
@@ -1870,7 +1880,7 @@ interface PaintState {
   placeOn: (p: Pt) => LaneAt | null;
   selPt: { lane: string; i: number } | null;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
-  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number } }[] | null;
+  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean }[] | null;
   /** the time of the cars shown (live or replayed), for the traffic lights; null with no cars */
   simT: number | null;
   /** the traffic lights as they run with the cars (null: worked out from the fixed cycle) */
@@ -2262,6 +2272,16 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     const t = car.trailer;
     if (t) vehicleBody(t.p, t.d, t.len, "#e9e6dd", false, "rgba(20,28,34,0.7)");
     vehicleBody(car.p, car.d, car.len, speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15), true, "rgba(20,28,34,0.45)");
+    // (broken down: hazard lights flashing at its four corners, dim between flashes so they show when paused)
+    if (car.broken) {
+      const { p, d } = car, back = t ?? car, bl = t ? t.len : car.len, r = Math.max(0.35, 2.5 * px);
+      const corners = [[car.p, car.len / 2], [back.p, -bl / 2]].flatMap(([q, a]) => [-1, 1].map(side => {
+        const c = q as Pt, k = a as number, dd = q === p ? d : back.d;
+        return { x: c.x + dd.x * k - dd.y * side * 0.8, y: c.y + dd.y * k + dd.x * side * 0.8 };
+      }));
+      ctx.fillStyle = Math.floor(performance.now() / 400) % 2 ? "#a86f00" : "#ffb000";
+      for (const c of corners) { ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.fill(); }
+    }
   }
   // the car picked: the way it will go, and a ring round it
   if (D && st.car) {
