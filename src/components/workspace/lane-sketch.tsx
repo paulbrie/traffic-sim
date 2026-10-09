@@ -28,6 +28,7 @@ import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField, Stepper } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
 import { FuelPanel, fmtFuel } from "@/components/v2/fuel-panel";
+import { JunctionResults } from "@/components/v2/junction-results";
 import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
@@ -1136,6 +1137,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
+          {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
           <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">

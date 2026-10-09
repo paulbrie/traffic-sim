@@ -89,6 +89,8 @@ export interface SimStats {
   turns?: Record<string, number>;
   /** fuel burnt since the start (see `FuelStats`) */
   fuel: FuelStats;
+  /** each junction's results since the start (see `JunctionStats`) */
+  junctions: JunctionStats[];
   /** vehicles broken down so far (at random, or by hand), and those towed away */
   breakdowns: number;
   towed: number;
@@ -98,6 +100,15 @@ export interface SimStats {
  * standing still in traffic (and the vehicle-seconds of it), km driven, trips finished and their fuel, and
  * the CO₂ (kg: 2.31 a litre of petrol for cars, 2.64 of diesel for trucks)
  */
+/**
+ * A junction's results since the start: vehicles through it; the time they lost (against driving at the speed they
+ * want) on the last `APPROACH` metres of its ways in and on it, in vehicle-seconds; the vehicles standing there, on
+ * average and at most; the fuel burnt there (L). Only counted: the run is the same with or without them.
+ */
+export interface JunctionStats { id: string; through: number; delay: number; queueMean: number; queueMax: number; fuel: number }
+/** metres of a way in counted as the junction's */
+const APPROACH = 100;
+interface JunctionTally { id: string; through: number; delay: number; queueSum: number; queueMax: number; fuel: number; now: number }
 export interface FuelStats { total: number; idle: number; idleTime: number; km: number; trips: number; tripFuel: number; co2: number }
 const CO2_PETROL = 2.31, CO2_DIESEL = 2.64;
 const noFuel = (): FuelStats => ({ total: 0, idle: 0, idleTime: 0, km: 0, trips: 0, tripFuel: 0, co2: 0 });
@@ -448,6 +459,11 @@ export class SketchSim {
   private changes = 0;
   private reroutes = 0;
   private fuel = noFuel();
+  /** per junction: its tally, and the junction each of its connectors and lanes on it is in, each lane ending into it its way in to */
+  private jTally: JunctionTally[] = [];
+  private jOn = new Map<Edge, number>();
+  private jIn = new Map<Edge, number>();
+  private jSince = 0;
   private breakdowns = 0;
   private towed = 0;
   /** pairs of cars overlapping last step ("a-b") */
@@ -644,6 +660,20 @@ export class SketchSim {
     });
     for (const s of this.sources) if (s.wait) { s.wait = s.wait.filter(w => this.journeys.some(j => j.def.id === w.journey && j.to.includes(w.dest))); if (!s.wait.length) delete s.wait; }
     this.edges = edges;
+    // junctions: what is on each and its ways in (their tallies kept by id)
+    {
+      const cs = contentsOf(sk), oldT = new Map(this.jTally.map(j => [j.id, j]));
+      this.jTally = []; this.jOn = new Map(); this.jIn = new Map();
+      for (const j of sk.junctions) {
+        const c = cs.get(j.id);
+        if (!c) continue;
+        const k = this.jTally.length;
+        this.jTally.push(oldT.get(j.id) ?? { id: j.id, through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 });
+        for (const id of c.connectors) { const e = edges.get(`conn:${id}`); if (e) this.jOn.set(e, k); }
+        for (const id of c.lanes) { const e = edges.get(`lane:${id}`); if (e) this.jOn.set(e, k); }
+        for (const a of junctionApproaches(sk, c)) for (const id of a.lanes) { const e = edges.get(`lane:${id}`); if (e && !this.jOn.has(e)) this.jIn.set(e, k); }
+      }
+    }
     this.buildCrossings(sk, edges);
     this.vehicles = this.vehicles.flatMap(v => {
       const e = edges.get(v.edge.key);
@@ -683,7 +713,7 @@ export class SketchSim {
   reset() {
     this.posed = null;
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
-    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); this.breakdowns = 0; this.towed = 0;
+    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, { through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
     this.replay = []; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
     for (const x of this.crossings) x.ped = newPed();
@@ -1631,6 +1661,7 @@ export class SketchSim {
 
     const gone = new Set<SimVehicle>(), drove = new Map<SimVehicle, number>();
     const T = this.tuning, F = this.fuel;
+    for (const J of this.jTally) J.now = 0;
     for (const v of this.vehicles) {
       const nv = Math.max(0, v.v + acc.get(v)! * dt);
       let move = (v.v + nv) * 0.5 * dt;
@@ -1641,6 +1672,13 @@ export class SketchSim {
       const mL = fuelRate(v.truck ? "truck" : "car", vAvg, (nv - v.v) / dt, idle) * dt;
       v.fuel += mL; F.total += mL / 1000; F.km += move / 1000; F.co2 += (mL / 1000) * (v.truck ? CO2_DIESEL : CO2_PETROL);
       if (still) { F.idle += mL / 1000; F.idleTime += dt; }
+      // (a junction's: on it, or on the last metres of a way into it)
+      const jk = this.jOn.get(v.edge) ?? (v.edge.kind === "lane" && !v.edge.ring && v.edge.len - v.pos < APPROACH ? this.jIn.get(v.edge) : undefined);
+      if (jk !== undefined) {
+        const J = this.jTally[jk];
+        J.delay += dt * Math.max(0, 1 - nv / Math.max(1, v.edge.vmax * v.vf)); J.fuel += mL / 1000;
+        if (nv < 0.5) J.now++;
+      }
       v.v = nv;
       v.still = nv < 0.1 ? v.still + dt : 0;
       v.held = nv < 0.1 && !v.why?.startsWith("signal") ? v.held + dt : nv < 0.1 ? v.held : 0;
@@ -1651,6 +1689,7 @@ export class SketchSim {
           move -= e.len - v.pos;
           v.trail = this.trailOf(v, e, e.len);
           v.edge = e.to!.lane; v.pos = e.to!.s; v.run = 0; v.stopped = false;
+          { const a = this.jOn.get(v.edge); if (a !== undefined && a !== this.jOn.get(e)) this.jTally[a].through++; }
           this.plan(v);
           this.note({ what: "onto", car: v.id, from: e.key, to: v.edge.key, at: r2(v.pos), exit: v.exit?.key ?? null });
           continue;
@@ -1661,6 +1700,7 @@ export class SketchSim {
         if (move >= toExit) {
           { const sc = this.splitOut.get(v.exit!.id); if (sc) this.turnCounts.set(sc.count, (this.turnCounts.get(sc.count) ?? 0) + 1); }
           move -= toExit; v.trail = this.trailOf(v, e, exitAt!); v.edge = v.exit!; v.pos = 0; v.run = 0; v.exit = null; v.goal = null; v.stopped = false;
+          { const a = this.jOn.get(v.edge); if (a !== undefined && a !== this.jOn.get(e)) this.jTally[a].through++; }
           this.note({ what: "onto", car: v.id, from: e.key, left: r2(exitAt!), to: v.edge.key });
           continue;
         }
@@ -1674,6 +1714,9 @@ export class SketchSim {
         }
       }
     }
+    // (the junctions' queues: how many stand there now, over the time so far)
+    for (const J of this.jTally) { J.queueSum += J.now * dt; if (J.now > J.queueMax) J.queueMax = J.now; }
+    this.jSince += dt;
     // (broken down long enough: towed away)
     for (const v of this.vehicles) if (v.broken !== null && this.t - v.broken >= this.tuning.brokenTowAfter) this.towAway(v, gone);
     if (gone.size) this.vehicles = this.vehicles.filter(v => !gone.has(v));
@@ -1879,7 +1922,9 @@ export class SketchSim {
     return {
       t: this.t, vehicles: n, spawned: this.spawned, finished: this.finished, overlaps,
       meanSpeed: n ? (this.vehicles.reduce((a, v) => a + v.v, 0) / n) * 3.6 : 0,
-      waiting: this.vehicles.filter(v => v.still >= 20).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes, fuel: { ...this.fuel }, breakdowns: this.breakdowns, towed: this.towed,
+      waiting: this.vehicles.filter(v => v.still >= 20).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes, fuel: { ...this.fuel },
+      junctions: this.jTally.map(j => ({ id: j.id, through: j.through, delay: j.delay, queueMean: this.jSince > 0 ? j.queueSum / this.jSince : 0, queueMax: j.queueMax, fuel: j.fuel })),
+      breakdowns: this.breakdowns, towed: this.towed,
       pedsCrossed: this.crossings.reduce((a, x) => a + x.ped.crossed, 0), pedsWaiting: this.crossings.reduce((a, x) => a + x.ped.waiting, 0),
       ...(this.splitOut.size ? { turns: Object.fromEntries(this.turnCounts) } : {}),
       ...(this.journeys.length ? { journeys: this.journeys.map(j => ({
