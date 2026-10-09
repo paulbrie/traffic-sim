@@ -15,16 +15,21 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T57 | Agents City Desk: its labels on Alex's OverlayLabel (removeChild on Table → City) | Tom | 2026-10-09 | |
+| T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | |
+| T55 | Re-run Bistrița seeds 1–3 with T46 (readings at 5, 10, 15 min) | Ramona | 2026-10-09 | after T50 |
 | T52 | V1→V2 quick wins: per-road speed limits, hover cards, zoom keys and cursor x/y, a colour-by-speed switch with a legend, the sim settings that map | Tatiana | 2026-10-09 | |
 | T50 | Re-test of T48, and a smoke test of Next.js 16.4 | Ramona | 2026-10-09 | |
 | T49 | Next.js 16.3 → 16.4.0 in trafficsim, then the admin (after the user's deploy) | Alex | 2026-10-09 | |
-| T46 | Regressions after 5e8d5b7: a deadlock loop at J21 (Strada Sigmirului), collisions on l1945 after J574 | Bob | 2026-10-09 | from T45 |
-| T43 | Agents City: React "synchronously unmount a root" warning (32× per load, drei Html labels) | Alex | 2026-10-09 | after T42 |
 
 ## Done
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T54 | Agents City: collapsible side panel and sections | Tom | 2026-10-09 | admin-dev |
+| T53 | Agents City: City / Table switch for everyone (T key, deep links) | Tom | 2026-10-09 | admin-dev |
+| T46 | Bistrița after 5e8d5b7: give-way stop points, mutual waits read at the step's start, side-by-side lanes not crossings, U-turns, spawn room; 900 s deadlocks 344/422/401 → 9/49/3 | Bob | 2026-10-09 | 657bb2d |
+| T43 | Agents City: the unmount warnings (own OverlayLabel instead of drei Html) | Alex | 2026-10-09 | admin-dev |
 | T51 | genie: resize Taz VMs (API client with a 5 min timeout, manager handler with progress, agent tool marked disruptive, admin card Resize dialog), tests on mocks | Alex | 2026-10-09 | genie: bdf04a4 |
 | T39 | Agents City Desk mode (behind ?desk=1): seated avatars with laptops, miniature cities, thrown messages, a live task whiteboard | Tom | 2026-10-09 | admin: 00c1948 |
 | T48 | V2 central UI store read by the Claude bridge: per-editor tool, selection, view, run, dialogs, tables; layers, panels, Sketch window, background; ui reads, watch and events; a closed list of actions | Tatiana | 2026-10-09 | d2edce8, 4c47de4, a91a6f3, 1b4a117 |
