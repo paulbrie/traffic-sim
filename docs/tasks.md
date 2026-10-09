@@ -18,6 +18,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T39 | Agents City: playful Desk mode (clay avatars, the cities as miniatures on a desk, activity acted out, City / Desk toggle) | Tom | 2026-10-09 | in progress, admin-dev |
 | T37 | Bistrița rev 89 follow-ups: a new deadlock at J574, deadlocks on roundabout j747, J593 lets nobody through, J356, a collision at J155 | Bob | 2026-10-09 | diagnose; plan changes only after the user confirms |
 | T34 | Test "Test in Sketch" independently | Ramona | 2026-10-09 | |
+| T41 | Claude bridge "agent tabs": agents open their own labelled tabs of the app in the user's browser (a hub page, per-agent codes, a popup prompt, Take over) | Bob | 2026-10-09 | queued after T37 |
 
 ## Done
 
