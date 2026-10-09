@@ -12,13 +12,15 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { NumberField } from "@/components/workspace/fields";
 import { cn } from "@/lib/utils";
-import { addJourney, deleteJourney, demandWays, laneInRate, laneOutWeight, laneById, setInRate, setOutWeight, updateJourney, type DemandWay, type Sketch, type SketchJourney } from "@/lib/lane-sketch";
+import { addJourney, deleteJourney, demandWays, laneInRate, laneOutWeight, laneById, setInRate, setOutWeight, updateJourney, type DemandWay, type Pt, type Sketch, type SketchJourney } from "@/lib/lane-sketch";
 import type { JourneyStats } from "@/lib/lane-sketch-sim";
 import { useSketchStore } from "@/state/lane-sketch";
 import { InspectorPanel } from "./inspector-panel";
 
-export function DemandPanel({ sketch, readOnly, onFocus, results }: {
+export function DemandPanel({ sketch, readOnly, onFocus, results, onGo }: {
   sketch: Sketch; readOnly: boolean; onFocus?: (lanes: string[] | null) => void;
+  /** the view glided to a way in or out (where its lanes start or end) */
+  onGo?: (at: Pt) => void;
   /** the journeys' results so far, while the cars run (by journey id) */
   results?: JourneyStats[] | null;
 }) {
@@ -40,7 +42,8 @@ export function DemandPanel({ sketch, readOnly, onFocus, results }: {
         <span className="text-xs font-medium">Ways in <span className="font-normal text-muted-foreground">· veh/h</span></span>
         {entries.slice(0, shown.in).map(w => (
           <div key={w.key} className={row} onMouseEnter={() => onFocus?.(w.lanes)} onMouseLeave={() => onFocus?.(null)}>
-            <span className={cn("min-w-0 flex-1 truncate", !own(w.lanes) && "text-muted-foreground")} title={`${w.name}: ${w.lanes.join(", ")}${own(w.lanes) ? "" : " (the sketch's rate per lane)"}`}>{w.name}</span>
+            <button type="button" onClick={() => onGo?.(w.at)} className={cn("min-w-0 flex-1 truncate text-left hover:underline", !own(w.lanes) && "text-muted-foreground")}
+              title={`${w.name}: ${w.lanes.join(", ")}${own(w.lanes) ? "" : " (the sketch's rate per lane)"} · click to go there`}>{w.name}</button>
             {readOnly ? <span className="font-mono tabular">{Math.round(total(w.lanes))}</span> : (
               <NumberField id={`dm-in-${w.key}`} label={`${w.name} vehicles per hour`} hideLabel unit="veh/h" digits={0} min={0} max={5000} step={50} className="w-32"
                 value={total(w.lanes)} onCommit={v => editSketch(s => setInRate(s, w.lanes, v))} />
@@ -55,7 +58,8 @@ export function DemandPanel({ sketch, readOnly, onFocus, results }: {
           const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0), pct = sumW > 0 ? Math.round((ws / sumW) * 100) : 0;
           return (
             <div key={w.key} className={row} onMouseEnter={() => onFocus?.(w.lanes)} onMouseLeave={() => onFocus?.(null)}>
-              <span className={cn("min-w-0 flex-1 truncate", weight(w.lanes) === 0 && "text-muted-foreground line-through")} title={`${w.name}: ${w.lanes.join(", ")}`}>{w.name}</span>
+              <button type="button" onClick={() => onGo?.(w.at)} className={cn("min-w-0 flex-1 truncate text-left hover:underline", weight(w.lanes) === 0 && "text-muted-foreground line-through")}
+                title={`${w.name}: ${w.lanes.join(", ")} · click to go there`}>{w.name}</button>
               <span className="w-9 text-right font-mono text-[11px] text-muted-foreground tabular">{pct}%</span>
               {readOnly ? <span className="font-mono tabular">×{weight(w.lanes)}</span> : (
                 <NumberField id={`dm-out-${w.key}`} label={`${w.name} share of trips`} hideLabel unit="×" digits={1} min={0} max={100} step={0.5} className="w-24"

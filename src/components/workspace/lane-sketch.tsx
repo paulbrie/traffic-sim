@@ -560,12 +560,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
    */
   const glide = useRef(0);
   const centerOn = (piece: Piece) => centerOnPts(piecePoints(live.current.sketch, piece));
-  /** …or round some points */
-  const centerOnPts = (pts: Pt[]) => {
+  /** …or round some points (`close`: zoomed in to them too, not only out) */
+  const centerOnPts = (pts: Pt[], close = false) => {
     const c = canvas.current, b = boundsOfPts(pts);
     if (!c || !b) return;
     const from = { ...view.current }, fit = Math.min(c.clientWidth / (b.maxX - b.minX + 30), c.clientHeight / (b.maxY - b.minY + 30));
-    const to = { cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, scale: Math.max(0.5, Math.min(from.scale, fit)) };
+    const to = { cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, scale: Math.max(0.5, close ? fit : Math.min(from.scale, fit)) };
     cancelAnimationFrame(glide.current);
     const t0 = performance.now(), T = 350;
     const step = (now: number) => {
@@ -1100,7 +1100,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
-          <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
+          <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys}
+            onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
             <Button size="sm" variant="ghost" aria-label="Clear the sketch" title="Clear the sketch (undo brings it back)" disabled={empty}
