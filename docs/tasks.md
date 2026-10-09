@@ -16,17 +16,17 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
 | T52 | V1→V2 quick wins: per-road speed limits, hover cards, zoom keys and cursor x/y, a colour-by-speed switch with a legend, the sim settings that map | Tatiana | 2026-10-09 | |
-| T51 | genie: resize Taz VMs (API client, manager handler, admin UI with confirm and progress) | Alex | 2026-10-09 | after T49 part 1 |
 | T50 | Re-test of T48, and a smoke test of Next.js 16.4 | Ramona | 2026-10-09 | |
 | T49 | Next.js 16.3 → 16.4.0 in trafficsim, then the admin (after the user's deploy) | Alex | 2026-10-09 | |
 | T46 | Regressions after 5e8d5b7: a deadlock loop at J21 (Strada Sigmirului), collisions on l1945 after J574 | Bob | 2026-10-09 | from T45 |
-| T39 | Agents City: playful Desk mode (clay avatars, the cities as miniatures on a desk, activity acted out, City / Desk toggle) | Tom | 2026-10-09 | in progress, admin-dev |
 | T43 | Agents City: React "synchronously unmount a root" warning (32× per load, drei Html labels) | Alex | 2026-10-09 | after T42 |
 
 ## Done
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T51 | genie: resize Taz VMs (API client with a 5 min timeout, manager handler with progress, agent tool marked disruptive, admin card Resize dialog), tests on mocks | Alex | 2026-10-09 | genie: bdf04a4 |
+| T39 | Agents City Desk mode (behind ?desk=1): seated avatars with laptops, miniature cities, thrown messages, a live task whiteboard | Tom | 2026-10-09 | admin: 00c1948 |
 | T48 | V2 central UI store read by the Claude bridge: per-editor tool, selection, view, run, dialogs, tables; layers, panels, Sketch window, background; ui reads, watch and events; a closed list of actions | Tatiana | 2026-10-09 | d2edce8, 4c47de4, a91a6f3, 1b4a117 |
 | T47 | Re-test of T44: all 9 pass, nothing new | Ramona | 2026-10-09 | /tmp/ramona/t47/ |
 | T44 | Test in Sketch fixes from T34: a fresh sim on Replace, the kept connectors, imagery in the window, Add's fit, copy names, tree ids, per-lane rates, Shift+T, whole junctions | Tatiana, Bob | 2026-10-09 | f1dcebf, 72b001e |
