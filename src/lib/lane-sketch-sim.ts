@@ -1272,8 +1272,6 @@ export class SketchSim {
     // backs are as good as off a connector's shared metres once their fronts are past it, and runs without trucks stay as they were)
     this.tails.clear();
     for (const w of this.vehicles) if (w.truck) for (let t = w.trail, run = w.run; t && run < w.len; run += t.run, t = t.before) if (t.edge.kind === "conn") put(this.tails, t.edge, { w, pos: t.pos + run });
-    /** the vehicles on connector `e` and those whose backs are still on it, where their fronts are (or would be) along it */
-    const onConn = (e: Edge) => (byEdge.get(e) ?? []).map(w => ({ w, pos: w.pos })).concat(this.tails.get(e) ?? []);
 
     // the cars that may be on their way to an edge (as toPlace sees it): on it, just off it (their backs still on
     // it), about to take it from the lane before, or on the connector or lane leading into it; in the cars' order,
@@ -1294,7 +1292,8 @@ export class SketchSim {
       if (v.broken !== null) { acc.set(v, v.v > 0 ? -Math.min(2.5, v.v / dt) : 0); held.set(v, { gap: Infinity, lead: 0 }); v.why = "broken down"; v.blocking = false; continue; }
       const route = this.route(v);
       let gap = Infinity, lead = 0, vmax = v.edge.vmax * v.vf, why: string | null = null;
-      const behind = (g: number, speed: number, reason: string) => { if (g < gap) { gap = g; lead = speed; why = reason; } };
+      // (the reason: a car's "car <id>" made only when it is the nearest yet, not for every car looked at)
+      const behind = (g: number, speed: number, reason: string | SimVehicle) => { if (g < gap) { gap = g; lead = speed; why = typeof reason === "string" ? reason : `car ${reason.id}`; } };
       /** the zones ahead where its path meets another (not to stop in), and where those it gives way at start */
       const zones: { s: number; e: number }[] = [], yields: { at: number; why: string }[] = [];
       // (a car stops 0.5 m short of a zone; one closer than 0.1 m, or too fast to stop before it, is committed)
@@ -1324,7 +1323,7 @@ export class SketchSim {
       const mine = this.ghostPos(v);
       if (mine !== null) for (const w of byEdge.get(v.left!) ?? []) {
         const x = w.pos - mine;
-        if (x > 0 && x < 40) behind(x - w.len, w.v, `car ${w.id}`);
+        if (x > 0 && x < 40) behind(x - w.len, w.v, w);
       }
       for (const r of route) {
         const ahead = (pos: number) => (r.edge.ring ? this.along(r.edge, r.a, pos) : pos - r.a);
@@ -1333,14 +1332,14 @@ export class SketchSim {
           if (w === v) continue;
           const x = ahead(w.pos);
           if (x <= (r.edge === v.edge ? 0 : -0.01) || x > r.b - r.a) continue;
-          behind(r.off + x - w.len, w.v, `car ${w.id}`);
+          behind(r.off + x - w.len, w.v, w);
         }
         if (r.edge.kind === "lane") {
           const at = (pos: number) => (r.edge.ring ? ((pos % r.edge.len) + r.edge.len) % r.edge.len : pos);
           // …or one just changed lane off it, still partly over it…
           for (const { w, pos } of ghosts.get(r.edge) ?? []) {
             const x = ahead(pos);
-            if (w !== v && x > 0 && x <= r.b - r.a) behind(r.off + x - w.len, w.v, `car ${w.id}`);
+            if (w !== v && x > 0 && x <= r.b - r.a) behind(r.off + x - w.len, w.v, w);
           }
           // (one waiting to change onto it, a while: let in, stopping short of it with room for it)
           if (r.edge === v.edge) for (const { w, pos } of waitIn.get(r.edge) ?? []) {
@@ -1348,12 +1347,17 @@ export class SketchSim {
             if (x > 0.1 && x <= 30 && canStopBefore(x)) behind(x + S0, 0, `letting car ${w.id} change lane`);
           }
           // …also one turning off this lane, while still beside it…
-          for (const o of r.edge.outs) for (const { w, pos } of onConn(o.conn)) {
-            if (w === v || pos - w.len >= o.conn.forkShared) continue;
-            // (past the lane's end its place beside the lane is the end: then as far as along the way it went)
-            const b = this.beside(o.conn.onFrom, pos);
-            const x = !r.edge.ring && b >= r.edge.len - 0.01 ? ahead(o.s) + pos : ahead(at(b));
-            if (x > 0 && x <= r.b - r.a + w.len) behind(r.off + x - w.len, w.v, `car ${w.id}`);
+          for (const o of r.edge.outs) {
+            const one = (w: SimVehicle, pos: number) => {
+              if (w === v || pos - w.len >= o.conn.forkShared) return;
+              // (past the lane's end its place beside the lane is the end: then as far as along the way it went)
+              const b = this.beside(o.conn.onFrom, pos);
+              const x = !r.edge.ring && b >= r.edge.len - 0.01 ? ahead(o.s) + pos : ahead(at(b));
+              if (x > 0 && x <= r.b - r.a + w.len) behind(r.off + x - w.len, w.v, w);
+            };
+            // (those on it, then those with their backs still on it, without a list made)
+            for (const w of byEdge.get(o.conn) ?? NO_VEHICLES) one(w, w.pos);
+            for (const { w, pos } of this.tails.get(o.conn) ?? NO_PLACES) one(w, pos);
           }
           // …or one joining it, already beside it
           for (const o of r.edge.ins) for (const w of byEdge.get(o.conn) ?? []) {
@@ -1367,15 +1371,19 @@ export class SketchSim {
               continue;
             }
             const x = ahead(at(this.beside(o.conn.onTo, w.pos)));
-            if (x > 0 && x <= r.b - r.a) behind(r.off + x - w.len, w.v, `car ${w.id}`);
+            if (x > 0 && x <= r.b - r.a) behind(r.off + x - w.len, w.v, w);
           }
         } else {
           const f = r.edge.from!;
           // …on a connector: one that took a sibling, in the metres they share…
-          for (const sib of r.edge.siblings) for (const { w, pos } of onConn(sib)) {
-            if (w === v || pos - w.len >= (r.edge.shared.get(sib) ?? 0)) continue;
-            const x = pos - r.a;
-            if (x > 0) behind(r.off + x - w.len, w.v, `car ${w.id}`);
+          for (const sib of r.edge.siblings) {
+            const shared = r.edge.shared.get(sib) ?? 0, one = (w: SimVehicle, pos: number) => {
+              if (w === v || pos - w.len >= shared) return;
+              const x = pos - r.a;
+              if (x > 0) behind(r.off + x - w.len, w.v, w);
+            };
+            for (const w of byEdge.get(sib) ?? NO_VEHICLES) one(w, w.pos);
+            for (const { w, pos } of this.tails.get(sib) ?? NO_PLACES) one(w, pos);
           }
           // …or one going on along the lane it leaves, still beside it…
           if (r.a < r.edge.forkShared) {
@@ -1384,7 +1392,7 @@ export class SketchSim {
               if (w === v) continue;
               const x = this.diff(f.lane, me, w.pos);
               // (its body along the lane as far back as it has come on it)
-              if (x > 0 && x - Math.min(w.len, w.run) < this.diff(f.lane, me, end)) behind(r.off + x - w.len, w.v, `car ${w.id}`);
+              if (x > 0 && x - Math.min(w.len, w.run) < this.diff(f.lane, me, end)) behind(r.off + x - w.len, w.v, w);
             }
           }
           // …or, joining a lane, one on it beside or just past where it joins
@@ -1396,7 +1404,7 @@ export class SketchSim {
             for (const w of byEdge.get(t.lane) ?? []) {
               if (w === v) continue;
               const x = before ? r.edge.len - r.a + w.pos - t.s : this.diff(t.lane, me, w.pos);
-              if (x > 0 && x <= lim + w.len) behind(r.off + x - w.len, w.v, `car ${w.id}`);
+              if (x > 0 && x <= lim + w.len) behind(r.off + x - w.len, w.v, w);
             }
           }
         }
@@ -1454,7 +1462,7 @@ export class SketchSim {
             const O = k.other, mine = r.off + r.edge.len - r.a;
             if (mine > 80) continue;
             const zip = (w: SimVehicle, theirs: number) => {
-              if (w !== v && (theirs < mine || (theirs === mine && w.id < v.id))) behind(mine - theirs - w.len, w.v, `car ${w.id}`);
+              if (w !== v && (theirs < mine || (theirs === mine && w.id < v.id))) behind(mine - theirs - w.len, w.v, w);
             };
             for (const w of byEdge.get(O) ?? []) zip(w, O.len - w.pos);
             // (and one about to take it, still on the lane into it)
