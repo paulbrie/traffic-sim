@@ -228,7 +228,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d });
 
   // ------------------------------------------------------------ coordinates, snapping, picking
   const toWorld = (e: { clientX: number; clientY: number }): Pt => {
@@ -392,7 +392,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
       const c = canvas.current;
-      if (!c) return;
+      // (under the 3D view the map isn't seen: not drawn)
+      if (!c || live.current.in3d) return;
       // (the background: the imagery where the plan is, the reference image; in the Sketch window the imagery only, where it has a place on Earth)
       const l = live.current, bg = (x: typeof l): Background => ({ geo: x.sketch.geo ?? null, satellite: x.layers.satellite, sat: x.sat, underlay: x.layers.image ? x.underlay : null, img: x.ulImg, calib: x.calib, onTile: redraw });
       const st: PaintState = { ...live.current, sketch: dragSk.current ?? live.current.sketch, ...(dragSk.current ? { contents: contentsOf(dragSk.current) } : {}), view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : l.sketch.geo ? { ...bg(l), underlay: null, calib: null } : null };
@@ -411,8 +412,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (a render: the kept image drawn again only if something it shows changed, not for the cars' stats)
   const shownBy = useRef<unknown[]>([]);
   useEffect(() => {
-    live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed };
-    const now = [sketch, sel, tool, contents, selPt, layers, page, sat, underlay, ulImg, calib, bySpeed];
+    live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d };
+    const now = [sketch, sel, tool, contents, selPt, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d];
     const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
     shownBy.current = now;
     redraw(changed);
@@ -1354,7 +1355,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
           {in3d && (
-            <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
+            <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} bySpeed={bySpeed}
+              cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
           )}
           {hoverCard && (() => {

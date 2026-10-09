@@ -19,6 +19,8 @@ import {
 /** heights over the ground (m) the layers lie at, so they don't fight */
 const Y = { kerb: 0.04, asphalt: 0.06, paint: 0.09 };
 const KERB = 0.6, PAINT_W = 0.16, DECK = 0.8, PARAPET = 0.9;
+/** how far (m) a simplified line may stray: lanes and paint; junction outlines */
+const TOL = 0.05, TOL_J = 0.1;
 
 /** triangles put together, one material's worth */
 class Mesh {
@@ -61,12 +63,35 @@ class Mesh {
   }
 }
 
-/** a lane's points every `step` metres, with their heights */
+/**
+ * A polyline with only the points it needs: none further than `tol` metres from where it ran (Douglas–Peucker; the
+ * ends kept). A city's lanes and junction outlines come sampled every metre: most of it straight.
+ */
+export function simplify(pts: Pt[], tol: number, keep?: (i: number) => boolean): Pt[] {
+  const n = pts.length;
+  if (n <= 2) return pts;
+  const on = new Uint8Array(n); on[0] = on[n - 1] = 1;
+  const stack: [number, number][] = [[0, n - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop()!, A = pts[a], B = pts[b], dx = B.x - A.x, dy = B.y - A.y, L = Math.hypot(dx, dy) || 1e-9;
+    let far = -1, fd = tol;
+    for (let i = a + 1; i < b; i++) {
+      const d = keep?.(i) ? Infinity : Math.abs((pts[i].x - A.x) * dy - (pts[i].y - A.y) * dx) / L;
+      if (d > fd) { fd = d; far = i; }
+    }
+    if (far >= 0) { on[far] = 1; stack.push([a, far], [far, b]); }
+  }
+  return pts.filter((_, i) => on[i]);
+}
+/** a lane's points (every `step` metres, those it needs), with their heights */
 function laneLine(sk: Sketch, id: string, shape: Parameters<typeof samples>[0], step: number) {
-  const pts = samples(shape, step), hs: number[] = [];
+  const all = samples(shape, step), ha: number[] = [];
   let s = 0;
-  for (let i = 0; i < pts.length; i++) { if (i) s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y); hs.push(zAt(sk, id, s) * LEVEL_H); }
-  return { pts, hs };
+  for (let i = 0; i < all.length; i++) { if (i) s += Math.hypot(all[i].x - all[i - 1].x, all[i].y - all[i - 1].y); ha.push(zAt(sk, id, s) * LEVEL_H); }
+  // (where its height changes, every point kept: a ramp stays a ramp)
+  const keep = (i: number) => i > 0 && i < all.length - 1 && Math.abs(ha[i + 1] - 2 * ha[i] + ha[i - 1]) > 1e-4;
+  const kept = simplify(all.map((p, i) => ({ ...p, i })), TOL, keep) as (Pt & { i: number })[];
+  return { pts: kept.map(p => ({ x: p.x, y: p.y })), hs: kept.map(p => ha[p.i]) };
 }
 /** dashes along a polyline: `on` metres drawn, `off` left */
 function dashes(pts: Pt[], on: number, off: number): Pt[][] {
@@ -144,13 +169,14 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
     for (const j of sk.junctions) {
       if (j.outline.length < 3) continue;
       const c = cOf(j.id), h = junctionLevel(sk, c) * LEVEL_H;
-      if (j.shape !== "auto") { asphalt.polygon(outlinePath(j), [], h + Y.asphalt); continue; }
-      if (j.smooth) { const [outer, ...holes] = smoothJunction(sk, j, c); if (outer) asphalt.polygon(outer, holes, h + Y.asphalt); }
+      const loop = (ps: Pt[]) => simplify(ps, TOL_J);
+      if (j.shape !== "auto") { asphalt.polygon(loop(outlinePath(j)), [], h + Y.asphalt); continue; }
+      if (j.smooth) { const [outer, ...holes] = smoothJunction(sk, j, c); if (outer) asphalt.polygon(loop(outer), holes.map(loop), h + Y.asphalt); }
       else for (const b of junctionBands(sk, c)) {
-        if (b.w1 !== undefined) asphalt.polygon(bandPolygon(b), [], h + Y.asphalt);
-        else asphalt.ribbon(b.pts, b.pts.map(() => h), b.width, Y.asphalt, b.closed);
+        if (b.w1 !== undefined) asphalt.polygon(loop(bandPolygon(b)), [], h + Y.asphalt);
+        else { const ps = b.closed ? b.pts : simplify(b.pts, TOL); asphalt.ribbon(ps, ps.map(() => h), b.width, Y.asphalt, b.closed); }
       }
-      for (const hole of junctionHoles(sk, c)) asphalt.polygon(hole, [], h + Y.asphalt);
+      for (const hole of junctionHoles(sk, c)) asphalt.polygon(loop(hole), [], h + Y.asphalt);
     }
     for (const k of sk.links ?? []) { const g = linkGeometry(sk, k); if (g) asphalt.polygon(g.outline, [], Y.asphalt); }
   }
@@ -158,7 +184,8 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
     // the lines between lanes (dashed or not), the centre line in its yellow
     for (const m of roadMarkings(sk)) {
       const h = (m.level ?? 0) * LEVEL_H, to = m.kind === "center" ? yellow : paint;
-      for (const part of m.dashed ? dashes(m.pts, 3, 4) : [m.pts]) to.ribbon(part, part.map(() => h), PAINT_W, Y.paint);
+      const line = simplify(m.pts, TOL);
+      for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(() => h), PAINT_W, Y.paint);
     }
     for (const a of turnArrows(sk)) for (const line of arrowLines(a.p, a.d, a.turns)) paint.ribbon(line, line.map(() => a.level * LEVEL_H), 0.18, Y.paint);
     // zebras: stripes along the traffic, across the road

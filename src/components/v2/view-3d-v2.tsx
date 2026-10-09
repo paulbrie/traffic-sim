@@ -12,7 +12,9 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { laneLength, pointAt, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
+import { laneById, laneLength, pointAt, signalAt, signalPlans, zAt, type JunctionContents, type SignalController, type Sketch } from "@/lib/lane-sketch";
+import { LEVEL_H } from "@/engine/compile";
+import { speedColor } from "@/render/palette";
 import { buildSketch3D, type Sketch3D } from "@/render/sketch3d";
 import type { SketchLayers } from "@/state/sketch-layers";
 import type { Underlay } from "@/lib/underlay";
@@ -33,11 +35,20 @@ export interface View3DProps {
   onLeave: (v: PlanView) => void;
   satellite: boolean; sat: SatOptions;
   underlay: Underlay | null; underlayImg: HTMLImageElement | null; image: boolean;
+  /** the cars as shown now (live, or the moment replayed), coloured by their speed or not, and the lights' state */
+  cars: () => Car3D[] | null; bySpeed: boolean;
+  simT: () => number | null; signals: () => SignalController[] | null;
   /** the canvas, for the bridge's screenshot (with a frame drawn just before it is read) */
   canvasRef: React.MutableRefObject<(() => HTMLCanvasElement | null) | null>;
 }
 
 const FOV = 40, TILT = (55 * Math.PI) / 180;
+/** a car as the editor shows it: its middle, heading, length, speed as a share of what it wants; a truck's trailer; broken down; its level */
+export interface Car3D { p: { x: number; y: number }; d: { x: number; y: number }; len: number; share: number; trailer?: { p: { x: number; y: number }; d: { x: number; y: number }; len: number }; broken?: boolean; z?: number }
+/** instances at most: bodies (a truck's cab and trailer two), their glass, hazard lamps */
+const MAXV = 24000, MAXL = 4000;
+/** how high a car's body is, and a truck's */
+const CAR_H = 1.35, CAR_W = 1.8, TRUCK_H = 2.6, TRUCK_W = 2.4, TRAILER_H = 3.2;
 
 export function View3DV2(props: View3DProps) {
   const wrap = useRef<HTMLDivElement>(null);
@@ -147,6 +158,79 @@ export function View3DV2(props: View3DProps) {
       ulMesh.rotation.z = -(u.rot * Math.PI) / 180;
     };
 
+    // the cars: boxes, one instance each (a truck's cab and its trailer two), a darker box of glass on each car,
+    // hazard lamps flashing on those broken down
+    const box = new THREE.BoxGeometry(1, 1, 1); box.translate(0, 0.5, 0);
+    const bodies = new THREE.InstancedMesh(box, new THREE.MeshLambertMaterial({ color: 0xffffff }), MAXV);
+    const glass = new THREE.InstancedMesh(box, new THREE.MeshLambertMaterial({ color: 0x1e2830 }), MAXV);
+    const lamps = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffab1a }), MAXL);
+    for (const m of [bodies, glass, lamps]) { m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.count = 0; m.frustumCulled = false; scene.add(m); }
+    const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), P = new THREE.Vector3(), S = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0), C = new THREE.Color();
+    const colors = new Map<string, THREE.Color>();
+    const colorOf = (css: string) => { let c = colors.get(css); if (!c) colors.set(css, (c = new THREE.Color(css))); return c; };
+    const put = (m: THREE.InstancedMesh, i: number, x: number, y: number, z: number, yaw: number, l: number, h: number, w: number) => {
+      Q.setFromAxisAngle(UP, yaw); P.set(x, y, z); S.set(l, h, w); M.compose(P, Q, S); m.setMatrixAt(i, M);
+    };
+    const syncCars = (now: number) => {
+      const p = live.current, cars = p.cars() ?? [], flash = Math.floor(now / 400) % 2 === 0;
+      let nb = 0, ng = 0, nl = 0;
+      for (const c of cars) {
+        if (nb + 2 > MAXV) break;
+        const y = (c.z ?? 0) * LEVEL_H + 0.06, yaw = -Math.atan2(c.d.y, c.d.x), truck = !!c.trailer;
+        const col = p.bySpeed ? speedColor(pal, Math.round(Math.min(1, c.share) * 15) / 15) : truck ? pal.truck : pal.car;
+        put(bodies, nb, c.p.x, y + 0.25, c.p.y, yaw, c.len, truck ? TRUCK_H : CAR_H, truck ? TRUCK_W : CAR_W); bodies.setColorAt(nb++, colorOf(col));
+        if (c.trailer) { const t = c.trailer; put(bodies, nb, t.p.x, y + 0.5, t.p.y, -Math.atan2(t.d.y, t.d.x), t.len, TRAILER_H, TRUCK_W); bodies.setColorAt(nb++, colorOf("#e9e6dd")); }
+        else { put(glass, ng++, c.p.x - c.d.x * c.len * 0.05, y + 0.25 + CAR_H * 0.55, c.p.y - c.d.y * c.len * 0.05, yaw, c.len * 0.5, CAR_H * 0.5, CAR_W * 0.92); }
+        if (c.broken && flash && nl + 4 <= MAXL) {
+          const n = { x: -c.d.y, y: c.d.x }, hl = c.len / 2, hw = (truck ? TRUCK_W : CAR_W) / 2 + 0.05;
+          for (const [f, s2] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) { P.set(c.p.x + c.d.x * hl * f + n.x * hw * s2, y + 0.9, c.p.y + c.d.y * hl * f + n.y * hw * s2); M.makeTranslation(P.x, P.y, P.z); lamps.setMatrixAt(nl++, M); }
+        }
+      }
+      bodies.count = nb; glass.count = ng; lamps.count = nl;
+      bodies.instanceMatrix.needsUpdate = true; glass.instanceMatrix.needsUpdate = true; lamps.instanceMatrix.needsUpdate = true;
+      if (bodies.instanceColor) bodies.instanceColor.needsUpdate = true;
+    };
+
+    // the traffic lights: a pole and a head beside each lane held by them, at its end, lit as the cars see them
+    const poleGeo = new THREE.CylinderGeometry(0.08, 0.08, 1, 6); poleGeo.translate(0, 0.5, 0);
+    const poles = new THREE.InstancedMesh(poleGeo, new THREE.MeshLambertMaterial({ color: 0x4b5563 }), 2000);
+    const heads = new THREE.InstancedMesh(box, new THREE.MeshBasicMaterial({ color: 0xffffff }), 2000);
+    for (const m of [poles, heads]) { m.count = 0; m.frustumCulled = false; scene.add(m); }
+    let lights: { junction: string; lane: string; conns: string[] }[] = [], lightsFor: unknown = null;
+    const syncLights = () => {
+      const sk = live.current.sketch;
+      if (lightsFor !== sk) {
+        lightsFor = sk; lights = [];
+        let n = 0;
+        for (const plan of signalPlans(sk)) {
+          const held = new Map<string, string[]>();
+          for (const id of plan.controlled) { const c = sk.connectors.find(x => x.id === id); if (c) held.set(c.from.lane, [...(held.get(c.from.lane) ?? []), id]); }
+          for (const [lane, conns] of held) {
+            const l = laneById(sk, lane);
+            if (!l || n >= 2000) continue;
+            const L = laneLength(l.shape), e = pointAt(l.shape, L), r = { x: e.d.y, y: -e.d.x }, o = l.width / 2 + 0.6, h = zAt(sk, lane, L) * LEVEL_H;
+            const x = e.p.x + r.x * o, z = e.p.y + r.y * o;
+            P.set(x, h, z); S.set(1, 4.2, 1); M.compose(P, Q.identity(), S); poles.setMatrixAt(n, M);
+            put(heads, n, x, h + 4.2, z, -Math.atan2(e.d.y, e.d.x), 0.35, 0.9, 0.35);
+            lights.push({ junction: plan.junction, lane, conns }); n++;
+          }
+        }
+        poles.count = heads.count = n; poles.instanceMatrix.needsUpdate = heads.instanceMatrix.needsUpdate = true;
+      }
+      if (!lights.length) return;
+      const t = live.current.simT(), ctls = live.current.signals(), plans = signalPlans(sk);
+      lights.forEach((x, i) => {
+        let st: string | null = null;
+        if (t !== null) {
+          const ctl = ctls?.find(c => c.plan.junction === x.junction);
+          if (ctl) { const ss = x.conns.map(id => ctl.stateAt(id, t)); st = ss.includes("green") ? "green" : ss.includes("amber") ? "amber" : ss.length ? "red" : null; }
+          else { const plan = plans.find(p2 => p2.junction === x.junction); st = plan ? signalAt(plan, x.lane, t) : null; }
+        }
+        heads.setColorAt(i, C.set(st === "green" ? pal.go : st === "amber" ? pal.slow : st === "red" ? pal.stop : "#3f3f46"));
+      });
+      if (heads.instanceColor) heads.instanceColor.needsUpdate = true;
+    };
+
     // drawn while shown and the tab is visible
     let disposed = false, frame = 0, lastSync = 0;
     const draw = () => {
@@ -160,7 +244,7 @@ export function View3DV2(props: View3DProps) {
       frame = 0;
       if (disposed) return;
       if (now - lastSync > 500) { lastSync = now; syncSat(); syncUnderlay(); }
-      syncRoads();
+      syncRoads(); syncCars(now); syncLights();
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
     };
