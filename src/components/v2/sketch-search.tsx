@@ -10,7 +10,7 @@ export type SearchTarget = { kind: "road" | "lane" | "connector" | "junction" | 
 /** something to do, found by the search too */
 export interface SearchCommand { title: string; sub: string; run: () => void }
 /** one thing on the sketch the search can find (or a command) */
-interface Item { kind: string; title: string; sub: string; id: string; to: SearchTarget | { kind: "command"; run: () => void }; hay: string }
+export interface Item { kind: string; title: string; sub: string; id: string; to: SearchTarget | { kind: "command"; run: () => void }; hay: string }
 
 const MAX = 60;
 const fmt = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toFixed(m < 10 ? 1 : 0)} m`);
@@ -18,7 +18,7 @@ const fmt = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toF
 const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 
 /** everything on the sketch (and the cars running now), as search entries */
-function catalogue(sk: Sketch, contents: Map<string, JunctionContents>, cars: { id: number; edge?: string; kmh?: number }[]): Item[] {
+export function catalogue(sk: Sketch, contents: Map<string, JunctionContents>, cars: { id: number; edge?: string; kmh?: number }[]): Item[] {
   const out: Item[] = [];
   const add = (kind: string, title: string, sub: string, id: string, to: SearchTarget) => out.push({ kind, title, sub, id, to, hay: fold(`${kind} ${title} ${sub} ${id}`) });
   const roadOf = new Map(sk.roads.flatMap(r => r.lanes.map(id => [id, r] as const)));
@@ -59,20 +59,26 @@ function catalogue(sk: Sketch, contents: Map<string, JunctionContents>, cars: { 
   return out;
 }
 
-/** the entries matching every word typed, best first: an exact id or name, then those starting with it */
-function search(items: Item[], q: string): Item[] {
+/** what kind comes first among matches as good: junctions, then roads, then the rest */
+const KIND_RANK: Record<string, number> = { Command: -1, Junction: 0, Road: 1 };
+/**
+ * The entries matching every word typed, best first: an exact name (accents and case aside), an exact id,
+ * a name then an id starting with it, a name with a word that is it ("709": Junction 709), then the rest;
+ * as good: junctions, then roads, then lanes and the others. The commands matching come first.
+ */
+export function search(items: Item[], q: string): Item[] {
   const words = fold(q).split(/\s+/).filter(Boolean);
   if (!words.length) return [];
   // (a car by #number: its number alone matches too)
-  const ql = fold(q.trim()).replace(/^#/, ""), hits: { it: Item; score: number }[] = [];
+  // (a car's number is only its name with # typed: "709" is Junction 709 before car #709)
+  const car = q.trim().startsWith("#"), ql = fold(q.trim()).replace(/^#/, ""), hits: { it: Item; score: number }[] = [];
   for (const it of items) {
     if (!words.every(w => it.hay.includes(w.replace(/^#(?=\d)/, "")) || it.hay.includes(w))) continue;
-    const t = fold(it.title).replace(/^#/, ""), id = it.id.toLowerCase();
-    const score = it.kind === "Command" ? -1 : id === ql || t === ql ? 0 : t.startsWith(ql) || id.startsWith(ql) ? 1 : 2;
+    const t = car ? fold(it.title).replace(/^#/, "") : fold(it.title), id = it.kind === "Car" && !car ? `#${it.id}` : it.id.toLowerCase();
+    const score = it.kind === "Command" ? -1 : t === ql ? 0 : id === ql ? 1 : t.startsWith(ql) ? 2 : id.startsWith(ql) ? 3 : t.split(/[^\p{L}\p{N}]+/u).includes(ql) ? 4 : 5;
     hits.push({ it, score });
-    if (hits.length > 5000) break;
   }
-  return hits.sort((a, b) => a.score - b.score).slice(0, MAX).map(h => h.it);
+  return hits.sort((a, b) => a.score - b.score || (KIND_RANK[a.it.kind] ?? 2) - (KIND_RANK[b.it.kind] ?? 2)).slice(0, MAX).map(h => h.it);
 }
 
 /**
@@ -114,10 +120,11 @@ export function SketchSearch({ sketch, contents, cars, commands = [], onGo, onCl
           <Kbd>Esc</Kbd>
         </div>
         <div className="min-h-0 overflow-y-auto" role="listbox">
+          {/* (a row is picked by a pointer moving over it: one resting where the list appears doesn't take Enter's pick) */}
           {hits.map((it, i) => (
             <button key={`${it.kind}:${it.id}`} type="button" role="option" aria-selected={i === at}
               className={`flex w-full items-center gap-3 px-3 py-1.5 text-left text-sm ${i === at ? "bg-muted" : "hover:bg-muted/60"}`}
-              onMouseEnter={() => setAt(i)} onClick={() => go(it)}>
+              onMouseMove={() => { if (at !== i) setAt(i); }} onClick={() => go(it)}>
               <span className="w-28 shrink-0 text-[11px] font-medium text-muted-foreground uppercase">{it.kind}</span>
               <span className="min-w-0 flex-1 truncate">{it.title}</span>
               <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground" title={`${it.sub} · ${it.id}`}>{it.sub}{it.kind !== "Command" && <>{it.sub ? " · " : ""}<span className="font-mono">{it.id}</span></>}</span>
