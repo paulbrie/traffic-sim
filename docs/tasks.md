@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T61 | Agents City Table: speech bubbles for messages, laptop-to-file links, poses for thinking (leaning back) and idle (coffee, pencil…) | Tom | 2026-10-09 | |
 | T60 | Re-test of T59 and T52 | Ramona | 2026-10-09 | after T55 |
 | T58 | Admin: team recipes, a Teams page to start or stop a whole team with one button (docs/team.md as the first recipe) | Alex | 2026-10-09 | design first |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | |
