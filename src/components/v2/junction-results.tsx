@@ -22,13 +22,19 @@ const COLS: { key: Key; label: string; title: string }[] = [
  * had there on average, the queue, the fuel; sorted by any of them; a click takes the view to it.
  */
 export function JunctionResults({ sketch, stats, onGo }: { sketch: Sketch; stats: SimStats; onGo: (id: string) => void }) {
-  const [by, setBy] = useState<Key>("delay");
+  // (by a column, the most first; again, the other way; by name, A to Z first)
+  const [{ by, flip }, setSort] = useState<{ by: Key | "name"; flip: boolean }>({ by: "delay", flip: false });
+  const sortBy = (k: Key | "name") => setSort(s => ({ by: k, flip: s.by === k ? !s.flip : false }));
   const [n, setN] = useState(12);
   const t = Math.max(1, stats.t), name = new Map(sketch.junctions.map(j => [j.id, j.name]));
   const rows = (stats.junctions ?? []).filter(j => j.through > 0 || j.queueMax > 0).map(j => ({
     j, rate: (j.through / t) * 3600, delay: j.through ? j.delay / j.through : j.delay, queue: j.queueMean, fuel: j.fuel,
   }));
-  rows.sort((a, b) => b[by] - a[by]);
+  rows.sort((a, b) => {
+    const d = by === "name" ? (name.get(a.j.id) ?? a.j.id).localeCompare(name.get(b.j.id) ?? b.j.id, undefined, { numeric: true }) : b[by] - a[by];
+    return flip ? -d : d;
+  });
+  const arrow = (k: Key | "name") => (by !== k ? "" : (k === "name") !== flip ? " ↑" : " ↓");
   if (!rows.length) return null;
   const csv = () => {
     const head = "junction,id,vehicles per hour,through,mean delay (s),delay (vehicle-s),queue mean,queue max,fuel (L)";
@@ -42,10 +48,12 @@ export function JunctionResults({ sketch, stats, onGo }: { sketch: Sketch; stats
       <table className="w-full text-xs">
         <thead>
           <tr className="text-[11px] text-muted-foreground">
-            <th className="pb-1 text-left font-normal">Junction</th>
+            <th className="pb-1 text-left font-normal">
+              <button type="button" title="Sort by name (again: the other way)" onClick={() => sortBy("name")} className={cn("hover:text-foreground", by === "name" && "font-semibold text-foreground")}>Junction{arrow("name")}</button>
+            </th>
             {COLS.map(c => (
               <th key={c.key} className="pb-1 text-right font-normal">
-                <button type="button" title={c.title} onClick={() => setBy(c.key)} className={cn("hover:text-foreground", by === c.key && "font-semibold text-foreground")}>{c.label}{by === c.key ? " ↓" : ""}</button>
+                <button type="button" title={`${c.title} (again: the other way)`} onClick={() => sortBy(c.key)} className={cn("hover:text-foreground", by === c.key && "font-semibold text-foreground")}>{c.label}{arrow(c.key)}</button>
               </th>
             ))}
           </tr>
@@ -62,7 +70,7 @@ export function JunctionResults({ sketch, stats, onGo }: { sketch: Sketch; stats
           ))}
         </tbody>
       </table>
-      {rows.length > n && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setN(x => x + 25)}>Show {Math.min(25, rows.length - n)} more of {rows.length - n}</button>}
+      {rows.length > n && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setN(x => x + 25)}>Show {Math.min(25, rows.length - n)} more ({rows.length - n} of {rows.length} junctions not shown yet)</button>}
     </InspectorPanel>
   );
 }

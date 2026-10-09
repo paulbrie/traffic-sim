@@ -25,7 +25,9 @@ const COLS: { key: Key; label: string; title: string }[] = [
  * a click takes the view to the road.
  */
 export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: SimStats; onGo: (id: string) => void }) {
-  const [by, setBy] = useState<Key>("delay");
+  // (by a column, the most first (speed: the slowest); again, the other way; by name, A to Z first)
+  const [{ by, flip }, setSort] = useState<{ by: Key | "name"; flip: boolean }>({ by: "delay", flip: false });
+  const sortBy = (k: Key | "name") => setSort(s => ({ by: k, flip: s.by === k ? !s.flip : false }));
   const [n, setN] = useState(12);
   const list = (stats as SimStats & { roads?: RoadRow[] }).roads;
   if (!list?.length) return null;
@@ -35,7 +37,11 @@ export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: Si
   }));
   if (!rows.length) return null;
   // (speed: the slowest first; the others, the most first)
-  rows.sort((a, b) => (by === "speed" ? a.speed - b.speed : b[by] - a[by]));
+  rows.sort((a, b) => {
+    const d = by === "name" ? (name.get(a.r.id) ?? a.r.id).localeCompare(name.get(b.r.id) ?? b.r.id, undefined, { numeric: true }) : by === "speed" ? a.speed - b.speed : b[by] - a[by];
+    return flip ? -d : d;
+  });
+  const arrow = (k: Key | "name") => (by !== k ? "" : (k === "name" || k === "speed") !== flip ? " ↑" : " ↓");
   const csv = () => {
     const head = "road,id,vehicles per hour,through,mean speed (km/h),mean delay (s),vehicle-km,queue max";
     const lines = rows.map(x => [JSON.stringify(name.get(x.r.id) ?? x.r.id), x.r.id, x.rate.toFixed(0), x.r.through, x.speed.toFixed(1), x.delay.toFixed(1), x.r.vehKm.toFixed(2), x.r.queueMax].join(","));
@@ -48,10 +54,12 @@ export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: Si
       <table className="w-full text-xs">
         <thead>
           <tr className="text-[11px] text-muted-foreground">
-            <th className="pb-1 text-left font-normal">Road</th>
+            <th className="pb-1 text-left font-normal">
+              <button type="button" title="Sort by name (again: the other way)" onClick={() => sortBy("name")} className={cn("hover:text-foreground", by === "name" && "font-semibold text-foreground")}>Road{arrow("name")}</button>
+            </th>
             {COLS.map(c => (
               <th key={c.key} className="pb-1 text-right font-normal">
-                <button type="button" title={c.title} onClick={() => setBy(c.key)} className={cn("hover:text-foreground", by === c.key && "font-semibold text-foreground")}>{c.label}{by === c.key ? (c.key === "speed" ? " ↑" : " ↓") : ""}</button>
+                <button type="button" title={`${c.title} (again: the other way)`} onClick={() => sortBy(c.key)} className={cn("hover:text-foreground", by === c.key && "font-semibold text-foreground")}>{c.label}{arrow(c.key)}</button>
               </th>
             ))}
           </tr>
@@ -68,7 +76,7 @@ export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: Si
           ))}
         </tbody>
       </table>
-      {rows.length > n && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setN(k => k + 25)}>Show {Math.min(25, rows.length - n)} more of {rows.length - n}</button>}
+      {rows.length > n && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setN(k => k + 25)}>Show {Math.min(25, rows.length - n)} more ({rows.length - n} of {rows.length} roads not shown yet)</button>}
     </InspectorPanel>
   );
 }

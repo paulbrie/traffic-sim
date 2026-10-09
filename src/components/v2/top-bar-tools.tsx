@@ -42,7 +42,9 @@ export function SketchLayerPicker() {
       if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
       const t = e.target instanceof HTMLElement ? e.target : null;
       if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))) return;
-      if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return;
+      // (any dialog open — the search box, a settings dialog — but the windows one works beside: the sketch window, the bridge's panel)
+      const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].filter(d => d.getAttribute("aria-label") !== "Lane sketch" && !d.closest("[data-bridge-ui]") && (d as HTMLElement).offsetParent !== null);
+      if (dialogs.length) return;
       const menu = t?.closest('[role="menu"]');
       if (menu && !menu.hasAttribute("data-layers-menu")) return;
       if (e.code === "KeyL" && e.shiftKey) { e.preventDefault(); e.stopPropagation(); setOpen(true); return; }

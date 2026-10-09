@@ -10,19 +10,40 @@
  * go, and so does a junction surface over the middle. Traffic goes round anticlockwise, as the Ring tool's.
  * Framework-free.
  */
-import { dist, LANE_WIDTH, laneLength, nextId, nearestOn, pointAt, remove, type Pt, type Sketch, type SketchConnector, type SketchLane } from "./lane-sketch";
+import { dist, LANE_WIDTH, laneLength, nextId, nearestOn, pointAt, remove, sliceLane, type Pt, type Sketch, type SketchConnector, type SketchLane } from "./lane-sketch";
 
-export interface RoundaboutReport { ins: number; outs: number; removedConnectors: number; removedJunctions: number; /** lanes ending or starting inside the ring, left as they were */ inside: string[] }
+export interface RoundaboutReport { ins: number; outs: number; removedConnectors: number; removedJunctions: number; /** lanes ending or starting inside the ring, left as they were */ inside: string[]; /** lanes running across where the ring goes: cut where they meet it, the stretch inside taken out, the two ends joined to it */ crossed: string[] }
 
 const TAU = 2 * Math.PI;
 /** metres along the ring after where a way in meets it (and before where a way out leaves) */
 const JOIN_AFTER = 7;
+/** how far outside the ring's edge a lane running across it is cut (metres) */
+const CUT_GAP = 3;
 
 export function stampRoundabout(sk: Sketch, c: Pt, r: number, reach = 30): { sketch: Sketch; report: RoundaboutReport; ring: string; junction: string } {
   const R = Math.max(4, r), outer = R + LANE_WIDTH / 2;
   const ends = (l: SketchLane) => { const L = laneLength(l.shape); return { a: pointAt(l.shape, 0), b: pointAt(l.shape, L) }; };
+  // lanes running across where the ring goes (both ends outside it): cut CUT_GAP outside its edge on either side, the
+  // stretch between taken out (with its connectors); the stretch coming in a way in, the one going on a way out
+  const crossed: string[] = [], forceIn = new Set<string>(), forceOut = new Set<string>();
+  for (const l of sk.lanes) {
+    if ((l.shape.kind === "line" && l.shape.closed) || (l.shape.kind === "arc" && Math.abs(l.shape.sweep) >= TAU - 1e-6)) continue;
+    const L = laneLength(l.shape), { a, b } = ends(l), near = nearestOn(l.shape, c), edge = outer + CUT_GAP;
+    if (near.d > outer || dist(a.p, c) <= edge || dist(b.p, c) <= edge) continue;
+    let s0 = near.s, s1 = near.s;
+    while (s0 > 0 && dist(pointAt(l.shape, s0).p, c) < edge) s0 -= 0.25;
+    while (s1 < L && dist(pointAt(l.shape, s1).p, c) < edge) s1 += 0.25;
+    if (s0 <= 0.5 || s1 >= L - 0.5) continue;
+    const ids = sk.lanes.map(x => x.id), after = nextId("l", ids), mid = nextId("l", [...ids, after]);
+    const cut = sliceLane(sk, l.id, s1, after), cut2 = cut && sliceLane(cut, l.id, s0, mid);
+    if (!cut2) continue;
+    sk = remove(cut2, { lanes: [mid] });
+    crossed.push(l.id); forceIn.add(l.id); forceOut.add(after);
+  }
   const ins: SketchLane[] = [], outs: SketchLane[] = [], inside: string[] = [];
   for (const l of sk.lanes) {
+    if (forceIn.has(l.id)) { ins.push(l); continue; }
+    if (forceOut.has(l.id)) { outs.push(l); continue; }
     if (l.shape.kind === "line" && l.shape.closed) continue;
     if (l.shape.kind === "arc" && Math.abs(l.shape.sweep) >= TAU - 1e-6) continue;
     const { a, b } = ends(l);
@@ -54,7 +75,7 @@ export function stampRoundabout(sk: Sketch, c: Pt, r: number, reach = 30): { ske
   const outline = Array.from({ length: 24 }, (_, i) => ({ x: round(c.x + jr * Math.cos((i / 24) * TAU)), y: round(c.y + jr * Math.sin((i / 24) * TAU)) }));
   const n = out.junctions.filter(j => j.name.startsWith("Roundabout")).length + 1;
   out = { ...out, junctions: [...out.junctions, { id: jId, name: `Roundabout ${n}`, outline, shape: "auto" }] };
-  return { sketch: out, report: { ins: ins.length, outs: outs.length, removedConnectors: old.length, removedJunctions: oldJ.length, inside }, ring: ringId, junction: jId };
+  return { sketch: out, report: { ins: ins.length, outs: outs.length, removedConnectors: old.length, removedJunctions: oldJ.length, inside, crossed }, ring: ringId, junction: jId };
 }
 
 const round = (x: number) => Math.round(x * 100) / 100;

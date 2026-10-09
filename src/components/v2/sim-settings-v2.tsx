@@ -74,7 +74,7 @@ function SimSettings({ params, setParams, readOnly }: { params: SimParams; setPa
                         onClick={() => set({ [t.key]: t.def })}><RotateCcw className="size-3" /></Button>
                     </span>
                   </div>
-                  <Slider id={id} disabled={readOnly} min={t.min} max={t.max} step={t.step} value={[v]} onValueChange={([x]) => set({ [t.key]: +x.toFixed(digits(t.step)) })} />
+                  <Slider id={id} aria-label={`${t.label}${t.unit ? ` (${t.unit})` : ""}`} disabled={readOnly} min={t.min} max={t.max} step={t.step} value={[v]} onValueChange={([x]) => set({ [t.key]: +x.toFixed(digits(t.step)) })} />
                   <p className="text-xs text-muted-foreground">{t.help}</p>
                 </div>
               );

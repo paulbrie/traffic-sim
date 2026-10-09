@@ -37,7 +37,7 @@ import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/sketch-replay-bar";
-import { ProblemConsole } from "@/components/v2/problem-console";
+import { CONSOLE_HEIGHT, ProblemConsole } from "@/components/v2/problem-console";
 import { bridgeApp, bridgeState, setBridgeCanvas, setBridgeToWorld } from "@/state/bridge-registry";
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
@@ -191,10 +191,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const sim = useRef<SketchSimClient | null>(sketchSim());
   const [running, setRunning] = useState(false);
   const [simSpeed, setSimSpeed] = useState(1);
+  /** the problem console open, under the map (the replay bar above it) */
+  const [consoleOpen, setConsoleOpen] = useState(false);
   // (saved with the sketch: changing them isn't an undo step)
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
   const setParams = (p: SimParams) => store.show({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}) } });
   const [readOnly] = useDeepSubject(ui, "readOnly");
+  // (the plan's editor takes the keys: on opening the page, and when the sketch window over it closes)
+  const [sketchOpen] = useDeepSubject(ui, "sketch");
+  useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
   // the background (V2 plans): how the imagery shows, the image, a scale being set by two clicks
   const [sat, setSatState] = useState<SatOptions>(loadSatOptions);
   const setSat = (o: SatOptions) => { setSatState(o); saveSatOptions(o); };
@@ -859,7 +864,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           setSel(junctionSel(live.current.sketch, [m.junction]));
           const R = m.report;
           toast.success(`Roundabout: ${R.ins} way${R.ins === 1 ? "" : "s"} in, ${R.outs} out`, {
-            description: [R.removedConnectors ? `${R.removedConnectors} connectors straight across taken out` : "", R.removedJunctions ? "the junction it replaces taken out" : "", R.inside.length ? `lanes ending inside the ring left as they were: ${R.inside.join(", ")}` : "", "⌘Z takes it all back"].filter(Boolean).join(" · "),
+            description: [R.removedConnectors ? `${R.removedConnectors} connectors straight across taken out` : "", R.removedJunctions ? "the junction it replaces taken out" : "", R.crossed.length ? `lanes running across cut and joined to the ring: ${R.crossed.join(", ")}` : "", R.inside.length ? `lanes ending inside the ring left as they were: ${R.inside.join(", ")}` : "", "⌘Z takes it all back"].filter(Boolean).join(" · "),
           });
         }
         break;
@@ -1057,9 +1062,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     let rep: TidyReport | null = null;
     editSketch(s => { const t = tidySketch(s); rep = t.report; return t.report.kinks || t.report.folded || t.report.extended ? t.sketch : s; });
     const r = rep as TidyReport | null;
-    if (!r || !(r.kinks || r.folded || r.extended)) { toast("Nothing to tidy", { description: r?.kept.length ? `${r.kept.length} short lanes left as they are (a sign, lights, a journey or turning share, or a road joined at that end).` : "No lane doubles back, none is too short for a car." }); return; }
+    // (the three checks, each said: what it found, or that it found nothing)
+    const checks = (x: TidyReport | null) => [
+      x?.kinks ? `${x.kinks} points doubling back taken out` : "no lane doubling back",
+      x?.folded ? `${x.folded} lanes too short for a car folded into ${x.added} connectors` : "no lane too short for a car",
+      x?.extended ? `${x.extended} short ways in or out made 15 m long` : "no way in or out too short",
+    ];
+    if (!r || !(r.kinks || r.folded || r.extended)) { toast("Nothing to tidy", { description: [...checks(r), r?.kept.length ? `${r.kept.length} short lanes left as they are (a sign, a level, lights, a journey or turning shares, or a road joined at that end)` : ""].filter(Boolean).join(" · ") }); return; }
     setSel(NO_SEL);
-    toast.success("Tidied", { description: [r.kinks ? `${r.kinks} points doubling back taken out` : "", r.folded ? `${r.folded} very short lanes folded into ${r.added} connectors` : "", r.extended ? `${r.extended} short ways in or out lengthened` : "", r.kept.length ? `${r.kept.length} left as they are` : "", "⌘Z brings it back"].filter(Boolean).join(" · ") });
+    toast.success("Tidied", { description: [...checks(r), r.kept.length ? `${r.kept.length} short lanes left as they are` : "", "⌘Z brings it back"].filter(Boolean).join(" · ") });
   };
   const copy = () => {
     void navigator.clipboard.writeText(JSON.stringify(exportSketch(sketch, contents), null, 2))
@@ -1161,8 +1172,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {searchOpen && <SketchSearch sketch={sketch} contents={contents} cars={searchOpen.cars}
             onGo={goTo} onClose={() => { setSearchOpen(null); panel.current?.focus(); }} />}
           <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
-            onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} />
-          <ProblemConsole sim={() => sim.current} stats={stats} sketch={sketch} contents={contents} replayFrom={replayRange?.from ?? null} onReplay={showAt}
+            onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0} />
+          <ProblemConsole open={consoleOpen} onOpen={setConsoleOpen} sim={() => sim.current} stats={stats} sketch={sketch} contents={contents} replayFrom={replayRange?.from ?? null} onReplay={showAt}
             onGo={(p, car) => { if (sim.current?.poses().some(c => c.id === car)) { setSel(NO_SEL); setSelCar(car); } centerOnPts([p], true); redraw(); }} />
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
@@ -1174,7 +1185,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                 const s = sim.current, info = s?.inspect(selCar);
                 if (!s) return;
                 const { frames, events } = await s.car(selCar);
-                const text = `Lane sketch car ${selCar} at ${clock(s.t)}\n\`\`\`json\n${JSON.stringify({ car: info ? { ...info, route: undefined } : "left the sketch", frames, events })}\n\`\`\`\n`;
+                const text = `Lane sketch car ${selCar} at ${clock(s.t)}\n\`\`\`json\n${JSON.stringify({ car: info ? { ...info, route: undefined } : `left the ${store.kind === "scratch" ? "sketch" : "plan"}`, frames, events })}\n\`\`\`\n`;
                 void navigator.clipboard.writeText(text).then(() => toast.success(`Car ${selCar}'s data copied`, { description: "Its state, its last 10 s and what happened to it. Paste it into the conversation." }), () => toast.error("Couldn't copy"));
               }} />
           )}
@@ -1254,6 +1265,8 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
   onBreakDown: () => void; onTow: () => void;
   onFollow: (on: boolean) => void; onPick: (id: number) => void; onClose: () => void; onCopy: () => void;
 }) {
+  // (the sketch window's own cars, or the plan's)
+  const where = useSketchStore().kind === "scratch" ? "sketch" : "plan";
   const row = (label: string, value: React.ReactNode) => (
     <div className="flex justify-between gap-2 text-xs"><span className="text-muted-foreground">{label}</span><span className="text-right">{value}</span></div>
   );
@@ -1261,7 +1274,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
   return (
     <InspectorPanel id="car" title={`${info?.truck ? "Truck" : "Car"} ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
       actions={<button className="rounded p-0.5 hover:bg-muted" aria-label="Stop inspecting the car" title="Stop inspecting (Esc)" onClick={onClose}><X className="size-3.5" /></button>}>
-      {!info ? <p className="text-xs text-muted-foreground">{replayT !== null ? "Not on the sketch at this moment." : "It has left the sketch."}</p> : replayT !== null ? (
+      {!info ? <p className="text-xs text-muted-foreground">{replayT !== null ? `Not on the ${where} at this moment.` : `It has left the ${where}.`}</p> : replayT !== null ? (
         <>
           {row("At", <span className="font-mono tabular">{clock(replayT)} (replay)</span>)}
           {row("On", <span className="font-mono">{edgeName(info.edge)}</span>)}
@@ -1410,7 +1423,7 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover, now, onPick 
       </div>
       <div className="grid grid-cols-[1fr_auto] items-end gap-2">
         <label className="flex items-center justify-between gap-2 pb-1.5 text-xs" title="End a green nobody is using once its minimum is over, when another phase has cars waiting; pass over phases nobody waits for; rest on green when nobody else waits">
-          Actuated <Switch checked={L.actuated} onCheckedChange={actuated => set({ actuated })} />
+          Actuated <Switch checked={L.actuated && !plan.coord} disabled={!!plan.coord} title={plan.coord ? `In ${plan.coord.groupName}: the group's clock times these lights, not the traffic waiting` : undefined} onCheckedChange={actuated => set({ actuated })} />
         </label>
         <NumberField id="sk-mingreen" label="Min green" unit="s" digits={0} value={L.minGreen} min={1} max={60} step={1} onCommit={minGreen => set({ minGreen })} />
       </div>
@@ -1615,7 +1628,12 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
       <>
         <Input aria-label="Junction name" value={junction.name} className="h-8" onChange={e => rename("junctions", junction.id, e.target.value)} />
         <p className="text-xs text-muted-foreground">
-          {plural(c.lanes.length, "lane")}{c.lanes.length ? ` (${c.lanes.join(", ")})` : ""}, {plural(c.connectors.length, "connector")} on it · joins {c.roads.map(roadName).join(", ") || "no road"}
+          {plural(c.lanes.length, "lane")}{c.lanes.length ? ` (${c.lanes.join(", ")})` : ""}, {plural(c.connectors.length, "connector")} on it · joins {(() => {
+            // (a street cut into several roads: its name once, with how many)
+            const n = new Map<string, number>();
+            for (const id of c.roads) { const k = roadName(id); n.set(k, (n.get(k) ?? 0) + 1); }
+            return [...n].map(([k, m]) => (m > 1 ? `${k} ×${m}` : k)).join(", ") || "no road";
+          })()}
         </p>
         {results && <JunctionLine st={results.junctions?.find(x => x.id === junction.id)} t={results.t} />}
         <p className="text-[11px] text-muted-foreground">Drag its corners to reshape it; double-click its edge to add a corner, a corner to take it out; Alt-click a corner to round it off (again to make it sharp). Moving or turning it takes what is on it along.</p>
@@ -1887,7 +1905,7 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
   };
   const moreRow = (key: string, more: number) => more > 0 && (
     <button key={`${key}:more`} className="ml-6 justify-self-start rounded px-1 py-0.5 text-[11px] text-primary hover:underline" onClick={() => setLimits(l => ({ ...l, [key]: (l[key] ?? STEP) + 200 }))}>
-      Show {Math.min(200, more)} more of {more}
+      Show {Math.min(200, more)} more ({more} not shown yet)
     </button>
   );
   // (the junctions each road is joined at, worked out once)

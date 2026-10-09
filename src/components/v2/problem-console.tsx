@@ -33,15 +33,20 @@ export const problemCount = (s: SimStats | null) => (s ? s.collisions + s.jumps 
  * there (and picks the car, if it is still on the sketch); its clock button replays from 5 s before; copy the lines to
  * paste them into a conversation.
  */
-export function ProblemConsole({ sim, stats, sketch, contents, onGo, onReplay, replayFrom }: {
+/** the console's height while open (px): what sits over the map's foot (the replay bar) goes above it */
+export const CONSOLE_HEIGHT = 224;
+
+export function ProblemConsole({ sim, stats, sketch, contents, onGo, onReplay, replayFrom, open, onOpen }: {
   /** the cars' simulation, if there is one (asked for when wanted) */
   sim: () => SketchSimClient | null; stats: SimStats | null; sketch: Sketch; contents: Map<string, JunctionContents>;
   /** the view to `p`, the car picked if it is still there */
   onGo: (p: Pt, car: number) => void;
   /** replay from `t`; `replayFrom`: the earliest moment kept (null: nothing kept) */
   onReplay: (t: number) => void; replayFrom: number | null;
+  /** open (the editor keeps it, so the replay bar can make room) */
+  open: boolean; onOpen: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const setOpen = onOpen;
   const [show, setShow] = useState<Show>("all");
   const [filter, setFilter] = useState("");
   const [data, setData] = useState<{ problems: SimProblem[]; stuck: StuckCar[] } | null>(null);
@@ -92,7 +97,7 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onReplay, r
   useEffect(() => { const el = list.current; if (el && stick.current) el.scrollTop = el.scrollHeight; }, [rows.length]);
 
   const copy = () => {
-    const text = `Lane sketch console at ${clock(stats?.t ?? 0)} · ${rows.length} line${rows.length === 1 ? "" : "s"}\n` +
+    const text = `Plan console at ${clock(stats?.t ?? 0)} · ${rows.length} line${rows.length === 1 ? "" : "s"}\n` +
       rows.map(r => `${clock(r.t)}  ${LABEL[r.kind].padEnd(9)}  #${r.car}${r.other != null ? ` · #${r.other}` : ""}  ${r.place} (${r.x}, ${r.y}) — ${r.detail}`).join("\n");
     navigator.clipboard.writeText(text).then(() => toast.success(`Copied ${rows.length} line${rows.length === 1 ? "" : "s"}`), () => toast.error("Couldn't copy"));
   };
@@ -105,7 +110,7 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onReplay, r
     </Button>
   );
   return (
-    <div className="absolute inset-x-0 bottom-0 z-20 flex h-56 flex-col border-t bg-background" role="region" aria-label="Simulation console">
+    <div className="absolute inset-x-0 bottom-0 z-20 flex flex-col border-t bg-background" style={{ height: CONSOLE_HEIGHT }} role="region" aria-label="Simulation console">
       <div className="flex items-center gap-2 border-b px-3 py-1.5">
         <span className="text-sm font-medium">Console</span>
         <span className="truncate text-xs text-muted-foreground tabular-nums">

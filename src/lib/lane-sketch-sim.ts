@@ -863,7 +863,7 @@ export class SketchSim {
     if (!v || v.broken !== null) return false;
     v.broken = this.t; this.breakdowns++;
     this.note({ what: "breakdown", car: v.id, edge: v.edge.key, at: r2(v.pos) });
-    this.problem("breakdown", v, `broke down, ${r2(v.pos)} m along`);
+    this.problem("breakdown", v, `broke down ${Math.round(v.pos)} m along`);
     return true;
   }
   /** car `id` (broken down, or any) towed away now */
