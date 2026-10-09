@@ -7,8 +7,10 @@ import { isFullCircle, laneLength, type JunctionContents, type Sketch } from "@/
 
 /** what a search entry leads to: something on the sketch, or a car running now */
 export type SearchTarget = { kind: "road" | "lane" | "connector" | "junction" | "link" | "crossing"; id: string } | { kind: "car"; id: number };
-/** one thing on the sketch the search can find */
-interface Item { kind: string; title: string; sub: string; id: string; to: SearchTarget; hay: string }
+/** something to do, found by the search too */
+export interface SearchCommand { title: string; sub: string; run: () => void }
+/** one thing on the sketch the search can find (or a command) */
+interface Item { kind: string; title: string; sub: string; id: string; to: SearchTarget | { kind: "command"; run: () => void }; hay: string }
 
 const MAX = 60;
 const fmt = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toFixed(m < 10 ? 1 : 0)} m`);
@@ -66,7 +68,7 @@ function search(items: Item[], q: string): Item[] {
   for (const it of items) {
     if (!words.every(w => it.hay.includes(w.replace(/^#(?=\d)/, "")) || it.hay.includes(w))) continue;
     const t = fold(it.title).replace(/^#/, ""), id = it.id.toLowerCase();
-    const score = id === ql || t === ql ? 0 : t.startsWith(ql) || id.startsWith(ql) ? 1 : 2;
+    const score = it.kind === "Command" ? -1 : id === ql || t === ql ? 0 : t.startsWith(ql) || id.startsWith(ql) ? 1 : 2;
     hits.push({ it, score });
     if (hits.length > 5000) break;
   }
@@ -78,8 +80,10 @@ function search(items: Item[], q: string): Item[] {
  * junctions, lanes, connectors, links, zebra crossings, and the cars running now. Enter (or a click) selects
  * it and brings it into view. Mounted only while open: a fresh box each time, with the sketch as it is then.
  */
-export function SketchSearch({ sketch, contents, cars, onGo, onClose }: {
+export function SketchSearch({ sketch, contents, cars, commands = [], onGo, onClose }: {
   sketch: Sketch; contents: Map<string, JunctionContents>; cars: { id: number; edge?: string; kmh?: number }[];
+  /** things to do (on what is selected), found as the rest are and listed first */
+  commands?: SearchCommand[];
   onGo: (to: SearchTarget) => void; onClose: () => void;
 }) {
   const [q, setQ] = useState(""), [at, setAt] = useState(0);
@@ -88,9 +92,9 @@ export function SketchSearch({ sketch, contents, cars, onGo, onClose }: {
   const box = useRef<HTMLInputElement>(null);
   useEffect(() => { const f = requestAnimationFrame(() => box.current?.focus()); return () => cancelAnimationFrame(f); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const items = useMemo(() => catalogue(sketch, contents, cars), []);
+  const items = useMemo(() => [...commands.map((c, i) => ({ kind: "Command", title: c.title, sub: c.sub, id: `cmd${i}`, to: { kind: "command" as const, run: c.run }, hay: fold(`command ${c.title} ${c.sub}`) })), ...catalogue(sketch, contents, cars)], []);
   const hits = useMemo(() => search(items, q), [items, q]);
-  const go = (it: Item) => { onGo(it.to); onClose(); };
+  const go = (it: Item) => { onClose(); if (it.to.kind === "command") it.to.run(); else onGo(it.to); };
   const onKey = (e: React.KeyboardEvent) => {
     // (keys typed here are the box's, not the editor's: no tool picked, nothing deleted)
     e.stopPropagation();
@@ -105,7 +109,7 @@ export function SketchSearch({ sketch, contents, cars, onGo, onClose }: {
         <div className="flex items-center gap-2 border-b px-3">
           <Search className="size-4 text-muted-foreground" />
           <input ref={box} autoFocus value={q} onChange={e => { setQ(e.target.value); setAt(0); }} onKeyDown={onKey}
-            placeholder="Search roads, junctions, lanes (l12), connectors, crossings, cars (#123)…" aria-label="Search the sketch"
+            placeholder={commands.length ? "Search roads, junctions, lanes, cars (#123)… or a command (test)" : "Search roads, junctions, lanes (l12), connectors, crossings, cars (#123)…"} aria-label="Search the sketch"
             className="h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" />
           <Kbd>Esc</Kbd>
         </div>
@@ -116,7 +120,7 @@ export function SketchSearch({ sketch, contents, cars, onGo, onClose }: {
               onMouseEnter={() => setAt(i)} onClick={() => go(it)}>
               <span className="w-28 shrink-0 text-[11px] font-medium text-muted-foreground uppercase">{it.kind}</span>
               <span className="min-w-0 flex-1 truncate">{it.title}</span>
-              <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground" title={`${it.sub} · ${it.id}`}>{it.sub}{it.sub ? " · " : ""}<span className="font-mono">{it.id}</span></span>
+              <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground" title={`${it.sub} · ${it.id}`}>{it.sub}{it.kind !== "Command" && <>{it.sub ? " · " : ""}<span className="font-mono">{it.id}</span></>}</span>
             </button>
           ))}
           {q.trim() && !hits.length && <p className="px-3 py-3 text-sm text-muted-foreground">Nothing on the sketch matches “{q}”.</p>}

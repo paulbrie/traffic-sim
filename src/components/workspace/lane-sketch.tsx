@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, CircleDashed, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Car, CircleDashed, FlaskConical, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +22,8 @@ import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStat
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
-import { clipText, readClipText, setSketchClip, sketchClip, useSketchStore } from "@/state/lane-sketch";
+import { clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
+import { testPiece } from "@/lib/test-piece";
 import { readPalette, speedColor } from "@/render/palette";
 import { arrowGlyph } from "@/render/draw2d";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
@@ -464,6 +465,37 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
   };
   const resetCars = () => { sim.current?.reset(); setStats(sim.current?.stats() ?? null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null); redraw(); };
+  // "Test in Sketch": the selection taken into the Sketch window, cut off with short ways in and out, to run on its own
+  const [tis, setTisState] = useState<TestOptions>(loadTestOptions);
+  const setTis = (o: TestOptions) => { setTisState(o); saveTestOptions(o); };
+  const canTest = page && store.kind === "plan";
+  const testInSketch = (only?: Sel) => {
+    if (!canTest) return;
+    const sk = live.current.sketch, s = only ?? live.current.sel;
+    if (!s.lanes.length && !s.junctions.length && !s.connectors.length) { toast("Select what to test first", { description: "A junction, lanes, a road, or a box round a few junctions." }); return; }
+    // (the traffic measured in the plan's last run: each road's vehicles an hour shared among its lanes)
+    const rates = new Map<string, number>(), t = Math.max(1, stats?.t ?? 0);
+    for (const r of stats?.roads ?? []) { const road = sk.roads.find(x => x.id === r.id); if (road?.lanes.length) for (const l of road.lanes) rates.set(l, ((r.through / t) * 3600) / road.lanes.length); }
+    // (a run shorter than this hasn't filled the roads: what it measured is too little)
+    const measured = !!stats && stats.t >= MEASURE_AFTER;
+    const { sketch: piece, report } = testPiece(sk, s, { cut: tis.cut, rates: measured ? rates : undefined });
+    if (!piece.lanes.length) { toast("Nothing to test there", { description: "The selection has no lanes, and no junction with lanes or connectors on it." }); return; }
+    let added = false;
+    scratchSketch.edit(cur => {
+      if (tis.mode === "replace" || (!cur.lanes.length && !cur.junctions.length)) return { ...piece, ...(piece.geo ?? cur.geo ? { geo: piece.geo ?? cur.geo } : {}) };
+      // (beside what is there: where it is on the plan, as the Sketch's own origin has it, so the imagery still lines up)
+      added = true;
+      const o = geoShift(sk.geo, cur.geo), r = pastePart(cur, piece, o.x, o.y);
+      return { ...r.sketch, ...(cur.geo ?? sk.geo ? { geo: cur.geo ?? sk.geo } : {}), ...(cur.traffic ?? piece.traffic ? { traffic: cur.traffic ?? piece.traffic } : {}) };
+    });
+    ui.getValue().sketch = true;
+    requestScratchFocus({ run: tis.run });
+    const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
+    const what = report.junctions ? n(report.junctions, "junction") : n(report.lanes, "lane");
+    toast.success(`Testing ${what} in the Sketch`, {
+      description: `${n(report.lanes, "lane")}, ${report.cut} cut ${tis.cut} m out; ${n(report.entries, "way")} in${report.measured ? `, ${report.measured} at the rate measured in the last run` : !stats ? " at the plan's rate (no run yet)" : !measured ? ` at the plan's rate (the run so far is under ${MEASURE_AFTER / 60} min: too short to measure)` : ""}${added ? "; added beside what was there (zebras, signal groups and journeys come only when replacing)" : ""}. ⌘Z in the Sketch takes it back.`,
+    });
+  };
 
   // ------------------------------------------------------------ editing
   /** a junction selected with what it takes in, so they move, turn and copy with it */
@@ -1029,6 +1061,26 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // (the Sketch window: a piece put in it is shown fitted, nothing selected, its cars run if asked)
+  const onFocusPiece = useRef<() => void>(() => {});
+  useEffect(() => {
+    onFocusPiece.current = () => {
+      const f = takeScratchFocus();
+      if (!f) return;
+      setSel(NO_SEL); setSelCar(null);
+      if (sim.current) resetCars();
+      fit();
+      if (f.run && !running) play();
+    };
+  });
+  useEffect(() => {
+    if (store.kind !== "scratch") return;
+    // (after the render showing the piece)
+    const take = () => requestAnimationFrame(() => onFocusPiece.current());
+    take();
+    return onScratchFocus(take);
+  }, [store.kind]);
+
   // ------------------------------------------------------------ keys (kept from the plan's shortcuts while the window has focus)
   const onKeyDown = (e: React.KeyboardEvent) => {
     if ((e.target as HTMLElement).closest("input,textarea")) { e.stopPropagation(); return; }
@@ -1068,6 +1120,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       stepReplay((k === "arrowleft" || k === "," ? -1 : 1) * (e.shiftKey ? 1 : REPLAY_STEP));
       return;
     }
+    if (k === "t" && e.shiftKey && canTest) { e.preventDefault(); testInSketch(); return; }
     const t = TOOLS.find(t => t.key.toLowerCase() === k);
     if (t) changeTool(t.id);
   };
@@ -1167,6 +1220,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                     Make a circle <span className="ml-auto text-[11px] text-muted-foreground">a ring, made round</span>
                   </DropdownMenuItem>
                 </>}
+                {canTest && (menu.lanes.length > 0 || hasSel(sel)) && <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => testInSketch(hasSel(sel) ? undefined : { ...NO_SEL, lanes: menu.lanes })}>
+                    <FlaskConical /> Test in Sketch <span className="ml-auto text-[11px] text-muted-foreground">{hasSel(sel) ? "the selection" : menu.lanes.length === 1 ? "this lane" : "these lanes"} · ⇧T</span>
+                  </DropdownMenuItem>
+                </>}
                 {menu.geo && <>
                   {menu.lanes.length > 0 && <DropdownMenuSeparator />}
                   <DropdownMenuItem asChild>
@@ -1187,6 +1246,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
           {searchOpen && <SketchSearch sketch={sketch} contents={contents} cars={searchOpen.cars}
+            commands={canTest && hasSel(sel) ? [{ title: "Test in Sketch", sub: "the selection, on its own in the Sketch window · ⇧T", run: () => testInSketch() }] : []}
             onGo={goTo} onClose={() => { setSearchOpen(null); panel.current?.focus(); }} />}
           <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
             onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0} />
@@ -1214,6 +1274,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               selPt={selPt} onCurvePoint={curvePoint} onDeletePoint={deletePoint}
               onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} now={stats?.t ?? null} results={stats} />
           )}
+          {canTest && hasSel(sel) && <TestInSketchPanel options={tis} setOptions={setTis} onTest={() => testInSketch()} />}
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
@@ -1997,7 +2058,7 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
   const open = (key: string) => !closed.has(key);
 
   return (
-    <div ref={box} role="tree" aria-label="Roads and junctions" className="grid gap-px p-2">
+    <div ref={box} role="tree" aria-label="Roads and junctions" className="grid grid-cols-[minmax(0,1fr)] gap-px p-2">
       <p className="px-1 pb-1 text-[11px] text-muted-foreground">
         {plural(sketch.roads.length, "road")} · {plural(sketch.junctions.length, "junction")} · {plural(sketch.lanes.length, "lane")} · {plural(sketch.connectors.length, "connector")}
       </p>
@@ -2109,6 +2170,41 @@ interface PaintState {
 }
 
 /** a marking's box (kept: markings are kept per sketch) */
+/** "Test in Sketch"'s options (kept in the browser): how far out roads are cut, replacing what is in the Sketch or adding beside it, running at once */
+interface TestOptions { cut: number; mode: "replace" | "add"; run: boolean }
+const TEST_KEY = "laneSketch:testInSketch";
+/** a run at least this long (s) before its flows are taken for a tested piece's ways in */
+const MEASURE_AFTER = 180;
+function loadTestOptions(): TestOptions {
+  const d: TestOptions = { cut: 70, mode: "replace", run: true };
+  try { return { ...d, ...(JSON.parse(localStorage.getItem(TEST_KEY) ?? "{}") as Partial<TestOptions>) }; } catch { return d; }
+}
+function saveTestOptions(o: TestOptions) { try { localStorage.setItem(TEST_KEY, JSON.stringify(o)); } catch { /* private mode */ } }
+/** metres east and south from origin `to` to origin `from` (both latitude / longitude; nothing if either is missing) */
+function geoShift(from?: { lat: number; lon: number }, to?: { lat: number; lon: number }): Pt {
+  if (!from || !to) return { x: 0, y: 0 };
+  return { x: (from.lon - to.lon) * 111320 * Math.cos((to.lat * Math.PI) / 180), y: (to.lat - from.lat) * 110540 };
+}
+const hasSel = (s: Sel) => s.lanes.length > 0 || s.junctions.length > 0 || s.connectors.length > 0;
+
+/** "Test in Sketch": the selection taken into the Sketch window to run on its own, and how */
+function TestInSketchPanel({ options: o, setOptions, onTest }: { options: TestOptions; setOptions: (o: TestOptions) => void; onTest: () => void }) {
+  return (
+    <InspectorPanel id="test-in-sketch" title="Test in Sketch">
+      <p className="text-[11px] text-muted-foreground">The selection on its own in the Sketch window: its junctions with their lights, signs and turning shares, and each road into and out of it cut a little way out, cars coming in there at the rate measured in the last run (or the plan&apos;s). Where it is on the plan, so the imagery lines up.</p>
+      <div className="grid grid-cols-[repeat(2,minmax(0,1fr))] items-end gap-2">
+        <NumberField id="tis-cut" label="Roads cut at" unit="m" digits={0} min={15} max={500} step={10} value={o.cut} onCommit={v => setOptions({ ...o, cut: Math.round(v) })} />
+        <ToggleGroup type="single" className="w-full" value={o.mode} onValueChange={v => { if (v) setOptions({ ...o, mode: v as TestOptions["mode"] }); }} aria-label="What is in the Sketch">
+          <ToggleGroupItem value="replace" className="h-7 flex-1 text-xs" title="Instead of what is in the Sketch (⌘Z there brings it back)">Replace</ToggleGroupItem>
+          <ToggleGroupItem value="add" className="h-7 flex-1 text-xs" title="Beside what is in the Sketch">Add</ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+      <label className="flex items-center gap-2 text-xs"><Switch checked={o.run} onCheckedChange={v => setOptions({ ...o, run: v })} aria-label="Run the cars at once" /> Run the cars at once</label>
+      <Button size="sm" variant="outline" onClick={onTest} title="Take the selection into the Sketch window to try it on its own (⇧T)"><FlaskConical /> Test in Sketch</Button>
+    </InspectorPanel>
+  );
+}
+
 /** names, each once, with how many times it came ("Bulevardul Decebal ×2"), in the order first met */
 function timesEach(names: string[]): string[] {
   const n = new Map<string, number>();

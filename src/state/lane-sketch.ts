@@ -119,3 +119,12 @@ export function readClipText(text: string): SketchClip | null {
     return { part: { ...p, roads: p.roads ?? [] }, centre: o.centre, pastes: 0, stamp: o.stamp };
   } catch { return null; }
 }
+
+/** what the Sketch window does when it next shows a piece put in it ("Test in Sketch"): the view fitted to it, nothing selected, the cars run if `run` */
+export interface ScratchFocus { run: boolean }
+let scratchFocus: ScratchFocus | null = null;
+const scratchFocusWaiting = new Set<() => void>();
+export function requestScratchFocus(f: ScratchFocus) { scratchFocus = f; scratchFocusWaiting.forEach(g => g()); }
+/** the request, taken (null: none) */
+export function takeScratchFocus(): ScratchFocus | null { const f = scratchFocus; scratchFocus = null; return f; }
+export function onScratchFocus(g: () => void) { scratchFocusWaiting.add(g); return () => { scratchFocusWaiting.delete(g); }; }
