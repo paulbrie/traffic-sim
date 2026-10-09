@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T68 | Bistrița with repeatable runs (7b27441): repeatability check, every collision with seed and time, deadlocks per place | Ramona | 2026-10-09 | after T66 |
 | T67 | Small fixes from T60: more bridge argument checks, the editor opening on Select, the lat/lon readout legible | Tatiana | 2026-10-09 | |
 | T66 | Test History's "Apply changes from file" and "Restore from file" | Ramona | 2026-10-09 | after T60 |
 | T65 | Agents City Table: a round table | Tom | 2026-10-09 | |
