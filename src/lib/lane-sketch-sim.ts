@@ -38,7 +38,7 @@
  * further from where it was drawn a step before than it drove.
  */
 import {
-  CHANGE_COST, connectorPts, connectorById, connectorLevel, hasLevels, zAt, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
+  CHANGE_COST, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
   onCrossing, crossingFrame,
   type LaneControl, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
 } from "./lane-sketch";
@@ -85,6 +85,8 @@ export interface SimStats {
   pedsWaiting: number;
   /** the journeys' results (when the sketch has journeys) */
   journeys?: JourneyStats[];
+  /** turning shares: the vehicles that have gone each way, by `junction|way in|road out` (when the sketch has any) */
+  turns?: Record<string, number>;
   /** fuel burnt since the start (see `FuelStats`) */
   fuel: FuelStats;
   /** vehicles broken down so far (at random, or by hand), and those towed away */
@@ -235,6 +237,8 @@ export interface SimVehicle {
   broken: number | null;
   /** the journey it is on (going to that journey's way out), and when it came in */
   journey: string | null;
+  /** the road out it drew at a way in with turning shares (`at`: the junction and way in), kept while it is on that way in */
+  turn: { at: string; out: string } | null;
   born: number;
   /** seconds stopped, not counting the time at red lights (kept through them) */
   held: number;
@@ -600,6 +604,25 @@ export class SketchSim {
       const zs = e.conflicts.filter(k => !k.join).map(k => ({ s: k.at - k.before, e: k.at + k.after })).sort((p, q) => p.s - q.s);
       for (const z of zs) { const last = e.runs[e.runs.length - 1]; if (last && z.s <= last.e) last.e = Math.max(last.e, z.e); else e.runs.push({ ...z }); }
     }
+    // turning shares: each lane of a way in that has them, and the connectors out of it, by the road they lead to
+    this.splitAt = new Map(); this.splitOut = new Map();
+    if (sk.junctions.some(j => j.splits?.length)) {
+      const cs = contentsOf(sk);
+      for (const j of sk.junctions) {
+        if (!j.splits?.length) continue;
+        const c = cs.get(j.id);
+        if (!c) continue;
+        for (const a of junctionApproaches(sk, c)) {
+          const sp = j.splits.find(x => x.from === approachKey(a));
+          if (!sp) continue;
+          const key = `${j.id}|${sp.from}`, outs = Object.keys(sp.shares).filter(k => sp.shares[k] > 0), w = outs.map(k => sp.shares[k]), total = w.reduce((x, y) => x + y, 0);
+          if (total <= 0) continue;
+          for (const id of a.lanes) this.splitAt.set(id, { key, outs, w, total });
+          const lanes = new Set(a.lanes);
+          for (const cid of c.connectors) { const cn = connectorById(sk, cid); if (cn && lanes.has(cn.from.lane)) { const out = wayKey(sk, cn.to.lane); this.splitOut.set(cid, { out, count: `${key}|${out}` }); } }
+        }
+      }
+    }
     // traffic comes in where a lane starts with nothing joining it near its start (see entryLanes)
     const entries = new Map(entryLanes(sk).map(l => [`lane:${l.id}`, l]));
     const old = new Map(this.sources.map(s => [s.lane.key, s]));
@@ -658,7 +681,7 @@ export class SketchSim {
   reset() {
     this.posed = null;
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
-    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); this.breakdowns = 0; this.towed = 0;
+    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); this.breakdowns = 0; this.towed = 0;
     this.replay = []; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
     for (const x of this.crossings) x.ped = newPed();
@@ -833,7 +856,33 @@ export class SketchSim {
       }
     }
     // going to an exit: the way there that is shortest (from those within 5 m of it, one at random)
-    const rt = this.routes, dest = v.dest;
+    const rt = this.routes;
+    let dest = v.dest;
+    // turning shares (as v1's): on a way in that has them, its road out drawn by them (once on the way in), only the
+    // ways there taken; where it was going not to be reached from there, another way out that can be (journeys keep theirs)
+    const sp = v.edge.kind === "lane" && !v.journey ? this.splitAt.get(v.edge.id) : undefined;
+    if (sp) {
+      // (drawn among the roads out it can get to from where it is, by their shares; again if it can't get to the one drawn)
+      const reach = new Set(goals.flatMap(g => (g.conn ? [this.splitOut.get(g.conn.id)?.out ?? ""] : [])));
+      const outs = sp.outs.map((o, i) => ({ o, w: sp.w[i] })).filter(x => reach.has(x.o)), total = outs.reduce((a, x) => a + x.w, 0);
+      if (total > 0 && (v.turn?.at !== sp.key || !reach.has(v.turn.out))) {
+        let r = this.rnd() * total, k = 0;
+        for (; k < outs.length - 1; k++) { r -= outs[k].w; if (r <= 0) break; }
+        v.turn = { at: sp.key, out: outs[k].o };
+      }
+      const out = v.turn?.at === sp.key ? v.turn.out : null, mine = out ? goals.filter(g => g.conn && this.splitOut.get(g.conn.id)?.out === out) : [];
+      if (mine.length) {
+        goals.splice(0, goals.length, ...mine);
+        if (rt && dest && !mine.some(g => rt.viaConnector(g.conn!.id, dest!) < Infinity)) {
+          const opts = rt.exits.filter(ex => (this.exitWeights.get(ex) ?? 1) > 0 && mine.some(g => rt.viaConnector(g.conn!.id, ex) < Infinity));
+          const total = opts.reduce((a, ex) => a + (this.exitWeights.get(ex) ?? 1), 0);
+          let r = this.rnd() * total;
+          for (const ex of opts) { r -= this.exitWeights.get(ex) ?? 1; if (r <= 0) { dest = ex; break; } }
+          if (opts.length && dest === v.dest) dest = opts[opts.length - 1];
+          v.dest = dest;
+        }
+      }
+    }
     if (rt && dest) {
       const cost = (g: (typeof goals)[number]) => g.d + (g.conn ? rt.viaConnector(g.conn.id, dest) : g.lane.id === dest ? 0 : Infinity);
       const best = goals.reduce((m, g) => Math.min(m, cost(g)), Infinity);
@@ -1196,7 +1245,7 @@ export class SketchSim {
       if (s.wait && !s.wait.length) delete s.wait;
       // (no faster than it can stop from behind the last car in)
       const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - S0 - 1)));
-      const v: SimVehicle = { id: this.nextId++, seenX: NaN, seenY: NaN, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : 1, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, born: this.t, fuel: 0, broken: null };
+      const v: SimVehicle = { id: this.nextId++, seenX: NaN, seenY: NaN, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : 1, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, turn: null, born: this.t, fuel: 0, broken: null };
       if (jw) this.journeys.find(j => j.def.id === jw.journey)!.sent++;
       else s.truck = undefined;
       // (speeds varying: its own share of the lanes' speed; no random number drawn when they don't, so runs stay as they were)
@@ -1579,6 +1628,7 @@ export class SketchSim {
         const exitAt = v.exit ? e.outs.find(o => o.conn === v.exit)?.s : undefined;
         const toExit = exitAt === undefined ? Infinity : this.along(e, v.pos, exitAt);
         if (move >= toExit) {
+          { const sc = this.splitOut.get(v.exit!.id); if (sc) this.turnCounts.set(sc.count, (this.turnCounts.get(sc.count) ?? 0) + 1); }
           move -= toExit; v.trail = this.trailOf(v, e, exitAt!); v.edge = v.exit!; v.pos = 0; v.run = 0; v.exit = null; v.goal = null; v.stopped = false;
           this.note({ what: "onto", car: v.id, from: e.key, left: r2(exitAt!), to: v.edge.key });
           continue;
@@ -1611,6 +1661,10 @@ export class SketchSim {
   /** what is kept to replay: per frame, per car [id, x, y, dx, dy, v, share] and [edge, exit, why] as indexes into `tags` */
   /** per connector, the vehicles gone on past it with their backs still on it (as `step` found them) */
   private tails = new Map<Edge, { w: SimVehicle; pos: number }[]>();
+  /** turning shares (as v1's): per lane of a way in that has them, the roads out and their weights; per connector out of it, the way it counts as */
+  private splitAt = new Map<string, { key: string; outs: string[]; w: number[]; total: number }>();
+  private splitOut = new Map<string, { out: string; count: string }>();
+  private turnCounts = new Map<string, number>();
   /** the vehicles' bodies as the last step left them (until the next step, or the sketch or the run changes) */
   private posed: Map<SimVehicle, Body & { trailer?: Body }> | null = null;
   private replay: { t: number; nums: Float32Array; tags: Uint32Array; peds?: { ids: Uint32Array; nums: Float32Array }; /** per truck [index, x, y, dx, dy, len] */ trailers?: Float32Array }[] = [];
@@ -1796,6 +1850,7 @@ export class SketchSim {
       meanSpeed: n ? (this.vehicles.reduce((a, v) => a + v.v, 0) / n) * 3.6 : 0,
       waiting: this.vehicles.filter(v => v.still >= 20).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes, fuel: { ...this.fuel }, breakdowns: this.breakdowns, towed: this.towed,
       pedsCrossed: this.crossings.reduce((a, x) => a + x.ped.crossed, 0), pedsWaiting: this.crossings.reduce((a, x) => a + x.ped.waiting, 0),
+      ...(this.splitOut.size ? { turns: Object.fromEntries(this.turnCounts) } : {}),
       ...(this.journeys.length ? { journeys: this.journeys.map(j => ({
         id: j.def.id, sent: j.sent, arrived: j.arrived, meanTrip: j.arrived ? j.tripSum / j.arrived : 0, noRoute: j.noRoute,
         driving: this.vehicles.filter(v => v.journey === j.def.id).length, waiting: this.sources.reduce((a, s) => a + (s.wait?.filter(w => w.journey === j.def.id).length ?? 0), 0),

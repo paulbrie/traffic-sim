@@ -51,7 +51,13 @@ export interface SketchJunction { id: string; name: string; outline: Pt[]; /** c
   smooth?: number;
   /** traffic lights on the ways in (instead of signs; see `JunctionLights`) */
   lights?: JunctionLights;
+  /**
+   * Turning shares, as v1's: for a way in (`from`: its road's id, or `lane:<id>` for a lane in no road), the relative
+   * share of the traffic on it that goes on to each road out (by the same keys). Ways in without one: each car its own way.
+   */
+  splits?: JunctionSplit[];
 }
+export interface JunctionSplit { from: string; shares: Record<string, number> }
 export interface Sketch {
   lanes: SketchLane[]; connectors: SketchConnector[]; roads: SketchRoad[]; junctions: SketchJunction[];
   /** road ends joined so the road carries on (see `SketchLink`) */
@@ -2099,7 +2105,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const outline = pts(j?.outline, 3);
     if (!str(j?.id) || !outline || junctions.some(x => x.id === j.id)) continue;
     const curved = Array.isArray(j.curved) && j.curved.length === outline.length ? { curved: (j.curved as unknown[]).map(Boolean) } : {};
-    junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...lightsOf(j.lights) });
+    junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...lightsOf(j.lights), ...splitsOf(j.splits) });
   }
   const g = o.geo as Sketch["geo"];
   const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;
@@ -2229,3 +2235,54 @@ export function connectorById(sk: Sketch, id: string) {
   if (!m) connIndexKept.set(sk.connectors, (m = new Map(sk.connectors.map(c => [c.id, c]))));
   return m.get(id);
 }
+
+// ---------------------------------------------------------------- turning shares (as v1's)
+
+/** a way in or a road out, as turning shares name them: its road's id, or `lane:<id>` for a lane in no road */
+export const wayKey = (sk: Sketch, lane: string) => roadOf(sk, lane)?.id ?? `lane:${lane}`;
+/** turning shares as saved, kept only if they make sense (non-negative numbers, some way in) */
+function splitsOf(raw: unknown): { splits?: JunctionSplit[] } {
+  if (!Array.isArray(raw)) return {};
+  const out: JunctionSplit[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== "object" || typeof (x as JunctionSplit).from !== "string" || !(x as JunctionSplit).shares || typeof (x as JunctionSplit).shares !== "object") continue;
+    const shares: Record<string, number> = {};
+    for (const [k, v] of Object.entries((x as JunctionSplit).shares)) if (typeof v === "number" && Number.isFinite(v) && v >= 0) shares[k.slice(0, 80)] = Math.min(1000, v);
+    if (Object.keys(shares).length) out.push({ from: (x as JunctionSplit).from.slice(0, 80), shares });
+  }
+  return out.length ? { splits: out } : {};
+}
+/** a road out of a junction from a way in: its key and name, and which way it turns (from the way in's lanes' direction at their end) */
+export interface SplitExit { key: string; name: string; turn: "L" | "S" | "R" | "U" }
+/** the roads out a way in leads to through a junction (by its connectors from the way in's lanes) */
+export function splitExits(sk: Sketch, c: JunctionContents, a: Approach): SplitExit[] {
+  const lanes = new Set(a.lanes), out = new Map<string, SplitExit>();
+  for (const id of c.connectors) {
+    const cn = connectorById(sk, id);
+    if (!cn || !lanes.has(cn.from.lane)) continue;
+    const to = laneById(sk, cn.to.lane), from = laneById(sk, cn.from.lane);
+    if (!to || !from) continue;
+    const key = wayKey(sk, to.id);
+    if (out.has(key)) continue;
+    // (the turn: the angle between going into the junction and coming out of it)
+    const d0 = pointAt(from.shape, cn.from.s).d, d1 = pointAt(to.shape, cn.to.s).d, ang = Math.atan2(d0.x * d1.y - d0.y * d1.x, d0.x * d1.x + d0.y * d1.y);
+    const turn = Math.abs(ang) < 0.5 ? "S" : Math.abs(ang) > 2.6 ? "U" : ang > 0 ? "R" : "L";
+    out.set(key, { key, name: roadOf(sk, to.id)?.name ?? `Lane ${to.id}`, turn });
+  }
+  return [...out.values()];
+}
+/** a way in's turning shares set (null: taken away, each car its own way) */
+export function setSplit(sk: Sketch, junction: string, from: string, shares: Record<string, number> | null): Sketch {
+  return {
+    ...sk,
+    junctions: sk.junctions.map(j => {
+      if (j.id !== junction) return j;
+      const rest = (j.splits ?? []).filter(x => x.from !== from), splits = shares ? [...rest, { from, shares }] : rest;
+      const next = { ...j };
+      if (splits.length) next.splits = splits; else delete next.splits;
+      return next;
+    }),
+  };
+}
+/** the way in a lane is part of, as turning shares name it */
+export const approachKey = (a: Approach) => a.road ?? `lane:${a.lanes[0]}`;

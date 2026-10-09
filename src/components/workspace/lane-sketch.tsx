@@ -14,7 +14,7 @@ import { unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, addLane, contentsOf, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
-  roadOf, rotation, samples, setControl, junctionHoles, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
+  roadOf, rotation, samples, setControl, junctionHoles, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
   type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
@@ -1270,6 +1270,45 @@ function JunctionSigns({ sketch, contents }: { sketch: Sketch; contents: Junctio
 }
 
 /**
+ * Turning shares, as v1's: for each way into the junction leading to two roads or more, the share of its traffic
+ * going on to each (relative weights; off: each car its own way), and while the cars run, the share that has.
+ */
+function TurnSharesPanel({ sketch, junction, contents, now }: { sketch: Sketch; junction: SketchJunction; contents: JunctionContents; now: number | null }) {
+  const { edit: editSketch, sim } = useSketchStore();
+  const turns = now !== null ? sim()?.stats()?.turns : undefined;
+  const ways = junctionApproaches(sketch, contents).map(a => ({ a, key: approachKey(a), exits: splitExits(sketch, contents, a) })).filter(w => w.exits.length >= 2);
+  if (!ways.length) return null;
+  const turnName = { L: "Left", S: "Ahead", R: "Right", U: "U-turn" } as const;
+  return (
+    <div className="grid gap-2">
+      <span className="text-xs font-medium">Turning shares</span>
+      {ways.map(({ a, key, exits }) => {
+        const split = junction.splits?.find(x => x.from === key)?.shares ?? null;
+        const set = (shares: Record<string, number> | null) => editSketch(s => setSplit(s, junction.id, key, shares));
+        const counted = exits.map(x => turns?.[`${junction.id}|${key}|${x.key}`] ?? 0), total = counted.reduce((x, y) => x + y, 0);
+        return (
+          <div key={key} className="grid gap-1.5 rounded-md border p-2">
+            <label className="flex items-center justify-between gap-2 text-xs">
+              <span className="truncate">From {a.name}</span>
+              <Switch checked={!!split} aria-label={`Turning shares from ${a.name}`}
+                onCheckedChange={on => set(on ? Object.fromEntries(exits.map(x => [x.key, Math.round(100 / exits.length)])) : null)} />
+            </label>
+            {split ? exits.map((x, i) => (
+              <div key={x.key} className="grid grid-cols-[1fr_2.5rem_5rem] items-center gap-2">
+                <span className="truncate text-xs" title={x.name}>{turnName[x.turn]} · {x.name}</span>
+                <span className="text-right font-mono text-[10px] text-muted-foreground tabular-nums" title="The share that has gone this way in the running simulation">{total >= 5 ? `${Math.round((100 * counted[i]) / total)}%` : ""}</span>
+                <NumberField id={`sk-split-${junction.id}-${key}-${x.key}`} label={`Share turning ${turnName[x.turn]} to ${x.name}`} hideLabel value={split[x.key] ?? 0} min={0} max={1000} step={5} digits={0}
+                  onCommit={n => set({ ...split, [x.key]: Math.max(0, n) })} />
+              </div>
+            )) : <p className="text-[11px] text-muted-foreground">Each car its own way, to where it is going. Switch on to set the share going to each road; cars then re-plan from the road they draw.</p>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * A junction's traffic lights, as on the plan: their times, actuated or not, and the phases: worked
  * out (ways facing each other together, or one at a time) or set by hand, each with its own green and
  * the connectors that have green in it (hovering a phase lights them up on the sketch).
@@ -1549,6 +1588,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           </ToggleGroup>
         </div>
         {junction.lights ? <JunctionLightsPanel sketch={sketch} junction={junction} contents={c} onHover={onHover} now={now} onPick={id => setSel(junctionSel([id]))} /> : <JunctionSigns sketch={sketch} contents={c} />}
+        <TurnSharesPanel sketch={sketch} junction={junction} contents={c} now={now} />
         <div className="flex gap-1.5">
           <Button size="sm" variant="outline" className="flex-1" title="Take the surface away; its lanes and connectors stay" onClick={() => { editSketch(sk => remove(sk, { junctions: [junction.id] })); setSel(NO_SEL); }}>Remove surface</Button>
           <Button size="sm" variant="ghost" onClick={onDelete} aria-label="Delete the junction and what is on it" title="Delete the junction and its lanes and connectors (Del)"><Trash2 /></Button>
