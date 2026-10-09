@@ -10,12 +10,13 @@
  * Kept small and cold: no plan data, no results, nothing private, nothing each frame (the view and the cars' clock
  * are copied in at most four times a second).
  */
-import { createContext, useCallback, useContext, useMemo } from "react";
+import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 import { DeepSubject } from "subjecto";
-import { useDeepSubject } from "subjecto/react";
 import type { Piece } from "@/lib/lane-sketch";
 import { bridgeApp, setBridgeUi } from "@/state/bridge-registry";
 import { ui } from "@/state/store";
+import { SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
+import { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
 
 /** the drawing tools */
 export type Tool = "select" | "lane" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing";
@@ -56,7 +57,10 @@ export interface EditorUi {
     /** Optimise timings: open (from that junction's lights), the lights chosen, the effort, where it is */
     optimizer: { open: boolean; junction: string | null; chosen: string[]; effort: string; stage: "setup" | "running" | "done" | "error" };
   };
+  /** the results tables: sorted by which column (or "name"), the other way or not, how many rows shown */
+  tables: { junctions: TableUi; roads: TableUi };
 }
+export interface TableUi { by: string; flip: boolean; shown: number }
 export type EditorKind = "plan" | "scratch" | "whole";
 /** Test in Sketch's options (kept in the browser): how far out roads are cut, replacing what is in the Sketch or adding beside it, running at once */
 export interface TestOptions { cut: number; mode: "replace" | "add"; run: boolean }
@@ -68,12 +72,17 @@ export interface SketchUiState {
   panels: { closed: Record<string, true> };
   /** the Sketch window over the plan: open; Test in Sketch's options and the last piece it took there */
   sketchWindow: { open: boolean; test: TestOptions; lastPiece: { junctions: number; lanes: number; mode: "replace" | "add"; at: number } | null };
+  /** the layers shown (the editor's and the top bar's: sketch-layers.ts, kept in the browser; shown here as they are) */
+  layers: SketchLayers;
+  /** how the satellite imagery is shown (kept in the browser) */
+  background: SatOptions;
 }
 
 const editor = (tool: Tool): EditorUi => ({
   tool, selection: NO_SEL, point: null, car: null, follow: false, view: { cx: 0, cy: 0, scale: 6 },
   run: { running: false, speed: 1, t: 0, replayT: null, playing: false, kept: null },
   dialogs: { search: { open: false, query: "" }, console: { open: false, kind: "all", text: "", clearedAt: -1 }, settings: false, optimizer: { open: false, junction: null, chosen: [], effort: "quick", stage: "setup" } },
+  tables: { junctions: { by: "delay", flip: false, shown: 12 }, roads: { by: "delay", flip: false, shown: 12 } },
 });
 export const freshEditor = (): EditorUi => editor("lane");
 
@@ -90,7 +99,12 @@ export const sketchUi = new DeepSubject<SketchUiState>({
   editors: { plan: freshEditor(), scratch: freshEditor(), whole: freshEditor() },
   panels: { closed: stored<Record<string, true>>(PANELS_KEY, {}) },
   sketchWindow: { open: false, test: stored<TestOptions>(TEST_KEY, { cut: 70, mode: "replace", run: true }), lastPiece: null },
+  layers: sketchLayers$.getValue(),
+  background: typeof localStorage === "undefined" ? { brightness: 0.85, source: "esri" } : loadSatOptions(),
 }, { name: "sketchUi" });
+sketchUi.subscribe("background", v => saveSatOptions(JSON.parse(JSON.stringify(v)) as SatOptions), { skipInitialCall: true });
+// (the layers: sketch-layers.ts's, as they change)
+sketchLayers$.subscribe(l => { sketchUi.getValue().layers = { ...l }; });
 sketchUi.subscribe("panels/closed", v => store(PANELS_KEY, v), { skipInitialCall: true });
 sketchUi.subscribe("sketchWindow/test", v => store(TEST_KEY, v), { skipInitialCall: true });
 // (the Sketch window opens and closes through V1's ui, as before: shown here too)
@@ -113,10 +127,13 @@ export function useEditorState(kind: EditorKind, key: string): [unknown, (v: unk
 /** any part of the store, as useState gives one (a plain copy, and a setter taking a value or a function of the last) */
 export function useUiPath<T>(path: string): [T, (v: T | ((p: T) => T)) => void];
 export function useUiPath(path: string): [unknown, (v: unknown) => void] {
-  const [proxied] = useDeepSubject(sketchUi, path as never) as [unknown, unknown];
-  // (a plain copy, made again only when it changed: the drawing reads the selection's lists thousands of times a frame,
+  // (followed by its text: a part changed in place keeps its proxy, which React would take for no change; and a plain
+  // copy, made again only when that text changed: the drawing reads the selection's lists thousands of times a frame,
   // a proxy's every read would cost)
-  const value = useMemo(() => plain(proxied), [proxied]);
+  const subscribe = useCallback((f: () => void) => { const h = sketchUi.subscribe(path, f, { skipInitialCall: true }); return () => h.unsubscribe(); }, [path]);
+  const read = useCallback(() => { const v = at(path); return v !== null && typeof v === "object" ? OBJ + JSON.stringify(v) : v; }, [path]);
+  const snap = useSyncExternalStore(subscribe, read, read);
+  const value = useMemo(() => (typeof snap === "string" && snap.startsWith(OBJ) ? JSON.parse(snap.slice(OBJ.length)) : snap), [snap]);
   const set = useCallback((v: unknown) => {
     const parts = path.split("/"), last = parts.pop()!;
     let o = sketchUi.getValue() as unknown as Record<string, unknown>;
@@ -126,7 +143,10 @@ export function useUiPath(path: string): [unknown, (v: unknown) => void] {
   }, [path]);
   return [value, set];
 }
-const plain = (v: unknown): unknown => (v !== null && typeof v === "object" ? JSON.parse(JSON.stringify(v)) : v);
+/** (marks an object's text in a snapshot: no string kept in the store starts so) */
+const OBJ = "\u0000obj:";
+/** what is at a path of the store now (slashes) */
+const at = (path: string): unknown => path.split("/").reduce<unknown>((o, k) => (o !== null && typeof o === "object" ? (o as Record<string, unknown>)[k] : undefined), sketchUi.getValue());
 /** an editor's state now (outside React: handlers, frames) */
 export const editorUi = (kind: EditorKind) => sketchUi.getValue().editors[kind];
 /** an editor's state back to how a new one starts (it went: the Sketch window closed, the page left) */
@@ -173,6 +193,26 @@ export function offerSketchUiToBridge() {
       if (a.text !== undefined) d.text = String(a.text);
       if (a.open !== undefined) d.open = !!a.open;
       return { ...d };
+    }),
+    // layers shown or not: { set: { id: boolean } } (ids as in `layers`)
+    bridgeApp.register("layers", a => {
+      const set = a.set as Record<string, unknown> | undefined, ids = SKETCH_LAYERS.map(l => l.id) as string[];
+      if (!set || typeof set !== "object") throw new Error(`which? { set: { id: true|false } }, ids: ${ids.join(", ")}`);
+      const bad = Object.keys(set).filter(k => !ids.includes(k));
+      if (bad.length) throw new Error(`no layer ${bad.join(", ")}: ${ids.join(", ")}`);
+      const next = { ...sketchLayers$.getValue(), ...Object.fromEntries(Object.entries(set).map(([k, v]) => [k, !!v])) } as SketchLayers;
+      setSketchLayers(next);
+      return next;
+    }),
+    // a results table sorted: { table: "junctions" | "roads", by, flip?, editor? }
+    bridgeApp.register("sort", a => {
+      const table = String(a.table), by = String(a.by);
+      const cols: Record<string, string[]> = { junctions: ["name", "rate", "delay", "queue", "fuel"], roads: ["name", "rate", "speed", "delay", "queue"] };
+      if (!cols[table]) throw new Error("table: junctions or roads");
+      if (!cols[table].includes(by)) throw new Error(`by: one of ${cols[table].join(", ")}`);
+      const t = editorFor(a).tables[table as "junctions" | "roads"];
+      t.by = by; t.flip = !!a.flip;
+      return { ...t };
     }),
     // the search box (Cmd/Ctrl+K): { open, query?, editor? }
     bridgeApp.register("search", a => {

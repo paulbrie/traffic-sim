@@ -51,7 +51,7 @@ process; a restart drops them: the page reconnects, the agent pairs again).
 | `type` | `{ role?, name?, selector?, text, submit?: boolean }` | `{ typed }` |
 | `key` | `{ key: string }` (e.g. `"Control+k"`, `"Escape"`) | `{}` |
 | `navigate` | `{ url }` (same origin) | `{ url }` |
-| `app` | `{ action, args }`: `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `replay` `{ t }`, `restart`; on a V2 plan also `panel`, `console`, `search` (see "UI state") | `{}` or what the action returns |
+| `app` | `{ action, args }`: `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `replay` `{ t }`, `restart`; on a V2 plan also `panel`, `console`, `search`, `layers`, `sort` (see "UI state") | `{}` or what the action returns |
 
 Targets by role and name follow Playwright's `getByRole` (name: case-insensitive substring unless `exact`).
 Every command is shown to the user in the activity log; `click` / `type` / `key` move the agent's cursor there first
@@ -67,12 +67,15 @@ as `{ first, count }`), with no plan data, no results, nothing private, nothing 
 { active: "plan" | "scratch",            // the editor the user is at: the Sketch window's while open and last used
   editors: { plan: Editor, scratch: Editor },    // the plan's, and the Sketch window's (Test in Sketch)
   panels: { closed: { [panelId]: true } },       // the inspector's panels folded away (both editors')
-  sketchWindow: { open, test: { cut, mode, run }, lastPiece: { junctions, lanes, mode, at } | null } }
+  sketchWindow: { open, test: { cut, mode, run }, lastPiece: { junctions, lanes, mode, at } | null },
+  layers: { surfaces, markings, lanes, connectors, signs, cars, names, demand, grid, satellite, image },  // shown or not
+  background: { brightness, source } }            // the satellite imagery's
 Editor = { tool, selection: { lanes, connectors, junctions, road, link?, crossing? }, point, car, follow,
            view: { cx, cy, scale },        // at most 4 times a second
            run: { running, speed, t, replayT, playing, kept },   // t: at most 4 times a second
            dialogs: { search: { open, query }, console: { open, kind, text, clearedAt }, settings,
-                      optimizer: { open, junction, chosen, effort, stage } } }
+                      optimizer: { open, junction, chosen, effort, stage } },
+           tables: { junctions: { by, flip, shown }, roads: { by, flip, shown } } }   // the results tables' sort
 ```
 
 Changes an agent may ask for (`app`; no others, nothing written by path):
@@ -82,6 +85,8 @@ Changes an agent may ask for (`app`; no others, nothing written by path):
 | `panel` | `{ id, open }` | folds an inspector panel away or opens it (ids: `selection`, `traffic`, `fuel`, `demand`, `junction-results`, `road-results`, `test-in-sketch`, `background`, `car`, `crossing`) |
 | `console` | `{ open?, kind?, text?, editor? }` | the problem console: open or close it, show one kind (`all`, `stuck`, `collision`, `jump`, `deadlock`, `breakdown`, `towed`), filter its lines |
 | `search` | `{ open, query?, editor? }` | the search box (Cmd/Ctrl+K), with what is typed in it |
+| `layers` | `{ set: { [id]: boolean } }` | layers shown or hidden (ids as in `layers`), kept in the browser as the user's own are |
+| `sort` | `{ table: "junctions" \| "roads", by, flip?, editor? }` | a results table sorted: `name`, `rate`, `delay`, `queue`, and `fuel` (junctions) or `speed` (roads); `flip`: the other way |
 
 `editor`: `plan` or `scratch` (the Sketch window, if open); without it, the editor the user is at.
 

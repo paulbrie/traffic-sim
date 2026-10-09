@@ -18,19 +18,15 @@ import { NumberField } from "@/components/workspace/fields";
 import type { Pt, Sketch } from "@/lib/lane-sketch";
 import type { Underlay } from "@/lib/underlay";
 import { unproject } from "@/lib/osm/area";
-import { drawSatellite, googleImagery, SAT_ATTRIBUTION, type SatSource } from "@/render/satellite";
+import { drawSatellite, googleImagery, SAT_ATTRIBUTION } from "@/render/satellite";
 import { setUnderlay, ui, underlay$ } from "@/state/store";
 import { useSketchStore } from "@/state/lane-sketch";
 import { removeUnderlay, underlayImg$, uploadUnderlay } from "@/state/underlay-image";
 import { InspectorPanel } from "./inspector-panel";
 
-/** how the imagery is shown (kept in the browser) */
-export interface SatOptions { brightness: number; source: SatSource }
-export const loadSatOptions = (): SatOptions => {
-  try { const o = JSON.parse(localStorage.getItem("v2:sat") ?? "null"); if (o && typeof o.brightness === "number") return { brightness: Math.min(1, Math.max(0.3, o.brightness)), source: o.source === "google" ? "google" : "esri" }; } catch { /* private mode, or nothing kept */ }
-  return { brightness: 0.85, source: "esri" };
-};
-export const saveSatOptions = (o: SatOptions) => { try { localStorage.setItem("v2:sat", JSON.stringify(o)); } catch { /* private mode */ } };
+// (how the imagery is shown: src/state/sat-options.ts, kept in the V2 UI store)
+export { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
+import type { SatOptions } from "@/state/sat-options";
 
 /** two points clicked on the sketch to set the image's scale by a distance known between them */
 export interface Calibration { a: Pt | null; b: Pt | null }

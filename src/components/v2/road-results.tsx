@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { useEditorKind, useUiPath, type TableUi } from "@/state/sketch-ui";
 import { ClipboardCopy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -27,9 +28,11 @@ const COLS: { key: Key; label: string; title: string }[] = [
  */
 export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: SimStats; onGo: (id: string) => void }) {
   // (by a column, the most first (speed: the slowest); again, the other way; by name, A to Z first)
-  const [{ by, flip }, setSort] = useState<{ by: Key | "name"; flip: boolean }>({ by: "delay", flip: false });
-  const sortBy = (k: Key | "name") => setSort(s => ({ by: k, flip: s.by === k ? !s.flip : false }));
-  const [n, setN] = useState(12);
+  // (how it is sorted and how much shows: the editor's, in the V2 UI store)
+  const [table, setTable] = useUiPath<TableUi>(`editors/${useEditorKind()}/tables/roads`);
+  const by = table.by as Key | "name", flip = table.flip, n = table.shown;
+  const sortBy = (k: Key | "name") => setTable(s => ({ ...s, by: k, flip: s.by === k ? !s.flip : false }));
+  const setN = (f: (n: number) => number) => setTable(s => ({ ...s, shown: f(s.shown) }));
   const name = useMemo(() => roadNames(sketch), [sketch]);
   const list = (stats as SimStats & { roads?: RoadRow[] }).roads;
   if (!list?.length) return null;

@@ -42,7 +42,7 @@ import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from 
 import { REPLAY_STEP, SketchReplayBar } from "@/components/v2/sketch-replay-bar";
 import { CONSOLE_HEIGHT, ProblemConsole } from "@/components/v2/problem-console";
 import { bridgeApp, bridgeState, setBridgeCanvas, setBridgeToWorld } from "@/state/bridge-registry";
-import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
+import { BackgroundPanel, drawBackground, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
 import { stampRoundabout } from "@/lib/roundabout";
 import { tidySketch, type TidyReport } from "@/lib/sketch-tidy";
@@ -204,8 +204,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [sketchOpen] = useDeepSubject(ui, "sketch");
   useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
   // the background (V2 plans): how the imagery shows, the image, a scale being set by two clicks
-  const [sat, setSatState] = useState<SatOptions>(loadSatOptions);
-  const setSat = (o: SatOptions) => { setSatState(o); saveSatOptions(o); };
+  // (how the imagery shows: in the V2 UI store, kept in the browser)
+  const [sat, setSat] = useUiPath<SatOptions>("background");
   const [underlay] = useSubject(underlay$), [ulImg] = useSubject(underlayImg$);
   const [calib, setCalib] = useState<Calibration | null>(null);
   // the hand shown over the map: open while Space is held (ready to drag it), closed while it is dragged
