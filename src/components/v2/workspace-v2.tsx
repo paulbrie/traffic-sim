@@ -9,7 +9,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UserMenu, type MenuUser } from "@/components/auth/user-menu";
 import { HistoryButton } from "@/components/workspace/history-dialog";
 import { LaneSketch } from "@/components/workspace/lane-sketch";
-import { FrameRate, SketchLayerPicker, SketchModeButton } from "./top-bar-tools";
+import { FrameRate, SketchLayerPicker } from "./top-bar-tools";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
 import { loadPlan } from "@/state/store";
 import { startUnderlayImage } from "@/state/underlay-image";
@@ -39,7 +39,6 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
             : <SaveIndicator planId={plan.id} />}
           <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} />
           <Separator orientation="vertical" className="!h-5" />
-          <SketchModeButton />
           <SketchLayerPicker />
           <div className="ml-auto flex items-center gap-3">
             <FrameRate />

@@ -21,7 +21,7 @@ import {
 import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { laneSketch$, ui, underlay$ } from "@/state/store";
-import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchEditing$, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
+import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { editSketch, recordSketch, redoSketch, setSketchClip, setSketchSim, sketchClip, sketchSim, undoSketch } from "@/state/lane-sketch";
 import { readPalette, speedColor } from "@/render/palette";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
@@ -182,9 +182,6 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
   const setParams = (p: SimParams) => laneSketch$.next({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}) } });
   const [readOnly] = useDeepSubject(ui, "readOnly");
-  // (a V2 plan with the top bar's Sketch button off: only the map, the cars and their panels; nothing to draw or edit)
-  const [editing] = useSubject(sketchEditing$);
-  const viewing = page && !editing;
   // the background (V2 plans): how the imagery shows, the image, a scale being set by two clicks
   const [sat, setSatState] = useState<SatOptions>(loadSatOptions);
   const setSat = (o: SatOptions) => { setSatState(o); saveSatOptions(o); };
@@ -366,13 +363,6 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (the client kept between openings of the window: its frames come here)
   useEffect(() => { if (sim.current) sim.current.onFrame = onSimFrame; });
   const changeTool = (t: Tool) => { draft.current = null; setTool(t); redraw(); };
-  // (switched to viewing: back to the pointer, nothing half drawn or selected)
-  useEffect(() => {
-    if (!page) return;
-    const h = sketchEditing$.subscribe(on => { if (!on) { draft.current = null; setTool("select"); setSel(NO_SEL); setSelPt(null); redraw(); } });
-    return () => h.unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
   /** a car picked to inspect (null: none) */
   const setSelCar = (id: number | null) => { setSelCarId(id); setCarInfo(id !== null ? carInfoAt(id, live.current.replayT) : null); };
 
@@ -673,8 +663,6 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const lanes = l ? (s.lanes.includes(l.id) ? s.lanes : [l.id]) : s.lanes;
     // (where on Earth, the sketch placed on the map: the spot to open in Google Maps, as in V1)
     const geo = sk.geo ? unproject(sk.geo, raw) : null;
-    // (viewing: only the spot in Google Maps)
-    if (viewing) { if (geo) { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: e.clientX - r.left, y: e.clientY - r.top, lanes: [], straightenable: false, ring: false, geo, add: null }); } return; }
     if (!lanes.length && !geo) return;
     if (l && !s.lanes.includes(l.id)) setSel({ ...NO_SEL, lanes: [l.id] });
     const can = lanes.some(id => { const sh = laneById(sk, id)?.shape; return sh?.kind === "line" && !sh.closed && sh.pts.length > 2 && !leadOf(sk, id); });
@@ -698,13 +686,6 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const raw = toWorld(e);
     if (e.button === 1 || e.button === 2 || space.current) { setMenu(null); if (e.button !== 2) setHand("grabbing"); drag.current = { kind: "pan", x0: e.clientX, y0: e.clientY, v0: { ...view.current }, right: e.button === 2 && !space.current }; return; }
     if (e.button !== 0) return;
-    // (viewing: a car to inspect, or the map dragged)
-    if (viewing) {
-      const rt = live.current.replayT, car = (rt !== null ? sim.current?.replayCarAt(rt, raw, 4 / view.current.scale) : sim.current?.carAt(raw, 4 / view.current.scale)) ?? null;
-      if (car !== null) { setSelCar(car); redraw(); return; }
-      setSelCar(null); setHand("grabbing"); drag.current = { kind: "pan", x0: e.clientX, y0: e.clientY, v0: { ...view.current }, right: false };
-      return;
-    }
     const sk = live.current.sketch, d = draft.current;
     switch (tool) {
       case "select": {
@@ -916,7 +897,6 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
 
   const onDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (viewing) return;
     if (tool === "lane") { finishLane(); return; }
     if (tool === "junction") { finishJunction(); return; }
     if (tool !== "select") return;
@@ -949,8 +929,6 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if ((e.target as HTMLElement).closest("input,textarea")) { e.stopPropagation(); return; }
     e.stopPropagation();
     const k = e.key.toLowerCase(), mod = e.metaKey || e.ctrlKey, d = draft.current;
-    // (viewing: only moving about, the cars and the replay)
-    if (viewing && (mod || ![" ", "escape", "f", "p", "arrowleft", "arrowright", ",", "."].includes(k))) return;
     if (mod && k === "z") { e.preventDefault(); if (e.shiftKey) redoSketch(); else undoSketch(); return; }
     if (mod && k === "y") { e.preventDefault(); redoSketch(); return; }
     if (mod && k === "c") { if (copySel()) e.preventDefault(); return; }
@@ -1005,20 +983,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       <div className={cn("flex items-center gap-2 border-b px-3 py-1.5 select-none", !page && "cursor-move touch-none")} title={page ? undefined : "Drag to move · double-click to put back"}
         onPointerDown={e => { if (!page && !(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!page && !(e.target as HTMLElement).closest("button")) reset(); }}>
         {!page && <span className="text-sm font-medium">Lane sketch <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "saved with the plan"}</span></span>}
-        {viewing ? <span className="text-xs text-muted-foreground">Viewing: click a car to inspect it, drag to move about. Sketch (top bar) to draw and edit.</span> : (
-          <ToggleGroup type="single" value={tool} onValueChange={v => v && changeTool(v as Tool)} aria-label="Drawing tool" className="ml-2">
-            {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={tip(t)} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
-          </ToggleGroup>
-        )}
+        <ToggleGroup type="single" value={tool} onValueChange={v => v && changeTool(v as Tool)} aria-label="Drawing tool" className="ml-2">
+          {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={tip(t)} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
+        </ToggleGroup>
         <div className="ml-auto flex items-center gap-0.5">
           <Button size="sm" variant={running ? "secondary" : "default"} className="mr-0.5 h-7 w-20" onClick={play} title={running ? "Pause the cars (P)" : "Run cars on the sketch (P)"}>
             {running ? <><Pause /> Pause</> : <><Play /> Run</>}
           </Button>
           <Button size="icon-sm" variant="ghost" aria-label="Clear the cars" title="Take the cars off and start the clock again" disabled={!stats} onClick={resetCars}><RotateCcw /></Button>
-          {!viewing && <>
-            <Button size="icon-sm" variant="ghost" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" onClick={undoSketch}><Undo2 /></Button>
-            <Button size="icon-sm" variant="ghost" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Y)" onClick={redoSketch}><Redo2 /></Button>
-          </>}
+          <Button size="icon-sm" variant="ghost" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" onClick={undoSketch}><Undo2 /></Button>
+          <Button size="icon-sm" variant="ghost" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Y)" onClick={redoSketch}><Redo2 /></Button>
           {/* (a V2 plan: the layers are picked in the top bar) */}
           {!page && (
           <DropdownMenu>
@@ -1045,12 +1019,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         </div>
       </div>
       <div className="flex min-h-0 flex-1">
-        {!viewing && (
-          <aside className="flex w-56 shrink-0 flex-col overflow-y-auto border-r text-sm" aria-label="Sketch structure">
-            <StructureTree sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
-              onHover={h => { hover.current = h; redraw(); }} onZoom={zoomTo} onCenter={centerOn} />
-          </aside>
-        )}
+        <aside className="flex w-56 shrink-0 flex-col overflow-y-auto border-r text-sm" aria-label="Sketch structure">
+          <StructureTree sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
+            onHover={h => { hover.current = h; redraw(); }} onZoom={zoomTo} onCenter={centerOn} />
+        </aside>
         <div className="relative min-w-0 flex-1">
           {menu && (
             <DropdownMenu open onOpenChange={o => { if (!o) setMenu(null); }}>
@@ -1090,11 +1062,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
             onPointerLeave={() => { cursor.current = null; hover.current = null; redraw(); }}
             onDoubleClick={onDoubleClick} onContextMenu={e => e.preventDefault()} />
-          {!viewing && (
-            <div className="pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
-              <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
-            </div>
-          )}
+          <div className="pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
+            <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
+          </div>
           {searchOpen && <SketchSearch sketch={sketch} contents={contents} cars={searchOpen.cars}
             onGo={goTo} onClose={() => { setSearchOpen(null); panel.current?.focus(); }} />}
           <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
@@ -1113,7 +1083,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                 void navigator.clipboard.writeText(text).then(() => toast.success(`Car ${selCar}'s data copied`, { description: "Its state, its last 10 s and what happened to it. Paste it into the conversation." }), () => toast.error("Couldn't copy"));
               }} />
           )}
-          {viewing ? null : sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
+          {sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
             <CrossingPanel x={sketch.crossings.find(x => x.id === sel.crossing)!} readOnly={readOnly} onDelete={deleteSel}
               live={stats ? peds.find(q => q.id === sel.crossing) ?? null : null} />
           ) : (
@@ -1121,17 +1091,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               selPt={selPt} onCurvePoint={curvePoint} onDeletePoint={deletePoint}
               onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} now={stats?.t ?? null} />
           )}
-          {page && !viewing && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
+          {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
-          <DemandPanel sketch={sketch} readOnly={readOnly || viewing} results={stats?.journeys} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
-          {!viewing && (
-            <div className="mt-auto flex gap-1.5 border-t p-2">
-              <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
-              <Button size="sm" variant="ghost" aria-label="Clear the sketch" title="Clear the sketch (undo brings it back)" disabled={empty}
-                onClick={() => { editSketch(s => ({ ...emptySketch(), ...(s.geo ? { geo: s.geo } : {}), ...(s.traffic ? { traffic: s.traffic } : {}) })); setSel(NO_SEL); }}><Trash2 /></Button>
-            </div>
-          )}
+          <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
+          <div className="mt-auto flex gap-1.5 border-t p-2">
+            <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
+            <Button size="sm" variant="ghost" aria-label="Clear the sketch" title="Clear the sketch (undo brings it back)" disabled={empty}
+              onClick={() => { editSketch(s => ({ ...emptySketch(), ...(s.geo ? { geo: s.geo } : {}), ...(s.traffic ? { traffic: s.traffic } : {}) })); setSel(NO_SEL); }}><Trash2 /></Button>
+          </div>
         </aside>
       </div>
     </div>

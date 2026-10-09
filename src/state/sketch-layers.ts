@@ -46,14 +46,3 @@ export function toggleSketchLayer(id: SketchLayer, only = false, page = true) {
   if (only) setSketchLayers({ ...(Object.fromEntries(SKETCH_LAYERS.map(l => [l.id, !page && l.page ? cur[l.id] : false])) as SketchLayers), [id]: true });
   else setSketchLayers({ ...cur, [id]: !cur[id] });
 }
-
-/**
- * A V2 plan's editor drawing (the Sketch button in the top bar pressed: tools, structure, editing) or only
- * showing the map, the cars and their panels (kept in the browser)
- */
-const EDIT_KEY = "laneSketch:editing";
-export const sketchEditing$ = new Subject<boolean>(typeof window === "undefined" ? true : (() => { try { return localStorage.getItem(EDIT_KEY) !== "0"; } catch { return true; } })(), { name: "sketchEditing" });
-export function setSketchEditing(on: boolean) {
-  sketchEditing$.next(on);
-  try { localStorage.setItem(EDIT_KEY, on ? "1" : "0"); } catch { /* private mode */ }
-}
