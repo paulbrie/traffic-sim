@@ -23,7 +23,7 @@ export interface ReplayKept { from: number; to: number; frames: number; bytes: n
  * play it back at the simulation speed, copy the moment to paste into a conversation. Live goes back to the
  * cars as they are (replaying doesn't change them; going into the replay pauses them).
  */
-export function SketchReplayBar({ kept, t, playing, onPlaying, onShow, onLive, onCopy, above = 0 }: {
+export function SketchReplayBar({ kept, t, playing, onPlaying, onShow, onLive, onCopy, above = 0, sides = { left: 0, right: 0 } }: {
   kept: ReplayKept | null;
   /** the moment shown (null: live) */
   t: number | null;
@@ -35,6 +35,8 @@ export function SketchReplayBar({ kept, t, playing, onPlaying, onShow, onLive, o
   onCopy: () => void;
   /** how high (px) what is open under it is (the console): the bar sits above it, its scrubber in reach */
   above?: number;
+  /** room (px) kept clear at its sides, for what sits there at the map's foot (the Console button; the zoom buttons) */
+  sides?: { left: number; right: number };
 }) {
   const shown = !!kept && kept.frames >= 2;
   const ref = useRef({ kept, t });
@@ -63,8 +65,9 @@ export function SketchReplayBar({ kept, t, playing, onPlaying, onShow, onLive, o
   const cur = t ?? kept.to;
   const go = (x: number) => { onPlaying(false); onShow(Math.max(kept.from, Math.min(kept.to, x))); };
   return (
-    <div role="group" aria-label="Replay" style={above ? { bottom: above + 8 } : undefined}
-      className="absolute bottom-6 left-1/2 z-30 flex w-[min(760px,calc(100%-2rem))] -translate-x-1/2 items-center gap-2 rounded-lg border bg-background/95 px-2.5 py-1.5 text-xs shadow-sm backdrop-blur">
+    <div role="group" aria-label="Replay"
+      style={{ ...(above ? { bottom: above + 8 } : {}), left: `calc(50% + ${(sides.left - sides.right) / 2}px)`, width: `min(760px, calc(100% - 2rem - ${sides.left + sides.right}px))` }}
+      className="absolute bottom-6 z-30 flex -translate-x-1/2 items-center gap-2 rounded-lg border bg-background/95 px-2.5 py-1.5 text-xs shadow-sm backdrop-blur">
       <StepButton dir={-1} stop={() => onPlaying(false)} step={stepBy} />
       <Button size="icon-sm" variant="ghost" aria-label={playing ? "Pause the replay" : "Play the replay"} title={playing ? "Pause the replay" : "Play the replay (at the simulation speed)"}
         onClick={() => {

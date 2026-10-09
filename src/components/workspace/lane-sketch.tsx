@@ -1348,7 +1348,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             commands={canTest && hasSel(sel) ? [{ title: "Test in Sketch", sub: "the selection, on its own in the Sketch window · ⇧T", run: () => testInSketch() }] : []}
             onGo={goTo} onClose={() => { setSearchShown(false); panel.current?.focus(); }} />}
           <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
-            onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0} />
+            onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0}
+            sides={{ left: consoleOpen ? 0 : CONSOLE_BUTTON_ROOM, right: ZOOM_ROOM }} />
           {/* (zoom in and out about the middle, and the whole sketch in view: + − F) */}
           <div className="absolute right-2 z-20 flex flex-col overflow-hidden rounded-md border bg-background/95 shadow-sm" style={{ bottom: (consoleOpen ? CONSOLE_HEIGHT : 0) + 8 }}>
             <Button size="icon-sm" variant="ghost" className="rounded-none" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomBy(1.25)}><Plus /></Button>
@@ -2288,6 +2289,8 @@ interface PaintState {
 /** a marking's box (kept: markings are kept per sketch) */
 /** a run at least this long (s) before its flows are taken for a tested piece's ways in */
 const MEASURE_AFTER = 180;
+/** px kept clear beside the replay bar at the map's foot: the Console button's (while it is closed) on the left, the zoom buttons' on the right */
+const CONSOLE_BUTTON_ROOM = 120, ZOOM_ROOM = 44;
 /** metres east and south from origin `to` to origin `from` (both latitude / longitude; nothing if either is missing) */
 function geoShift(from?: { lat: number; lon: number }, to?: { lat: number; lon: number }): Pt {
   if (!from || !to) return { x: 0, y: 0 };
