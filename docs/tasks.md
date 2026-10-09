@@ -15,8 +15,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T66 | Test History's "Apply changes from file" and "Restore from file" | Ramona | 2026-10-09 | after T60 |
 | T65 | Agents City Table: a round table | Tom | 2026-10-09 | |
-| T64 | trafficsim: "Restore from file" in a plan's History (summary of changes, a note, one new revision under the user) | Alex | 2026-10-09 | |
 | T62 | The 3D view in V2, phase 1: Plan / 3D toggle, orbit camera, ground and imagery, roads, junctions, markings, levels, cars, live lights, picking | Tatiana | 2026-10-09 | plan first |
 | T60 | Re-test of T59 and T52 | Ramona | 2026-10-09 | after T55 |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | |
@@ -28,6 +28,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T50 | Re-test of T48 plus a Next.js 16.4 smoke test: all pass; 3 bridge input-check bugs, a one-off glitch | Ramona | 2026-10-09 | /tmp/ramona/t50/ → T59 |
 | T52 | V1→V2 quick wins: per-road speed limits, hover cards, zoom keys and lat/lon, a colour-by-speed switch, five sim settings (identical runs at the defaults) | Tatiana | 2026-10-09 | 9a32774, cf4a7d8, cad3d57, 6949407, de8031e |
 | T55 | Bistrița after T46 (rev 91, seeds 1–3, 5/10/15 min): 5-min deadlocks 22/56/64 → 0/0/4; a new ping-pong on the Strada 1 Decembrie overlap (seed 3); l2607/l1945 collisions; saturation by 10 min | Ramona | 2026-10-09 | /tmp/ramona/t55/ → T56 |
+| T64 | V2 History: "Apply changes from file" (partial, by id, nothing removed) and "Restore from file", with summaries, a note, conflict check, server-side merge | Alex | 2026-10-09 | 7e8757c |
 | T61 | Agents City Table: speech bubbles, laptop-to-file threads, thinking and idle poses, column close-ups, 3-line post-its with elapsed times, LED task tickers | Tom | 2026-10-09 | admin-dev, deploy pending |
 | T63 | Admin terminals: position and size remembered per terminal, kept inside the viewport (not while dragging), bad values ignored | Alex | 2026-10-09 | admin-dev, deploy pending |
 | T58 | Admin: team recipes and a Teams page (start, stop with STATUS requests, restart, close; recipe checks; live check with a throwaway Haiku team) | Alex | 2026-10-09 | admin-dev, deploy pending |
