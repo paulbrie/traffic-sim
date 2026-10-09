@@ -164,8 +164,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (the plan's map in 3D: over the map, this editor staying up under it; the plan's editor only, for now)
   const [mode] = useEditorState(ek, "mode");
   const in3d = page && mode === "3d";
-  /** the 3D view's canvas while it shows (the bridge's screenshot) */
+  /** the 3D view's canvas while it shows (the bridge's screenshot), and what its keys and buttons ask of it */
   const canvas3d = useRef<(() => HTMLCanvasElement | null) | null>(null);
+  const api3d = useRef<{ fit: () => void; dolly: (f: number) => void } | null>(null);
+  // (in 3D, nothing is drawn: the Select tool only, as V1)
+  useEffect(() => { if (in3d && tool !== "select") setTool("select"); }, [in3d, tool, setTool]);
   const [rawSel, setSel] = useEditorState(ek, "selection");
   /** a line lane's point picked (to curve or delete) */
   const [selPt, setSelPt] = useEditorState(ek, "point");
@@ -1211,9 +1214,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "g") { groupSel(); return; }
     if (k === "r") { reverseSel(); return; }
     if (k === "q" || k === "e") { rotateSel(((k === "e" ? 1 : -1) * (e.shiftKey ? 1 : 15) * Math.PI) / 180); return; }
-    if (k === "f") { fit(); return; }
-    if (k === "+" || k === "=") { e.preventDefault(); zoomBy(1.25); return; }
-    if (k === "-" || k === "_") { e.preventDefault(); zoomBy(1 / 1.25); return; }
+    if (k === "f") { if (in3d) api3d.current?.fit(); else fit(); return; }
+    if (k === "+" || k === "=") { e.preventDefault(); if (in3d) api3d.current?.dolly(1.25); else zoomBy(1.25); return; }
+    if (k === "-" || k === "_") { e.preventDefault(); if (in3d) api3d.current?.dolly(1 / 1.25); else zoomBy(1 / 1.25); return; }
     if (k === "p") { play(); return; }
     // (the replay: a step back or forward; Shift, a second)
     // (not on a slider: the replay's own thumb steps it already, and once is enough)
@@ -1223,6 +1226,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       return;
     }
     if (k === "t" && e.shiftKey && canTest) { e.preventDefault(); testInSketch(); return; }
+    // (in 3D, no drawing tools: their keys do nothing there)
+    if (in3d) return;
     const t = TOOLS.find(t => t.key.toLowerCase() === k);
     if (t) changeTool(t.id);
   };
@@ -1261,7 +1266,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         onPointerDown={e => { if (!page && !(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!page && !(e.target as HTMLElement).closest("button")) reset(); }}>
         {!page && <span className="text-sm font-medium">{store.kind === "scratch" ? "Sketch" : "Lane sketch"} <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : store.kind === "scratch" ? "ideas apart from the plan, saved with it" : "saved with the plan"}</span></span>}
         <ToggleGroup type="single" value={tool} onValueChange={v => v && changeTool(v as Tool)} aria-label="Drawing tool" className="ml-2">
-          {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={tip(t)} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
+          {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={in3d && t.id !== "select" ? "Not in 3D: back to the plan to draw" : tip(t)} disabled={in3d && t.id !== "select"} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
         </ToggleGroup>
         <div className="ml-auto flex items-center gap-0.5">
           <Button size="sm" variant={running ? "secondary" : "default"} className="mr-0.5 h-7 w-20" onClick={play} title={running ? "Pause the cars (P)" : "Run cars on the sketch (P)"}>
@@ -1349,7 +1354,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
           {in3d && (
-            <View3DV2 sketch={sketch} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
+            <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
           )}
           {hoverCard && (() => {
@@ -1365,9 +1370,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {bySpeed && stats && layers.cars && <SpeedLegend above={consoleOpen ? CONSOLE_HEIGHT : 0} />}
           {/* (zoom in and out about the middle, and the whole sketch in view: + − F) */}
           <div className="absolute right-2 z-20 flex flex-col overflow-hidden rounded-md border bg-background/95 shadow-sm" style={{ bottom: (consoleOpen ? CONSOLE_HEIGHT : 0) + 8 }}>
-            <Button size="icon-sm" variant="ghost" className="rounded-none" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomBy(1.25)}><Plus /></Button>
-            <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoomBy(1 / 1.25)}><Minus /></Button>
-            <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Fit the sketch in view" title="The whole sketch in view (F)" onClick={fit}><Maximize /></Button>
+            <Button size="icon-sm" variant="ghost" className="rounded-none" aria-label="Zoom in" title="Zoom in (+)" onClick={() => (in3d ? api3d.current?.dolly(1.25) : zoomBy(1.25))}><Plus /></Button>
+            <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Zoom out" title="Zoom out (−)" onClick={() => (in3d ? api3d.current?.dolly(1 / 1.25) : zoomBy(1 / 1.25))}><Minus /></Button>
+            <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Fit the sketch in view" title="The whole sketch in view (F)" onClick={() => (in3d ? api3d.current?.fit() : fit())}><Maximize /></Button>
           </div>
           <ProblemConsole open={consoleOpen} onOpen={setConsoleOpen} sim={() => sim.current} stats={stats} sketch={sketch} contents={contents} replayFrom={replayRange?.from ?? null} onReplay={showAt}
             onGo={(p, car) => { if (sim.current?.poses().some(c => c.id === car)) { setSel(NO_SEL); setSelCar(car); } centerOnPts([p], true); redraw(); }} />

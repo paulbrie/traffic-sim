@@ -12,9 +12,9 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { Maximize } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { laneLength, pointAt, type Sketch } from "@/lib/lane-sketch";
+import { laneLength, pointAt, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
+import { buildSketch3D, type Sketch3D } from "@/render/sketch3d";
+import type { SketchLayers } from "@/state/sketch-layers";
 import type { Underlay } from "@/lib/underlay";
 import { readPalette } from "@/render/palette";
 import { satelliteMosaic, type SatSource } from "@/render/satellite";
@@ -24,7 +24,9 @@ import type { SatOptions } from "@/state/sat-options";
 export interface PlanView { cx: number; cy: number; scale: number }
 /** what the editor gives the 3D view */
 export interface View3DProps {
-  sketch: Sketch;
+  sketch: Sketch; contents: Map<string, JunctionContents>; layers: SketchLayers;
+  /** what the editor's keys and buttons ask of the 3D view: the whole sketch in view, closer or further */
+  apiRef: React.MutableRefObject<{ fit: () => void; dolly: (f: number) => void } | null>;
   /** the plan view as it is (where 3D arrives) */
   planView: () => PlanView;
   /** where the plan view should be on leaving 3D */
@@ -41,7 +43,6 @@ export function View3DV2(props: View3DProps) {
   const wrap = useRef<HTMLDivElement>(null);
   const live = useRef(props);
   useEffect(() => { live.current = props; });
-  const api = useRef<{ fit: () => void } | null>(null);
 
   useEffect(() => {
     const el = wrap.current!;
@@ -84,7 +85,23 @@ export function View3DV2(props: View3DProps) {
       if (!Number.isFinite(x0)) return;
       place((x0 + x1) / 2, (y0 + y1) / 2, Math.max(60, (x1 - x0) * 1.15, ((y1 - y0) * 1.15 * (el.clientWidth || 1)) / (el.clientHeight || 1)));
     };
-    api.current = { fit };
+    const dolly = (f: number) => {
+      const t = controls.target, d = camera.position.clone().sub(t);
+      camera.position.copy(t).add(d.multiplyScalar(Math.min(controls.maxDistance / d.length(), Math.max(controls.minDistance / d.length(), 1 / f))));
+      controls.update();
+    };
+    live.current.apiRef.current = { fit, dolly };
+
+    // the roads, junctions and what is painted on them: made again when the sketch (or what shows) changes
+    let built: Sketch3D | null = null, builtFor: unknown[] = [];
+    const syncRoads = () => {
+      const p = live.current, key = [p.sketch, p.contents, p.layers.surfaces, p.layers.markings, p.layers.signs, pal];
+      if (built && key.every((x, i) => x === builtFor[i])) return;
+      builtFor = key;
+      if (built) { scene.remove(built.group); built.dispose(); }
+      built = buildSketch3D(p.sketch, p.contents, pal, p.layers);
+      scene.add(built.group);
+    };
 
     // the satellite imagery under the sketch (where it has a place on Earth), and the reference image
     const satMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
@@ -134,12 +151,16 @@ export function View3DV2(props: View3DProps) {
     let disposed = false, frame = 0, lastSync = 0;
     const draw = () => {
       controls.update();
+      // (the haze far off, further the further out the view is: a whole city seen from above stays clear)
+      const d = camera.position.distanceTo(controls.target), fog = scene.fog as THREE.Fog;
+      fog.near = Math.max(1500, d * 1.5); fog.far = Math.max(6000, d * 4); camera.far = Math.max(12000, d * 5); camera.updateProjectionMatrix();
       renderer.render(scene, camera);
     };
     const tick = (now: number) => {
       frame = 0;
       if (disposed) return;
       if (now - lastSync > 500) { lastSync = now; syncSat(); syncUnderlay(); }
+      syncRoads();
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
     };
@@ -147,7 +168,7 @@ export function View3DV2(props: View3DProps) {
     document.addEventListener("visibilitychange", onVisible);
     const ro = new ResizeObserver(() => size());
     ro.observe(el);
-    const onTheme = () => { pal = readPalette(); scene.background = new THREE.Color(pal.sky); (scene.fog as THREE.Fog).color.set(pal.sky); (ground.material as THREE.MeshLambertMaterial).color.set(pal.ground); };
+    const onTheme = () => { pal = readPalette(); builtFor = []; scene.background = new THREE.Color(pal.sky); (scene.fog as THREE.Fog).color.set(pal.sky); (ground.material as THREE.MeshLambertMaterial).color.set(pal.ground); };
     const mo = new MutationObserver(onTheme);
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     frame = requestAnimationFrame(tick);
@@ -162,7 +183,8 @@ export function View3DV2(props: View3DProps) {
       // (the plan view to where the 3D view looks: its middle, and a zoom showing as much across)
       const t = controls.target, d = camera.position.distanceTo(t), across = 2 * d * Math.tan(((FOV * Math.PI) / 180) / 2) * camera.aspect;
       live.current.onLeave({ cx: t.x, cy: t.z, scale: Math.min(80, Math.max(0.3, (el.clientWidth || 1) / Math.max(1, across))) });
-      live.current.canvasRef.current = null;
+      live.current.canvasRef.current = null; live.current.apiRef.current = null;
+      if (built) { scene.remove(built.group); built.dispose(); }
       controls.dispose();
       scene.traverse(o => {
         const m = o as THREE.Mesh;
@@ -178,7 +200,6 @@ export function View3DV2(props: View3DProps) {
   return (
     <div className="absolute inset-0 z-[5]">
       <div ref={wrap} className="size-full" aria-label="3D view" role="img" />
-      <Button size="icon-sm" variant="outline" className="absolute top-2 right-2 z-10 bg-background/95" aria-label="The whole sketch in view (3D)" title="The whole sketch in view" onClick={() => api.current?.fit()}><Maximize /></Button>
     </div>
   );
 }
