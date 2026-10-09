@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { cn } from "@/lib/utils";
 import { unproject } from "@/lib/osm/area";
 import {
-  LANE_WIDTH, addLane, contentsOf, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, contentsOf, setLaneSpeed, setRoadSpeed, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, junctionHoles, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -1751,6 +1751,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
         )}
         <GeometrySection sketch={sketch} lanes={road.align ? [road.align.ref] : road.lanes} lead={road.align?.ref ?? road.lanes[0]} />
         <LevelRow sketch={sketch} lanes={road.lanes} />
+        <SpeedRow sketch={sketch} id={`road-${road.id}`} own={road.speed} of="road" onSet={v => editSketch(sk => setRoadSpeed(sk, road.id, v))} />
         <div className="flex gap-1.5">
           <Button size="sm" variant="outline" className="flex-1" onClick={() => editSketch(sk => ({ ...sk, roads: sk.roads.filter(r => r.id !== road.id) }))}>Ungroup</Button>
           <Button size="sm" variant="ghost" onClick={onDelete} aria-label="Delete the road's lanes" title="Delete the road and its lanes"><Trash2 /></Button>
@@ -1862,6 +1863,9 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
         </div>
         {!lead && <GeometrySection sketch={sketch} lanes={[lane.id]} lead={lane.id} />}
         <LevelRow sketch={sketch} lanes={inRoad?.align ? inRoad.lanes : [lane.id]} />
+        {inRoad
+          ? <p className="text-xs text-muted-foreground">Speed limit: {inRoad.speed ?? sketch.traffic?.speed ?? 50} km/h{inRoad.speed === undefined ? " (the sketch's)" : ""}, its road&apos;s.</p>
+          : <SpeedRow sketch={sketch} id={`lane-${lane.id}`} own={lane.speed} of="lane" onSet={v => editSketch(sk => setLaneSpeed(sk, lane.id, v))} />}
         {sh.kind === "arc" && !lead && (
           <Button size="sm" variant="outline" title="Make it curved points along the same circle, to drag, add and curve like a drawn lane (a ring stays a ring); its connectors stay where they are"
             onClick={() => editSketch(s => arcToPoints(s, lane.id))}><Spline /> Edit as points</Button>
@@ -2255,6 +2259,19 @@ function TestInSketchPanel({ options: o, setOptions, onTest }: { options: TestOp
       <label className="flex items-center gap-2 text-xs"><Switch checked={o.run} onCheckedChange={v => setOptions({ ...o, run: v })} aria-label="Run the cars at once" /> Run the cars at once</label>
       <Button size="sm" variant="outline" onClick={onTest} title="Take the selection into the Sketch window to try it on its own (⇧T)"><FlaskConical /> Test in Sketch</Button>
     </InspectorPanel>
+  );
+}
+
+/** a road's (or a lone lane's) speed limit: its own, or the sketch's traffic speed until one is set */
+function SpeedRow({ sketch, id, own, of, onSet }: { sketch: Sketch; id: string; own: number | undefined; of: "road" | "lane"; onSet: (kmh: number | null) => void }) {
+  const all = sketch.traffic?.speed ?? 50;
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
+      <NumberField id={`sk-speed-${id}`} label="Speed limit" unit="km/h" digits={0} min={5} max={130} step={5} value={own ?? all} onCommit={v => onSet(Math.round(v))} />
+      {own !== undefined
+        ? <Button size="sm" variant="ghost" className="h-8 text-xs" title={`Back to the sketch's speed (${all} km/h, set in Traffic)`} onClick={() => onSet(null)}>The sketch&apos;s</Button>
+        : <span className="pb-2 text-[11px] text-muted-foreground" title={`Until one is set here, the ${of} has the sketch's speed (Traffic)`}>the sketch&apos;s</span>}
+    </div>
   );
 }
 
