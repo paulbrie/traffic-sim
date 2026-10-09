@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 import { Subject } from "subjecto";
-import { emptySketch, settle, type Pt, type Sketch } from "@/lib/lane-sketch";
+import { emptySketch, settle, type Piece, type Pt, type Sketch } from "@/lib/lane-sketch";
 import type { SketchSimClient } from "./sketch-sim-client";
 import { laneSketch$, sketchReplaced } from "./store";
 
@@ -101,7 +101,30 @@ export const sketchSim = () => planSketch.sim() ?? wholeSketch.sim();
 export function setSketchSim(s: SketchSimClient) { wholeSketch.setSim(s); }
 
 /** what ⌘C / ⌘X took in the sketch (kept while the page is open, shared by the plan and its sketch window); `pastes` puts each paste a little off the last when it isn't at the cursor */
-export interface SketchClip { part: Sketch; centre: Pt; pastes: number }
+export interface SketchClip { part: Sketch; centre: Pt; pastes: number; /** which copy it is (the same on the system clipboard: one copied here wins without being read back) */ stamp?: string }
 let clip: SketchClip | null = null;
 export const sketchClip = () => clip;
 export function setSketchClip(c: SketchClip) { clip = c; }
+
+/** the clipboard's text for a copied piece of sketch, marked so a paste (in another tab too) knows it */
+const CLIP_MARK = "trafficsim/sketch-part";
+export const clipText = (c: SketchClip) => JSON.stringify({ kind: CLIP_MARK, stamp: c.stamp, centre: c.centre, part: c.part });
+/** a piece of sketch from the clipboard's text (null: something else) */
+export function readClipText(text: string): SketchClip | null {
+  if (!text.startsWith(`{"kind":"${CLIP_MARK}"`)) return null;
+  try {
+    const o = JSON.parse(text) as { stamp?: string; centre?: Pt; part?: Sketch };
+    const p = o.part;
+    if (!p || !Array.isArray(p.lanes) || !Array.isArray(p.connectors) || !Array.isArray(p.junctions) || !o.centre) return null;
+    return { part: { ...p, roads: p.roads ?? [] }, centre: o.centre, pastes: 0, stamp: o.stamp };
+  } catch { return null; }
+}
+
+/** what the Sketch window does when it next shows a piece put in it ("Test in Sketch"): the view fitted to it, nothing selected, the cars run if `run` */
+export interface ScratchFocus { run: boolean; /** added beside what was there: the view fitted to this only */ piece?: Piece }
+let scratchFocus: ScratchFocus | null = null;
+const scratchFocusWaiting = new Set<() => void>();
+export function requestScratchFocus(f: ScratchFocus) { scratchFocus = f; scratchFocusWaiting.forEach(g => g()); }
+/** the request, taken (null: none) */
+export function takeScratchFocus(): ScratchFocus | null { const f = scratchFocus; scratchFocus = null; return f; }
+export function onScratchFocus(g: () => void) { scratchFocusWaiting.add(g); return () => { scratchFocusWaiting.delete(g); }; }

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "trafficsim-ui": {
+      "command": "npx",
+      "args": ["tsx", "scripts/claude-bridge-mcp.ts"],
+      "env": { "BRIDGE_URL": "https://paul.cloud.teleporthq.ai/projects/trafficsim" }
+    }
+  }
+}

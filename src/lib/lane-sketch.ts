@@ -32,6 +32,8 @@ export interface SketchLane {
    * its ends ramp to the level of the lanes it joins there (see `zAt`).
    */
   level?: number;
+  /** a lane in no road: its speed limit (km/h; default: its road's, else the sketch's traffic speed) */
+  speed?: number;
 }
 /** a place on a lane, `s` metres from its start */
 export interface LaneAt { lane: string; s: number }
@@ -40,7 +42,23 @@ export interface SketchConnector { id: string; from: LaneAt; to: LaneAt; /** ben
  * `align`: its lanes kept side by side, each `offset` metres beside the lead lane `ref` (to its left
  * as it runs, negative to its right), running the same way or the other (`reverse`).
  */
-export interface SketchRoad { id: string; name: string; lanes: string[]; align?: { ref: string; lanes: { id: string; offset: number; reverse: boolean }[] } }
+export interface SketchRoad { id: string; name: string; lanes: string[]; align?: { ref: string; lanes: { id: string; offset: number; reverse: boolean }[] };
+  /** its speed limit (km/h; default: the sketch's traffic speed) */
+  speed?: number;
+}
+/** a lane's speed limit (km/h): its road's, else its own (in no road), else none of its own (the sketch's traffic speed) */
+export function speedLimitOf(sk: Sketch, lane: string): number | undefined {
+  const r = sk.roads.find(x => x.lanes.includes(lane));
+  return r?.speed ?? (r ? undefined : laneById(sk, lane)?.speed);
+}
+/** a road's speed limit set (km/h), or back to the sketch's (null) */
+export function setRoadSpeed(sk: Sketch, id: string, kmh: number | null): Sketch {
+  return { ...sk, roads: sk.roads.map(r => { if (r.id !== id) return r; const { speed: _, ...rest } = r; return kmh === null ? rest : { ...rest, speed: kmh }; }) };
+}
+/** a lane's own speed limit set (km/h; a lane in no road), or back to the sketch's (null) */
+export function setLaneSpeed(sk: Sketch, id: string, kmh: number | null): Sketch {
+  return { ...sk, lanes: sk.lanes.map(l => { if (l.id !== id) return l; const { speed: _, ...rest } = l; return kmh === null ? rest : { ...rest, speed: kmh }; }) };
+}
 /**
  * a junction: a surface (closed outline); the lanes in no road and the connectors mostly on it are its own.
  * `shape: "auto"`: its surface is drawn as the union of what is on it and the ends of the roads it joins
@@ -473,9 +491,17 @@ export function pastePart(sk: Sketch, part: Sketch, dx: number, dy: number): { s
   const fresh = (k: keyof typeof ids) => { const id = nextId(k, ids[k]); ids[k].push(id); return id; };
   const t = translation(dx, dy), laneIds = new Map(part.lanes.map(l => [l.id, fresh("l")]));
   const lanes = part.lanes.map(l => ({ ...l, id: laneIds.get(l.id)!, shape: t.shape(l.shape) }));
-  const connectors = part.connectors.map(c => ({ id: fresh("c"), from: { ...c.from, lane: laneIds.get(c.from.lane)! }, to: { ...c.to, lane: laneIds.get(c.to.lane)! }, ...(c.via?.length ? { via: c.via.map(t.pt) } : {}), ...(c.straight ? { straight: true as const } : {}) }));
-  const roads = part.roads.map(r => ({ id: fresh("r"), name: `${r.name} copy`, lanes: r.lanes.map(l => laneIds.get(l)!) }));
-  const junctions = part.junctions.map(j => ({ id: fresh("j"), name: `${j.name} copy`, outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.lights ? { lights: { ...j.lights } } : {}) }));
+  const connIds = new Map(part.connectors.map(c => [c.id, fresh("c")]));
+  const connectors = part.connectors.map(c => ({ id: connIds.get(c.id)!, from: { ...c.from, lane: laneIds.get(c.from.lane)! }, to: { ...c.to, lane: laneIds.get(c.to.lane)! }, ...(c.via?.length ? { via: c.via.map(t.pt) } : {}), ...(c.straight ? { straight: true as const } : {}) }));
+  const roadIds = new Map(part.roads.map(r => [r.id, fresh("r")]));
+  // (a copy's name says so once: a copy of a copy is "… copy" still)
+  const copyName = (n: string) => (/ copy$/.test(n) ? n : `${n} copy`);
+  const roads = part.roads.map(r => ({ id: roadIds.get(r.id)!, name: copyName(r.name), lanes: r.lanes.map(l => laneIds.get(l)!), ...(r.speed !== undefined ? { speed: r.speed } : {}) }));
+  // (the lights' phases set by hand and the turning shares name connectors, roads and lanes: by their new ids)
+  const way = (k: string) => (k.startsWith("lane:") ? (laneIds.has(k.slice(5)) ? `lane:${laneIds.get(k.slice(5))}` : null) : roadIds.get(k) ?? null);
+  const lights = (l: JunctionLights): JunctionLights => (l.phases ? { ...l, phases: l.phases.map(p => ({ ...p, conns: p.conns.flatMap(c => (connIds.has(c) ? [connIds.get(c)!] : [])) })) } : { ...l });
+  const splits = (ss: JunctionSplit[]) => ss.flatMap(x => { const from = way(x.from); if (!from) return []; const shares = Object.fromEntries(Object.entries(x.shares).flatMap(([k, v]) => { const w = way(k); return w ? [[w, v]] : []; })); return [{ from, shares }]; });
+  const junctions = part.junctions.map(j => { const sp = j.splits ? splits(j.splits) : []; return { id: fresh("j"), name: copyName(j.name), outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.lights ? { lights: lights(j.lights) } : {}), ...(sp.length ? { splits: sp } : {}) }; });
   return {
     sketch: { ...sk, lanes: [...sk.lanes, ...lanes], connectors: [...sk.connectors, ...connectors], roads: [...sk.roads, ...roads], junctions: [...sk.junctions, ...junctions] },
     piece: { lanes: lanes.map(l => l.id), connectors: connectors.map(c => c.id), junctions: junctions.map(j => j.id) },
@@ -652,7 +678,7 @@ export function sliceLane(sk: Sketch, id: string, s: number, newId: string): Ske
   if (!lane || !parts) return null;
   const cut = laneLength(lane.shape) - laneLength(parts[1]);
   // (the first keeps what is at the lane's start: the traffic coming in; the second what is at its end: its sign, its share of trips out)
-  const first: SketchLane = { id, shape: parts[0], width: lane.width, ...(lane.inRate !== undefined ? { inRate: lane.inRate } : {}) };
+  const first: SketchLane = { id, shape: parts[0], width: lane.width, ...(lane.inRate !== undefined ? { inRate: lane.inRate } : {}), ...(lane.speed !== undefined ? { speed: lane.speed } : {}), ...(lane.level !== undefined ? { level: lane.level } : {}) };
   const second: SketchLane = { ...lane, id: newId, shape: parts[1] };
   delete second.inRate;
   const move = (a: LaneAt, leaving: boolean) => (a.lane !== id ? a : (leaving ? a.s <= cut + 1e-6 : a.s < cut - 1e-6) ? { ...a, s: Math.min(a.s, cut) } : { lane: newId, s: Math.max(0, a.s - cut) });
@@ -703,8 +729,9 @@ export function sliceRoad(sk: Sketch, roadId: string, at: string, p: Pt, newRoad
   const a = alignFor(new Set(near)), b = alignFor(far);
   const roads = out.roads.flatMap(r => {
     if (r.id !== roadId) return [r];
-    const first: SketchRoad = { id: r.id, name: r.name, lanes: near, ...(a ? { align: a } : {}) };
-    const second: SketchRoad = { id: newRoad, name: newName, lanes: [...far], ...(b ? { align: b } : {}) };
+    const keep = r.speed !== undefined ? { speed: r.speed } : {};
+    const first: SketchRoad = { id: r.id, name: r.name, lanes: near, ...(a ? { align: a } : {}), ...keep };
+    const second: SketchRoad = { id: newRoad, name: newName, lanes: [...far], ...(b ? { align: b } : {}), ...keep };
     return [first, second];
   });
   return { ...out, roads };
@@ -2286,3 +2313,40 @@ export function setSplit(sk: Sketch, junction: string, from: string, shares: Rec
 }
 /** the way in a lane is part of, as turning shares name it */
 export const approachKey = (a: Approach) => a.road ?? `lane:${a.lanes[0]}`;
+
+// ---------------------------------------------------------------- turn arrows
+
+/**
+ * A turn arrow painted on a lane, as V1's: `at` metres before its end (`p`, facing `d`), showing the ways its
+ * connectors leaving there go: L(eft), S(traight on), R(ight), U(-turn), in that order.
+ */
+export interface TurnArrow { lane: string; p: Pt; d: Pt; turns: string; level: number }
+const arrowsKept = new WeakMap<Sketch, TurnArrow[]>();
+/** the turn arrows of every lane (not a ring) at least 12 m long whose connectors leave at its end */
+export function turnArrows(sk: Sketch): TurnArrow[] {
+  let x = arrowsKept.get(sk);
+  if (x) return x;
+  x = [];
+  const outs = new Map<string, SketchConnector[]>();
+  for (const c of sk.connectors) (outs.get(c.from.lane) ?? outs.set(c.from.lane, []).get(c.from.lane)!).push(c);
+  for (const l of sk.lanes) {
+    const cs = outs.get(l.id);
+    if (!cs || isFullCircle(l.shape) || (l.shape.kind === "line" && l.shape.closed)) continue;
+    const L = laneLength(l.shape);
+    if (L < 12) continue;
+    const atEnd = cs.filter(c => c.from.s >= L - EXIT_CLEAR);
+    if (!atEnd.length) continue;
+    const end = pointAt(l.shape, L).d, set = new Set<string>();
+    for (const c of atEnd) {
+      const to = laneById(sk, c.to.lane);
+      if (!to) continue;
+      const b = pointAt(to.shape, c.to.s).d, ang = Math.atan2(end.x * b.y - end.y * b.x, end.x * b.x + end.y * b.y);
+      set.add(Math.abs(ang) < 0.5 ? "S" : Math.abs(ang) > 2.6 ? "U" : ang > 0 ? "R" : "L");
+    }
+    if (!set.size) continue;
+    const at = pointAt(l.shape, L - 6);
+    x.push({ lane: l.id, p: at.p, d: at.d, turns: ["L", "S", "R", "U"].filter(t => set.has(t)).join(""), level: l.level ?? 0 });
+  }
+  arrowsKept.set(sk, x);
+  return x;
+}

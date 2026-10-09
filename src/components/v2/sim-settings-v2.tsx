@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useEditorKind, useUiPath } from "@/state/sketch-ui";
 import { Dices, RotateCcw, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,7 +19,8 @@ const fmt = (t: TuneInfo, v: number) => `${v.toFixed(digits(t.step))}${t.unit ? 
  * the map. Saved with the plan, applied to the running cars straight away; the seed when the cars restart.
  */
 export function SimSettingsButton({ params, setParams, readOnly }: { params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean }) {
-  const [open, setOpen] = useState(false);
+  // (open or not: the editor's, in the V2 UI store)
+  const [open, setOpen] = useUiPath<boolean>(`editors/${useEditorKind()}/dialogs/settings`);
   const changed = Object.keys(params.tune ?? {}).length + (params.seed !== undefined && params.seed !== 1 ? 1 : 0);
   return (
     <>
@@ -74,7 +76,7 @@ function SimSettings({ params, setParams, readOnly }: { params: SimParams; setPa
                         onClick={() => set({ [t.key]: t.def })}><RotateCcw className="size-3" /></Button>
                     </span>
                   </div>
-                  <Slider id={id} disabled={readOnly} min={t.min} max={t.max} step={t.step} value={[v]} onValueChange={([x]) => set({ [t.key]: +x.toFixed(digits(t.step)) })} />
+                  <Slider id={id} aria-label={`${t.label}${t.unit ? ` (${t.unit})` : ""}`} disabled={readOnly} min={t.min} max={t.max} step={t.step} value={[v]} onValueChange={([x]) => set({ [t.key]: +x.toFixed(digits(t.step)) })} />
                   <p className="text-xs text-muted-foreground">{t.help}</p>
                 </div>
               );

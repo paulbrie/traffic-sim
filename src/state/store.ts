@@ -256,7 +256,18 @@ let synced: { network: Network; settings: PlanSettings; underlay: Underlay | nul
 /** what was just saved is now what the server has */
 export function markSynced(network: Network, settings: PlanSettings, underlay: Underlay | null, sketch: Sketch) { synced = { network, settings, underlay, sketch }; }
 // (the lane sketch saves with the plan: any change to it but the one just loaded or merged in is unsaved)
-laneSketch$.subscribe(k => { if (k !== synced.sketch) markDirty(); });
+// (and undone back to what was saved, it is saved again: the sketch shown as saved is kept when a change is made to it,
+// and undo gives back the very pieces it had, so each is compared as it is, cheaply, even on a city; the plan saved only
+// if nothing else differs either)
+const sameSketch = (a: Sketch, b: Sketch) => a === b || (Object.keys({ ...a, ...b }) as (keyof Sketch)[]).every(k => a[k] === b[k]);
+let shownSketch = laneSketch$.getValue(), savedSketch: Sketch | null = null;
+laneSketch$.subscribe(k => {
+  const s = ui.getValue().save;
+  if (s.status === "saved") savedSketch = shownSketch;
+  shownSketch = k;
+  if (!sameSketch(k, synced.sketch) && !(savedSketch && sameSketch(k, savedSketch))) { markDirty(); return; }
+  if (s.status === "dirty" && network$.getValue() === synced.network && settings$.getValue() === synced.settings && underlay$.getValue() === synced.underlay) s.status = "saved";
+});
 /** listeners told when the sketch is replaced by one loaded or merged in (its own undo history no longer applies) */
 export const sketchReplaced = new Set<(why: "load" | "merge") => void>();
 

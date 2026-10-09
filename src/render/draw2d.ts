@@ -68,7 +68,7 @@ const stripPath = (p: Path2D, s: Strip) => {
  * the stem further back and heading off to its side, with its own head, so heads never sit on each other;
  * a U-turn is a hook bending back. `d` = the lane's direction; local f forward, s to the right (m).
  */
-function arrowGlyph(p: Path2D, at: Vec, d: Vec, turns: string) {
+export function arrowGlyph(p: Path2D, at: Vec, d: Vec, turns: string) {
   const r = { x: -d.y, y: d.x };
   const P = (f: number, s: number) => ({ x: at.x + d.x * f + r.x * s, y: at.y + d.y * f + r.y * s });
   const seg = (pts: [number, number][]) => { const a = P(...pts[0]); p.moveTo(a.x, a.y); for (const q of pts.slice(1)) { const b = P(...q); p.lineTo(b.x, b.y); } };

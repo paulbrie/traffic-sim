@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useRef, useState } from "react";
 import { ChevronRight, Minus, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,11 +28,15 @@ export function NumberField({ label, value, onCommit, unit, step = 1, min, max, 
   const fmt = (v: number) => (Number.isFinite(v) ? String(Number(v.toFixed(digits))) : "");
   // while editing we keep the raw text; otherwise we show the live value
   const [draft, setDraft] = useState<string | null>(null);
+  // (a draft is committed once: Enter commits and then blurs, and the blur would commit it again before the field is
+  // shown anew, one change made two undo steps)
+  const committed = useRef(false);
   const text = draft ?? fmt(value);
   const commit = () => {
     const v = Number((draft ?? "").replace(",", "."));
     setDraft(null);
-    if (draft === null || !Number.isFinite(v)) return;
+    if (draft === null || committed.current || !Number.isFinite(v)) return;
+    committed.current = true;
     const c = Math.min(max ?? Infinity, Math.max(min ?? -Infinity, v));
     if (c !== value) onCommit(c);
   };
@@ -42,9 +46,9 @@ export function NumberField({ label, value, onCommit, unit, step = 1, min, max, 
       <div className="relative">
         <Input
           id={id} inputMode="decimal" value={text} step={step}
-          onFocus={() => setDraft(fmt(value))}
+          onFocus={() => { committed.current = false; setDraft(fmt(value)); }}
+          onChange={e => { committed.current = false; setDraft(e.target.value); }}
           onBlur={commit}
-          onChange={e => setDraft(e.target.value)}
           onKeyDown={e => {
             if (e.key === "Enter") { commit(); (e.target as HTMLInputElement).blur(); }
             if (e.key === "Escape") { setDraft(null); (e.target as HTMLInputElement).blur(); }

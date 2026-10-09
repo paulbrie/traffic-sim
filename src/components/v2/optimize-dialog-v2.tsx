@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { useSketchStore } from "@/state/lane-sketch";
 import { startSketchOptimizer } from "@/state/sketch-optimizer";
 import { ui } from "@/state/store";
+import { sketchUi, useEditorKind, useUiPath, type EditorUi } from "@/state/sketch-ui";
 
 type Stage = { kind: "setup" } | { kind: "running"; progress: OptimizeProgress | null; startedAt: number } | { kind: "done"; result: OptimizeResult; took: number } | { kind: "error"; message: string };
 
@@ -22,7 +23,11 @@ type Stage = { kind: "setup" } | { kind: "running"; progress: OptimizeProgress |
  * candidates (see lib/sketch-optimize.ts), this junction chosen to start with.
  */
 export function OptimizeLightsButton({ junction }: { junction: string }) {
-  const [open, setOpen] = useState(false);
+  // (open or not, from which junction, and where it is: the editor's, in the V2 UI store)
+  const kind = useEditorKind();
+  const [o, setO] = useUiPath<EditorUi["dialogs"]["optimizer"]>(`editors/${kind}/dialogs/optimizer`);
+  const open = o.open && o.junction === junction;
+  const setOpen = (v: boolean) => setO(p => ({ ...p, open: v, junction: v ? junction : null, stage: "setup" }));
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -48,6 +53,15 @@ function OptimizeContent({ first, close }: { first: string; close: () => void })
   const [targets, setTargets] = useState<Set<OptimizeTarget>>(() => new Set(["greens", "actuated"]));
   const [effort, setEffort] = useState<OptimizeEffort>("quick");
   const [stage, setStage] = useState<Stage>({ kind: "setup" });
+  // (shown in the V2 UI store, for agents: what is chosen and where it is; the progress and results stay here)
+  const ek = useEditorKind();
+  useEffect(() => {
+    const d = sketchUi.getValue().editors[ek].dialogs.optimizer;
+    if (d.stage !== stage.kind) d.stage = stage.kind;
+    if (d.effort !== effort) d.effort = effort;
+    const c = [...chosen];
+    if (c.length !== d.chosen.length || c.some((x, i) => x !== d.chosen[i])) d.chosen = c;
+  }, [ek, stage.kind, effort, chosen]);
   const runRef = useRef<ReturnType<typeof startSketchOptimizer> | null>(null);
   const cores = typeof navigator !== "undefined" ? Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1)) : 3;
   const cfg = OPTIMIZE_EFFORT[effort];
@@ -132,6 +146,16 @@ function OptimizeContent({ first, close }: { first: string; close: () => void })
             Only the roads within about 600 m of the chosen junctions are simulated (traffic comes in where they are cut off), so a city stays quick. Runs in this tab on {cores} CPU
             core{cores === 1 ? "" : "s"}; keep it open. Lights with phases worked out get them set by hand, so each phase can have its own green. Nothing changes until you apply the result.
           </p>
+          {(!chosen.size || !targets.size) && (() => {
+            // (why Start can't be pressed, and what can be done)
+            const own = lit.find(l => l.id === first), free = lit.filter(l => !l.group);
+            const why = !chosen.size
+              ? own?.group
+                ? `${own.name} is in ${own.group}: the group times it (one cycle, each member's offset), so its own timings can't be optimised here. ${free.length ? `Choose other lights above (${free.length} not in a group), or set the group's timing in its panel.` : "Every junction with lights is in a group: set the group's cycle and offsets in its panel."}`
+                : free.length ? "Choose at least one junction with lights above." : "No junction with lights of two phases or more to optimise."
+              : "Choose at least one thing that may change.";
+            return <p className="rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-300" role="status">{why}</p>;
+          })()}
           <DialogFooter>
             <Button variant="ghost" onClick={close}>Cancel</Button>
             <Button onClick={start} disabled={!chosen.size || !targets.size}>Start</Button>
