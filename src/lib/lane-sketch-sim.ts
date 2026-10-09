@@ -326,6 +326,8 @@ function applyTuning(t: Tuning) {
 }
 /** seconds a car takes to move over to the lane it changes to */
 const SHIFT_T = 2;
+/** a connector shorter than this (m) between one lane's end and another's start: the two are one way on (no crossing between them) */
+const CHAIN_GAP = 5;
 /** a way in whose first metres (this many) cross another's way: no car let in while that crossing is taken, or one is
  * within SPAWN_COMING metres of it */
 const SPAWN_CLEAR = 10, SPAWN_COMING = 15;
@@ -632,6 +634,7 @@ export class SketchSim {
     const roadOf = new Map(sk.roads.flatMap(rd => rd.lanes.map(id => [id, rd.id] as const)));
     const all = [...edges.values()], boxes = new Map(all.map(e => [e, bounds(paths.get(e.key)!)]));
     const attached = (c: Edge, l: Edge) => c.kind === "conn" && (c.from!.lane === l || c.to!.lane === l);
+    const chained = (X: Edge, Y: Edge) => X.kind === "lane" && Y.kind === "lane" && X.outs.some(o => o.conn.to!.lane === Y && o.conn.len < CHAIN_GAP && o.s >= X.len - 1 && o.conn.to!.s <= 1);
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
       let A = all[i], B = all[j];
       // (the connector first, where one is attached to the other)
@@ -651,6 +654,9 @@ export class SketchSim {
           if (B === A.to!.lane && r.a1 > A.len - 0.5) { A.mergeBefore = Math.max(A.mergeBefore, A.len - r.a0); continue; }
           if (A.siblings.includes(B) && r.a0 < 0.5) { A.shared.set(B, r.a1); B.shared.set(A, r.b1); continue; }
         }
+        // (a lane and the one it carries on into, joined end to start by a connector hardly there: one way on, not a crossing; the
+        // cars on them follow one another along it)
+        if (chained(A, B) || chained(B, A)) continue;
         // (one passing over or under the other, at another level there: they don't meet)
         if (Math.abs(this.zOf(A, r.at) - this.zOf(B, r.otherAt)) >= 0.5) continue;
         // (lanes merging: from lanes of one road; from different roads they are traffic meeting, giving way as at a crossing)
