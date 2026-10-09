@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T71 | Admin /chrome: say why an instance can't be streamed (Playwright's pipe), its owner; the team launches browsers with a DevTools port | Alex | 2026-10-09 | before T70 |
 | T70 | Admin: a Team menu (Comms, Agents City, Tasks) and a Kanban task dashboard | Alex | 2026-10-09 | after T69 |
 | T69 | Fixes from T66: Restore keeps fields the file lacks (geo, traffic, journeys…), the dialog after a conflict, "Applied" in History | Alex | 2026-10-09 | |
 | T68 | Bistrița with repeatable runs (7b27441): repeatability check, every collision with seed and time, deadlocks per place | Ramona | 2026-10-09 | after T66 |
