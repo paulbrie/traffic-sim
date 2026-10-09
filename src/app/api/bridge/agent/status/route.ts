@@ -1,9 +1,9 @@
 import type { NextRequest } from "next/server";
 import { agentOf, status } from "@/server/bridge";
 
-// Where the agent's page is, and whether it is connected now.
+// What the agent sees: who it is, the hub's page (if it drives it), whether tabs are allowed, and its tabs.
 export async function GET(req: NextRequest) {
-  const p = agentOf(req.headers.get("authorization"));
-  if (!p) return Response.json({ error: "Not paired" }, { status: 401 });
-  return Response.json(status(p), { headers: { "Cache-Control": "no-store" } });
+  const a = agentOf(req.headers.get("authorization"));
+  if (!a) return Response.json({ error: "Not paired" }, { status: 401 });
+  return Response.json(status(a), { headers: { "Cache-Control": "no-store" } });
 }

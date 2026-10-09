@@ -66,7 +66,57 @@ Every command is shown to the user in the activity log; `click` / `type` / `key`
 { seq, at, kind: "message", text }
 ```
 
+## Agent tabs (several agents, tabs of their own)
+
+The page the user pairs with "Connect Claude" is the **hub**. The agent that claims the hub's own code drives the hub (as
+above). More agents can be attached from the hub's panel: **Add agent** shows a fresh 6-digit code per agent (10 min); an
+agent claiming it (`POST /api/bridge/agent/claim`, same as above; the answer has `drivesHub: false`) works only in tabs of
+its own. Each agent has its own token, colour and events; the panel lists the agents with **Revoke**.
+
+Opening a tab (only once the user has switched on **Allow agent tabs** in the hub's panel; off by default):
+
+1. Agent: `POST /api/bridge/agent/open-tab { url, label?, task? }` (`url`: a page of this app, a path like `/plans/<id>` or a
+   URL of this site; never `/api/*`). The server makes a single-use **ticket** (60 s) bound to that agent and sends the hub
+   `event: openTab` `{ ticket, url, label, task, agent, color }`.
+2. Hub: `window.open(url#bridge-ticket=<ticket>)`. If the browser blocks it (no user gesture), the hub's panel asks
+   "Ramona wants to open a tab: … [Open] [Deny]" (one click opens it; Deny: `POST /api/bridge/page/deny-tab { ticket }`), and
+   says that allowing pop-ups for this site makes it automatic.
+3. The new tab's BridgeProvider sees the ticket, pairs as that agent's tab (`POST /api/bridge/page/pair { ticket }` →
+   `{ pageId, pageToken, agent, color, label, task }`), takes the ticket out of the address and says hello.
+4. The agent's call answers `{ ok: true, pageId }` once the tab has paired, or `{ pending: true }` after 25 s (the request
+   stands until the ticket expires: `bridge_tabs` shows the tab when it opens).
+
+At most 3 open tabs per agent (`MAX_TABS` in src/server/bridge.ts). Commands take an optional `pageId`
+(`POST /api/bridge/agent/command { type, args, pageId? }`); without it they go to the tab the agent opened last, else to the
+hub if it drives it. An agent only ever reaches its own pages; another agent's tab or the hub (unless it drives it) answer
+"Not one of your pages". Events (annotations, messages) from a tab go to its agent only; from the hub, to the agent driving it.
+
+| route | | |
+|---|---|---|
+| `GET /api/bridge/agent/tabs` | agent | `{ tabs: [{ pageId, url, title, label, task, connected, paused, left }] }` |
+| `POST /api/bridge/agent/close-tab { pageId }` | agent | its own tab only; the tab closes itself where the browser lets it |
+| `POST /api/bridge/page/allow-tabs { on }` | hub | |
+| `POST /api/bridge/page/agent-code` | hub | `{ code, expiresAt }` |
+| `POST /api/bridge/page/revoke { agentId }` | hub | the agent's token ends; its tabs stay open for the user, marked "Ramona left" |
+| `POST /api/bridge/page/pause { paused, tabId? }` | tab (Take over), or hub with `tabId` | commands to it answer "paused by user" until resumed |
+| `POST /api/bridge/page/close-tab { tabId }` | hub | |
+
+Streams: the hub also gets `event: hub` `{ allowTabs, agents: [{ id, name, color, hub }], tabs: [...] }` on every change
+(and the requests still open when it reconnects); a tab gets `event: tab` `{ agent, color, label, task, paused, left }`.
+
+Each tab is marked as the agent's: its title prefixed "● Ramona · T34 — …", its favicon a dot in the agent's colour, a frame
+round the window in that colour and a bar "Ramona is working here · T34 · <label> [Take over] [Close]", the agent's cursor and
+toasts in its colour. The hub's panel lists every agent tab (agent, label, live/paused/left) with Focus (where the browser
+lets a page bring another tab forward), Pause/Resume and Close. Disconnecting the hub ends its agents and their tabs'
+pairings. Closing a tab ends its pairing (the agent sees it gone from `bridge_tabs`).
+
+MCP tools (scripts/claude-bridge-mcp.ts): every page tool takes an optional `pageId`; new: `bridge_open_tab { url, label?,
+task? }`, `bridge_tabs`, `bridge_close_tab { pageId }`; `bridge_pair` takes either kind of code.
+
 ## Guardrails
 
 Admins only; pairing by code shown in the page; a visible badge while attached, one-click disconnect; no
-arbitrary JavaScript; cookies and tokens never sent to the agent; every command logged in the page.
+arbitrary JavaScript; cookies and tokens never sent to the agent; every command logged in the page. No typing in or reading
+of password fields; the bridge's own UI (panel, tab bar) is out of the agent's reach; pages of this app only (never its API).
+Agent tabs: only with the user's leave (Allow agent tabs), each agent only in its own tabs, a tab taken over at any time;
+an agent token can't drive the hub unless the user paired that agent with the hub's own code.

@@ -2,7 +2,9 @@
  * The Claude bridge's agent side (docs/claude-bridge.md): an MCP server over stdio giving a Claude session tools
  * to work in a page of the app the user paired with it (the code shown in the page's bridge panel): read the page
  * (accessibility tree, screenshot, the app's state), act in it (click, type, keys, navigate, app actions) and wait
- * for the user's annotations and messages. No dependencies: MCP's JSON-RPC by hand.
+ * for the user's annotations and messages. With the user's leave ("Allow agent tabs" in the hub's panel), it can also open
+ * tabs of its own in the user's browser (bridge_open_tab), each marked as the agent's, and work in them (any page tool's
+ * `pageId`; by default the tab it opened last, else the hub). No dependencies: MCP's JSON-RPC by hand.
  *
  *   BRIDGE_URL   the app's base URL (default https://paul.cloud.teleporthq.ai/projects/trafficsim)
  *   BRIDGE_AGENT the name shown in the page (default "Claude"; `bridge_pair` can give another)
@@ -28,9 +30,10 @@ async function call(path: string, init: { method?: string; body?: unknown; auth?
   if (!res.ok && data.ok !== false) throw new Error(s(data.error) ?? `HTTP ${res.status}`);
   return data;
 }
-/** a command to the page: its data, or its error thrown */
+/** a command to one of the agent's pages (`pageId` in the args, else the default one): its data, or its error thrown */
 async function command(type: string, args: Json = {}): Promise<unknown> {
-  const r = await call("/agent/command", { body: { type, args } });
+  const { pageId, ...rest } = args;
+  const r = await call("/agent/command", { body: { type, args: rest, ...(s(pageId) ? { pageId } : {}) } });
   if (r.ok !== true) throw new Error(s(r.error) ?? "The page couldn't do it");
   return r.data;
 }
@@ -40,28 +43,40 @@ async function command(type: string, args: Json = {}): Promise<unknown> {
 interface Tool { name: string; description: string; inputSchema: Json; run: (a: Json) => Promise<Content[]> }
 type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 const text = (v: unknown): Content[] => [{ type: "text", text: typeof v === "string" ? v : JSON.stringify(v, null, 2) }];
-const target = { role: { type: "string", description: "ARIA role, e.g. button, textbox, link, tab, option, region" }, name: { type: "string", description: "accessible name (case-insensitive substring)" }, exact: { type: "boolean" }, nth: { type: "number", description: "0-based, when several match" }, selector: { type: "string", description: "CSS selector instead of role/name" }, text: { type: "string", description: "visible text instead of role/name" } };
+const page = { pageId: { type: "string", description: "which of your pages (bridge_tabs lists them); default: the tab you opened last, else the hub" } };
+const target = { ...page, role: { type: "string", description: "ARIA role, e.g. button, textbox, link, tab, option, region" }, name: { type: "string", description: "accessible name (case-insensitive substring)" }, exact: { type: "boolean" }, nth: { type: "number", description: "0-based, when several match" }, selector: { type: "string", description: "CSS selector instead of role/name" }, text: { type: "string", description: "visible text instead of role/name" } };
 
 const TOOLS: Tool[] = [
   {
-    name: "bridge_pair", description: "Pair with a page of the app: the user clicks 'Connect Claude' in the app's user menu and gives you the 6-digit code shown there. Needed before any other bridge tool.",
+    name: "bridge_pair", description: "Pair with the user's hub page: the user clicks 'Connect Claude' in the app's account menu and gives you the 6-digit code shown there (that code: you drive the hub page too), or an 'Add agent' code from the hub's panel (you work in tabs of your own). Needed before any other bridge tool.",
     inputSchema: { type: "object", properties: { code: { type: "string" }, agent: { type: "string", description: "your name shown in the page (e.g. Alice)" } }, required: ["code"] },
     run: async a => {
       if (s(a.agent)) agent = s(a.agent)!;
       const r = await call("/agent/claim", { body: { code: s(a.code) ?? "", agent }, auth: false });
       token = s(r.agentToken) ?? null; after = 0;
+      if (r.drivesHub === false) return text(`Paired as ${agent}, for tabs of your own (open one with bridge_open_tab). ${JSON.stringify(await call("/agent/status"))}`);
       return text(`Paired as ${agent}. ${JSON.stringify(await call("/agent/status"))}`);
     },
   },
-  { name: "bridge_status", description: "The paired page: its URL and title, and whether it is connected now.", inputSchema: { type: "object", properties: {} }, run: async () => text(await call("/agent/status")) },
+  { name: "bridge_status", description: "Who you are to the hub, its page (if you drive it), whether agent tabs are allowed, and your tabs.", inputSchema: { type: "object", properties: {} }, run: async () => text(await call("/agent/status")) },
+  {
+    name: "bridge_open_tab", description: "Open a tab of your own in the user's browser at a page of this app (a path like /plans/<id>, never /api), marked as yours. The user must have switched on 'Allow agent tabs' in the hub's panel; if their browser blocks pop-ups they're asked to open it (then this answers pending: check bridge_tabs). At most 3 open tabs. Your page tools then go to it by default.",
+    inputSchema: { type: "object", properties: { url: { type: "string" }, label: { type: "string", description: "what it's for, shown to the user" }, task: { type: "string", description: "your task id, e.g. T34" } }, required: ["url"] },
+    run: async a => text(await call("/agent/open-tab", { body: { url: s(a.url), label: s(a.label), task: s(a.task) } })),
+  },
+  { name: "bridge_tabs", description: "Your tabs: pageId, url, title, label, connected, paused (the user took over), left.", inputSchema: { type: "object", properties: {} }, run: async () => text(await call("/agent/tabs")) },
+  {
+    name: "bridge_close_tab", description: "Close one of your tabs.", inputSchema: { type: "object", properties: { pageId: { type: "string" } }, required: ["pageId"] },
+    run: async a => text(await call("/agent/close-tab", { body: { pageId: s(a.pageId) } })),
+  },
   {
     name: "bridge_snapshot", description: "The page's accessibility tree as compact text (one line per node: role \"name\" [value] {states}), to see what is on it and how to target it.",
-    inputSchema: { type: "object", properties: { root: { type: "string", description: "CSS selector of the part to read (default the whole page)" } } },
+    inputSchema: { type: "object", properties: { ...page, root: { type: "string", description: "CSS selector of the part to read (default the whole page)" } } },
     run: async a => { const d = obj(await command("snapshot", a)); return text(`${s(d.url) ?? ""} · ${s(d.title) ?? ""}\n${s(d.tree) ?? JSON.stringify(d)}`); },
   },
   {
     name: "bridge_screenshot", description: "A picture of the editor's map (target 'map', default) or of the whole page ('page').",
-    inputSchema: { type: "object", properties: { target: { type: "string", enum: ["map", "page"] }, maxWidth: { type: "number" } } },
+    inputSchema: { type: "object", properties: { ...page, target: { type: "string", enum: ["map", "page"] }, maxWidth: { type: "number" } } },
     run: async a => {
       const d = obj(await command("screenshot", a)), url = s(d.dataUrl) ?? "", m = url.match(/^data:([^;]+);base64,(.*)$/);
       return m ? [{ type: "image", mimeType: m[1], data: m[2] }] : text(d);
@@ -69,7 +84,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "bridge_state", description: "The app's own state, by key: sketch (counts and ids), selection, stats (the running cars' results), problems (the console), view (centre and zoom), run (running, speed, time).",
-    inputSchema: { type: "object", properties: { keys: { type: "array", items: { type: "string" } } } },
+    inputSchema: { type: "object", properties: { ...page, keys: { type: "array", items: { type: "string" } } } },
     run: async a => text(await command("state", a)),
   },
   { name: "bridge_click", description: "Click an element (the user sees your cursor go there first).", inputSchema: { type: "object", properties: target }, run: async a => text(await command("click", a)) },
@@ -78,11 +93,11 @@ const TOOLS: Tool[] = [
     inputSchema: { type: "object", properties: { ...target, value: { type: "string", description: "the text to type" }, submit: { type: "boolean", description: "press Enter after" } }, required: ["value"] },
     run: async a => { const { value, ...rest } = a; return text(await command("type", { ...rest, text: s(value) ?? "" })); },
   },
-  { name: "bridge_key", description: "Press a key or chord, e.g. 'Escape', 'Control+k', 'p'.", inputSchema: { type: "object", properties: { key: { type: "string" } }, required: ["key"] }, run: async a => text(await command("key", a)) },
-  { name: "bridge_navigate", description: "Go to another page of the app (same origin).", inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, run: async a => text(await command("navigate", a)) },
+  { name: "bridge_key", description: "Press a key or chord, e.g. 'Escape', 'Control+k', 'p'.", inputSchema: { type: "object", properties: { ...page, key: { type: "string" } }, required: ["key"] }, run: async a => text(await command("key", a)) },
+  { name: "bridge_navigate", description: "Go to another page of the app (same origin).", inputSchema: { type: "object", properties: { ...page, url: { type: "string" } }, required: ["url"] }, run: async a => text(await command("navigate", a)) },
   {
     name: "bridge_app", description: "An action of the editor: select {kind,id}, goTo {kind,id} (kind: road, lane, connector, junction, link, crossing, car), view {x,y,scale?}, run, pause, replay {t}, restart.",
-    inputSchema: { type: "object", properties: { action: { type: "string" }, args: { type: "object" } }, required: ["action"] },
+    inputSchema: { type: "object", properties: { ...page, action: { type: "string" }, args: { type: "object" } }, required: ["action"] },
     run: async a => text(await command("app", { action: s(a.action), args: obj(a.args) })),
   },
   {

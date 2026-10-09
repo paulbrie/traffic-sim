@@ -4,29 +4,46 @@
  * The page's side of the Claude bridge (docs/claude-bridge.md): pairing, the stream of commands from the agent, running
  * them and answering, and what the user sends the agent. A small store the bridge's UI follows (useSyncExternalStore);
  * every command is in its log. Nothing runs until the user pairs the page.
+ *
+ * Two kinds of page: the hub (paired by the user with "Connect Claude"), which can let agents open tabs of their own and
+ * opens them for them; and an agent's tab (opened by the hub with a ticket in its address), which pairs as that agent's,
+ * shows whose it is, and can be taken over by the user.
  */
 import { basePath } from "@/lib/base-path";
 import { bridgeApp, bridgeCanvas, bridgeState } from "@/state/bridge-registry";
 import { describe, find, isBridgeUi, snapshot, type Target } from "@/components/bridge/a11y";
 
 export interface BridgeLogEntry { at: number; type: string; target: string; ok: boolean; error?: string }
+export interface BridgeAgent { id: string; name: string; color: string; hub: boolean }
+export interface BridgeTab { pageId: string; ticket: string; agent: string; agentName: string; color: string; label: string; task: string; url: string; title: string; connected: boolean; paused: boolean; left: boolean }
+/** a tab an agent asked for that the browser wouldn't open by itself (pop-ups blocked): the user opens it, or not */
+export interface BridgeRequest { ticket: string; url: string; label: string; task: string; agent: string; color: string }
 export interface BridgeView {
   /** the panel shown */
   open: boolean;
   phase: "off" | "pairing" | "waiting" | "attached" | "lost";
+  /** a hub, or an agent's tab */
+  mode: "hub" | "tab";
   code: string | null;
   agent: string | null;
+  agentColor: string | null;
   log: BridgeLogEntry[];
   error: string | null;
   /** where the agent's cursor is (client px), and what it last did (shown a moment) */
   cursor: { x: number; y: number } | null;
   trace: { text: string; at: number } | null;
+  // the hub's
+  allowTabs: boolean; agents: BridgeAgent[]; tabs: BridgeTab[]; requests: BridgeRequest[];
+  /** a code for another agent (Add agent), while it lasts */
+  agentCode: string | null;
+  // an agent's tab's
+  tab: { agent: string; color: string; label: string; task: string; paused: boolean; left: boolean; closed: boolean } | null;
 }
-interface Pairing { pageId: string; pageToken: string; code: string }
+interface Pairing { pageId: string; pageToken: string; code?: string; mode: "hub" | "tab" }
 interface Command { id: string; type: string; args?: Record<string, unknown> }
 
 const KEY = "trafficsim:bridge";
-let view: BridgeView = { open: false, phase: "off", code: null, agent: null, log: [], error: null, cursor: null, trace: null };
+let view: BridgeView = { open: false, phase: "off", mode: "hub", code: null, agent: null, agentColor: null, log: [], error: null, cursor: null, trace: null, allowTabs: false, agents: [], tabs: [], requests: [], agentCode: null, tab: null };
 const listeners = new Set<() => void>();
 const set = (patch: Partial<BridgeView>) => { view = { ...view, ...patch }; for (const f of listeners) f(); };
 export const bridgeStore = {
@@ -40,39 +57,69 @@ let pairing: Pairing | null = null, stream: EventSource | null = null, failures 
 /** how to go to a page of the app (the provider's router) */
 let navigateTo: ((path: string) => void) | null = null;
 export const setBridgeNavigate = (f: (path: string) => void) => { navigateTo = f; };
+/** (the hub's) the windows it opened for agents, by the ticket they were opened with */
+const windows = new Map<string, Window>();
 
 const api = (path: string) => `${basePath}/api/bridge/page/${path}`;
 // (every call of a paired page: its id in the body, its token in a header)
 const post = (path: string, body: Record<string, unknown>) => fetch(api(path), {
   method: "POST", headers: { "Content-Type": "application/json", ...(pairing ? { "x-bridge-page": pairing.pageToken } : {}) }, body: JSON.stringify(pairing ? { pageId: pairing.pageId, ...body } : body),
 });
+const keep = () => { if (pairing) sessionStorage.setItem(KEY, JSON.stringify(pairing)); else sessionStorage.removeItem(KEY); };
+const gone = (phase: BridgeView["phase"]) => { stream?.close(); stream = null; pairing = null; keep(); set({ phase, code: null, agent: null, cursor: null, agents: [], tabs: [], requests: [], agentCode: null }); };
 
-/** pair the page: a code to give the agent, then the stream of its commands */
+/** pair the page as a hub: a code to give the agent, then the stream of its commands */
 export async function bridgePair() {
   set({ phase: "pairing", error: null });
   try {
     const r = await fetch(api("pair"), { method: "POST" });
     if (!r.ok) throw new Error(r.status === 403 ? "Only admins can connect Claude." : `Pairing failed (${r.status})`);
-    pairing = await r.json() as Pairing;
-    sessionStorage.setItem(KEY, JSON.stringify(pairing));
-    set({ phase: "waiting", code: pairing.code, agent: null });
+    pairing = { ...(await r.json() as Omit<Pairing, "mode">), mode: "hub" };
+    keep();
+    set({ phase: "waiting", mode: "hub", code: pairing.code ?? null, agent: null, tab: null });
     listen();
   } catch (e) { set({ phase: "off", error: e instanceof Error ? e.message : String(e) }); }
 }
-/** carried on after a reload of the page (the same tab), if it was paired */
-export function bridgeResume() {
+/**
+ * On loading a page: opened for an agent (a ticket in the address), it pairs as that agent's tab (the ticket taken out of
+ * the address); else it carries on after a reload of the same tab, if it was paired. (A tab opened by the hub starts with a
+ * copy of the hub's session storage: the ticket wins.)
+ */
+export async function bridgeResume() {
   if (pairing || typeof sessionStorage === "undefined") return;
+  const ticket = /[#&]bridge-ticket=([\w-]+)/.exec(location.hash)?.[1];
+  if (ticket) {
+    const h = location.hash.replace(/[#&]?bridge-ticket=[\w-]+/, "");
+    history.replaceState(history.state, "", location.pathname + location.search + (h && h !== "#" ? h : ""));
+    sessionStorage.removeItem(KEY);
+    try {
+      const r = await fetch(api("pair"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket }) });
+      if (!r.ok) throw new Error(r.status === 404 ? "This tab's ticket was used or expired." : `Pairing failed (${r.status})`);
+      const t = await r.json() as { pageId: string; pageToken: string; agent: string; color: string; label: string; task: string };
+      pairing = { pageId: t.pageId, pageToken: t.pageToken, mode: "tab" };
+      keep();
+      set({ mode: "tab", phase: "attached", agent: t.agent, agentColor: t.color, tab: { agent: t.agent, color: t.color, label: t.label, task: t.task, paused: false, left: false, closed: false } });
+      listen();
+    } catch (e) { set({ mode: "tab", phase: "off", error: e instanceof Error ? e.message : String(e) }); }
+    return;
+  }
   const raw = sessionStorage.getItem(KEY);
   if (!raw) return;
-  try { pairing = JSON.parse(raw) as Pairing; set({ phase: "waiting", code: pairing.code }); listen(); } catch { sessionStorage.removeItem(KEY); }
+  try {
+    pairing = JSON.parse(raw) as Pairing;
+    pairing.mode ??= "hub";
+    set({ mode: pairing.mode, phase: pairing.mode === "tab" ? "attached" : "waiting", code: pairing.code ?? null });
+    listen();
+  } catch { sessionStorage.removeItem(KEY); }
 }
-/** the agent let go and the pairing ended */
+/** the pairing ended by the user: a hub's agents and tabs with it; a tab's (the tab closes itself if it can) */
 export async function bridgeDisconnect() {
   const was = pairing;
   stream?.close(); stream = null;
   if (was) await post("close", {}).catch(() => {});
-  pairing = null; sessionStorage.removeItem(KEY);
-  set({ phase: "off", code: null, agent: null, cursor: null });
+  const tab = was?.mode === "tab";
+  gone("off");
+  if (tab) { set({ tab: view.tab ? { ...view.tab, closed: true } : null }); window.close(); }
 }
 /** where the page is now (on connecting, and on every navigation) */
 export function bridgeHello() {
@@ -85,20 +132,53 @@ export async function bridgeSend(event: Record<string, unknown>) {
   if (!r.ok) throw new Error(`Not sent (${r.status})`);
 }
 
+// ---- the hub's: agents and their tabs
+const openFor = (q: BridgeRequest) => window.open(`${basePath}${q.url}#bridge-ticket=${q.ticket}`, "_blank");
+export async function bridgeAllowTabs(on: boolean) { set({ allowTabs: on }); await post("allow-tabs", { on }); }
+/** a code for another agent to attach (tabs only) */
+export async function bridgeAddAgent() {
+  const r = await post("agent-code", {});
+  if (!r.ok) throw new Error(`No code (${r.status})`);
+  const c = await r.json() as { code: string };
+  set({ agentCode: c.code });
+}
+export const bridgeRevoke = (agentId: string) => post("revoke", { agentId });
+export const bridgePauseTab = (tabId: string, paused: boolean) => post("pause", { tabId, paused });
+export async function bridgeCloseTab(tab: BridgeTab) { await post("close-tab", { tabId: tab.pageId }); windows.get(tab.ticket)?.close(); windows.delete(tab.ticket); }
+/** the tab's window brought forward (where the browser lets a page do that) */
+export function bridgeFocusTab(tab: BridgeTab) { const w = windows.get(tab.ticket); if (w && !w.closed) { w.focus(); return true; } return false; }
+/** a tab the browser wouldn't open by itself, opened by the user's click (or denied) */
+export function bridgeOpenRequest(q: BridgeRequest) {
+  const w = openFor(q);
+  if (w) windows.set(q.ticket, w);
+  set({ requests: view.requests.filter(x => x.ticket !== q.ticket) });
+  return !!w;
+}
+export async function bridgeDenyRequest(q: BridgeRequest) { set({ requests: view.requests.filter(x => x.ticket !== q.ticket) }); await post("deny-tab", { ticket: q.ticket }); }
+
+// ---- an agent's tab's: the user takes over (the agent's commands refused) or gives it back
+export async function bridgeTakeOver(paused: boolean) { set({ tab: view.tab ? { ...view.tab, paused } : null }); await post("pause", { paused }); }
+
 function listen() {
   if (!pairing) return;
   stream?.close();
   stream = new EventSource(`${api("stream")}?pageId=${encodeURIComponent(pairing.pageId)}&t=${encodeURIComponent(pairing.pageToken)}`);
   stream.onopen = () => { failures = 0; bridgeHello(); };
-  stream.addEventListener("agent", e => {
-    const a = JSON.parse((e as MessageEvent).data) as { name: string } | null;
-    set({ agent: a?.name ?? null, phase: a ? "attached" : "waiting" });
+  const on = <T,>(name: string, f: (d: T) => void) => stream!.addEventListener(name, e => f(JSON.parse((e as MessageEvent).data) as T));
+  on<{ name: string; color?: string } | null>("agent", a => { if (pairing?.mode === "hub") set({ agent: a?.name ?? null, agentColor: a?.color ?? null, phase: a ? "attached" : "waiting" }); });
+  on<{ allowTabs: boolean; agents: BridgeAgent[]; tabs: BridgeTab[] }>("hub", h => set({ allowTabs: h.allowTabs, agents: h.agents, tabs: h.tabs }));
+  on<NonNullable<BridgeView["tab"]>>("tab", t => set({ tab: { ...t, closed: false }, agent: t.agent, agentColor: t.color, phase: t.left ? "lost" : "attached" }));
+  // (an agent asks for a tab: opened at once if the browser lets it, else the user is asked)
+  on<BridgeRequest>("openTab", q => {
+    if (windows.has(q.ticket) || view.requests.some(x => x.ticket === q.ticket)) return;
+    const w = openFor(q);
+    if (w) windows.set(q.ticket, w); else set({ requests: [...view.requests, q], open: true });
   });
-  stream.addEventListener("command", e => { void run(JSON.parse((e as MessageEvent).data) as Command); });
-  // (the pairing ended on the server: by the page, or idle too long)
-  stream.addEventListener("closed", () => { stream?.close(); stream = null; pairing = null; sessionStorage.removeItem(KEY); set({ phase: "off", code: null, agent: null, cursor: null }); });
+  on<Command>("command", c => { void run(c); });
+  // (the pairing ended on the server: by the user, the agent, or idle too long; a tab closes itself if it can)
+  on("closed", () => { const tab = pairing?.mode === "tab"; gone("off"); if (tab) { set({ tab: view.tab ? { ...view.tab, closed: true } : null }); window.close(); } });
   // (gone for good, the pairing with it, after a few tries: the server restarted, or the pairing ended)
-  stream.onerror = () => { if (++failures >= 4) { stream?.close(); stream = null; pairing = null; sessionStorage.removeItem(KEY); set({ phase: "lost", agent: null, cursor: null }); } };
+  stream.onerror = () => { if (++failures >= 4) gone("lost"); };
 }
 
 const logged = (e: BridgeLogEntry) => set({ log: [...view.log.slice(-199), e] });

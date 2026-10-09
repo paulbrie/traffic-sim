@@ -14,6 +14,7 @@ export async function POST(req: NextRequest) {
   if (kind !== "annotation" && kind !== "message") return Response.json({ error: "Unknown kind" }, { status: 400 });
   const r = await pageFromRequest(req, { pageId: str(pageId) });
   if ("error" in r) return r.error;
-  const ev = addEvent(r.p, { ...rest, kind });
-  return Response.json({ seq: ev.seq });
+  // (to the agents working on that page: a tab's own, or the hub's)
+  const to = addEvent(r.p, { ...rest, kind });
+  return Response.json({ ok: true, to });
 }

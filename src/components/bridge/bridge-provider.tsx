@@ -8,13 +8,14 @@
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Bot, PenLine, Send, Unplug, X } from "lucide-react";
+import { Bot, Hand, PenLine, Play, Send, Unplug, X } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { bridgeCanvas, bridgeState, bridgeToWorld } from "@/state/bridge-registry";
-import { bridgeDisconnect, bridgeHello, bridgePair, bridgeResume, bridgeSend, bridgeStore, setBridgeNavigate } from "@/state/bridge-client";
+import { bridgeAddAgent, bridgeAllowTabs, bridgeCloseTab, bridgeDenyRequest, bridgeDisconnect, bridgeFocusTab, bridgeHello, bridgeOpenRequest, bridgePair, bridgePauseTab, bridgeResume, bridgeRevoke, bridgeSend, bridgeStore, bridgeTakeOver, setBridgeNavigate } from "@/state/bridge-client";
 import { under } from "./a11y";
 
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -25,7 +26,7 @@ export function BridgeProvider() {
   const [annotating, setAnnotating] = useState(false);
   const paired = view.phase === "waiting" || view.phase === "attached";
 
-  useEffect(() => { setBridgeNavigate(path => router.push(path)); bridgeResume(); }, [router]);
+  useEffect(() => { setBridgeNavigate(path => router.push(path)); void bridgeResume(); }, [router]);
   useEffect(() => { bridgeHello(); }, [pathname]);
   // (A, while paired and not typing: a note for the agent)
   useEffect(() => {
@@ -39,19 +40,23 @@ export function BridgeProvider() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [paired]);
 
-  if (!view.open && !paired && view.phase !== "lost") return null;
+  const isTab = view.mode === "tab" && !!view.tab;
+  if (!view.open && !paired && view.phase !== "lost" && !isTab) return null;
   return (
     <div data-bridge-ui>
-      {view.open ? <BridgePanel onAnnotate={() => setAnnotating(true)} /> : paired || view.phase === "lost" ? (
+      {isTab && <AgentTabChrome />}
+      {view.open ? <BridgePanel onAnnotate={() => setAnnotating(true)} /> : isTab ? null : paired || view.phase === "lost" ? (
         // (while paired, always in sight: who is attached, one click to the panel)
         <button className={cn("fixed right-3 bottom-3 z-[60] flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs shadow-md",
           view.phase === "attached" ? "border-violet-400 bg-violet-50 text-violet-900 dark:bg-violet-950 dark:text-violet-100" : "bg-background text-muted-foreground")}
           onClick={() => bridgeStore.show(true)}>
           <Bot className="size-3.5" />
           {view.phase === "attached" ? `${view.agent} is working here` : view.phase === "lost" ? "Claude disconnected" : `Waiting for Claude · ${view.code}`}
+          {view.tabs.filter(t => !t.left).length > 0 && ` · ${view.tabs.filter(t => !t.left).length} agent tab${view.tabs.filter(t => !t.left).length === 1 ? "" : "s"}`}
+          {view.requests.length > 0 && <span className="ml-1 rounded-full bg-amber-500 px-1.5 text-white">{view.requests.length} to open</span>}
         </button>
       ) : null}
-      {view.phase === "attached" && view.cursor && <AgentCursor x={view.cursor.x} y={view.cursor.y} name={view.agent ?? "Claude"} />}
+      {view.phase === "attached" && view.cursor && <AgentCursor x={view.cursor.x} y={view.cursor.y} name={view.agent ?? "Claude"} color={view.agentColor ?? "#7c3aed"} />}
       {view.phase === "attached" && view.trace && <Trace text={view.trace.text} at={view.trace.at} />}
       {annotating && <Annotator onDone={() => setAnnotating(false)} />}
     </div>
@@ -79,9 +84,10 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
         </span>
         <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Close the panel" onClick={() => bridgeStore.show(false)}><X /></Button>
       </div>
-      <div className="grid gap-2 p-3">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-2 p-3">
         {!paired ? (
           <>
+            {view.mode === "tab" && view.error && <p className="text-xs text-red-600">This tab was opened for an agent, but couldn&apos;t pair: {view.error}</p>}
             <p className="text-xs text-muted-foreground">An agent (a Claude session with the bridge) can read this page, act in it — you see its cursor and every command — and get your notes. Pair, then give it the code.</p>
             {view.error && <p className="text-xs text-red-600">{view.error}</p>}
             <Button size="sm" onClick={() => void bridgePair()} disabled={view.phase === "pairing"}>Pair this page</Button>
@@ -94,14 +100,15 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
                 <span className="font-mono text-2xl tracking-[0.3em] tabular-nums">{view.code}</span>
               </div>
             )}
-            <div className="flex gap-1.5">
-              <Button size="sm" variant="outline" className="flex-1" onClick={onAnnotate} title="Draw a rectangle (or click a spot) and write a note for the agent (A)"><PenLine /> Annotate</Button>
+            <div className="flex min-w-0 gap-1.5">
+              <Button size="sm" variant="outline" className="min-w-0 flex-1" onClick={onAnnotate} title="Draw a rectangle (or click a spot) and write a note for the agent (A)"><PenLine /> Annotate</Button>
               <Button size="sm" variant="outline" onClick={() => void bridgeDisconnect()} title="End the pairing: the agent can't act here any more"><Unplug /> Disconnect</Button>
             </div>
             <div className="flex gap-1.5">
               <Input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") void send(); }} placeholder="A message to the agent" aria-label="Message to the agent" className="h-8 text-xs" />
               <Button size="icon-sm" className="size-8" aria-label="Send the message" disabled={!text.trim()} onClick={() => void send()}><Send /></Button>
             </div>
+            {view.mode === "hub" && <AgentTabsSection />}
           </>
         )}
       </div>
@@ -121,11 +128,11 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
 }
 
 /** the agent's pointer: where it is about to act (it glides there) */
-function AgentCursor({ x, y, name }: { x: number; y: number; name: string }) {
+function AgentCursor({ x, y, name, color }: { x: number; y: number; name: string; color: string }) {
   return (
     <div className="pointer-events-none fixed z-[70] transition-[left,top] duration-300 ease-out" style={{ left: x, top: y }} aria-hidden>
-      <svg width="20" height="20" viewBox="0 0 20 20" className="drop-shadow"><path d="M2 2 L17 9 L10 11 L8 18 Z" fill="#7c3aed" stroke="white" strokeWidth="1.5" /></svg>
-      <span className="ml-4 rounded bg-violet-600 px-1.5 py-0.5 text-[10px] font-medium text-white">{name}</span>
+      <svg width="20" height="20" viewBox="0 0 20 20" className="drop-shadow"><path d="M2 2 L17 9 L10 11 L8 18 Z" fill={color} stroke="white" strokeWidth="1.5" /></svg>
+      <span className="ml-4 rounded px-1.5 py-0.5 text-[10px] font-medium text-white" style={{ background: color }}>{name}</span>
     </div>
   );
 }
@@ -206,4 +213,110 @@ function crop(r: { x: number; y: number; w: number; h: number }): string | undef
   out.getContext("2d")!.drawImage(c, x, y, w, h, 0, 0, out.width, out.height);
   // (imagery from elsewhere can leave the map unreadable: no picture then)
   try { return out.toDataURL("image/png"); } catch { return undefined; }
+}
+
+/**
+ * The hub's agent tabs: whether agents may open tabs of their own here, a code for another agent, the agents attached
+ * (revoke), every tab they have open (focus, take over, close), and the tabs asked for that the browser wouldn't open by
+ * itself (pop-ups blocked: open with a click, or deny).
+ */
+function AgentTabsSection() {
+  const view = useSyncExternalStore(bridgeStore.subscribe, bridgeStore.get, bridgeStore.get);
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5 border-t pt-2">
+      <label className="flex items-center justify-between gap-2 text-xs">
+        <span title="Agents attached here may open tabs of their own in this browser (this app's pages only), each marked as theirs; you can watch, take over or close them">Allow agent tabs</span>
+        <Switch checked={view.allowTabs} onCheckedChange={on => void bridgeAllowTabs(on)} aria-label="Allow agent tabs" />
+      </label>
+      <div className="flex items-center gap-1.5">
+        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void bridgeAddAgent().catch(e => toast.error(e instanceof Error ? e.message : "No code"))} title="A code for another agent: it attaches here and works in tabs of its own">Add agent</Button>
+        {view.agentCode && <span className="font-mono text-sm tracking-[0.2em] tabular-nums" title="Give this code to the other agent (valid 10 minutes)">{view.agentCode}</span>}
+      </div>
+      {view.requests.map(q => (
+        <div key={q.ticket} className="grid gap-1 rounded-md border border-amber-400 bg-amber-50 p-2 text-xs dark:bg-amber-950" role="alert">
+          <span><b style={{ color: q.color }}>{q.agent}</b> wants to open a tab: {q.label || q.url}{q.task ? ` · ${q.task}` : ""}</span>
+          <div className="flex gap-1.5">
+            <Button size="sm" className="h-7 text-xs" onClick={() => { if (!bridgeOpenRequest(q)) toast.error("The browser blocked it again"); }}>Open</Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => void bridgeDenyRequest(q)}>Deny</Button>
+          </div>
+          <span className="text-[11px] text-muted-foreground">The browser blocked it as a pop-up. Allow pop-ups for this site and agent tabs open by themselves.</span>
+        </div>
+      ))}
+      {view.agents.length > 0 && (
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
+          <span className="text-[11px] text-muted-foreground">Agents</span>
+          {view.agents.map(a => (
+            <div key={a.id} className="flex items-center gap-1.5 text-xs">
+              <span className="size-2.5 shrink-0 rounded-full" style={{ background: a.color }} />
+              <span className="min-w-0 flex-1 truncate">{a.name}{a.hub ? " (this page)" : " (its tabs)"}</span>
+              <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => void bridgeRevoke(a.id)} title="Let it go: its pairing ends; its tabs stay open, marked as left">Revoke</Button>
+            </div>
+          ))}
+        </div>
+      )}
+      {view.tabs.length > 0 && (
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
+          <span className="text-[11px] text-muted-foreground">Agent tabs</span>
+          {view.tabs.map(t => (
+            <div key={t.pageId} className="flex items-center gap-1.5 text-xs" title={t.url}>
+              <span className="size-2.5 shrink-0 rounded-full" style={{ background: t.color }} />
+              <span className="min-w-0 flex-1 truncate">{t.agentName}{t.task ? ` · ${t.task}` : ""} · {t.label || t.title || t.url}</span>
+              <span className="text-[10px] text-muted-foreground">{t.left ? "left" : t.paused ? "paused" : t.connected ? "live" : "…"}</span>
+              <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => { if (!bridgeFocusTab(t)) toast("Switch to it from the browser's tab bar", { description: "This browser won't let a page bring another tab forward." }); }}>Focus</Button>
+              {!t.left && <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => void bridgePauseTab(t.pageId, !t.paused)}>{t.paused ? "Resume" : "Pause"}</Button>}
+              <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => void bridgeCloseTab(t)}>Close</Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * An agent's tab, marked as theirs: a bar across the top in the agent's colour ("Ramona is working here · T34", take
+ * over / give back, close), its title prefixed ("● Ramona · T34 — …") and its favicon in the agent's colour.
+ */
+function AgentTabChrome() {
+  const view = useSyncExternalStore(bridgeStore.subscribe, bridgeStore.get, bridgeStore.get);
+  const t = view.tab!;
+  const prefix = `● ${t.agent}${t.task ? ` · ${t.task}` : ""} — `;
+  // (the title kept prefixed as the page changes it; the favicon a dot in the agent's colour)
+  useEffect(() => {
+    const fix = () => { if (!document.title.startsWith(prefix)) document.title = prefix + document.title.replace(/^● [^—]* — /, ""); };
+    fix();
+    const head = document.querySelector("head");
+    const mo = new MutationObserver(fix);
+    if (head) mo.observe(head, { subtree: true, childList: true, characterData: true });
+    return () => { mo.disconnect(); document.title = document.title.replace(/^● [^—]* — /, ""); };
+  }, [prefix]);
+  useEffect(() => {
+    const c = document.createElement("canvas"); c.width = c.height = 32;
+    const g = c.getContext("2d")!; g.fillStyle = t.color; g.beginPath(); g.arc(16, 16, 14, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#fff"; g.font = "bold 18px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(t.agent.slice(0, 1).toUpperCase(), 16, 17);
+    const link = document.createElement("link"); link.rel = "icon"; link.href = c.toDataURL("image/png"); link.setAttribute("data-bridge-icon", "");
+    const old = [...document.querySelectorAll<HTMLLinkElement>('link[rel~="icon"]:not([data-bridge-icon])')];
+    old.forEach(l => l.setAttribute("data-bridge-was", l.rel)); old.forEach(l => { l.rel = "bridge-was-icon"; });
+    document.head.appendChild(link);
+    return () => { link.remove(); old.forEach(l => { l.rel = l.getAttribute("data-bridge-was") ?? "icon"; }); };
+  }, [t.color, t.agent]);
+  return (
+    <>
+    {/* (a frame round the window in the agent's colour, the page's own controls left free; the bar under the header, in the middle) */}
+    <div className="pointer-events-none fixed inset-0 z-[69] border-[3px]" style={{ borderColor: t.color }} aria-hidden />
+    <div className="fixed top-14 left-1/2 z-[70] flex h-7 max-w-[min(640px,calc(100%-2rem))] -translate-x-1/2 items-center gap-2 rounded-full px-3 text-xs text-white shadow-lg" style={{ background: t.color }} role="status" aria-label="Agent tab">
+      <Bot className="size-3.5" />
+      <span className="min-w-0 flex-1 truncate">
+        {t.closed ? `${t.agent}'s tab, closed: you can close it` : t.left ? `${t.agent} left: this tab is yours now` : t.paused ? `You took over from ${t.agent}: its commands are paused here` : `${t.agent} is working here`}
+        {t.task ? ` · ${t.task}` : ""}{t.label ? ` · ${t.label}` : ""}
+      </span>
+      {!t.left && !t.closed && (
+        <button className="flex items-center gap-1 rounded bg-white/20 px-2 py-0.5 hover:bg-white/30" onClick={() => void bridgeTakeOver(!t.paused)} title={t.paused ? `Let ${t.agent} carry on here` : `Pause ${t.agent}'s commands here, to work in this tab yourself`}>
+          {t.paused ? <><Play className="size-3" /> Give back</> : <><Hand className="size-3" /> Take over</>}
+        </button>
+      )}
+      <button className="rounded bg-white/20 px-2 py-0.5 hover:bg-white/30" onClick={() => void bridgeDisconnect()} title="End this tab's pairing and close it">Close</button>
+    </div>
+    </>
+  );
 }
