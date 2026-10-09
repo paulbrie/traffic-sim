@@ -1141,7 +1141,7 @@ function makeCurve(ids: string[]) {
 
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
-  return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, p: c.p, d: c.d, route: [] };
+  return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, p: c.p, d: c.d, route: [] };
 }
 
 function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClose, onCopy }: {
@@ -1175,6 +1175,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
           {row("Heading for", info.dest ? `the exit at the end of lane ${info.dest}` : "anywhere (no exit it can reach)")}
           {row("Going", info.goal ? (info.goal.startsWith("end:") ? `off the end of ${edgeName(info.goal.slice(4))}` : edgeName(info.goal)) : info.leaves ? `off the end of ${edgeName(info.edge)}` : info.exit ? `${edgeName(info.exit)}, then ${edgeName(info.then ?? "")}` : info.then ? `onto ${edgeName(info.then)}` : "round the ring")}
           {row("Now", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          {info.reroutes > 0 && row("Went another way", `${info.reroutes} time${info.reroutes === 1 ? "" : "s"}`)}
           {info.still >= 1 && row("Stopped for", <span className="font-mono tabular">{info.still.toFixed(0)} s</span>)}
           <div className="flex gap-1.5">
             <Button size="sm" variant={follow ? "secondary" : "outline"} className="h-7 flex-1" aria-pressed={follow} onClick={() => onFollow(!follow)} title="Keep the view on the car while the cars run">
@@ -1662,6 +1663,7 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
           {stats.overlaps > 0 && row("Overlapping", stats.overlaps, "text-destructive")}
           {row("Collisions", stats.collisions ?? 0, stats.collisions ? "text-destructive" : undefined)}
           {(stats.laneChanges ?? 0) > 0 && row("Lane changes", stats.laneChanges)}
+          {(stats.reroutes ?? 0) > 0 && row("Went another way", stats.reroutes)}
           {(stats.deadlocks ?? 0) > 0 && row("Deadlocks broken", stats.deadlocks, "text-amber-700 dark:text-amber-400")}
           {row("Jumps", stats.jumps, stats.jumps ? "text-destructive" : undefined)}
           {(sketch.crossings?.length ?? 0) > 0 && row("Pedestrians crossed / waiting", `${stats.pedsCrossed ?? 0} / ${stats.pedsWaiting ?? 0}`)}

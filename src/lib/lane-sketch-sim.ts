@@ -77,6 +77,8 @@ export interface SimStats {
   deadlocks: number;
   /** times a car changed lane */
   laneChanges: number;
+  /** times a car kept waiting to turn off went another way */
+  reroutes: number;
   /** pedestrians who have crossed at the zebras so far, and those waiting at them now */
   pedsCrossed: number;
   pedsWaiting: number;
@@ -92,7 +94,7 @@ interface SimCrossing { def: SketchCrossing; len: number; on: { edge: Edge; s0: 
 export interface PedView { id: string; waiting: number; crossing: number; progress: number; /** (live only) crossed so far, and their mean wait (s) */ crossed?: number; avgWait?: number }
 
 /** something that happened in the run */
-export type SimEvent = { t: number; what: "in" | "onto" | "out" | "gone" | "jump" | "collision" | "deadlock" | "edit" | "params" | "change"; car?: number } & Record<string, unknown>;
+export type SimEvent = { t: number; what: "in" | "onto" | "out" | "gone" | "jump" | "collision" | "deadlock" | "edit" | "params" | "change" | "reroute"; car?: number } & Record<string, unknown>;
 /** a car's state as kept and copied */
 interface CarState { edge: string; pos: number; v: number; exit: string | null; run: number; trail: string | null; x: number; y: number; heading: number; why: string | null }
 const FRAME_FIELDS = ["car", "edge", "pos", "v", "exit", "run", "trail", "x", "y", "heading", "why"] as const;
@@ -202,6 +204,12 @@ export interface SimVehicle {
   truck: boolean;
   /** its length, metres */
   len: number;
+  /** seconds stopped, not counting the time at red lights (kept through them) */
+  held: number;
+  /** the connectors it gave up waiting to take (each looked past once), when it last did, and how many times it went another way */
+  gaveUp: Edge[] | null;
+  rerouteT: number;
+  reroutes: number;
   /** it has stopped at the stop line of the lane it is on */
   stopped: boolean;
 }
@@ -222,6 +230,8 @@ const accOf = (v: SimVehicle) => (v.truck ? TRUCK_A : A_MAX);
 const hwOf = (v: SimVehicle) => (v.truck ? TRUCK_HW : T_HEAD);
 /** seconds of waiting after which a car goes before cars that can still stop for it */
 let PATIENCE = 6;
+/** seconds kept waiting where it turns off before a car looks for another way */
+let REROUTE = 40;
 const HALF_W = 0.9;
 /** paths closer than this (centre to centre) are within reach of each other: cars on them could touch */
 const NEAR = 2.4;
@@ -235,7 +245,7 @@ let GAP = 1.5;
  */
 function applyTuning(t: Tuning) {
   A_MAX = t.accel; B_COMF = t.brake; T_HEAD = t.headway; S0 = t.minGap;
-  PATIENCE = t.patience; GAP = t.yieldGap; YIELD_V = t.yieldSpeed;
+  PATIENCE = t.patience; REROUTE = t.rerouteAfter; GAP = t.yieldGap; YIELD_V = t.yieldSpeed;
   PED_WALK = t.pedWalk; PED_YIELD = t.pedYield; PED_V = t.pedSpeed;
   TRUCK_A = t.truckAccel; TRUCK_HW = t.truckHeadway;
 }
@@ -377,6 +387,7 @@ export class SketchSim {
   private collisions = 0;
   private deadlocks = 0;
   private changes = 0;
+  private reroutes = 0;
   /** pairs of cars overlapping last step ("a-b") */
   private touching = new Set<string>();
   /** the zebras, and where they run over each lane and connector */
@@ -571,7 +582,7 @@ export class SketchSim {
 
   reset() {
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
-    this.log = []; this.frames = []; this.drawn.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0;
+    this.log = []; this.frames = []; this.drawn.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0;
     this.replay = []; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
     for (const x of this.crossings) x.ped = newPed();
@@ -985,7 +996,7 @@ export class SketchSim {
       s.next = this.t + this.gap(s.rate);
       // (no faster than it can stop from behind the last car in)
       const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - S0 - 1)));
-      const v: SimVehicle = { id: this.nextId++, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : 1, truck, len };
+      const v: SimVehicle = { id: this.nextId++, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : 1, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0 };
       s.truck = undefined;
       // (speeds varying: its own share of the lanes' speed; no random number drawn when they don't, so runs stay as they were)
       const spread = this.tuning.speedSpread / 100;
@@ -1268,6 +1279,29 @@ export class SketchSim {
       held.set(v, { gap, lead });
     }
 
+    // another way: at the head of the queue where it turns off, kept waiting there long (not by lights), a connector further along its
+    // lane that leads where it is going too (the shortest such way; none it gave up on before; then as long again before it looks once more)
+    const rt = this.routes;
+    if (rt) for (const v of this.vehicles) {
+      const x = v.exit, dest = v.dest;
+      if (!x || !dest || v.held < REROUTE || this.t - v.rerouteT < REROUTE || v.gaveUp?.includes(x) || v.edge.kind !== "lane" || this.along(v.edge, v.pos, this.exitS(x)) > 10) continue;
+      // (nor queued behind another on its lane: the one at the head looks)
+      const ahead = /^car (\d+)/.exec(v.why ?? ""), lead = ahead && this.vehicles.find(w => w.id === Number(ahead[1]));
+      if (lead && lead.edge === v.edge) continue;
+      (v.gaveUp ??= []).push(x); v.rerouteT = this.t;
+      let best: Edge | null = null, bc = Infinity;
+      for (const o of v.edge.outs) {
+        if (v.gaveUp.includes(o.conn)) continue;
+        const d = this.along(v.edge, v.pos, o.s);
+        if (d < -0.01 || (v.edge.ring && d > v.edge.len - 1)) continue;
+        const c = d + rt.viaConnector(o.conn.id, dest);
+        if (c < bc) { bc = c; best = o.conn; }
+      }
+      if (!best) continue;
+      v.goal = { lane: v.edge, conn: best }; v.exit = best; v.reroutes++; this.reroutes++;
+      this.note({ what: "reroute", car: v.id, from: x.key, to: best.key, waited: r2(v.still) });
+    }
+
     // changing lane: to get where it is going, as soon as there is room (well before it has to, only where it is no worse off);
     // or to overtake, a slower car in its way and clearly more room on the other
     for (const v of this.vehicles) {
@@ -1308,6 +1342,7 @@ export class SketchSim {
       drove.set(v, move);
       v.v = nv;
       v.still = nv < 0.1 ? v.still + dt : 0;
+      v.held = nv < 0.1 && !v.why?.startsWith("signal") ? v.held + dt : nv < 0.1 ? v.held : 0;
       for (let guard = 0; move > 0 && guard < 4; guard++) {
         const e = v.edge;
         if (e.kind === "conn") {
@@ -1489,7 +1524,7 @@ export class SketchSim {
     return {
       t: this.t, vehicles: n, spawned: this.spawned, finished: this.finished, overlaps,
       meanSpeed: n ? (this.vehicles.reduce((a, v) => a + v.v, 0) / n) * 3.6 : 0,
-      waiting: this.vehicles.filter(v => v.still >= 20).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes,
+      waiting: this.vehicles.filter(v => v.still >= 20).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes,
       pedsCrossed: this.crossings.reduce((a, x) => a + x.ped.crossed, 0), pedsWaiting: this.crossings.reduce((a, x) => a + x.ped.waiting, 0),
     };
   }
@@ -1535,7 +1570,7 @@ export class SketchSim {
       /** the exit it is going to (by the shortest way), or null (wandering) */
       dest: v.dest,
       changeTo: this.hop(v)?.n.lane.key ?? null, goal: v.goal && v.goal.lane !== v.edge ? v.goal.conn?.key ?? `end:${v.goal.lane.key}` : null,
-      why: v.why, still: v.still, p: pose.p, d: pose.d, route,
+      why: v.why, still: v.still, reroutes: v.reroutes, p: pose.p, d: pose.d, route,
     };
   }
 
