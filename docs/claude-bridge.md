@@ -92,9 +92,11 @@ Changes an agent may ask for (`app`; no others, nothing written by path):
 
 `editor`: `plan` or `scratch` (the Sketch window, if open); without it, the editor the user is at.
 
-Every action's arguments are checked as they are given: `true` or `false` for a switch (not `"yes"` or `1`), a string
-for a name or text (not `42`), a number for a number; anything else, an unknown panel or layer, or a missing argument,
-is an error saying what was expected, and nothing is changed.
+Every action's arguments are checked as they are given: `true` or `false` for a switch (not `"yes"`, `1` or `null`), a
+string for a name or text (not `42`), a number for a number; and within what the editor offers: `view` a scale from
+0.3 to 80 px a metre and x, y within 1,000 km of the plan's origin, `speed` 1, 3, 10 or 30, `select`/`goTo` something
+that is there (a car on the plan now), `panel` its `open` given. Anything else, an unknown panel or layer, or a missing
+argument, is an error saying what was expected, and nothing is changed.
 
 - `state { keys: ["ui"] }`: all of it (also in the default answer with no keys).
 - `state { path: "editors.plan.selection" }` (dots or slashes): one part. A path that isn't there is an error naming

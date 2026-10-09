@@ -799,7 +799,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const target = (a: Record<string, unknown>): SearchTarget => {
     const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "car"];
     if (!kinds.includes(kind)) throw new Error(`kind: one of ${kinds.join(", ")}`);
-    return kind === "car" ? { kind, id: argOf(a, "id", "number", true)! } : { kind: kind as Exclude<SearchTarget["kind"], "car">, id: argOf(a, "id", "string", true)! };
+    const sk = live.current.sketch;
+    if (kind === "car") {
+      const id = argOf(a, "id", "number", true)!;
+      if (!sim.current?.poses().some(c => c.id === id)) throw new Error(`no car ${id} on the ${page ? "plan" : "sketch"} now`);
+      return { kind, id };
+    }
+    const id = argOf(a, "id", "string", true)!;
+    const there = kind === "road" ? sk.roads.some(x => x.id === id) : kind === "lane" ? sk.lanes.some(x => x.id === id) : kind === "connector" ? sk.connectors.some(x => x.id === id)
+      : kind === "junction" ? sk.junctions.some(x => x.id === id) : kind === "link" ? (sk.links ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
+    if (!there) throw new Error(`no ${kind} ${id}`);
+    return { kind: kind as Exclude<SearchTarget["kind"], "car">, id };
   };
   // ------------------------------------------------------------ the Claude bridge (docs/claude-bridge.md): what this editor offers an agent
   // (registered again after each render, so they see the editor as it is; taken away when it goes)
@@ -812,13 +822,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       bridgeApp.register("goTo", a => { goTo(target(a)); }),
       bridgeApp.register("view", a => {
         const x = argOf(a, "x", "number", true)!, y = argOf(a, "y", "number", true)!, scale = argOf(a, "scale", "number");
+        if (Math.abs(x) > 1e6 || Math.abs(y) > 1e6) throw new Error("x and y: metres from the plan's origin, within 1,000 km of it");
+        if (scale !== undefined && (scale < 0.3 || scale > 80)) throw new Error("scale: pixels a metre, from 0.3 to 80 (the editor's zoom)");
         centerOnPts([{ x, y }], scale === undefined);
         if (scale !== undefined) { view.current = { ...view.current, scale }; redraw(); }
       }),
       // (as the Run button: the cars made the first time, out of the replay; running already, left so)
       bridgeApp.register("run", () => { if (!running) play(); return { running: true }; }),
       bridgeApp.register("pause", () => { setRunning(false); return { running: false }; }),
-      bridgeApp.register("speed", a => { const v = argOf(a, "speed", "number", true)!; if (v <= 0) throw new Error("\"speed\" must be more than 0"); setSimSpeed(v); return { speed: v }; }),
+      bridgeApp.register("speed", a => { const v = argOf(a, "speed", "number", true)!; if (![1, 3, 10, 30].includes(v)) throw new Error("\"speed\": 1, 3, 10 or 30 (as the speed buttons)"); setSimSpeed(v); return { speed: v }; }),
       bridgeApp.register("replay", a => {
         if (!sim.current || !replayRange) throw new Error("nothing kept to replay yet: run the cars first");
         const t = Math.max(replayRange.from, Math.min(replayRange.to, argOf(a, "t", "number", true)!));
@@ -3002,5 +3014,11 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   ctx.font = "10px ui-monospace, monospace"; ctx.fillStyle = dark ? "#a1a1aa" : "#78716c"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
   // (where the pointer is: metres, and on Earth where the sketch has a place there)
   const ll = cur && sk.geo ? unproject(sk.geo, cur.p) : null;
-  ctx.fillText(`${cur ? `${cur.p.x.toFixed(1)}, ${cur.p.y.toFixed(1)} m · ` : ""}${ll ? `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)} · ` : ""}${v.scale.toFixed(1)} px/m`, 8, h - 6);
+  const text = `${cur ? `${cur.p.x.toFixed(1)}, ${cur.p.y.toFixed(1)} m · ` : ""}${ll ? `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)} · ` : ""}${v.scale.toFixed(1)} px/m`;
+  // (on a pill, as the hint bar, so it reads over the imagery; drawn last, over the labels)
+  const tw = ctx.measureText(text).width;
+  ctx.fillStyle = dark ? "rgba(24,24,27,0.85)" : "rgba(255,255,255,0.85)";
+  ctx.beginPath(); ctx.roundRect(4, h - 19, tw + 10, 16, 4); ctx.fill();
+  ctx.fillStyle = dark ? "#d4d4d8" : "#44403c";
+  ctx.fillText(text, 9, h - 6);
 }

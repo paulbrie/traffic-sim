@@ -88,7 +88,7 @@ const editor = (tool: Tool): EditorUi => ({
   dialogs: { search: { open: false, query: "" }, console: { open: false, kind: "all", text: "", clearedAt: -1 }, settings: false, optimizer: { open: false, junction: null, chosen: [], effort: "quick", stage: "setup" } },
   tables: { junctions: { by: "delay", flip: false, shown: 12 }, roads: { by: "delay", flip: false, shown: 12 } },
 });
-export const freshEditor = (): EditorUi => editor("lane");
+export const freshEditor = (): EditorUi => editor("select");
 
 /** the inspector's panels (their ids): the only ones that can be folded away */
 export const PANEL_IDS = ["selection", "car", "crossing", "test-in-sketch", "background", "traffic", "fuel", "junction-results", "road-results", "demand"];
@@ -206,7 +206,7 @@ export function offerSketchUiToBridge() {
     }),
     // a panel of the inspector folded away or opened: { id, open }
     bridgeApp.register("panel", a => {
-      const id = argOf(a, "id", "string", true)!, open = argOf(a, "open", "boolean") ?? true;
+      const id = argOf(a, "id", "string", true)!, open = argOf(a, "open", "boolean", true)!;
       if (!PANEL_IDS.includes(id)) throw new Error(`no panel "${id}": ${PANEL_IDS.join(", ")}`);
       const p = sketchUi.getValue().panels, next = { ...p.closed };
       if (open) delete next[id]; else next[id] = true;

@@ -52,7 +52,7 @@ export function argOf(a: Record<string, unknown>, key: string, type: "string", r
 export function argOf(a: Record<string, unknown>, key: string, type: "number", required?: boolean): number | undefined;
 export function argOf(a: Record<string, unknown>, key: string, type: "boolean" | "string" | "number", required = false): unknown {
   const v = a[key];
-  if (v === undefined || v === null) { if (required) throw new Error(`"${key}" is needed (${type === "boolean" ? "true or false" : `a ${type}`})`); return undefined; }
+  if (v === undefined) { if (required) throw new Error(`"${key}" is needed (${type === "boolean" ? "true or false" : `a ${type}`})`); return undefined; }
   if (typeof v !== type || (type === "number" && !Number.isFinite(v as number))) throw new Error(`"${key}" must be ${type === "boolean" ? "true or false" : `a ${type}`}, not ${JSON.stringify(v)}`);
   return v;
 }
