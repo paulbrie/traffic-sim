@@ -68,8 +68,10 @@ function frame(withStats: boolean) {
  * One go: the simulated time owed since the last (the real time passed, times the speed asked for) stepped
  * in tenths, for at most `BUDGET` ms, then a frame posted, so frames keep coming however slow a step is.
  * What a go can't step stays owed (up to a second of it: a sim slower than asked falls behind, the page doesn't).
+ * Only whole steps of `STEP`, the rest left owed: steps of whatever the page's timing left over would make the same
+ * seed run differently each time (cars meeting a step earlier or later go on differently).
  */
-const BUDGET = 25;
+const BUDGET = 25, STEP = 0.1;
 let owed = 0;
 function tick() {
   timer = null;
@@ -78,11 +80,12 @@ function tick() {
   owed = Math.min(Math.max(1, speed), owed + ((now - last) / 1000) * speed);
   last = now;
   const t0 = sim.t;
-  while (owed > 1e-6 && performance.now() - now < BUDGET) { const h = Math.min(0.1, owed); sim.step(h); owed -= h; }
+  while (owed >= STEP - 1e-9 && performance.now() - now < BUDGET) { sim.step(STEP); owed -= STEP; }
   rateSim += sim.t - t0;
   if (now - rateSince > 1000) { rate = rateSim / ((now - rateSince) / 1000); rateSim = 0; rateSince = now; }
-  frame(false);
-  timer = setTimeout(tick, owed > 0.1 ? 0 : 16);
+  // (a frame only when the cars have moved: the page draws them on their way between the last two it had)
+  if (sim.t !== t0) frame(false);
+  timer = setTimeout(tick, owed >= STEP ? 0 : 16);
 }
 
 self.onmessage = (e: MessageEvent<ToSimWorker>) => {

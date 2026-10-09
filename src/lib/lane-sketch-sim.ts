@@ -805,7 +805,9 @@ export class SketchSim {
     for (const x of this.crossings) x.ped = newPed();
     // (from the start again: the same random numbers, the same run)
     this.rnd = mulberry32(this.seed); this.pedRnd = mulberry32((this.seed * 7919) ^ 0x9ed5); this.jRnd = mulberry32((this.seed * 104729) ^ 0x3c6e); this.bRnd = mulberry32((this.seed * 15485863) ^ 0x7f4a);
-    for (const s of this.sources) { s.next = this.gap(s.rate); delete s.wait; s.held = 0; }
+    // (and the cars numbered from 1 again, each lane's next one not drawn yet: those numbers settle who goes first)
+    this.nextId = 1;
+    for (const s of this.sources) { s.next = this.gap(s.rate); delete s.wait; delete s.truck; s.held = 0; }
     for (const j of this.journeys) Object.assign(j, { next: this.jGap(j.def.rate), sent: 0, arrived: 0, tripSum: 0, noRoute: 0 });
   }
 
