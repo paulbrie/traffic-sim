@@ -5,7 +5,7 @@ import { ClipboardCopy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import type { Sketch } from "@/lib/lane-sketch";
-import type { SimStats } from "@/lib/lane-sketch-sim";
+import type { JunctionStats, SimStats } from "@/lib/lane-sketch-sim";
 import { cn } from "@/lib/utils";
 import { InspectorPanel } from "./inspector-panel";
 
@@ -69,3 +69,21 @@ export function JunctionResults({ sketch, stats, onGo }: { sketch: Sketch; stats
 
 const fmtS = (s: number) => (s < 60 ? `${s.toFixed(s < 10 ? 1 : 0)} s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`);
 
+
+/** a junction's results so far, for its own panel: vehicles an hour, the delay each had, the queue, the fuel (nothing before any traffic) */
+export function JunctionLine({ st, t }: { st: JunctionStats | undefined; t: number }) {
+  if (!st || (!st.through && !st.queueMax)) return null;
+  const delay = st.through ? st.delay / st.through : st.delay;
+  return (
+    <div className="grid grid-cols-4 gap-1 rounded-md border bg-muted/40 p-1.5 text-center" title="Since the cars started, on the last 100 m of its ways in and on it">
+      {[
+        ["veh/h", String(Math.round((st.through / Math.max(1, t)) * 3600))],
+        ["delay each", fmtS(delay)],
+        ["queue", `${st.queueMean.toFixed(1)}/${st.queueMax}`],
+        ["fuel", st.fuel < 1 ? `${Math.round(st.fuel * 1000)} mL` : `${st.fuel.toFixed(1)} L`],
+      ].map(([k, v]) => (
+        <div key={k}><div className={cn("font-mono text-xs font-semibold tabular", k === "delay each" && delay >= 30 && "text-amber-700 dark:text-amber-400", k === "delay each" && delay >= 60 && "text-destructive")}>{v}</div><div className="text-[10px] text-muted-foreground">{k}</div></div>
+      ))}
+    </div>
+  );
+}

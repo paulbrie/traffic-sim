@@ -29,7 +29,8 @@ import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField, Stepper } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
 import { FuelPanel, fmtFuel } from "@/components/v2/fuel-panel";
-import { JunctionResults } from "@/components/v2/junction-results";
+import { JunctionLine, JunctionResults } from "@/components/v2/junction-results";
+import { RoadResults } from "@/components/v2/road-results";
 import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
@@ -1133,12 +1134,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           ) : (
             <SelectionPanel sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
               selPt={selPt} onCurvePoint={curvePoint} onDeletePoint={deletePoint}
-              onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} now={stats?.t ?? null} />
+              onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} now={stats?.t ?? null} results={stats} />
           )}
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
+          {stats ? <RoadResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "road", id })} /> : null}
           <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
@@ -1487,12 +1489,14 @@ function GeometrySection({ sketch, lanes, lead }: { sketch: Sketch; lanes: strin
   );
 }
 
-function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover, now = null }: {
+function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover, now = null, results = null }: {
   sketch: Sketch; sel: Sel; setSel: (s: Sel) => void; contents: Map<string, JunctionContents>; junctionSel: (ids: string[]) => Sel;
   selPt: { lane: string; i: number } | null; onCurvePoint: (lane: string, i: number) => void; onDeletePoint: (lane: string, i: number) => void;
   onGroup: () => void; onJunctionAround: () => void; onReverse: () => void; onDelete: () => void; onHover: (h: Hover | null) => void;
   /** the cars' time while they run (marked on a signal group's timeline) */
   now?: number | null;
+  /** the cars' results so far (a junction's own shown with it) */
+  results?: SimStats | null;
 }) {
   const { edit: editSketch, show } = useSketchStore();
   const road = sel.road ? sketch.roads.find(r => r.id === sel.road) : null;
@@ -1563,6 +1567,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
         <p className="text-xs text-muted-foreground">
           {plural(c.lanes.length, "lane")}{c.lanes.length ? ` (${c.lanes.join(", ")})` : ""}, {plural(c.connectors.length, "connector")} on it · joins {c.roads.map(roadName).join(", ") || "no road"}
         </p>
+        {results && <JunctionLine st={results.junctions?.find(x => x.id === junction.id)} t={results.t} />}
         <p className="text-[11px] text-muted-foreground">Drag its corners to reshape it; double-click its edge to add a corner, a corner to take it out; Alt-click a corner to round it off (again to make it sharp). Moving or turning it takes what is on it along.</p>
         <div className="grid gap-1">
           <span className="text-xs text-muted-foreground">Surface</span>
