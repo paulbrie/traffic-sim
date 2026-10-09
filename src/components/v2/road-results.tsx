@@ -4,10 +4,10 @@ import { useMemo, useState } from "react";
 import { ClipboardCopy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { laneById, laneLength, pointAt, type Sketch } from "@/lib/lane-sketch";
+import type { Sketch } from "@/lib/lane-sketch";
 import type { SimStats } from "@/lib/lane-sketch-sim";
 import { cn } from "@/lib/utils";
-import { compassNames } from "./compass-names";
+import { roadNames } from "./compass-names";
 import { InspectorPanel } from "./inspector-panel";
 
 /** a road's results as the sim keeps them (see `RoadStats` in lane-sketch-sim.ts) */
@@ -81,17 +81,6 @@ export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: Si
       {rows.length > n && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setN(k => k + 25)}>Show {Math.min(25, rows.length - n)} more ({rows.length - n} of {rows.length} roads not shown yet)</button>}
     </InspectorPanel>
   );
-}
-
-/** each road's name, those sharing one told apart by where they lie ("Strada Zimbrului (N)", "(S)") */
-function roadNames(sk: Sketch): Map<string, string> {
-  // (a road's middle: the middle of its lanes' middles)
-  const mid = (lanes: string[]) => {
-    const ps = lanes.flatMap(id => { const l = laneById(sk, id); return l ? [pointAt(l.shape, laneLength(l.shape) / 2).p] : []; });
-    return ps.length ? { x: ps.reduce((a, p) => a + p.x, 0) / ps.length, y: ps.reduce((a, p) => a + p.y, 0) / ps.length } : { x: 0, y: 0 };
-  };
-  const ns = compassNames(sk.roads, r => r.name, r => mid(r.lanes));
-  return new Map(sk.roads.map((r, i) => [r.id, ns[i]]));
 }
 
 const fmtS = (s: number) => (s < 60 ? `${s.toFixed(s < 10 ? 1 : 0)} s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`);

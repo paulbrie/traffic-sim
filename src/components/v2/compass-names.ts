@@ -1,4 +1,4 @@
-import type { Pt } from "@/lib/lane-sketch";
+import { laneById, laneLength, pointAt, type Pt, type Sketch } from "@/lib/lane-sketch";
 
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
@@ -22,4 +22,16 @@ export function compassNames<T>(items: T[], name: (x: T) => string, at: (x: T) =
     seen.set(n, k);
     return `${n.slice(0, -1)} ${k})`;
   });
+}
+
+/** each road's name (of `ids` only, if given: told apart among those), those sharing one told apart by where they lie ("Strada Zimbrului (N)", "(S)") */
+export function roadNames(sk: Sketch, ids?: string[]): Map<string, string> {
+  const roads = ids ? ids.flatMap(id => sk.roads.filter(r => r.id === id)) : sk.roads;
+  const ns = compassNames(roads, r => r.name, r => roadMiddle(sk, r.lanes));
+  return new Map(roads.map((r, i) => [r.id, ns[i]]));
+}
+/** a road's middle: the middle of its lanes' middles */
+export function roadMiddle(sk: Sketch, lanes: string[]): Pt {
+  const ps = lanes.flatMap(id => { const l = laneById(sk, id); return l ? [pointAt(l.shape, laneLength(l.shape) / 2).p] : []; });
+  return ps.length ? { x: ps.reduce((a, p) => a + p.x, 0) / ps.length, y: ps.reduce((a, p) => a + p.y, 0) / ps.length } : { x: 0, y: 0 };
 }

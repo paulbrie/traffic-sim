@@ -13,6 +13,21 @@ export interface SearchCommand { title: string; sub: string; run: () => void }
 export interface Item { kind: string; title: string; sub: string; id: string; to: SearchTarget | { kind: "command"; run: () => void }; hay: string }
 
 const MAX = 60;
+
+/**
+ * What is typed between Cmd/Ctrl+K and the search box having the focus (it opens a frame later): the editor
+ * keeps those keys for it (`opening`) rather than taking them as its own (J, the junction tool), and the box
+ * starts with them.
+ */
+export const searchTypeahead = { opening: false, text: "" };
+/** a key typed while the search is opening, kept for it: true if it was (the editor then leaves it) */
+export function keepForSearch(e: KeyboardEvent): boolean {
+  if (!searchTypeahead.opening || e.metaKey || e.ctrlKey || e.altKey) return false;
+  if (e.key === "Backspace") searchTypeahead.text = searchTypeahead.text.slice(0, -1);
+  else if (e.key.length === 1) searchTypeahead.text += e.key;
+  else return false;
+  return true;
+}
 const fmt = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toFixed(m < 10 ? 1 : 0)} m`);
 /** lower case without accents, so "garii" finds "Gării" and "sos" finds "Șoș" */
 const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
@@ -92,11 +107,18 @@ export function SketchSearch({ sketch, contents, cars, commands = [], onGo, onCl
   commands?: SearchCommand[];
   onGo: (to: SearchTarget) => void; onClose: () => void;
 }) {
-  const [q, setQ] = useState(""), [at, setAt] = useState(0);
+  const [q, setQ] = useState(() => searchTypeahead.text), [at, setAt] = useState(0);
   // (autoFocus can lose to whatever had focus as the box opened (a closing panel's button): focus it again
   // once it is up, so typing and Esc are the box's)
   const box = useRef<HTMLInputElement>(null);
-  useEffect(() => { const f = requestAnimationFrame(() => box.current?.focus()); return () => cancelAnimationFrame(f); }, []);
+  useEffect(() => {
+    const f = requestAnimationFrame(() => {
+      box.current?.focus();
+      // (what was typed meanwhile, the box's now)
+      if (searchTypeahead.opening) { setQ(searchTypeahead.text); searchTypeahead.opening = false; searchTypeahead.text = ""; }
+    });
+    return () => { cancelAnimationFrame(f); searchTypeahead.opening = false; searchTypeahead.text = ""; };
+  }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const items = useMemo(() => [...commands.map((c, i) => ({ kind: "Command", title: c.title, sub: c.sub, id: `cmd${i}`, to: { kind: "command" as const, run: c.run }, hay: fold(`command ${c.title} ${c.sub}`) })), ...catalogue(sketch, contents, cars)], []);
   const hits = useMemo(() => search(items, q), [items, q]);

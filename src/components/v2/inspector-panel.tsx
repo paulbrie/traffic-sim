@@ -31,10 +31,10 @@ export function InspectorPanel({ id, title, icon, actions, className, children }
     redraw(x => x + 1);
   };
   return (
-    <section className={cn("grid border-b px-3", open ? "gap-2 pt-1.5 pb-3" : "py-0.5", className)} aria-label={typeof title === "string" ? title : undefined}>
+    <section className={cn("grid grid-cols-[minmax(0,1fr)] border-b px-3", open ? "gap-2 pt-1.5 pb-3" : "py-0.5", className)} aria-label={typeof title === "string" ? title : undefined}>
       <div className="flex items-center gap-1">
         <button type="button" onClick={toggle} aria-expanded={open} title={open ? "Fold away" : "Open"}
-          className="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1.5 text-left hover:bg-muted/60">
+          className="-ml-1 flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1.5 text-left hover:bg-muted/60">
           <ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
           {icon}
           <h3 className="truncate text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{title}</h3>

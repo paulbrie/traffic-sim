@@ -36,7 +36,8 @@ import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
-import { SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
+import { roadNames } from "@/components/v2/compass-names";
+import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/sketch-replay-bar";
 import { CONSOLE_HEIGHT, ProblemConsole } from "@/components/v2/problem-console";
 import { bridgeApp, bridgeState, setBridgeCanvas, setBridgeToWorld } from "@/state/bridge-registry";
@@ -670,10 +671,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       // (the page's and a sketch window over it: the window's while it has the focus, the page's otherwise)
       const mine = !!panel.current?.contains(document.activeElement), other = !mine && !!(document.activeElement as HTMLElement | null)?.closest?.('[aria-label="Lane sketch"]');
       if (page ? other : !mine) return;
+      // (typed while the search opens: its, not the editor's)
+      if (keepForSearch(e)) { e.preventDefault(); e.stopPropagation(); return; }
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault(); e.stopPropagation();
         const cars = sim.current?.poses().map(c => ({ id: c.id })) ?? [];
-        setSearchOpen(o => (o ? null : { cars }));
+        setSearchOpen(o => { if (!o) { searchTypeahead.opening = true; searchTypeahead.text = ""; } return o ? null : { cars }; });
       }
     };
     window.addEventListener("keydown", key, true);
@@ -2011,7 +2014,9 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
   const orphans = sketch.lanes.filter(l => !inRoad.has(l.id));
   const orphanJunction = new Map<string, string>();
   for (const j of sketch.junctions) for (const id of contents.get(j.id)?.lanes ?? []) if (!inRoad.has(id)) orphanJunction.set(id, j.name);
-  const roadName = (id: string) => sketch.roads.find(r => r.id === id)?.name ?? id;
+  // (roads of the same name told apart by where they lie, as in the roads table: "Bulevardul Decebal (NE)")
+  const names = useMemo(() => roadNames(sketch), [sketch]);
+  const roadName = (id: string) => names.get(id) ?? id;
   const laneName = (id: string) => { const r = roadOf(sketch, id); return r ? `${id} (${r.name})` : id; };
   const piece = (p: Partial<Piece>): Piece => ({ lanes: p.lanes ?? [], connectors: p.connectors ?? [], junctions: p.junctions ?? [] });
   const pick = (e: React.MouseEvent, s: Sel) => setSel(e.shiftKey ? { lanes: [...new Set([...sel.lanes, ...s.lanes])], connectors: [...new Set([...sel.connectors, ...s.connectors])], junctions: [...new Set([...sel.junctions, ...s.junctions])], road: null } : s);
@@ -2072,7 +2077,7 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
         return [
           row({
             key: `road:${r.id}`, depth: 0, kids: true, on: sel.road === r.id, sel: { ...NO_SEL, lanes: r.lanes, road: r.id }, zoom: piece({ lanes: r.lanes }),
-            label: <span className="font-medium">{r.name}</span>, note: plural(r.lanes.length, "lane"), title: js.length ? `Joined at ${js.join(", ")}` : "Joined at no junction",
+            label: <span className="font-medium">{roadName(r.id)}</span>, note: plural(r.lanes.length, "lane"), title: js.length ? `Joined at ${js.join(", ")}` : "Joined at no junction",
           }),
           ...(open(`road:${r.id}`) ? r.lanes.map(id => laneRow(id, 1)) : []),
         ];
@@ -2096,10 +2101,11 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
             label: <span className="font-medium">{j.name}</span>, note: c.roads.length ? plural(c.roads.length, "road") : plural(c.connectors.length, "connector"),
           }),
           ...(open(k) ? [
-            ...group(`${k}:roads`, "Roads it joins", c.roads.length, c.roads.map(id => {
+            // (those of the same name told apart by which way from the junction they lie: "Bulevardul Decebal (NE)", "(SW)")
+            ...(() => { const here = roadNames(sketch, c.roads); return group(`${k}:roads`, "Roads it joins", c.roads.length, c.roads.map(id => {
               const r = sketch.roads.find(x => x.id === id)!;
-              return row({ key: `${k}:road:${id}`, depth: 2, on: sel.road === id, sel: { ...NO_SEL, lanes: r.lanes, road: id }, zoom: piece({ lanes: r.lanes }), label: roadName(id), note: plural(r.lanes.length, "lane") });
-            })),
+              return row({ key: `${k}:road:${id}`, depth: 2, on: sel.road === id, sel: { ...NO_SEL, lanes: r.lanes, road: id }, zoom: piece({ lanes: r.lanes }), label: here.get(id) ?? roadName(id), note: plural(r.lanes.length, "lane") });
+            })); })(),
             ...group(`${k}:lanes`, "Lanes on it", c.lanes.length, c.lanes.map(id => laneRow(id, 2, `${k}:`))),
             ...group(`${k}:conns`, "Connectors", c.connectors.length, c.connectors.map(id => connRow(id, 2, `${k}:`))),
           ] : []),
