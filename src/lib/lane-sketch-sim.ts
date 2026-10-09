@@ -326,6 +326,12 @@ function applyTuning(t: Tuning) {
 }
 /** seconds a car takes to move over to the lane it changes to */
 const SHIFT_T = 2;
+/** how far past the place where two connectors meet on a lane the zone between them goes (m): a car's length and a metre */
+const MEET_CLEAR = LEN + 1;
+/** lanes near each other along this much of their length (m) or more: running alongside, not crossing */
+const SIDE_LEN = 10;
+/** past where a connector and the lane it leaves part (m): a car's back there is still in reach of one turning off */
+const FORK_REACH = 2;
 /** a connector shorter than this (m) between one lane's end and another's start: the two are one way on (no crossing between them) */
 const CHAIN_GAP = 5;
 /** a way in whose first metres (this many) cross another's way: no car let in while that crossing is taken, or one is
@@ -636,7 +642,9 @@ export class SketchSim {
     const roadOf = new Map(sk.roads.flatMap(rd => rd.lanes.map(id => [id, rd.id] as const)));
     const all = [...edges.values()], boxes = new Map(all.map(e => [e, bounds(paths.get(e.key)!)]));
     const attached = (c: Edge, l: Edge) => c.kind === "conn" && (c.from!.lane === l || c.to!.lane === l);
-    const chained = (X: Edge, Y: Edge) => X.kind === "lane" && Y.kind === "lane" && X.outs.some(o => o.conn.to!.lane === Y && o.conn.len < CHAIN_GAP && o.s >= X.len - 1 && o.conn.to!.s <= 1);
+    const chained = (X: Edge, Y: Edge) => X.kind === "lane" && Y.kind === "lane" && X.outs.some(o => o.conn.to!.lane === Y && o.conn.len < CHAIN_GAP && o.s >= X.len - 1 && o.conn.to!.s <= 1
+      // (going on the same way: not turning back, a U-turn's lanes side by side)
+      && X.locate(X.len).d.x * Y.locate(0).d.x + X.locate(X.len).d.y * Y.locate(0).d.y > 0.7);
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
       let A = all[i], B = all[j];
       // (the connector first, where one is attached to the other)
@@ -661,11 +669,17 @@ export class SketchSim {
         if (chained(A, B) || chained(B, A)) continue;
         // (one passing over or under the other, at another level there: they don't meet)
         if (Math.abs(this.zOf(A, r.at) - this.zOf(B, r.otherAt)) >= 0.5) continue;
+        // (two lanes running alongside, never nearer than a car's width and a bit: cars on them pass one another, not a crossing)
+        if (A.kind === "lane" && B.kind === "lane" && r.a1 - r.a0 >= SIDE_LEN && r.best >= 2 * HALF_W + 0.15) continue;
         // (lanes merging: from lanes of one road; from different roads they are traffic meeting, giving way as at a crossing)
         const join = A.kind === "conn" && B.kind === "conn" && A.to!.lane === B.to!.lane && Math.abs(A.to!.s - B.to!.s) < 1
           && r.a1 > A.len - 0.5 && r.b1 > B.len - 0.5 && !!roadOf.get(A.from!.lane.id) && roadOf.get(A.from!.lane.id) === roadOf.get(B.from!.lane.id);
-        A.conflicts.push({ other: B, at: r.at, otherAt: r.otherAt, before: r.at - r.a0, after: r.a1 - r.at, otherBefore: r.otherBefore, otherAfter: r.otherAfter, join });
-        B.conflicts.push({ other: A, at: r.otherAt, otherAt: r.at, before: r.otherBefore, after: r.otherAfter, otherBefore: r.at - r.a0, otherAfter: r.a1 - r.at, join });
+        // (two connectors ending at one place on a lane, giving way as at a crossing: past the place where they meet the other's body is
+        // still there, so the zone goes on a car's length along the lane, either way)
+        const meet = !join && A.kind === "conn" && B.kind === "conn" && A.to!.lane === B.to!.lane && Math.abs(A.to!.s - B.to!.s) < 1 && r.a1 > A.len - 0.5 && r.b1 > B.len - 0.5;
+        const after = meet ? Math.max(r.a1 - r.at, MEET_CLEAR) : r.a1 - r.at, otherAfter = meet ? Math.max(r.otherAfter, MEET_CLEAR) : r.otherAfter;
+        A.conflicts.push({ other: B, at: r.at, otherAt: r.otherAt, before: r.at - r.a0, after, otherBefore: r.otherBefore, otherAfter, join });
+        B.conflicts.push({ other: A, at: r.otherAt, otherAt: r.at, before: r.otherBefore, after: otherAfter, otherBefore: r.at - r.a0, otherAfter: after, join });
       }
     }
     for (const e of all) {
@@ -1236,6 +1250,18 @@ export class SketchSim {
     }
   }
 
+  /** is `v` standing in a zone of its edge with `w`'s edge, or the one `w` goes on to (in its way)? */
+  private inWayOf(v: SimVehicle, w: SimVehicle) {
+    const theirs = [w.edge, w.edge.kind === "conn" ? w.edge.to!.lane : w.exit];
+    return v.edge.conflicts.some(k => !k.join && theirs.includes(k.other) && v.pos > k.at - k.before + 0.1 && v.pos - v.len < k.at + k.after);
+  }
+
+  /** of two cars each waiting for the other: whether `v` goes — the one in the other's way, that way clear; else the lower number */
+  private goesFirst(v: SimVehicle, w: SimVehicle) {
+    const a = this.inWayOf(v, w), b = this.inWayOf(w, v);
+    return a === b ? v.id < w.id : a;
+  }
+
   /** a car with its front at `pos` on `e`, past the start of the zones that the one starting at `zs` is part of */
   private inRun(e: Edge, pos: number, zs: number) {
     return e.runs.some(q => q.s + 0.1 < pos && q.s <= zs + 0.01 && zs <= q.e);
@@ -1362,6 +1388,9 @@ export class SketchSim {
       // (on a ring: how far before or past the crossing, along it)
       const toCross = (k: Conflict, w: SimVehicle) => (k.other.ring ? ((((k.otherAt - w.pos) % k.other.len) + k.other.len * 1.5) % k.other.len) - k.other.len / 2 : k.otherAt - w.pos);
       if (s.lane.conflicts.some(k => !k.join && k.at - k.before < SPAWN_CLEAR && (byEdge.get(k.other) ?? NO_VEHICLES).some(w => { const d = toCross(k, w); return d < k.otherBefore + SPAWN_COMING && d > -(k.otherAfter + w.len); }))) continue;
+      // (nor, its lane starting across another's way, unless there is room for it to stand clear past that crossing: one stopped
+      // in it, waiting behind those ahead, would hold up the traffic crossing there)
+      if (s.lane.conflicts.some(k => !k.join && k.at - k.before < SPAWN_CLEAR && first < k.at + k.after + len + S0)) continue;
       if (jw) s.wait!.shift(); else s.next = this.t + this.gap(s.rate);
       if (s.wait && !s.wait.length) delete s.wait;
       // (no faster than it can stop from behind the last car in, nor than it can stop before the first crossing on its lane)
@@ -1411,6 +1440,8 @@ export class SketchSim {
     const NONE: SimVehicle[] = [];
 
     const acc = new Map<SimVehicle, number>(), held = new Map<SimVehicle, { gap: number; lead: number }>();
+    // (what each was waiting for as this step began: those decided before another in it mustn't change what that one sees)
+    const whyWas = new Map(this.vehicles.map(v => [v, v.why]));
     for (const v of this.vehicles) {
       // (broken down: rolls to a stop where it is, an obstacle in its lane)
       if (v.broken !== null) { acc.set(v, v.v > 0 ? -Math.min(2.5, v.v / dt) : 0); held.set(v, { gap: Infinity, lead: 0 }); v.why = "broken down"; v.blocking = false; continue; }
@@ -1515,8 +1546,9 @@ export class SketchSim {
             for (const w of byEdge.get(f.lane) ?? []) {
               if (w === v) continue;
               const x = this.diff(f.lane, me, w.pos);
-              // (its body along the lane as far back as it has come on it)
-              if (x > 0 && x - Math.min(w.len, w.run) < this.diff(f.lane, me, end)) behind(r.off + x - w.len, w.v, w);
+              // (its body along the lane as far back as it has come on it; its back a little past where they part still in reach of
+              // one turning off there)
+              if (x > 0 && x - Math.min(w.len, w.run) < this.diff(f.lane, me, end) + FORK_REACH) behind(r.off + x - w.len, w.v, w);
             }
           }
           // …or, joining a lane, one on it beside or just past where it joins
@@ -1607,20 +1639,26 @@ export class SketchSim {
           // (already in among the zones this one is part of: it can't stop short of them any more, it goes through first)
           const meIn = r.edge === v.edge && r.edge.kind === "conn" && this.inRun(r.edge, v.pos, k.at - k.before);
           for (const w of toward.get(k.other) ?? NONE) {
-            if (w === v) continue;
+            // (nor one following this one, behind it in its lane or held up by it: it can't get there first)
+            if (w === v || (w.edge === v.edge && !v.edge.ring && w.pos < v.pos) || whyWas.get(w) === `car ${v.id}`) continue;
             const dW = this.toPlace(w, k.other, k.otherAt, reach(w) + 1 + k.otherAfter);
             if (dW === null) continue;
             const ws = dW - k.otherBefore;
             // (gone through, its back clear of the zone; or far off)
             if (dW + k.otherAfter < -reach(w) || ws > (minor ? LOOK : 70)) continue;
             const wIn = ws > 0 && w.edge === k.other && k.other.kind === "conn" && this.inRun(k.other, w.pos, k.otherAt - k.otherBefore);
+            // (stopped short of the zone, waiting for this one as this one would for it: the one standing in another's way goes, that
+            // way clear; else the one with the lower number — the same from either side)
+            const wWhy = whyWas.get(w) ?? null;
+            if (ws > 0.1 && w.v < 0.3 && wWhy?.endsWith(`for car ${v.id}`) && this.goesFirst(v, w)) continue;
             // (in among the zones, it is on its way through: it goes first, unless this one is in among them too)
             if (wIn && !meIn && !forced) { yields.push({ at: hold(zs), why: `zone ${k.other.key} for car ${w.id}` }); break; }
             // (this one in among them, the other able to stop short: it waits)
             if (meIn && !wIn && ws > 0 && ws >= (w.v * w.v) / 8) continue;
             // (stopped short of the zone for something else, the car ahead, keeping another crossing clear,
-            // joining a lane: it isn't on its way through here, and waiting for it would lock the junction)
-            if (w.v < 0.3 && ws > 0.1 && !w.why?.startsWith(`zone ${r.edge.key}`)) continue;
+            // joining a lane: it isn't on its way through here, and waiting for it would lock the junction; one held by
+            // nothing is setting off)
+            if (w.v < 0.3 && ws > 0.1 && wWhy !== null && !wWhy.startsWith(`zone ${r.edge.key}`)) continue;
             // (one from a line goes after those without one, unless it is past its line and can't stop any more)
             const wMinor = !!k.other.minor, committed = w.edge === k.other && ws < Math.max(0.1, (w.v * w.v) / 8 - 1);
             const first = ws <= 0
@@ -1642,8 +1680,9 @@ export class SketchSim {
       // giving way: stopping short of the zone, and of every other zone its body would block there
       for (const { at: x, why: reason } of yields) {
         let t = x - 0.5;
+        // (a zone starting just ahead counts too: one stopped half a metre short of it, then let on, would stop in it)
         for (let i = 0; i < 12; i++) {
-          const z = zones.find(q => q.s >= 0.6 && q.s < t - 0.01 && q.e > t - v.len);
+          const z = zones.find(q => q.s >= 0.1 && q.s < t - 0.01 && q.e > t - v.len);
           if (!z) break;
           t = z.s - 0.5;
         }
