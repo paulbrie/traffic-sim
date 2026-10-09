@@ -38,21 +38,21 @@ export function DemandPanel({ sketch, readOnly, onFocus, results, onGo }: {
   return (
     <InspectorPanel id="demand" title="Demand">
       <p className="text-[11px] text-muted-foreground">Cars come in on the ways in at their rate, go to a way out (more often to those with a larger share), and take the shortest way there.</p>
-      <div className="grid gap-1">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
         <span className="text-xs font-medium">Ways in <span className="font-normal text-muted-foreground">· veh/h</span></span>
         {entries.slice(0, shown.in).map(w => (
           <div key={w.key} className={row} onMouseEnter={() => onFocus?.(w.lanes)} onMouseLeave={() => onFocus?.(null)}>
             <button type="button" onClick={() => onGo?.(w.at)} className={cn("min-w-0 flex-1 truncate text-left hover:underline", !own(w.lanes) && "text-muted-foreground")}
               title={`${w.name}: ${w.lanes.join(", ")}${own(w.lanes) ? "" : " (the sketch's rate per lane)"} · click to go there`}>{w.name}</button>
             {readOnly ? <span className="font-mono tabular">{Math.round(total(w.lanes))}</span> : (
-              <NumberField id={`dm-in-${w.key}`} label={`${w.name} vehicles per hour`} hideLabel unit="veh/h" digits={0} min={0} max={5000} step={50} className="w-32"
+              <NumberField id={`dm-in-${w.key}`} label={`${w.name} vehicles per hour`} hideLabel unit="veh/h" digits={0} min={0} max={5000} step={50} className="w-32 min-w-20 shrink"
                 value={total(w.lanes)} onCommit={v => editSketch(s => setInRate(s, w.lanes, v))} />
             )}
           </div>
         ))}
       </div>
-      {entries.length > shown.in && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setShown(x => ({ ...x, in: x.in + 50 }))}>Show {Math.min(50, entries.length - shown.in)} more of {entries.length - shown.in}</button>}
-      <div className="grid gap-1">
+      {entries.length > shown.in && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setShown(x => ({ ...x, in: x.in + 50 }))}>Show {Math.min(50, entries.length - shown.in)} more ({entries.length - shown.in} of {entries.length} ways in not shown yet)</button>}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
         <span className="text-xs font-medium">Ways out <span className="font-normal text-muted-foreground">· share of trips</span></span>
         {exits.slice(0, shown.out).map(w => {
           const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0), pct = sumW > 0 ? Math.round((ws / sumW) * 100) : 0;
@@ -62,13 +62,13 @@ export function DemandPanel({ sketch, readOnly, onFocus, results, onGo }: {
                 title={`${w.name}: ${w.lanes.join(", ")} · click to go there`}>{w.name}</button>
               <span className="w-9 text-right font-mono text-[11px] text-muted-foreground tabular">{pct}%</span>
               {readOnly ? <span className="font-mono tabular">×{weight(w.lanes)}</span> : (
-                <NumberField id={`dm-out-${w.key}`} label={`${w.name} share of trips`} hideLabel unit="×" digits={1} min={0} max={100} step={0.5} className="w-24"
+                <NumberField id={`dm-out-${w.key}`} label={`${w.name} share of trips`} hideLabel unit="×" digits={1} min={0} max={100} step={0.5} className="w-24 min-w-16 shrink"
                   value={weight(w.lanes)} onCommit={v => editSketch(s => setOutWeight(s, w.lanes, v))} />
               )}
             </div>
           );
         })}
-        {exits.length > shown.out && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setShown(x => ({ ...x, out: x.out + 50 }))}>Show {Math.min(50, exits.length - shown.out)} more of {exits.length - shown.out}</button>}
+        {exits.length > shown.out && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setShown(x => ({ ...x, out: x.out + 50 }))}>Show {Math.min(50, exits.length - shown.out)} more ({exits.length - shown.out} of {exits.length} ways out not shown yet)</button>}
       </div>
       <Journeys sketch={sketch} entries={entries} exits={exits} readOnly={readOnly} onFocus={onFocus} results={results} />
     </InspectorPanel>
@@ -95,12 +95,12 @@ function Journeys({ sketch, entries, exits, readOnly, onFocus, results }: {
     );
   };
   return (
-    <div className="grid gap-1.5">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5">
       <span className="text-xs font-medium">Journeys <span className="font-normal text-muted-foreground">· from a way in to a way out, on top of the above</span></span>
       {js.map(j => {
         const a = wayOf(entries, j.from), b = wayOf(exits, j.to), r = results?.find(x => x.id === j.id);
         return (
-          <div key={j.id} className="grid gap-1.5 rounded-md border p-2" onMouseEnter={() => onFocus?.([...(a?.lanes ?? []), ...(b?.lanes ?? [])])} onMouseLeave={() => onFocus?.(null)}>
+          <div key={j.id} className="grid grid-cols-[minmax(0,1fr)] gap-1.5 rounded-md border p-2" onMouseEnter={() => onFocus?.([...(a?.lanes ?? []), ...(b?.lanes ?? [])])} onMouseLeave={() => onFocus?.(null)}>
             <div className="flex items-center gap-1.5">
               <span className="w-8 shrink-0 text-[11px] text-muted-foreground">From</span>
               {pick(`Journey ${j.id} from`, entries, j.from, from => set(j, { from }))}
@@ -111,7 +111,7 @@ function Journeys({ sketch, entries, exits, readOnly, onFocus, results }: {
               {pick(`Journey ${j.id} to`, exits, j.to, to => set(j, { to }))}
             </div>
             {readOnly ? <p className="text-xs tabular">{j.rate} veh/h{j.trucks ? ` · ${j.trucks}% trucks` : ""}</p> : (
-              <div className="grid grid-cols-2 gap-1.5">
+              <div className="grid grid-cols-[repeat(2,minmax(0,1fr))] gap-1.5">
                 <NumberField id={`dm-j-${j.id}`} label="Vehicles per hour" unit="veh/h" digits={0} min={0} max={5000} step={50} value={j.rate} onCommit={v => set(j, { rate: Math.round(v) })} />
                 <NumberField id={`dm-jt-${j.id}`} label="Trucks" unit="%" digits={0} min={0} max={100} step={5} value={j.trucks ?? 0} onCommit={v => set(j, { trucks: Math.round(v) })} />
               </div>
