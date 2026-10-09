@@ -244,6 +244,10 @@ export interface SimVehicle {
   stopped: boolean;
 }
 
+/** the lane changes found, from a lane to a goal (its connector, or its lane for its end): the lanes don't change while the edges are the same */
+const hopsKept = new WeakMap<Edge, Map<Edge, { n: Neighbor; hops: number; by: number } | null>>();
+/** (no vehicles at places: none there) */
+const NO_PLACES: { w: SimVehicle; pos: number }[] = [];
 /** (no vehicles: at a light) */
 const NO_VEHICLES: SimVehicle[] = [];
 /** (no vehicles: a cell of the grid the collision check looks in, empty) */
@@ -846,6 +850,16 @@ export class SketchSim {
   private hop(v: SimVehicle): { n: Neighbor; hops: number; by: number } | null {
     const g = v.goal, e = v.edge;
     if (!g || g.lane === e || e.kind !== "lane") return null;
+    // (the same from one lane for one goal, whoever asks: kept)
+    let byGoal = hopsKept.get(e);
+    if (!byGoal) hopsKept.set(e, (byGoal = new Map()));
+    const key = g.conn ?? g.lane;
+    if (byGoal.has(key)) return byGoal.get(key)!;
+    const h = this.hopOf(e, g);
+    byGoal.set(key, h);
+    return h;
+  }
+  private hopOf(e: Edge, g: { lane: Edge; conn: Edge | null }): { n: Neighbor; hops: number; by: number } | null {
     const first = new Map<Edge, Neighbor>(), depth = new Map<Edge, number>([[e, 0]]), todo = [e];
     while (todo.length) {
       const l = todo.shift()!;
@@ -898,21 +912,30 @@ export class SketchSim {
     const m = this.across(n, v.pos), L = n.lane;
     if (m === null || m < v.len || m > L.len - 1) return null;
     for (const k of L.conflicts) if (k.at - k.before < m + 2 && k.at + k.after > m - v.len - 2) return null;
+    // (each one there, as occupants() has them, looked at in place: whoever it is, any one too close is enough)
     let ahead = Infinity;
-    for (const { w, pos } of this.occupants(L, byEdge, ghosts)) {
-      if (w === v) continue;
+    const at = (w: SimVehicle, pos: number) => {
+      if (w === v) return true;
       const d = pos - m;
       if (d >= 0) {
         // (never onto a lane only to stop behind one broken down there)
-        if (w.broken !== null && d < 60) return null;
+        if (w.broken !== null && d < 60) return false;
         const gap = d - w.len;
-        if (gap < 1 || this.idm(v.v, L.vmax, gap, w.v, accOf(v), hwOf(v)) < -B_SAFE) return null;
+        if (gap < 1 || this.idm(v.v, L.vmax, gap, w.v, accOf(v), hwOf(v)) < -B_SAFE) return false;
         if (gap < 80) ahead = Math.min(ahead, gap);
       } else {
         const gap = -d - v.len;
-        if (gap < 1 || this.idm(w.v, L.vmax, gap, v.v, accOf(w), hwOf(w)) < -B_SAFE) return null;
+        if (gap < 1 || this.idm(w.v, L.vmax, gap, v.v, accOf(w), hwOf(w)) < -B_SAFE) return false;
       }
+      return true;
+    };
+    for (const w of byEdge.get(L) ?? NO_VEHICLES) if (!at(w, w.pos)) return null;
+    for (const o of L.outs) {
+      for (const w of byEdge.get(o.conn) ?? NO_VEHICLES) if (w.pos - w.len < o.conn.forkShared && !at(w, this.beside(o.conn.onFrom, w.pos))) return null;
+      for (const { w, pos } of this.tails.get(o.conn) ?? NO_PLACES) if (pos - w.len < o.conn.forkShared && !at(w, this.beside(o.conn.onFrom, pos))) return null;
     }
+    for (const o of L.ins) for (const w of byEdge.get(o.conn) ?? NO_VEHICLES) if (w.pos > o.conn.len - o.conn.mergeBefore && !at(w, this.beside(o.conn.onTo, w.pos))) return null;
+    for (const { w, pos } of ghosts.get(L) ?? NO_PLACES) if (!at(w, pos)) return null;
     return { ahead };
   }
 
@@ -1435,12 +1458,15 @@ export class SketchSim {
 
     // another way: at the head of the queue where it turns off, kept waiting there long (not by lights), a connector further along its
     // lane that leads where it is going too (the shortest such way; none it gave up on before; then as long again before it looks once more)
+    // (the vehicles by number, made when first wanted: the car one is behind, found without looking through them all)
+    let ids: Map<number, SimVehicle> | null = null;
+    const byId = () => (ids ??= new Map(this.vehicles.map(w => [w.id, w])));
     const rt = this.routes;
     if (rt) for (const v of this.vehicles) {
       const x = v.exit, dest = v.dest;
       if (!x || !dest || v.broken !== null || v.held < REROUTE || this.t - v.rerouteT < REROUTE || v.gaveUp?.includes(x) || v.edge.kind !== "lane" || this.along(v.edge, v.pos, this.exitS(x)) > 10) continue;
       // (nor queued behind another on its lane: the one at the head looks)
-      const ahead = /^car (\d+)/.exec(v.why ?? ""), lead = ahead && this.vehicles.find(w => w.id === Number(ahead[1]));
+      const ahead = /^car (\d+)/.exec(v.why ?? ""), lead = ahead && byId().get(Number(ahead[1]));
       if (lead && lead.edge === v.edge) continue;
       (v.gaveUp ??= []).push(x); v.rerouteT = this.t;
       let best: Edge | null = null, bc = Infinity;
@@ -1476,7 +1502,7 @@ export class SketchSim {
         this.changeIn(byEdge, ghosts, v, h.n);
       } else {
         // (stopped behind one broken down in its lane: any lane beside with room will do, to get round it)
-        const m = gap < 60 && v.v < 3 ? /^car (\d+)/.exec(v.why ?? "") : null, lw = m && this.vehicles.find(w => w.id === Number(m[1]));
+        const m = gap < 60 && v.v < 3 ? /^car (\d+)/.exec(v.why ?? "") : null, lw = m && byId().get(Number(m[1]));
         if (lw && lw.broken !== null && lw.edge === e) {
           const n = e.neighbors.find(n => n.a1 - v.pos > 10 && this.room(v, n, byEdge, ghosts));
           if (n) this.changeIn(byEdge, ghosts, v, n);
