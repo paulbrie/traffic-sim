@@ -38,6 +38,7 @@ import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
+import { describeHover, SketchHoverCard, type HoverHit } from "@/components/v2/sketch-hover-card";
 import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar } from "@/components/v2/sketch-replay-bar";
 import { CONSOLE_HEIGHT, ProblemConsole } from "@/components/v2/problem-console";
@@ -337,6 +338,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const kept = useRef<{ canvas: HTMLCanvasElement; stale: boolean; key: string } | null>(null);
   // (the view and the cars' clock copied into the UI store at most 4 times a second, the last always: for agents, not each frame)
   const mirrored = useRef<{ at: number; timer: ReturnType<typeof setTimeout> | null }>({ at: 0, timer: null });
+  /** the car under the pointer's card, if a car's (its details kept current with the frames) */
+  const hoverCarId = useRef<number | null>(null);
+  // (what the pointer is over, in a card by it: see hoverSoon)
+  const [hoverCard, setHoverCard] = useState<{ hit: HoverHit; x: number; y: number; car: ReturnType<SketchSim["inspect"]> | null } | null>(null);
   const mirror = () => {
     const m = mirrored.current;
     if (m.timer) return;
@@ -406,6 +411,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const s = sim.current;
     if (!s) return;
     mirror();
+    // (the car under the pointer's card, as it is now)
+    if (hoverCarId.current !== null) { const info = s.inspect(hoverCarId.current); setHoverCard(c => (c && "car" in c.hit ? { ...c, car: info } : c)); }
     // (the view kept on the car picked)
     const id = live.current.selCar, c = live.current.follow && id !== null && live.current.replayT === null ? s.inspect(id) : null;
     if (c) view.current = { ...view.current, cx: c.p.x, cy: c.p.y };
@@ -998,8 +1005,25 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
    * sketch once: the panels, the cars, saving and undo see the result, not every move of the drag).
    */
   const dragShow = (sk: Sketch) => { dragSk.current = sk; redraw(); };
+  // what the pointer is over, in a card by it once it rests a moment (as V1's): not while drawing, dragging or pressing
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverOff = () => { if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; } hoverCarId.current = null; setHoverCard(c => (c ? null : c)); };
+  const hoverSoon = (e: React.PointerEvent<HTMLCanvasElement>, p: Pt) => {
+    hoverOff();
+    if (tool !== "select" || draft.current || drag.current || e.buttons !== 0) return;
+    const r = e.currentTarget.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null;
+      // (a car, live, over what it drives on; else what is there)
+      const car = live.current.replayT === null ? sim.current?.carAt(p, 4 / view.current.scale) ?? null : null;
+      const hit = car !== null ? { car } : (pick(p) as HoverHit | null);
+      hoverCarId.current = car;
+      if (hit) setHoverCard({ hit, x, y, car: car !== null ? sim.current?.inspect(car) ?? null : null });
+    }, 450);
+  };
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const raw = toWorld(e), g = drag.current, v = view.current;
+    hoverSoon(e, raw);
     if (g?.kind === "pan") {
       view.current = { ...g.v0, cx: g.v0.cx - (e.clientX - g.x0) / v.scale, cy: g.v0.cy - (e.clientY - g.y0) / v.scale };
       // (a right drag shows the closed hand once it moves: a right click opens the menu)
@@ -1300,11 +1324,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           )}
           <canvas ref={canvas} className={cn("absolute inset-0 size-full touch-none", hand === "grab" ? "cursor-grab" : hand === "grabbing" ? "cursor-grabbing" : tool === "select" ? "cursor-default" : "cursor-crosshair")}
             onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
-            onPointerLeave={() => { cursor.current = null; hover.current = null; redraw(); }}
+            onPointerLeave={() => { cursor.current = null; hover.current = null; hoverOff(); redraw(); }}
             onDoubleClick={onDoubleClick} onContextMenu={e => e.preventDefault()} />
           <div className="pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
             <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
+          {hoverCard && (() => {
+            const info = describeHover(hoverCard.hit, sketch, contents, stats, hoverCard.car);
+            return info ? <SketchHoverCard info={info} x={hoverCard.x} y={hoverCard.y} /> : null;
+          })()}
           {searchShown && <SketchSearch sketch={sketch} contents={contents} cars={searchCars}
             commands={canTest && hasSel(sel) ? [{ title: "Test in Sketch", sub: "the selection, on its own in the Sketch window · ⇧T", run: () => testInSketch() }] : []}
             onGo={goTo} onClose={() => { setSearchShown(false); panel.current?.focus(); }} />}
