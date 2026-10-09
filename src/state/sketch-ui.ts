@@ -10,11 +10,12 @@
  * Kept small and cold: no plan data, no results, nothing private, nothing each frame (the view and the cars' clock
  * are copied in at most four times a second).
  */
-import { useCallback, useMemo } from "react";
+import { createContext, useCallback, useContext, useMemo } from "react";
 import { DeepSubject } from "subjecto";
 import { useDeepSubject } from "subjecto/react";
 import type { Piece } from "@/lib/lane-sketch";
-import { setBridgeUi } from "@/state/bridge-registry";
+import { bridgeApp, setBridgeUi } from "@/state/bridge-registry";
+import { ui } from "@/state/store";
 
 /** the drawing tools */
 export type Tool = "select" | "lane" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing";
@@ -44,21 +45,60 @@ export interface EditorUi {
     playing: boolean;
     kept: { from: number; to: number; frames: number; bytes: number } | null;
   };
+  /** its dialogs and what is open under the map */
+  dialogs: {
+    /** the search (Cmd/Ctrl+K): open, and what is typed */
+    search: { open: boolean; query: string };
+    /** the problem console under the map: open, which kind shown ("all", "stuck", "collision"…), the text filter, cleared up to (s; -1: none) */
+    console: { open: boolean; kind: string; text: string; clearedAt: number };
+    /** the simulation settings open */
+    settings: boolean;
+    /** Optimise timings: open (from that junction's lights), the lights chosen, the effort, where it is */
+    optimizer: { open: boolean; junction: string | null; chosen: string[]; effort: string; stage: "setup" | "running" | "done" | "error" };
+  };
 }
 export type EditorKind = "plan" | "scratch" | "whole";
+/** Test in Sketch's options (kept in the browser): how far out roads are cut, replacing what is in the Sketch or adding beside it, running at once */
+export interface TestOptions { cut: number; mode: "replace" | "add"; run: boolean }
 export interface SketchUiState {
   /** the editor the user is at: the Sketch window's while it is open and was last used, else the plan's */
   active: "plan" | "scratch";
   editors: Record<EditorKind, EditorUi>;
+  /** the inspector's panels folded away (by id; kept in the browser, the same for both editors) */
+  panels: { closed: Record<string, true> };
+  /** the Sketch window over the plan: open; Test in Sketch's options and the last piece it took there */
+  sketchWindow: { open: boolean; test: TestOptions; lastPiece: { junctions: number; lanes: number; mode: "replace" | "add"; at: number } | null };
 }
 
 const editor = (tool: Tool): EditorUi => ({
   tool, selection: NO_SEL, point: null, car: null, follow: false, view: { cx: 0, cy: 0, scale: 6 },
   run: { running: false, speed: 1, t: 0, replayT: null, playing: false, kept: null },
+  dialogs: { search: { open: false, query: "" }, console: { open: false, kind: "all", text: "", clearedAt: -1 }, settings: false, optimizer: { open: false, junction: null, chosen: [], effort: "quick", stage: "setup" } },
 });
 export const freshEditor = (): EditorUi => editor("lane");
 
-export const sketchUi = new DeepSubject<SketchUiState>({ active: "plan", editors: { plan: freshEditor(), scratch: freshEditor(), whole: freshEditor() } }, { name: "sketchUi" });
+// (kept in the browser: the panels folded away, Test in Sketch's options)
+const PANELS_KEY = "trafficsim:v2-closed-panels", TEST_KEY = "laneSketch:testInSketch";
+const stored = <T,>(key: string, fallback: T): T => {
+  if (typeof localStorage === "undefined") return fallback;
+  try { const v = localStorage.getItem(key); return v ? { ...fallback, ...(JSON.parse(v) as T) } : fallback; } catch { return fallback; }
+};
+const store = (key: string, v: unknown) => { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* private mode: this session only */ } };
+
+export const sketchUi = new DeepSubject<SketchUiState>({
+  active: "plan",
+  editors: { plan: freshEditor(), scratch: freshEditor(), whole: freshEditor() },
+  panels: { closed: stored<Record<string, true>>(PANELS_KEY, {}) },
+  sketchWindow: { open: false, test: stored<TestOptions>(TEST_KEY, { cut: 70, mode: "replace", run: true }), lastPiece: null },
+}, { name: "sketchUi" });
+sketchUi.subscribe("panels/closed", v => store(PANELS_KEY, v), { skipInitialCall: true });
+sketchUi.subscribe("sketchWindow/test", v => store(TEST_KEY, v), { skipInitialCall: true });
+// (the Sketch window opens and closes through V1's ui, as before: shown here too)
+ui.subscribe("sketch", v => { const w = sketchUi.getValue().sketchWindow; if (w.open !== !!v) w.open = !!v; });
+
+/** the editor a component is in (the plan's, or the Sketch window's): its dialogs are that one's */
+export const EditorKindContext = createContext<EditorKind>("plan");
+export const useEditorKind = () => useContext(EditorKindContext);
 
 type Fields = Omit<EditorUi, "run">;
 /**
@@ -68,7 +108,11 @@ type Fields = Omit<EditorUi, "run">;
 export function useEditorState<K extends keyof Fields>(kind: EditorKind, key: K): [Fields[K], (v: Fields[K] | ((p: Fields[K]) => Fields[K])) => void];
 export function useEditorState<K extends keyof EditorUi["run"]>(kind: EditorKind, key: `run/${K}`): [EditorUi["run"][K], (v: EditorUi["run"][K] | ((p: EditorUi["run"][K]) => EditorUi["run"][K])) => void];
 export function useEditorState(kind: EditorKind, key: string): [unknown, (v: unknown) => void] {
-  const path = `editors/${kind}/${key}`;
+  return useUiPath(`editors/${kind}/${key}`);
+}
+/** any part of the store, as useState gives one (a plain copy, and a setter taking a value or a function of the last) */
+export function useUiPath<T>(path: string): [T, (v: T | ((p: T) => T)) => void];
+export function useUiPath(path: string): [unknown, (v: unknown) => void] {
   const [proxied] = useDeepSubject(sketchUi, path as never) as [unknown, unknown];
   // (a plain copy, made again only when it changed: the drawing reads the selection's lists thousands of times a frame,
   // a proxy's every read would cost)
@@ -97,10 +141,46 @@ export function sketchUiSnapshot(): Record<string, unknown> {
   const { whole: _, ...editors } = all.editors;
   return { ...all, editors };
 }
-/** offered to the bridge while a V2 plan is open (see WorkspaceV2) */
+/** the problem console's kinds of line */
+const CONSOLE_KINDS = ["all", "stuck", "collision", "jump", "deadlock", "breakdown", "towed"];
+/** the editor an action is for: `editor` if given, else the one the user is at */
+const editorFor = (a: Record<string, unknown>): EditorUi => {
+  const k = a.editor === undefined ? sketchUi.getValue().active : String(a.editor);
+  if (k !== "plan" && k !== "scratch") throw new Error(`no editor "${k}": plan or scratch`);
+  if (k === "scratch" && !sketchUi.getValue().sketchWindow.open) throw new Error("the Sketch window isn't open");
+  return sketchUi.getValue().editors[k];
+};
+/** offered to the bridge while a V2 plan is open (the plan's editor): the state to read, and a few changes to it an agent may ask for (no others) */
 export function offerSketchUiToBridge() {
-  return setBridgeUi({
-    snapshot: sketchUiSnapshot,
-    subscribe: (path, fn) => { const h = sketchUi.subscribe(path, v => fn(v), { skipInitialCall: true }); return () => h.unsubscribe(); },
-  });
+  const offs = [
+    setBridgeUi({
+      snapshot: sketchUiSnapshot,
+      subscribe: (path, fn) => { const h = sketchUi.subscribe(path, v => fn(v), { skipInitialCall: true }); return () => h.unsubscribe(); },
+    }),
+    // a panel of the inspector folded away or opened: { id, open }
+    bridgeApp.register("panel", a => {
+      const id = String(a.id ?? ""), open = a.open !== false;
+      if (!id) throw new Error("which panel? { id, open }");
+      const p = sketchUi.getValue().panels, next = { ...p.closed };
+      if (open) delete next[id]; else next[id] = true;
+      p.closed = next;
+      return { id, open };
+    }),
+    // the problem console: { open?, kind?, text?, editor? }
+    bridgeApp.register("console", a => {
+      const d = editorFor(a).dialogs.console;
+      if (a.kind !== undefined) { const k = String(a.kind); if (!CONSOLE_KINDS.includes(k)) throw new Error(`kind: one of ${CONSOLE_KINDS.join(", ")}`); d.kind = k; }
+      if (a.text !== undefined) d.text = String(a.text);
+      if (a.open !== undefined) d.open = !!a.open;
+      return { ...d };
+    }),
+    // the search box (Cmd/Ctrl+K): { open, query?, editor? }
+    bridgeApp.register("search", a => {
+      const d = editorFor(a).dialogs.search;
+      if (a.query !== undefined) d.query = String(a.query);
+      if (a.open !== undefined) d.open = !!a.open;
+      return { ...d };
+    }),
+  ];
+  return () => { for (const off of offs) off(); };
 }

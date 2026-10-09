@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useEditorKind, useUiPath } from "@/state/sketch-ui";
 import { ClipboardCopy, History, TerminalSquare, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -47,11 +48,13 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onReplay, r
   open: boolean; onOpen: (open: boolean) => void;
 }) {
   const setOpen = onOpen;
-  const [show, setShow] = useState<Show>("all");
-  const [filter, setFilter] = useState("");
+  // (what it shows: the editor's, in the V2 UI store)
+  const at = `editors/${useEditorKind()}/dialogs/console`;
+  const [show, setShow] = useUiPath<Show>(`${at}/kind`);
+  const [filter, setFilter] = useUiPath<string>(`${at}/text`);
   const [data, setData] = useState<{ problems: SimProblem[]; stuck: StuckCar[] } | null>(null);
   // (cleared from view: the problems up to this moment of the run; a run started again (its time back) has none cleared)
-  const [clearedAt, setClearedAt] = useState(-1);
+  const [clearedAt, setClearedAt] = useUiPath<number>(`${at}/clearedAt`);
   const count = problemCount(stats);
   // (asked for while open, again as the stats change: about every quarter of a second while the cars run)
   useEffect(() => {

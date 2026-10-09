@@ -83,7 +83,7 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "bridge_state", description: "The app's own state, by key: sketch (counts and ids), selection, stats (the running cars' results), problems (the console), view (centre and zoom), run (running, speed, time), ui (a V2 plan's UI state: active editor, and each editor's tool, selection, view, run and replay). Or one part of the UI state by `path` (e.g. editors.plan.selection, editors.scratch.run, active). Or `watch` paths: their changes then come as 'ui' events in bridge_wait_events (at most 4 a second; [] stops).",
+    name: "bridge_state", description: "The app's own state, by key: sketch (counts and ids), selection, stats (the running cars' results), problems (the console), view (centre and zoom), run (running, speed, time), ui (a V2 plan's UI state: active editor; each editor's tool, selection, view, run, replay and dialogs (search, console, settings, optimizer); panels folded; the Sketch window). Or one part of the UI state by `path` (e.g. editors.plan.selection, editors.scratch.run, active). Or `watch` paths: their changes then come as 'ui' events in bridge_wait_events (at most 4 a second; [] stops).",
     inputSchema: { type: "object", properties: { ...page, keys: { type: "array", items: { type: "string" } }, path: { type: "string", description: "a part of the UI state, dots or slashes: editors.plan.selection" }, watch: { type: "array", items: { type: "string" }, description: "UI state paths to be told about when they change ([] stops)" } } },
     run: async a => text(await command("state", a)),
   },
@@ -96,7 +96,7 @@ const TOOLS: Tool[] = [
   { name: "bridge_key", description: "Press a key or chord, e.g. 'Escape', 'Control+k', 'p'.", inputSchema: { type: "object", properties: { ...page, key: { type: "string" } }, required: ["key"] }, run: async a => text(await command("key", a)) },
   { name: "bridge_navigate", description: "Go to another page of the app (same origin).", inputSchema: { type: "object", properties: { ...page, url: { type: "string" } }, required: ["url"] }, run: async a => text(await command("navigate", a)) },
   {
-    name: "bridge_app", description: "An action of the editor: select {kind,id}, goTo {kind,id} (kind: road, lane, connector, junction, link, crossing, car), view {x,y,scale?}, run, pause, replay {t}, restart.",
+    name: "bridge_app", description: "An action of the editor: select {kind,id}, goTo {kind,id} (kind: road, lane, connector, junction, link, crossing, car), view {x,y,scale?}, run, pause, replay {t}, restart. On a V2 plan also: panel {id, open} (fold an inspector panel), console {open?, kind?, text?, editor?} (kind: all, stuck, collision, jump, deadlock, breakdown, towed), search {open, query?, editor?}; editor: plan or scratch (the Sketch window), default the one the user is at.",
     inputSchema: { type: "object", properties: { ...page, action: { type: "string" }, args: { type: "object" } }, required: ["action"] },
     run: async a => text(await command("app", { action: s(a.action), args: obj(a.args) })),
   },

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { Kbd } from "@/components/ui/kbd";
+import { useEditorKind, useUiPath } from "@/state/sketch-ui";
 import { isFullCircle, laneLength, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
 
 /** what a search entry leads to: something on the sketch, or a car running now */
@@ -107,7 +108,8 @@ export function SketchSearch({ sketch, contents, cars, commands = [], onGo, onCl
   commands?: SearchCommand[];
   onGo: (to: SearchTarget) => void; onClose: () => void;
 }) {
-  const [q, setQ] = useState(() => searchTypeahead.text), [at, setAt] = useState(0);
+  // (what is typed: the editor's, in the V2 UI store)
+  const [q, setQ] = useUiPath<string>(`editors/${useEditorKind()}/dialogs/search/query`), [at, setAt] = useState(0);
   // (autoFocus can lose to whatever had focus as the box opened (a closing panel's button): focus it again
   // once it is up, so typing and Esc are the box's)
   const box = useRef<HTMLInputElement>(null);
@@ -118,7 +120,7 @@ export function SketchSearch({ sketch, contents, cars, commands = [], onGo, onCl
       if (searchTypeahead.opening) { setQ(searchTypeahead.text); searchTypeahead.opening = false; searchTypeahead.text = ""; }
     });
     return () => { cancelAnimationFrame(f); searchTypeahead.opening = false; searchTypeahead.text = ""; };
-  }, []);
+  }, [setQ]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const items = useMemo(() => [...commands.map((c, i) => ({ kind: "Command", title: c.title, sub: c.sub, id: `cmd${i}`, to: { kind: "command" as const, run: c.run }, hay: fold(`command ${c.title} ${c.sub}`) })), ...catalogue(sketch, contents, cars)], []);
   const hits = useMemo(() => search(items, q), [items, q]);

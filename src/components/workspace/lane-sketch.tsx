@@ -22,7 +22,7 @@ import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStat
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
-import { NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
+import { EditorKindContext, NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, useUiPath, type TestOptions, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
 import { clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
 import { testPiece } from "@/lib/test-piece";
 import { readPalette, speedColor } from "@/render/palette";
@@ -169,7 +169,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [replayT, setReplayT] = useEditorState(ek, "run/replayT");
   const [replayPlaying, setReplayPlaying] = useEditorState(ek, "run/playing");
   /** the search over the sketch (Cmd/Ctrl+K) while open, with the cars running when it opened */
-  const [searchOpen, setSearchOpen] = useState<{ cars: { id: number }[] } | null>(null);
+  const [searchShown, setSearchShown] = useUiPath<boolean>(`editors/${ek}/dialogs/search/open`);
+  const [searchCars, setSearchCars] = useState<{ id: number }[]>([]);
   const [replayRange, setReplayRange] = useEditorState(ek, "run/kept");
   const [follow, setFollow] = useEditorState(ek, "follow");
   /** the layers shown (kept in the browser) */
@@ -194,7 +195,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [running, setRunning] = useEditorState(ek, "run/running");
   const [simSpeed, setSimSpeed] = useEditorState(ek, "run/speed");
   /** the problem console open, under the map (the replay bar above it) */
-  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleOpen, setConsoleOpen] = useUiPath<boolean>(`editors/${ek}/dialogs/console/open`);
   // (saved with the sketch: changing them isn't an undo step)
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
   const setParams = (p: SimParams) => store.show({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}) } });
@@ -500,8 +501,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
   const resetCars = () => { sim.current?.reset(); setStats(sim.current?.stats() ?? null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null); redraw(); };
   // "Test in Sketch": the selection taken into the Sketch window, cut off with short ways in and out, to run on its own
-  const [tis, setTisState] = useState<TestOptions>(loadTestOptions);
-  const setTis = (o: TestOptions) => { setTisState(o); saveTestOptions(o); };
+  // (its options: in the V2 UI store, kept in the browser)
+  const [tis, setTis] = useUiPath<TestOptions>("sketchWindow/test");
   const canTest = page && store.kind === "plan";
   const testInSketch = (only?: Sel) => {
     if (!canTest) return;
@@ -529,6 +530,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     });
     ui.getValue().sketch = true;
     requestScratchFocus({ run: tis.run, piece: addedPiece });
+    sketchUi.getValue().sketchWindow.lastPiece = { junctions: report.junctions, lanes: report.lanes, mode: added ? "add" : "replace", at: Date.now() };
     const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
     const what = report.junctions ? n(report.junctions, "junction") : n(report.lanes, "lane");
     toast.success(`Testing ${what} in the Sketch`, {
@@ -714,12 +716,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault(); e.stopPropagation();
         const cars = sim.current?.poses().map(c => ({ id: c.id })) ?? [];
-        setSearchOpen(o => { if (!o) { searchTypeahead.opening = true; searchTypeahead.text = ""; } return o ? null : { cars }; });
+        // (opened afresh: an empty box, the cars running now)
+        const d = sketchUi.getValue().editors[ek].dialogs.search;
+        if (!d.open) { searchTypeahead.opening = true; searchTypeahead.text = ""; setSearchCars(cars); d.query = ""; }
+        d.open = !d.open;
       }
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, [page, panel]);
+  }, [page, panel, ek]);
   /** a point added to a selected connector (a bend) or junction (a corner) where it was double-clicked; on a point, the point taken out */
   const editPoints = (p: Pt) => {
     const sk = live.current.sketch, s = live.current.sel, h = handleAt(p);
@@ -1199,6 +1204,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const empty = !sketch.lanes.length && !sketch.junctions.length;
 
   return (
+    <EditorKindContext.Provider value={ek}>
     <div ref={panel} style={page ? undefined : style} role={page ? "region" : "dialog"} aria-label={page ? "Plan editor" : "Lane sketch"} tabIndex={-1} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
       className={page
         ? "relative flex size-full flex-col overflow-hidden bg-background outline-none"
@@ -1295,9 +1301,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <div className="pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
             <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
-          {searchOpen && <SketchSearch sketch={sketch} contents={contents} cars={searchOpen.cars}
+          {searchShown && <SketchSearch sketch={sketch} contents={contents} cars={searchCars}
             commands={canTest && hasSel(sel) ? [{ title: "Test in Sketch", sub: "the selection, on its own in the Sketch window · ⇧T", run: () => testInSketch() }] : []}
-            onGo={goTo} onClose={() => { setSearchOpen(null); panel.current?.focus(); }} />}
+            onGo={goTo} onClose={() => { setSearchShown(false); panel.current?.focus(); }} />}
           <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
             onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0} />
           <ProblemConsole open={consoleOpen} onOpen={setConsoleOpen} sim={() => sim.current} stats={stats} sketch={sketch} contents={contents} replayFrom={replayRange?.from ?? null} onReplay={showAt}
@@ -1342,6 +1348,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         </aside>
       </div>
     </div>
+    </EditorKindContext.Provider>
   );
 }
 
@@ -2224,16 +2231,8 @@ interface PaintState {
 }
 
 /** a marking's box (kept: markings are kept per sketch) */
-/** "Test in Sketch"'s options (kept in the browser): how far out roads are cut, replacing what is in the Sketch or adding beside it, running at once */
-interface TestOptions { cut: number; mode: "replace" | "add"; run: boolean }
-const TEST_KEY = "laneSketch:testInSketch";
 /** a run at least this long (s) before its flows are taken for a tested piece's ways in */
 const MEASURE_AFTER = 180;
-function loadTestOptions(): TestOptions {
-  const d: TestOptions = { cut: 70, mode: "replace", run: true };
-  try { return { ...d, ...(JSON.parse(localStorage.getItem(TEST_KEY) ?? "{}") as Partial<TestOptions>) }; } catch { return d; }
-}
-function saveTestOptions(o: TestOptions) { try { localStorage.setItem(TEST_KEY, JSON.stringify(o)); } catch { /* private mode */ } }
 /** metres east and south from origin `to` to origin `from` (both latitude / longitude; nothing if either is missing) */
 function geoShift(from?: { lat: number; lon: number }, to?: { lat: number; lon: number }): Pt {
   if (!from || !to) return { x: 0, y: 0 };

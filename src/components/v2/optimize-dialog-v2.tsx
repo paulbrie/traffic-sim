@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { useSketchStore } from "@/state/lane-sketch";
 import { startSketchOptimizer } from "@/state/sketch-optimizer";
 import { ui } from "@/state/store";
+import { sketchUi, useEditorKind, useUiPath, type EditorUi } from "@/state/sketch-ui";
 
 type Stage = { kind: "setup" } | { kind: "running"; progress: OptimizeProgress | null; startedAt: number } | { kind: "done"; result: OptimizeResult; took: number } | { kind: "error"; message: string };
 
@@ -22,7 +23,11 @@ type Stage = { kind: "setup" } | { kind: "running"; progress: OptimizeProgress |
  * candidates (see lib/sketch-optimize.ts), this junction chosen to start with.
  */
 export function OptimizeLightsButton({ junction }: { junction: string }) {
-  const [open, setOpen] = useState(false);
+  // (open or not, from which junction, and where it is: the editor's, in the V2 UI store)
+  const kind = useEditorKind();
+  const [o, setO] = useUiPath<EditorUi["dialogs"]["optimizer"]>(`editors/${kind}/dialogs/optimizer`);
+  const open = o.open && o.junction === junction;
+  const setOpen = (v: boolean) => setO(p => ({ ...p, open: v, junction: v ? junction : null, stage: "setup" }));
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -48,6 +53,15 @@ function OptimizeContent({ first, close }: { first: string; close: () => void })
   const [targets, setTargets] = useState<Set<OptimizeTarget>>(() => new Set(["greens", "actuated"]));
   const [effort, setEffort] = useState<OptimizeEffort>("quick");
   const [stage, setStage] = useState<Stage>({ kind: "setup" });
+  // (shown in the V2 UI store, for agents: what is chosen and where it is; the progress and results stay here)
+  const ek = useEditorKind();
+  useEffect(() => {
+    const d = sketchUi.getValue().editors[ek].dialogs.optimizer;
+    if (d.stage !== stage.kind) d.stage = stage.kind;
+    if (d.effort !== effort) d.effort = effort;
+    const c = [...chosen];
+    if (c.length !== d.chosen.length || c.some((x, i) => x !== d.chosen[i])) d.chosen = c;
+  }, [ek, stage.kind, effort, chosen]);
   const runRef = useRef<ReturnType<typeof startSketchOptimizer> | null>(null);
   const cores = typeof navigator !== "undefined" ? Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1)) : 3;
   const cfg = OPTIMIZE_EFFORT[effort];
