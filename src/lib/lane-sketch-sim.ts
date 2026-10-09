@@ -98,6 +98,11 @@ export interface SimStats {
   /** vehicles broken down so far (at random, or by hand), and those towed away */
   breakdowns: number;
   towed: number;
+  /** arrivals that couldn't come in (no room where their lane starts, or keeping a crossing there clear) while they were due:
+   * how many would have come in the time it was held up (from its rate; a lane's own cars only, not journeys', which wait) */
+  heldBack: number;
+  /** the same by lane where they come in (those with any) */
+  heldBackBy: Record<string, number>;
 }
 /**
  * Fuel, by V1's model (engine/fuel.ts: from each vehicle's speed and acceleration): litres burnt, the part
@@ -465,6 +470,7 @@ export class SketchSim {
   private sources: {
     lane: Edge; next: number; rate: number | null; /** the next one in a truck (drawn when it is due) */ truck?: boolean;
     /** vehicles on journeys waiting to come in here (before the lane's own next one) */ wait?: { journey: string; dest: string; truck: boolean }[];
+    /** arrivals lost while it was held up so far (expected, from its rate: a fraction) */ held?: number;
   }[] = [];
   private journeys: SimJourney[] = [];
   /** the journeys' own random numbers (so runs without journeys stay as they were); and the breakdowns' */
@@ -717,7 +723,7 @@ export class SketchSim {
     this.sources = [...edges.values()].filter(e => entries.has(e.key)).map(lane => {
       const rate = entries.get(lane.key)!.inRate ?? null, was = old.get(lane.key);
       // (its rate changed: the next arrival drawn again)
-      return { lane, rate, next: was && was.rate === rate ? was.next : this.t + this.gap(rate) };
+      return { lane, rate, next: was && was.rate === rate ? was.next : this.t + this.gap(rate), held: was?.held ?? 0 };
     });
     // where cars go: the shortest ways to the exits, and their shares
     this.routes = new RouteTable(sk);
@@ -799,7 +805,7 @@ export class SketchSim {
     for (const x of this.crossings) x.ped = newPed();
     // (from the start again: the same random numbers, the same run)
     this.rnd = mulberry32(this.seed); this.pedRnd = mulberry32((this.seed * 7919) ^ 0x9ed5); this.jRnd = mulberry32((this.seed * 104729) ^ 0x3c6e); this.bRnd = mulberry32((this.seed * 15485863) ^ 0x7f4a);
-    for (const s of this.sources) { s.next = this.gap(s.rate); delete s.wait; }
+    for (const s of this.sources) { s.next = this.gap(s.rate); delete s.wait; s.held = 0; }
     for (const j of this.journeys) Object.assign(j, { next: this.jGap(j.def.rate), sent: 0, arrived: 0, tripSum: 0, noRoute: 0 });
   }
 
@@ -915,6 +921,22 @@ export class SketchSim {
   /** seconds to a journey's next vehicle */
   private jGap(rate: number) { return rate > 0 ? (-Math.log(1 - this.jRnd()) * 3600) / rate : Infinity; }
   /** seconds to the next vehicle at a source */
+  /** arrivals held back, in all and by lane: those lost so far, and those of a lane held up now */
+  private heldStats() {
+    const by: Record<string, number> = {};
+    let all = 0;
+    for (const s of this.sources) {
+      const n = (s.held ?? 0) + (s.wait ? 0 : this.heldFor(s, 0.1));
+      all += n;
+      if (Math.round(n) > 0) by[s.lane.id] = Math.round(n);
+    }
+    return { heldBack: Math.round(all), heldBackBy: by };
+  }
+  /** arrivals a lane's own traffic would have had since its next one was due (beyond `grace` s late), from its rate */
+  private heldFor(s: { next: number; rate: number | null }, grace: number) {
+    const late = this.t - s.next - grace, r = s.rate ?? this.params.rate;
+    return late > 0 && r > 0 ? (late * r) / 3600 : 0;
+  }
   private gap(rate: number | null = null) { const r = rate ?? this.params.rate; return r > 0 ? (-Math.log(1 - this.rnd()) * 3600) / r : Infinity; }
 
   /** an exit for a car at `s` on a lane: drawn by the exits' shares among those it can reach (null: none) */
@@ -1397,6 +1419,8 @@ export class SketchSim {
       // (nor, its lane starting across another's way, unless there is room for it to stand clear past that crossing: one stopped
       // in it, waiting behind those ahead, would hold up the traffic crossing there)
       if (s.lane.conflicts.some(k => !k.join && k.at - k.before < SPAWN_CLEAR && first < k.at + k.after + len + S0)) continue;
+      // (held up past the step it was due in: the arrivals it would have had meanwhile are lost, the next drawn from now)
+      if (!jw) s.held = (s.held ?? 0) + this.heldFor(s, dt);
       if (jw) s.wait!.shift(); else s.next = this.t + this.gap(s.rate);
       if (s.wait && !s.wait.length) delete s.wait;
       // (no faster than it can stop from behind the last car in, nor than it can stop before the first crossing on its lane)
@@ -2054,7 +2078,7 @@ export class SketchSim {
       waiting: this.vehicles.filter(v => v.still >= 20).length, stuck: this.vehicles.filter(v => v.still >= STUCK_AFTER).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes, fuel: { ...this.fuel },
       roads: this.rTally.map(r => ({ id: r.id, through: r.through, vehKm: r.vehKm, vehHours: r.vehHours, delay: r.delay, queueMax: r.queueMax, lanes: { ...r.lanes } })),
       junctions: this.jTally.map(j => ({ id: j.id, through: j.through, delay: j.delay, queueMean: this.jSince > 0 ? j.queueSum / this.jSince : 0, queueMax: j.queueMax, fuel: j.fuel })),
-      breakdowns: this.breakdowns, towed: this.towed,
+      breakdowns: this.breakdowns, towed: this.towed, ...this.heldStats(),
       pedsCrossed: this.crossings.reduce((a, x) => a + x.ped.crossed, 0), pedsWaiting: this.crossings.reduce((a, x) => a + x.ped.waiting, 0),
       ...(this.splitOut.size ? { turns: Object.fromEntries(this.turnCounts) } : {}),
       ...(this.journeys.length ? { journeys: this.journeys.map(j => ({
