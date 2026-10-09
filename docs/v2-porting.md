@@ -38,11 +38,11 @@ noted), **todo**, or **n/a** (not needed in V2).
 | Junction templates and library | `junction-library.tsx`, `server/data/templates.ts` | todo |
 | Splitter islands, medians | `splitter-island.tsx`, `state/islands.ts` | todo |
 | Junction groups | `state/groups.ts`, `group-inspector.tsx` | todo |
-| Roundabouts | `state/roundabouts.ts`, `state/rings.ts`, `ring-inspector.tsx` | partial: rings drawn and reshaped by hand; to do: a roundabout tool (ring + entries/exits in one go) |
+| Roundabouts | `state/roundabouts.ts`, `state/rings.ts`, `ring-inspector.tsx` | done: rings drawn and reshaped by hand, and a Roundabout tool (U) that stamps a ring joined to the lanes round it, yields and a surface, leaving only ordinary pieces (`lib/roundabout.ts`) |
 | Stop / yield signs, all-way stop | `engine/sim/junctions.ts`, `inspector.tsx` | done |
 | Traffic lights: fixed / actuated, min green, phases worked out or by hand | `engine/signals.ts`, `engine/sim/signals.ts`, `phase-editor.tsx` | done (green per connector) |
 | Signal groups, green waves | `signal-groups.tsx`, `engine/signals.ts` (`greenWaveOffsets`) | done: groups on one fixed cycle, a coordinated phase with its share of green and offset, corridor order, Green wave from the distance by road, a timeline per group (`components/v2/signal-groups-v2.tsx`) |
-| Signal optimizer | `engine/optimize.ts`, `optimize-dialog.tsx` | todo |
+| Signal optimizer | `engine/optimize.ts`, `optimize-dialog.tsx` | done: greens, actuated or fixed, the phases' arrangement, simulated round the chosen junctions on several seeds, checked on fresh seeds (`lib/sketch-optimize.ts`, `components/v2/optimize-dialog-v2.tsx`); not ported: control type and lane arrows |
 | Reversible lanes | `engine/sim/reversible.ts`, `reversible-lane.tsx` | todo |
 | Bus stops and lines | `lines-panel.tsx`, engine `stops` / `lines` | todo |
 | Pedestrians, zebra crossings | `engine/crossings.ts`, `render/pedestrians.ts`, `crossing-parking.tsx` | done: X tool, pedestrians in the sim and the replay; converted from V1 (drawn crossings, and one across each road of a junction with pedestrians) |
@@ -82,7 +82,7 @@ noted), **todo**, or **n/a** (not needed in V2).
 
 1. ~~Satellite / reference image under the sketch, with real scale~~ (done).
 2. ~~Demand (where cars come from and go to) and routing over the network~~ (done: rates, shares, shortest routes, journeys, rerouting; trucks, fuel, breakdowns).
-3. ~~Signal groups and green waves~~ (done), then the optimizer.
+3. ~~Signal groups and green waves, then the optimizer~~ (done).
 4. Buses, pedestrians and crossings, parking.
 5. Per-object live merge; ~~simulation in a worker for large plans~~ (done).
 6. 3D view, assistant, OSM import, data tables.

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Waypoints, X } from "lucide-react";
+import { Car, CircleDashed, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,8 +36,9 @@ import { SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/sketch-replay-bar";
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
+import { stampRoundabout } from "@/lib/roundabout";
 
-type Tool = "select" | "lane" | "arc" | "circle" | "connector" | "junction" | "slice" | "crossing";
+type Tool = "select" | "lane" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing";
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
 const LAYERS = SKETCH_LAYERS, ALL_LAYERS = ALL_SKETCH_LAYERS;
@@ -46,6 +47,7 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
   { id: "lane", key: "L", label: "Lane", icon: <Spline />, hint: "Click the lane's points in the direction of travel · double-click or Enter to finish · Backspace takes the last point back · Esc cancels" },
   { id: "arc", key: "A", label: "Arc", icon: <Waypoints />, hint: "Click the centre, then where the lane starts, then move round the way it goes and click where it ends" },
   { id: "circle", key: "O", label: "Ring", icon: <Circle />, hint: "Click the centre, then the radius: a full ring of lane, anticlockwise (Shift: clockwise)" },
+  { id: "roundabout", key: "U", label: "Roundabout", icon: <CircleDashed />, hint: "Click the centre, then the radius: a ring joined to the lanes ending and starting within 30 m outside it (dashed), yield on the ways in, a surface over it; what went straight across taken out. Then all ordinary pieces, to edit as any other; one undo takes it back" },
   { id: "connector", key: "C", label: "Connector", icon: <Milestone />, hint: "Click the lane traffic leaves, then click bend points anywhere (Alt: over a lane too), then the lane it joins · Backspace takes the last bend back · Esc cancels" },
   { id: "slice", key: "K", label: "Slice", icon: <Scissors />, hint: "Click a road to cut it across there into two roads (Shift: keep them linked, so the road carries on; Alt: only the lane under the pointer) · its connectors stay with the piece they are on" },
   { id: "crossing", key: "X", label: "Zebra crossing", icon: <Footprints />, hint: "Click one kerb, then the other: the zebra runs between them (4 m wide, 300 pedestrians an hour; set them in its panel) · Esc cancels" },
@@ -66,6 +68,7 @@ type Draft =
   | { kind: "lane"; pts: Pt[] }
   | { kind: "arc"; c: Pt; start: { r: number; a0: number; sweep: number; last: number } | null }
   | { kind: "circle"; c: Pt }
+  | { kind: "roundabout"; c: Pt }
   | { kind: "connector"; from: LaneAt; via: Pt[] }
   | { kind: "junction"; pts: Pt[] }
   | { kind: "crossing"; a: Pt };
@@ -789,6 +792,24 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         const r = dist(d.c, p);
         draft.current = null;
         if (r >= 1) addShape({ kind: "arc", c: d.c, r: Number(r.toFixed(2)), a0: Math.atan2(p.y - d.c.y, p.x - d.c.x), sweep: e.shiftKey ? 2 * Math.PI : -2 * Math.PI });
+        break;
+      }
+      case "roundabout": {
+        const p = snap(raw).p;
+        if (d?.kind !== "roundabout") { draft.current = { kind: "roundabout", c: p }; break; }
+        const r = dist(d.c, p);
+        draft.current = null;
+        if (r < 4) { toast("Too small for a roundabout", { description: "Its ring needs a radius of 4 m or more." }); break; }
+        let made: ReturnType<typeof stampRoundabout> | null = null;
+        editSketch(s => { made = stampRoundabout(s, d.c, r); return made.sketch; });
+        const m = made as ReturnType<typeof stampRoundabout> | null;
+        if (m) {
+          setSel(junctionSel(live.current.sketch, [m.junction]));
+          const R = m.report;
+          toast.success(`Roundabout: ${R.ins} way${R.ins === 1 ? "" : "s"} in, ${R.outs} out`, {
+            description: [R.removedConnectors ? `${R.removedConnectors} connectors straight across taken out` : "", R.removedJunctions ? "the junction it replaces taken out" : "", R.inside.length ? `lanes ending inside the ring left as they were: ${R.inside.join(", ")}` : "", "⌘Z takes it all back"].filter(Boolean).join(" · "),
+          });
+        }
         break;
       }
       case "arc": {
@@ -2475,6 +2496,11 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       path(f.corners); ctx.closePath(); ctx.globalAlpha = 0.25; ctx.fill(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.stroke();
     }
     square(d.a);
+  } else if (d?.kind === "roundabout" && cur) {
+    const r = dist(d.c, cur.p);
+    ctx.beginPath(); ctx.arc(d.c.x, d.c.y, r, 0, Math.PI * 2); ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.stroke(); ctx.globalAlpha = 1;
+    // (how far out it looks for the ways in and out)
+    ctx.beginPath(); ctx.arc(d.c.x, d.c.y, r + LANE_WIDTH / 2 + 30, 0, Math.PI * 2); ctx.lineWidth = 1.5 * px; ctx.setLineDash([6 * px, 5 * px]); ctx.stroke(); ctx.setLineDash([]);
   } else if (d?.kind === "circle" && cur) {
     ctx.beginPath(); ctx.arc(d.c.x, d.c.y, dist(d.c, cur.p), 0, Math.PI * 2); ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.stroke(); ctx.globalAlpha = 1;
   } else if (d?.kind === "arc") {
