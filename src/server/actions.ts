@@ -18,6 +18,7 @@ import { cityAccess } from "./proofs/city-access";
 import { planAccess } from "./proofs/plan-access";
 import { userIsAdmin } from "./proofs/user-is-admin";
 import { versionOfPlan } from "./proofs/version-of-plan";
+import { restoreFromFile, type RestoreFileInput, type RestoreFileResult } from "./restore-file";
 import { canEditCity, canEditPlan, canOwnCity, canOwnPlan, refusal } from "./proofs/policy";
 import * as cities from "./data/cities";
 import * as plans from "./data/plans";
@@ -377,6 +378,29 @@ export async function restorePlanVersion(planId: string, versionId: string): Pro
     if (!ofPlan) return { ok: false as const, error: "That version no longer exists." };
     const revision = await plans.restorePlanVersion(plan, version, user, { edit, version: ofPlan });
     return revision == null ? { ok: false as const, error: "Plan not found." } : { ok: true as const, revision };
+  });
+  if (res.ok) revalidatePath(`/plans/${planId}`);
+  return res;
+}
+
+/**
+ * A V2 plan's sketch from a file (History's "Restore from file…" / "Apply changes from file…"), saved as one new
+ * revision through the normal save path, with the note, if nobody saved since `revision` (the one the user
+ * compared it with).
+ */
+export async function restorePlanFromFile(planId: string, input: RestoreFileInput): Promise<RestoreFileResult> {
+  const me = await assertUser();
+  assertId(planId);
+  const res = await name(me.id, PlanId(planId), async (user, plan) => {
+    const edit = canEditPlan(await planAccess(user, plan));
+    return restoreFromFile(input, {
+      canEdit: !!edit,
+      current: async () => {
+        const row = edit && (await plans.getPlan(plan, edit));
+        return row ? { engine: row.plan.engine, network: row.plan.network, settings: row.plan.settings, underlay: row.plan.underlay, sketch: row.plan.sketch } : null;
+      },
+      save: async s => (edit ? plans.savePlan(plan, user, s, edit) : { ok: false, reason: "forbidden" }),
+    });
   });
   if (res.ok) revalidatePath(`/plans/${planId}`);
   return res;

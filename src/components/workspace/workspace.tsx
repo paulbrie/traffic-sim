@@ -151,7 +151,7 @@ function TopBar({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
       {plan.access === "read"
         ? <span className="flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground" title="You can simulate and try things, but nothing is saved"><Eye className="size-3.5" /> View only</span>
         : <SaveIndicator planId={plan.id} />}
-      <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} />
+      <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} fromFile={false} />
       <OptimizeButton planId={plan.id} planName={plan.name} />
       {plan.access !== "read" && <JunctionLibrary />}
       <SketchButton />
