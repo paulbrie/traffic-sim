@@ -45,7 +45,7 @@ process; a restart drops them: the page reconnects, the agent pairs again).
 | type | args | data |
 |---|---|---|
 | `snapshot` | `{ root?: string }` (a CSS selector, default `body`) | `{ url, title, tree }`: the accessibility tree, compact text: one line per node `role "name" [value] {states}`, indented; regions, buttons, inputs, headings, tables (first rows), dialogs, toasts |
-| `screenshot` | `{ target?: "map" \| "page", maxWidth?: number }` | `{ dataUrl }` (PNG; `map`: the editor's canvas, `page`: the whole page, best effort) |
+| `screenshot` | `{ target?: "map" \| "page", maxWidth?: number }` | `{ dataUrl }` (PNG; `map`: the editor's canvas, or its 3D view while that shows; `page`: the whole page, best effort) |
 | `state` | `{ keys?: string[] }` (`sketch`, `selection`, `stats`, `problems`, `view`, `run`, `ui`); or `{ path }`; or `{ watch: string[] }` | `{ [key]: value }` (sketch: counts and ids, not the whole JSON; ask `sketchJson` for that); `{ [path]: value }`; `{ watching }` (see "UI state") |
 | `click` | `{ role?, name?, nth?, selector?, text? }` | `{ clicked: "<role> \"<name>\"" }` |
 | `type` | `{ role?, name?, selector?, text, submit?: boolean }` | `{ typed }` |
@@ -71,7 +71,8 @@ as `{ first, count }`), with no plan data, no results, nothing private, nothing 
   layers: { surfaces, markings, lanes, connectors, signs, cars, names, demand, grid, satellite, image },  // shown or not
   background: { brightness, source },             // the satellite imagery's
   display: { carsBySpeed } }                      // the cars coloured by speed, or all one colour
-Editor = { tool, selection: { lanes, connectors, junctions, road, link?, crossing? }, point, car, follow,
+Editor = { mode: "plan" | "3d",                  // the map from above or in 3D (the plan's editor; the Sketch window's later)
+           tool, selection: { lanes, connectors, junctions, road, link?, crossing? }, point, car, follow,
            view: { cx, cy, scale },        // at most 4 times a second
            run: { running, speed, t, replayT, playing, kept },   // t: at most 4 times a second
            dialogs: { search: { open, query }, console: { open, kind, text, clearedAt }, settings,
@@ -86,6 +87,7 @@ Changes an agent may ask for (`app`; no others, nothing written by path):
 | `panel` | `{ id, open }` | folds an inspector panel away or opens it (ids: `selection`, `traffic`, `fuel`, `demand`, `junction-results`, `road-results`, `test-in-sketch`, `background`, `car`, `crossing`) |
 | `console` | `{ open?, kind?, text?, editor? }` | the problem console: open or close it, show one kind (`all`, `stuck`, `collision`, `jump`, `deadlock`, `breakdown`, `towed`), filter its lines |
 | `search` | `{ open, query?, editor? }` | the search box (Cmd/Ctrl+K), with what is typed in it |
+| `mode` | `{ mode: "plan" \| "3d", editor? }` | the plan's map from above or in 3D, as the header's Plan / 3D switch (the plan's editor only, for now) |
 | `sketchWindow` | `{ open? }` | the Sketch window over the plan opened or closed (without `open`: the other way), as the top bar's Sketch button does |
 | `layers` | `{ set: { [id]: boolean } }` | layers shown or hidden (ids as in `layers`), kept in the browser as the user's own are |
 | `sort` | `{ table: "junctions" \| "roads", by, flip?, editor? }` | a results table sorted: `name`, `rate`, `delay`, `queue`, and `fuel` (junctions) or `speed` (roads); `flip`: the other way |

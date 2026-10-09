@@ -12,7 +12,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { laneById, laneLength, pointAt, signalAt, signalPlans, zAt, type JunctionContents, type SignalController, type Sketch } from "@/lib/lane-sketch";
+import { connectorPts, junctionLevel, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
 import { LEVEL_H } from "@/engine/compile";
 import { speedColor } from "@/render/palette";
 import { buildSketch3D, type Sketch3D } from "@/render/sketch3d";
@@ -38,6 +38,12 @@ export interface View3DProps {
   /** the cars as shown now (live, or the moment replayed), coloured by their speed or not, and the lights' state */
   cars: () => Car3D[] | null; bySpeed: boolean;
   simT: () => number | null; signals: () => SignalController[] | null;
+  /** what is selected (drawn over the scene at its own height), the car picked (a ring round it) */
+  selection: Piece; car: number | null;
+  /** a click on the scene at `p`, on level `level` (the highest first): true if it picked something there */
+  pickAt: (p: Pt, level: number) => boolean;
+  /** a click on nothing */
+  pickNone: () => void;
   /** the canvas, for the bridge's screenshot (with a frame drawn just before it is read) */
   canvasRef: React.MutableRefObject<(() => HTMLCanvasElement | null) | null>;
 }
@@ -231,6 +237,86 @@ export function View3DV2(props: View3DProps) {
       if (heads.instanceColor) heads.instanceColor.needsUpdate = true;
     };
 
+    // what is selected, drawn over the scene at its own height (a bridge's lane on the bridge), and a ring round the car picked
+    const selMat = new THREE.MeshBasicMaterial({ color: pal.select, transparent: true, opacity: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8, side: THREE.DoubleSide });
+    let overlay: THREE.Mesh | null = null, overlayFor: unknown[] = [];
+    const syncSelection = () => {
+      const p = live.current, key = [p.selection, p.sketch];
+      if (key.every((x, i) => x === overlayFor[i])) return;
+      overlayFor = key;
+      if (overlay) { scene.remove(overlay); overlay.geometry.dispose(); overlay = null; }
+      const sk = p.sketch, pos: number[] = [], idx: number[] = [];
+      const ribbon = (pts: Pt[], hs: number[], w: number) => {
+        const base = pos.length / 3, n = pts.length;
+        for (let i = 0; i < n; i++) {
+          const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)], dx = b.x - a.x, dz = b.y - a.y, m = Math.hypot(dx, dz) || 1, nx = (-dz / m) * w / 2, nz = (dx / m) * w / 2;
+          pos.push(pts[i].x + nx, hs[i] + 0.15, pts[i].y + nz, pts[i].x - nx, hs[i] + 0.15, pts[i].y - nz);
+        }
+        for (let i = 0; i < n - 1; i++) { const a = base + 2 * i, b = a + 2; idx.push(a, b, a + 1, b, b + 1, a + 1); }
+      };
+      const flat = (loop: Pt[], h: number) => {
+        if (loop.length < 3) return;
+        const tris = THREE.ShapeUtils.triangulateShape(loop.map(q => new THREE.Vector2(q.x, q.y)), []), base = pos.length / 3;
+        for (const q of loop) pos.push(q.x, h + 0.15, q.y);
+        for (const t of tris) idx.push(base + t[0], base + t[2], base + t[1]);
+      };
+      for (const id of p.selection.lanes) {
+        const l = laneById(sk, id);
+        if (!l) continue;
+        const L = laneLength(l.shape), pts: Pt[] = [], hs: number[] = [];
+        for (let s2 = 0; s2 <= L + 1e-6; s2 += Math.max(0.5, Math.min(2, L / 40))) { pts.push(pointAt(l.shape, Math.min(s2, L)).p); hs.push(zAt(sk, id, Math.min(s2, L)) * LEVEL_H); }
+        ribbon(pts, hs, l.width);
+      }
+      for (const id of p.selection.connectors) {
+        const c = sk.connectors.find(x => x.id === id), pts = c && connectorPts(sk, c);
+        if (!c || !pts) continue;
+        const h0 = zAt(sk, c.from.lane, c.from.s) * LEVEL_H, h1 = zAt(sk, c.to.lane, c.to.s) * LEVEL_H;
+        ribbon(pts, pts.map((_, i) => h0 + ((h1 - h0) * i) / Math.max(1, pts.length - 1)), 1.2);
+      }
+      for (const id of p.selection.junctions) {
+        const j = sk.junctions.find(x => x.id === id), c = p.contents.get(id);
+        if (!j || !c) continue;
+        const h = junctionLevel(sk, c) * LEVEL_H;
+        if (j.shape === "auto" && j.smooth) for (const loop of smoothJunction(sk, j, c).slice(0, 1)) flat(loop, h);
+        else flat(outlinePath(j), h);
+      }
+      if (!idx.length) return;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
+      overlay = new THREE.Mesh(g, selMat); overlay.renderOrder = 2; scene.add(overlay);
+    };
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.08, 6, 40), new THREE.MeshBasicMaterial({ color: pal.select }));
+    ring.rotation.x = -Math.PI / 2; ring.visible = false; scene.add(ring);
+    const syncRing = () => {
+      const p = live.current, id = p.car;
+      ring.visible = false;
+      if (id === null) return;
+      const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === id);
+      if (!c) return;
+      const s2 = Math.max(3.2, c.len * 0.8);
+      ring.position.set(c.p.x, (c.z ?? 0) * LEVEL_H + 0.2, c.p.y); ring.scale.set(s2, s2, s2); ring.visible = true;
+    };
+    // a click (not a drag) picks what is under it: the highest level first (a bridge before the road under it)
+    const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hitP = new THREE.Vector3();
+    let downAt: { x: number; y: number } | null = null;
+    const onDown = (e: PointerEvent) => { if (e.button === 0) downAt = { x: e.clientX, y: e.clientY }; };
+    const onUp = (e: PointerEvent) => {
+      if (e.button !== 0 || !downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 4) { downAt = null; return; }
+      downAt = null;
+      const r = renderer.domElement.getBoundingClientRect();
+      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      const sk = live.current.sketch, levels = [...new Set([0, ...sk.lanes.map(l => l.level ?? 0)])].sort((a, b) => b - a);
+      for (const lv of levels) {
+        plane.constant = -(lv * LEVEL_H + 0.06);
+        if (!ray.ray.intersectPlane(plane, hitP)) continue;
+        if (live.current.pickAt({ x: hitP.x, y: hitP.z }, lv)) return;
+      }
+      live.current.pickNone();
+    };
+    renderer.domElement.addEventListener("pointerdown", onDown);
+    renderer.domElement.addEventListener("pointerup", onUp);
+
     // drawn while shown and the tab is visible
     let disposed = false, frame = 0, lastSync = 0;
     const draw = () => {
@@ -244,7 +330,7 @@ export function View3DV2(props: View3DProps) {
       frame = 0;
       if (disposed) return;
       if (now - lastSync > 500) { lastSync = now; syncSat(); syncUnderlay(); }
-      syncRoads(); syncCars(now); syncLights();
+      syncRoads(); syncCars(now); syncLights(); syncSelection(); syncRing();
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
     };
@@ -252,7 +338,7 @@ export function View3DV2(props: View3DProps) {
     document.addEventListener("visibilitychange", onVisible);
     const ro = new ResizeObserver(() => size());
     ro.observe(el);
-    const onTheme = () => { pal = readPalette(); builtFor = []; scene.background = new THREE.Color(pal.sky); (scene.fog as THREE.Fog).color.set(pal.sky); (ground.material as THREE.MeshLambertMaterial).color.set(pal.ground); };
+    const onTheme = () => { pal = readPalette(); builtFor = []; selMat.color.set(pal.select); (ring.material as THREE.MeshBasicMaterial).color.set(pal.select); scene.background = new THREE.Color(pal.sky); (scene.fog as THREE.Fog).color.set(pal.sky); (ground.material as THREE.MeshLambertMaterial).color.set(pal.ground); };
     const mo = new MutationObserver(onTheme);
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     frame = requestAnimationFrame(tick);
@@ -264,6 +350,7 @@ export function View3DV2(props: View3DProps) {
       cancelAnimationFrame(frame);
       document.removeEventListener("visibilitychange", onVisible);
       ro.disconnect(); mo.disconnect();
+      renderer.domElement.removeEventListener("pointerdown", onDown); renderer.domElement.removeEventListener("pointerup", onUp);
       // (the plan view to where the 3D view looks: its middle, and a zoom showing as much across)
       const t = controls.target, d = camera.position.distanceTo(t), across = 2 * d * Math.tan(((FOV * Math.PI) / 180) / 2) * camera.aspect;
       live.current.onLeave({ cx: t.x, cy: t.z, scale: Math.min(80, Math.max(0.3, (el.clientWidth || 1) / Math.max(1, across))) });

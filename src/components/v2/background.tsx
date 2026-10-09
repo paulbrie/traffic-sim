@@ -167,7 +167,7 @@ export function BackgroundPanel({ sketch, sat, setSat, viewNow, calib, setCalib,
         )}
         {u && (
           <>
-            <label className="flex items-center justify-between gap-2 text-xs">Shown <Switch checked={u.visible} disabled={readOnly} onCheckedChange={visible => setUnderlay(x => ({ ...x, visible }))} /></label>
+            <label className="flex items-center justify-between gap-2 text-xs">Shown <Switch aria-label="Reference image shown" checked={u.visible} disabled={readOnly} onCheckedChange={visible => setUnderlay(x => ({ ...x, visible }))} /></label>
             <label className="grid gap-1 text-xs">
               <span className="flex justify-between text-muted-foreground"><span>Opacity</span><span className="font-mono tabular">{Math.round(u.opacity * 100)}%</span></span>
               <Slider value={[u.opacity]} min={0.05} max={1} step={0.05} disabled={readOnly} onValueChange={([opacity]) => setUnderlay(x => ({ ...x, opacity }))} aria-label="Image opacity" />

@@ -1040,6 +1040,26 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
    * sketch once: the panels, the cars, saving and undo see the result, not every move of the drag).
    */
   const dragShow = (sk: Sketch) => { dragSk.current = sk; redraw(); };
+  /** a click in the 3D view at `p` on level `lv`: a car there, else what the plan view would pick there if it is on that level */
+  const pickAt3d = (p: Pt, lv: number) => {
+    const sk = live.current.sketch, car = live.current.replayT === null ? sim.current?.carAt(p, 1.5) ?? null : null;
+    if (car !== null && Math.abs((sim.current?.poses().find(c => c.id === car)?.z ?? 0) - lv) < 0.5) { setSel(NO_SEL); setSelCar(car); return true; }
+    const hit = pick(p);
+    if (!hit) return false;
+    if ("lane" in hit) {
+      const l = laneById(sk, hit.lane);
+      if (!l || Math.abs(zAt(sk, l.id, nearestOn(l.shape, p).s) - lv) > 0.5) return false;
+      setSel({ ...NO_SEL, lanes: [hit.lane] });
+    } else if ("junction" in hit) {
+      const c = live.current.contents.get(hit.junction);
+      if (c && junctionLevel(sk, c) !== lv) return false;
+      setSel(junctionSel(sk, [hit.junction]));
+    } else if ("connector" in hit) setSel({ ...NO_SEL, connectors: [hit.connector] });
+    else if ("link" in hit) setSel({ ...NO_SEL, link: hit.link });
+    else setSel({ ...NO_SEL, crossing: hit.crossing });
+    setSelCar(null);
+    return true;
+  };
   // what the pointer is over, in a card by it once it rests a moment (as V1's): not while drawing, dragging or pressing
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverOff = () => { if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; } hoverCarId.current = null; setHoverCard(c => (c ? null : c)); };
@@ -1368,6 +1388,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           </div>
           {in3d && (
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} bySpeed={bySpeed}
+              selection={sel} car={selCar} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
           )}

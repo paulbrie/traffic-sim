@@ -75,7 +75,7 @@ const TOOLS: Tool[] = [
     run: async a => { const d = obj(await command("snapshot", a)); return text(`${s(d.url) ?? ""} · ${s(d.title) ?? ""}\n${s(d.tree) ?? JSON.stringify(d)}`); },
   },
   {
-    name: "bridge_screenshot", description: "A picture of the editor's map (target 'map', default) or of the whole page ('page').",
+    name: "bridge_screenshot", description: "A picture of the editor's map (target 'map', default; its 3D view while that shows) or of the whole page ('page').",
     inputSchema: { type: "object", properties: { ...page, target: { type: "string", enum: ["map", "page"] }, maxWidth: { type: "number" } } },
     run: async a => {
       const d = obj(await command("screenshot", a)), url = s(d.dataUrl) ?? "", m = url.match(/^data:([^;]+);base64,(.*)$/);
@@ -96,7 +96,7 @@ const TOOLS: Tool[] = [
   { name: "bridge_key", description: "Press a key or chord, e.g. 'Escape', 'Control+k', 'p'.", inputSchema: { type: "object", properties: { ...page, key: { type: "string" } }, required: ["key"] }, run: async a => text(await command("key", a)) },
   { name: "bridge_navigate", description: "Go to another page of the app (same origin).", inputSchema: { type: "object", properties: { ...page, url: { type: "string" } }, required: ["url"] }, run: async a => text(await command("navigate", a)) },
   {
-    name: "bridge_app", description: "An action of the editor: select {kind,id}, goTo {kind,id} (kind: road, lane, connector, junction, link, crossing, car), view {x,y,scale?}, run, pause, speed {speed}, replay {t}, restart. On a V2 plan also: panel {id, open} (fold an inspector panel), console {open?, kind?, text?, editor?} (kind: all, stuck, collision, jump, deadlock, breakdown, towed), search {open, query?, editor?}, layers {set: {id: bool}}, sort {table: junctions|roads, by, flip?, editor?}, sketchWindow {open?} (the Sketch window, as its button); editor: plan or scratch (the Sketch window), default the one the user is at.",
+    name: "bridge_app", description: "An action of the editor: select {kind,id}, goTo {kind,id} (kind: road, lane, connector, junction, link, crossing, car), view {x,y,scale?}, run, pause, speed {speed}, replay {t}, restart. On a V2 plan also: panel {id, open} (fold an inspector panel), console {open?, kind?, text?, editor?} (kind: all, stuck, collision, jump, deadlock, breakdown, towed), search {open, query?, editor?}, layers {set: {id: bool}}, sort {table: junctions|roads, by, flip?, editor?}, sketchWindow {open?} (the Sketch window, as its button), mode {mode: plan|3d} (the plan's map from above or in 3D); editor: plan or scratch (the Sketch window), default the one the user is at.",
     inputSchema: { type: "object", properties: { ...page, action: { type: "string" }, args: { type: "object" } }, required: ["action"] },
     run: async a => text(await command("app", { action: s(a.action), args: obj(a.args) })),
   },
