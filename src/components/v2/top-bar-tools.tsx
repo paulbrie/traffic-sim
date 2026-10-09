@@ -6,12 +6,23 @@
  */
 import { useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
-import { ChevronDown, Layers } from "lucide-react";
+import { ChevronDown, Layers, PenLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, toggleSketchLayer, type SketchLayers } from "@/state/sketch-layers";
+import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchEditing, setSketchLayers, sketchEditing$, sketchLayers$, toggleSketchLayer, type SketchLayers } from "@/state/sketch-layers";
 import { sketchSim } from "@/state/lane-sketch";
+
+/** the Sketch button, as V1's: pressed, the editor draws (tools, structure, editing); not, it only shows the map and the cars */
+export function SketchModeButton() {
+  const [editing] = useSubject(sketchEditing$);
+  return (
+    <Button size="sm" variant={editing ? "secondary" : "ghost"} className="h-8" aria-pressed={editing} onClick={() => setSketchEditing(!editing)}
+      title={editing ? "Sketch: drawing lanes, connectors and junctions. Click to only view the map and the cars" : "Viewing the map and the cars. Click to sketch: draw and edit lanes, connectors and junctions"}>
+      <PenLine /> Sketch
+    </Button>
+  );
+}
 
 export function SketchLayerPicker() {
   const [layers] = useSubject(sketchLayers$);
