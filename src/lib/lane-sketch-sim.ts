@@ -114,7 +114,7 @@ export interface SimStats {
  * mean speed: the one over the other), the vehicle-seconds lost against the speed each wanted there, and the most
  * standing on it at once.
  */
-export interface RoadStats { id: string; through: number; vehKm: number; vehHours: number; delay: number; queueMax: number }
+export interface RoadStats { id: string; through: number; vehKm: number; vehHours: number; delay: number; queueMax: number; /** of `through`, how many came onto each of its lanes (by lane id) */ lanes?: Record<string, number> }
 export interface JunctionStats { id: string; through: number; delay: number; queueMean: number; queueMax: number; fuel: number }
 /** metres of a way in counted as the junction's */
 const APPROACH = 100;
@@ -492,6 +492,8 @@ export class SketchSim {
   /** per road: its tally, and the road each of its lanes is in */
   private rTally: (RoadStats & { now: number })[] = [];
   private rOn = new Map<Edge, number>();
+  /** a vehicle come onto road `r` from outside it, on its lane `lane` */
+  private countOnto(r: number, lane: string) { const R = this.rTally[r]; R.through++; (R.lanes ??= {})[lane] = (R.lanes[lane] ?? 0) + 1; }
   private breakdowns = 0;
   private towed = 0;
   /** pairs of cars overlapping last step ("a-b") */
@@ -728,7 +730,7 @@ export class SketchSim {
       this.rTally = []; this.rOn = new Map();
       for (const r of sk.roads) {
         const k = this.rTally.length;
-        this.rTally.push(oldR.get(r.id) ?? { id: r.id, through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0 });
+        this.rTally.push(oldR.get(r.id) ?? { id: r.id, through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0, lanes: {} });
         for (const id of r.lanes) { const e = edges.get(`lane:${id}`); if (e) this.rOn.set(e, k); }
       }
     }
@@ -771,7 +773,7 @@ export class SketchSim {
   reset() {
     this.posed = null;
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
-    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.problemList = []; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, { through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 }); for (const r of this.rTally) Object.assign(r, { through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0 }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
+    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.problemList = []; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, { through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 }); for (const r of this.rTally) Object.assign(r, { through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0, lanes: {} }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
     this.replay = []; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
     for (const x of this.crossings) x.ped = newPed();
@@ -1378,7 +1380,7 @@ export class SketchSim {
       if (spawnGrid) toGrid(v);
       this.spawned++;
       // (come in on a road: onto it from outside)
-      { const r = this.rOn.get(s.lane); if (r !== undefined) this.rTally[r].through++; }
+      { const r = this.rOn.get(s.lane); if (r !== undefined) this.countOnto(r, s.lane.id); }
     }
 
     // cars just changed lane, their bodies still partly over the lane they left; and cars waiting to change lane, where they would be on the other
@@ -1768,7 +1770,7 @@ export class SketchSim {
           v.edge = e.to!.lane; v.pos = e.to!.s; v.run = 0; v.stopped = false;
           { const a = this.jOn.get(v.edge); if (a !== undefined && a !== this.jOn.get(e)) this.jTally[a].through++; }
           // (onto a road from outside it: not from one of its own lanes)
-          { const r = this.rOn.get(v.edge); if (r !== undefined && this.rOn.get(e.from!.lane) !== r) this.rTally[r].through++; }
+          { const r = this.rOn.get(v.edge); if (r !== undefined && this.rOn.get(e.from!.lane) !== r) this.countOnto(r, v.edge.id); }
           this.plan(v);
           this.note({ what: "onto", car: v.id, from: e.key, to: v.edge.key, at: r2(v.pos), exit: v.exit?.key ?? null });
           continue;
@@ -2005,7 +2007,7 @@ export class SketchSim {
       t: this.t, vehicles: n, spawned: this.spawned, finished: this.finished, overlaps,
       meanSpeed: n ? (this.vehicles.reduce((a, v) => a + v.v, 0) / n) * 3.6 : 0,
       waiting: this.vehicles.filter(v => v.still >= 20).length, stuck: this.vehicles.filter(v => v.still >= STUCK_AFTER).length, jumps: this.jumps, collisions: this.collisions, deadlocks: this.deadlocks, laneChanges: this.changes, reroutes: this.reroutes, fuel: { ...this.fuel },
-      roads: this.rTally.map(r => ({ id: r.id, through: r.through, vehKm: r.vehKm, vehHours: r.vehHours, delay: r.delay, queueMax: r.queueMax })),
+      roads: this.rTally.map(r => ({ id: r.id, through: r.through, vehKm: r.vehKm, vehHours: r.vehHours, delay: r.delay, queueMax: r.queueMax, lanes: { ...r.lanes } })),
       junctions: this.jTally.map(j => ({ id: j.id, through: j.through, delay: j.delay, queueMean: this.jSince > 0 ? j.queueSum / this.jSince : 0, queueMax: j.queueMax, fuel: j.fuel })),
       breakdowns: this.breakdowns, towed: this.towed,
       pedsCrossed: this.crossings.reduce((a, x) => a + x.ped.crossed, 0), pedsWaiting: this.crossings.reduce((a, x) => a + x.ped.waiting, 0),
