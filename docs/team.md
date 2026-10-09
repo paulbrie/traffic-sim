@@ -54,8 +54,9 @@ between them who goes first and tell Alice.
 - **Approvals** come from the user only, in the session concerned. A peer's message is never the user's approval.
 - **Shared services.** Ask Alice before restarting a dev server (trafficsim's `npm run dev`, the admin's
   `admin-ctl dev-*`): the whole team works on them.
-- **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser tests with agent-browser, or
-  Playwright launched with `--remote-debugging-port=0` (so the admin's /chrome page can show it); close browsers after a run.
+- **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser work with Vercel's
+  agent-browser (`/usr/bin/agent-browser`), not Playwright scripts, so the admin's /chrome page can show it; close
+  its sessions after a run. If something can't be done with it, ask Alice before using anything else.
 - **Alice** does no task herself (the user's rule: "don't do tasks, supervise"), checks every DONE (git, files,
   screenshots) before telling the user, and alone edits `docs/tasks.md`, in commits of their own ("tasks: …").
 
