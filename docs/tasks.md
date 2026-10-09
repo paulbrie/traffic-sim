@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T58 | Admin: team recipes, a Teams page to start or stop a whole team with one button (docs/team.md as the first recipe) | Alex | 2026-10-09 | design first |
 | T57 | Agents City Desk: its labels on Alex's OverlayLabel (removeChild on Table → City) | Tom | 2026-10-09 | |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | |
 | T55 | Re-run Bistrița seeds 1–3 with T46 (readings at 5, 10, 15 min) | Ramona | 2026-10-09 | after T50 |
