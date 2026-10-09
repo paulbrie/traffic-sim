@@ -28,6 +28,7 @@ import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
 import { FuelPanel, fmtFuel } from "@/components/v2/fuel-panel";
+import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
@@ -1088,7 +1089,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           ) : (
             <SelectionPanel sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
               selPt={selPt} onCurvePoint={curvePoint} onDeletePoint={deletePoint}
-              onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} />
+              onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} now={stats?.t ?? null} />
           )}
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
@@ -1239,7 +1240,9 @@ function JunctionSigns({ sketch, contents }: { sketch: Sketch; contents: Junctio
  * out (ways facing each other together, or one at a time) or set by hand, each with its own green and
  * the connectors that have green in it (hovering a phase lights them up on the sketch).
  */
-function JunctionLightsPanel({ sketch, junction, contents, onHover }: { sketch: Sketch; junction: SketchJunction; contents: JunctionContents; onHover: (h: Hover | null) => void }) {
+function JunctionLightsPanel({ sketch, junction, contents, onHover, now, onPick }: {
+  sketch: Sketch; junction: SketchJunction; contents: JunctionContents; onHover: (h: Hover | null) => void; now: number | null; onPick: (id: string) => void;
+}) {
   const L = junction.lights!, plan = signalPlan(sketch, junction, contents);
   const set = (patch: Partial<JunctionLights>) => editSketch(sk => ({ ...sk, junctions: sk.junctions.map(x => (x.id === junction.id ? { ...x, lights: { ...L, ...patch } } : x)) }));
   const name = (key: string) => (key.startsWith("lane:") ? `Lane ${key.slice(5)}` : sketch.roads.find(r => r.id === key)?.name ?? key);
@@ -1324,7 +1327,8 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover }: { sketch: 
           )}
         </div>
       )}
-      <p className="text-[11px] text-muted-foreground">{L.actuated ? `Up to ${plan.cycle} s round` : `A cycle of ${plan.cycle} s`}. Turning cars give way where their paths cross on green.</p>
+      <p className="text-[11px] text-muted-foreground">{plan.coord ? `A cycle of ${plan.cycle} s, in ${plan.coord.groupName}` : L.actuated ? `Up to ${plan.cycle} s round` : `A cycle of ${plan.cycle} s`}. Turning cars give way where their paths cross on green.</p>
+      <SignalGroupSection sketch={sketch} junction={junction} plan={plan} now={now} onPick={onPick} />
     </div>
   );
 }
@@ -1373,10 +1377,12 @@ function GeometrySection({ sketch, lanes, lead }: { sketch: Sketch; lanes: strin
   );
 }
 
-function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover }: {
+function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover, now = null }: {
   sketch: Sketch; sel: Sel; setSel: (s: Sel) => void; contents: Map<string, JunctionContents>; junctionSel: (ids: string[]) => Sel;
   selPt: { lane: string; i: number } | null; onCurvePoint: (lane: string, i: number) => void; onDeletePoint: (lane: string, i: number) => void;
   onGroup: () => void; onJunctionAround: () => void; onReverse: () => void; onDelete: () => void; onHover: (h: Hover | null) => void;
+  /** the cars' time while they run (marked on a signal group's timeline) */
+  now?: number | null;
 }) {
   const road = sel.road ? sketch.roads.find(r => r.id === sel.road) : null;
   const link = sel.link ? sketch.links?.find(k => k.id === sel.link) : null;
@@ -1484,7 +1490,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             <ToggleGroupItem value="lights" className="h-7 flex-1 text-xs" title="Traffic lights: each way in gets green in turn">Traffic lights</ToggleGroupItem>
           </ToggleGroup>
         </div>
-        {junction.lights ? <JunctionLightsPanel sketch={sketch} junction={junction} contents={c} onHover={onHover} /> : <JunctionSigns sketch={sketch} contents={c} />}
+        {junction.lights ? <JunctionLightsPanel sketch={sketch} junction={junction} contents={c} onHover={onHover} now={now} onPick={id => setSel(junctionSel([id]))} /> : <JunctionSigns sketch={sketch} contents={c} />}
         <div className="flex gap-1.5">
           <Button size="sm" variant="outline" className="flex-1" title="Take the surface away; its lanes and connectors stay" onClick={() => { editSketch(sk => remove(sk, { junctions: [junction.id] })); setSel(NO_SEL); }}>Remove surface</Button>
           <Button size="sm" variant="ghost" onClick={onDelete} aria-label="Delete the junction and what is on it" title="Delete the junction and its lanes and connectors (Del)"><Trash2 /></Button>

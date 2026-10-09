@@ -41,7 +41,7 @@ noted), **todo**, or **n/a** (not needed in V2).
 | Roundabouts | `state/roundabouts.ts`, `state/rings.ts`, `ring-inspector.tsx` | partial: rings drawn and reshaped by hand; to do: a roundabout tool (ring + entries/exits in one go) |
 | Stop / yield signs, all-way stop | `engine/sim/junctions.ts`, `inspector.tsx` | done |
 | Traffic lights: fixed / actuated, min green, phases worked out or by hand | `engine/signals.ts`, `engine/sim/signals.ts`, `phase-editor.tsx` | done (green per connector) |
-| Signal groups, green waves | `signal-groups.tsx`, `engine/signals.ts` (`greenWaveOffsets`) | todo |
+| Signal groups, green waves | `signal-groups.tsx`, `engine/signals.ts` (`greenWaveOffsets`) | done: groups on one fixed cycle, a coordinated phase with its share of green and offset, corridor order, Green wave from the distance by road, a timeline per group (`components/v2/signal-groups-v2.tsx`) |
 | Signal optimizer | `engine/optimize.ts`, `optimize-dialog.tsx` | todo |
 | Reversible lanes | `engine/sim/reversible.ts`, `reversible-lane.tsx` | todo |
 | Bus stops and lines | `lines-panel.tsx`, engine `stops` / `lines` | todo |
@@ -82,7 +82,7 @@ noted), **todo**, or **n/a** (not needed in V2).
 
 1. ~~Satellite / reference image under the sketch, with real scale~~ (done).
 2. ~~Demand (where cars come from and go to) and routing over the network~~ (done: rates, shares, shortest routes, journeys, rerouting; trucks, fuel, breakdowns).
-3. Signal groups and green waves, then the optimizer.
+3. ~~Signal groups and green waves~~ (done), then the optimizer.
 4. Buses, pedestrians and crossings, parking.
 5. Per-object live merge; ~~simulation in a worker for large plans~~ (done).
 6. 3D view, assistant, OSM import, data tables.

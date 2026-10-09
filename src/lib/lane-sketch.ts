@@ -58,6 +58,8 @@ export interface Sketch {
   crossings?: SketchCrossing[];
   /** journeys between a particular way in and way out (see `SketchJourney`) */
   journeys?: SketchJourney[];
+  /** junctions' lights run together (see `SketchSignalGroup`) */
+  signalGroups?: SketchSignalGroup[];
 }
 /**
  * Journeys, as V1's transit flows: `rate` vehicles an hour coming in on the way in that lane `from` is one of
@@ -885,7 +887,111 @@ export interface JunctionLights {
 export const DEFAULT_LIGHTS: JunctionLights = { green: 18, amber: 3, allRed: 2, mode: "pairs", minGreen: 6, actuated: true };
 export const MAX_PHASES = 8;
 export interface SignalPhase { name: string; ways: string[]; lanes: string[]; conns: string[]; start: number; green: number; minGreen: number }
-export interface SignalPlan { junction: string; cycle: number; amber: number; allRed: number; actuated: boolean; custom: boolean; phases: SignalPhase[]; /** every connector the lights hold (the ways in), green in a phase or not */ controlled: string[] }
+export interface SignalPlan {
+  junction: string; cycle: number; amber: number; allRed: number; actuated: boolean; custom: boolean; phases: SignalPhase[];
+  /** every connector the lights hold (the ways in), green in a phase or not */ controlled: string[];
+  /** in a signal group: its id, the coordinated phase (it starts the cycle) and when, in the group's cycle, it turns green; the cycle its phases need when the group's is too short */
+  coord?: { group: string; groupName: string; phase: number; offset: number; stretched?: number };
+}
+
+/** a junction in a signal group: when its coordinated phase turns green in the group's cycle (s), which phase that is, its share of the green */
+export interface SignalGroupMember { junction: string; offset: number; phase: number; share: number }
+/**
+ * Lights run together, as V1's signal groups: every member on the group's fixed `cycle`, its coordinated
+ * phase green first at its own offset into it (a green wave when the offsets follow the driving time
+ * between the junctions at `speed` km/h); members in corridor order. Members don't run actuated.
+ */
+export interface SketchSignalGroup { id: string; name: string; cycle: number; speed: number; members: SignalGroupMember[] }
+export const GROUP_CYCLE = 90, GROUP_SPEED = 50, GROUP_SHARE = 0.5;
+/** the group junction `id` is in */
+export const groupOf = (sk: Sketch, id: string) => (sk.signalGroups ?? []).find(g => g.members.some(m => m.junction === id)) ?? null;
+const withGroups = (sk: Sketch, gs: SketchSignalGroup[]): Sketch => { const { signalGroups: _, ...rest } = sk; const keep = gs.filter(g => g.members.length); return keep.length ? { ...rest, signalGroups: keep } : rest; };
+/** junction `id` out of its group (a group left empty goes) */
+export function leaveGroup(sk: Sketch, id: string): Sketch {
+  return withGroups(sk, (sk.signalGroups ?? []).map(g => ({ ...g, members: g.members.filter(m => m.junction !== id) })));
+}
+/** junction `id` into group `gid` (at its end), or into a new group (null); out of any other first */
+export function joinGroup(sk: Sketch, id: string, gid: string | null): [Sketch, SketchSignalGroup] {
+  const out = leaveGroup(sk, id), gs = out.signalGroups ?? [], m: SignalGroupMember = { junction: id, offset: 0, phase: 0, share: GROUP_SHARE };
+  if (gid) {
+    const g = gs.find(x => x.id === gid);
+    if (g) { const n = { ...g, members: [...g.members, m] }; return [withGroups(out, gs.map(x => (x === g ? n : x))), n]; }
+  }
+  const used = new Set(gs.map(g => g.id));
+  let k = gs.length + 1;
+  while (used.has(`g${k}`)) k++;
+  const g: SketchSignalGroup = { id: `g${k}`, name: `Signal group ${k}`, cycle: GROUP_CYCLE, speed: GROUP_SPEED, members: [m] };
+  return [withGroups(out, [...gs, g]), g];
+}
+export function updateGroup(sk: Sketch, gid: string, patch: Partial<Omit<SketchSignalGroup, "id" | "members">>): Sketch {
+  return withGroups(sk, (sk.signalGroups ?? []).map(g => (g.id === gid ? { ...g, ...patch } : g)));
+}
+export function deleteGroup(sk: Sketch, gid: string): Sketch { return withGroups(sk, (sk.signalGroups ?? []).filter(g => g.id !== gid)); }
+export function updateMember(sk: Sketch, id: string, patch: Partial<Omit<SignalGroupMember, "junction">>): Sketch {
+  return withGroups(sk, (sk.signalGroups ?? []).map(g => ({ ...g, members: g.members.map(m => (m.junction === id ? { ...m, ...patch } : m)) })));
+}
+/** junction `id` one place earlier (-1) or later (1) in its group's corridor */
+export function moveMember(sk: Sketch, id: string, by: -1 | 1): Sketch {
+  return withGroups(sk, (sk.signalGroups ?? []).map(g => {
+    const i = g.members.findIndex(m => m.junction === id), k = i + by;
+    if (i < 0 || k < 0 || k >= g.members.length) return g;
+    const ms = [...g.members];
+    [ms[i], ms[k]] = [ms[k], ms[i]];
+    return { ...g, members: ms };
+  }));
+}
+/**
+ * Metres by road from junction `a` to junction `b`: from where `a`'s connectors lead out, along lanes and
+ * connectors, to the end of one of `b`'s ways in (the shortest such way; null: none within 5 km)
+ */
+export function junctionDistance(sk: Sketch, a: SketchJunction, b: SketchJunction): number | null {
+  const ca = junctionContents(sk, a), cb = junctionContents(sk, b);
+  const goal = new Set(junctionApproaches(sk, cb).flatMap(w => w.lanes)), inA = new Set(ca.lanes), conns = new Set(ca.connectors);
+  const outs = new Map<string, SketchConnector[]>();
+  for (const c of sk.connectors) (outs.get(c.from.lane) ?? outs.set(c.from.lane, []).get(c.from.lane)!).push(c);
+  const plen = (ps: Pt[] | null) => { let d = 0; if (ps) for (let i = 1; i < ps.length; i++) d += dist(ps[i - 1], ps[i]); return d; };
+  const best = new Map<string, number>(), todo: { lane: string; s: number; d: number }[] = [];
+  for (const c of sk.connectors) if (conns.has(c.id) && !inA.has(c.to.lane)) todo.push({ lane: c.to.lane, s: c.to.s, d: 0 });
+  let found: number | null = null;
+  while (todo.length) {
+    todo.sort((p, q) => p.d - q.d);
+    const { lane, s, d } = todo.shift()!;
+    if (found !== null && d >= found) break;
+    const key = `${lane}@${s.toFixed(1)}`;
+    if ((best.get(key) ?? Infinity) <= d) continue;
+    best.set(key, d);
+    const l = laneById(sk, lane);
+    if (!l) continue;
+    const len = laneLength(l.shape);
+    if (goal.has(lane)) { found = Math.min(found ?? Infinity, d + Math.max(0, len - s)); continue; }
+    for (const c of outs.get(lane) ?? []) {
+      if (c.from.s < s - 0.5) continue;
+      const nd = d + (c.from.s - s) + plen(connectorPts(sk, c));
+      if (nd < 5000) todo.push({ lane: c.to.lane, s: c.to.s, d: nd });
+    }
+  }
+  return found;
+}
+/** a green wave: every member's offset from the one before it plus the driving time between them at the group's speed (the first's kept); and those distances */
+export function greenWave(sk: Sketch, g: SketchSignalGroup): { offsets: number[]; gaps: (number | null)[] } {
+  const v = g.speed / 3.6, offsets: number[] = [], gaps: (number | null)[] = [];
+  const J = (id: string) => sk.junctions.find(j => j.id === id);
+  g.members.forEach((m, i) => {
+    if (i === 0) { offsets.push(m.offset); gaps.push(null); return; }
+    const a = J(g.members[i - 1].junction), b = J(m.junction);
+    const d = a && b ? junctionDistance(sk, a, b) ?? junctionDistance(sk, b, a) : null;
+    gaps.push(d);
+    offsets.push(Math.round((((offsets[i - 1] + (d === null ? 0 : d / v)) % g.cycle) + g.cycle) % g.cycle));
+  });
+  return { offsets, gaps };
+}
+export function applyGreenWave(sk: Sketch, gid: string): Sketch {
+  const g = (sk.signalGroups ?? []).find(x => x.id === gid);
+  if (!g) return sk;
+  const { offsets } = greenWave(sk, g);
+  return updateGroupMembers(sk, gid, g.members.map((m, i) => ({ ...m, offset: offsets[i] })));
+}
+const updateGroupMembers = (sk: Sketch, gid: string, members: SignalGroupMember[]) => withGroups(sk, (sk.signalGroups ?? []).map(g => (g.id === gid ? { ...g, members } : g)));
 export type SignalState = "green" | "amber" | "red";
 
 /** the connectors leaving a junction's ways in at their ends (what its lights hold), by way */
@@ -931,6 +1037,22 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
     }
     raw = groups.map((g, i) => ({ name: `Phase ${i + 1}`, ways: g.map(key), lanes: g.flatMap(k => ways[k].lanes), conns: g.flatMap(k => conns[k]), green: L.green, minGreen }));
   }
+  // (in a signal group: the group's cycle, its coordinated phase first with its share of the green, the others sharing the rest; fixed, from its offset)
+  const g = groupOf(sk, j.id), m = g?.members.find(x => x.junction === j.id);
+  if (g && m && raw.length >= 2) {
+    const n = raw.length, lost = n * (L.amber + L.allRed), c = Math.min(Math.max(0, m.phase), n - 1);
+    const avail = Math.max(g.cycle - lost, n * 5), mine = Math.max(5, avail * m.share), rest = Math.max(5, (avail - mine) / (n - 1));
+    const r1 = (x: number) => Math.round(x * 10) / 10;
+    raw = raw.map((p, i) => ({ ...p, green: r1(i === c ? mine : rest), minGreen: r1(i === c ? mine : rest) }));
+    let t = 0;
+    const starts = new Array<number>(n);
+    for (let k = 0; k < n; k++) { const i = (c + k) % n; starts[i] = t; t += raw[i].green + L.amber + L.allRed; }
+    const phases = raw.map((p, i) => ({ ...p, start: starts[i] }));
+    return {
+      junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: false, custom: !!L.phases?.length, phases, controlled,
+      coord: { group: g.id, groupName: g.name, phase: c, offset: m.offset, ...(t > g.cycle + 0.05 ? { stretched: t } : {}) },
+    };
+  }
   let t = 0;
   const phases = raw.map(p => { const out = { ...p, start: t }; t += p.green + L.amber + L.allRed; return out; });
   return { junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: L.actuated ?? DEFAULT_LIGHTS.actuated, custom: !!L.phases?.length, phases, controlled };
@@ -939,7 +1061,7 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
 /** the light a lane has at time `t` in the fixed cycle (green if any of its connectors is), or null if the lights don't hold it */
 export function signalAt(plan: SignalPlan, lane: string, t: number): SignalState | null {
   if (!plan.phases.some(p => p.lanes.includes(lane))) return null;
-  const into = ((t % plan.cycle) + plan.cycle) % plan.cycle;
+  const t0 = t - (plan.coord?.offset ?? 0), into = ((t0 % plan.cycle) + plan.cycle) % plan.cycle;
   const p = plan.phases.find(x => x.lanes.includes(lane) && into >= x.start && into < x.start + x.green + plan.amber);
   return !p ? "red" : into < p.start + p.green ? "green" : "amber";
 }
@@ -959,9 +1081,21 @@ export class SignalController {
     // (the same lights edited: carrying on where they were)
     if (prev && prev.plan.junction === plan.junction && prev.phase < plan.phases.length) {
       this.phase = prev.phase; this.stage = prev.stage; this.into = prev.into; this.history = prev.history;
-    }
+    } else if (plan.coord) this.reset();
   }
-  reset() { this.phase = 0; this.stage = "green"; this.into = 0; this.history = [{ t: 0, phase: 0, stage: "green" }]; }
+  reset() {
+    const c = this.plan.coord ? this.clock(0) : { phase: 0, stage: "green" as const, into: 0 };
+    this.phase = c.phase; this.stage = c.stage; this.into = c.into; this.history = [{ t: 0, phase: c.phase, stage: c.stage }];
+  }
+  /** in a signal group: the phase on at time `t` by the group's clock, its stage and how long it has been on */
+  private clock(t: number): { phase: number; stage: "green" | "amber" | "allRed"; into: number } {
+    const P = this.plan, x = ((((t - P.coord!.offset) % P.cycle) + P.cycle) % P.cycle);
+    for (let i = 0; i < P.phases.length; i++) {
+      const p = P.phases[i], a = x - p.start;
+      if (a >= 0 && a < p.green + P.amber + P.allRed) return { phase: i, stage: a < p.green ? "green" : a < p.green + P.amber ? "amber" : "allRed", into: a < p.green ? a : a < p.green + P.amber ? a - p.green : a - p.green - P.amber };
+    }
+    return { phase: P.coord!.phase, stage: "green", into: 0 };
+  }
   private go(t: number, phase: number, stage: "green" | "amber" | "allRed") {
     this.phase = phase; this.stage = stage; this.into = 0;
     this.history.push({ t, phase, stage });
@@ -971,6 +1105,13 @@ export class SignalController {
   step(t: number, dt: number, demand: (conns: string[]) => boolean) {
     const P = this.plan, n = P.phases.length;
     if (!n) return;
+    // (in a signal group: by the group's clock)
+    if (P.coord) {
+      const c = this.clock(t);
+      if (c.phase !== this.phase || c.stage !== this.stage) this.go(t, c.phase, c.stage);
+      this.into = c.into;
+      return;
+    }
     this.into += dt;
     const ph = P.phases[this.phase];
     if (this.stage === "green") {
@@ -1975,6 +2116,19 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const trucks = num(j.trucks) ? Math.round(Math.min(100, Math.max(0, j.trucks))) : 0;
     journeys.push({ id: j.id, from: j.from, to: j.to, rate: Math.round(Math.min(5000, Math.max(0, j.rate))), ...(trucks ? { trucks } : {}) });
   }
+  const signalGroups: SketchSignalGroup[] = [], grouped = new Set<string>();
+  for (const g of Array.isArray(o.signalGroups) ? o.signalGroups : []) {
+    if (!str(g?.id) || signalGroups.some(y => y.id === g.id) || !Array.isArray(g.members)) continue;
+    const cycle = num(g.cycle) ? Math.round(Math.min(240, Math.max(20, g.cycle))) : GROUP_CYCLE;
+    const members: SignalGroupMember[] = [];
+    for (const m of g.members as unknown[]) {
+      const x = m as SignalGroupMember;
+      if (!str(x?.junction) || grouped.has(x.junction) || !junctions.some(j => j.id === x.junction)) continue;
+      grouped.add(x.junction);
+      members.push({ junction: x.junction, offset: num(x.offset) ? Math.min(cycle, Math.max(0, x.offset)) : 0, phase: num(x.phase) ? Math.max(0, Math.min(MAX_PHASES - 1, Math.round(x.phase))) : 0, share: num(x.share) ? Math.min(0.85, Math.max(0.2, x.share)) : GROUP_SHARE });
+    }
+    if (members.length) signalGroups.push({ id: g.id, name: typeof g.name === "string" && g.name.trim() ? g.name.trim().slice(0, 80) : g.id, cycle, speed: num(g.speed) ? Math.min(130, Math.max(10, g.speed)) : GROUP_SPEED, members });
+  }
   if (!lanes.length && !junctions.length && !geo && !crossings.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}) };
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}) };
 }
