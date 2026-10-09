@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, CircleDashed, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Waypoints, X } from "lucide-react";
+import { Car, CircleDashed, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +37,7 @@ import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/s
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
 import { stampRoundabout } from "@/lib/roundabout";
+import { tidySketch, type TidyReport } from "@/lib/sketch-tidy";
 
 type Tool = "select" | "lane" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing";
 /** what can be shown on the sketch, or hidden (kept in the browser) */
@@ -1000,6 +1001,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const onKeyUp = (e: React.KeyboardEvent) => { if (e.key === " ") { space.current = false; if (drag.current?.kind !== "pan") setHand(""); } };
 
   const toolInfo = TOOLS.find(t => t.id === tool)!;
+  /** the sketch tidied (see sketch-tidy.ts), and what was done told */
+  const tidy = () => {
+    let rep: TidyReport | null = null;
+    editSketch(s => { const t = tidySketch(s); rep = t.report; return t.report.kinks || t.report.folded || t.report.extended ? t.sketch : s; });
+    const r = rep as TidyReport | null;
+    if (!r || !(r.kinks || r.folded || r.extended)) { toast("Nothing to tidy", { description: r?.kept.length ? `${r.kept.length} short lanes left as they are (a sign, lights, a journey or turning share, or a road joined at that end).` : "No lane doubles back, none is too short for a car." }); return; }
+    setSel(NO_SEL);
+    toast.success("Tidied", { description: [r.kinks ? `${r.kinks} points doubling back taken out` : "", r.folded ? `${r.folded} very short lanes folded into ${r.added} connectors` : "", r.extended ? `${r.extended} short ways in or out lengthened` : "", r.kept.length ? `${r.kept.length} left as they are` : "", "⌘Z brings it back"].filter(Boolean).join(" · ") });
+  };
   const copy = () => {
     void navigator.clipboard.writeText(JSON.stringify(exportSketch(sketch, contents), null, 2))
       .then(() => toast.success("Copied the sketch", { description: "Lanes, connectors, roads and junctions (with what each takes in), as JSON." }), () => toast.error("Couldn't copy"));
@@ -1130,6 +1140,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
+            <Button size="sm" variant="outline" disabled={empty || readOnly} onClick={tidy}
+              title="Tidy: straighten lanes that double back on themselves, fold lanes too short for a car (under 4 m) between connectors into those connectors, and make short ways in and out 15 m long (as a conversion from V1 does; undo brings it back)"><Wand2 /> Tidy</Button>
             <Button size="sm" variant="ghost" aria-label="Clear the sketch" title="Clear the sketch (undo brings it back)" disabled={empty}
               onClick={() => { editSketch(s => ({ ...emptySketch(), ...(s.geo ? { geo: s.geo } : {}), ...(s.traffic ? { traffic: s.traffic } : {}) })); setSel(NO_SEL); }}><Trash2 /></Button>
           </div>

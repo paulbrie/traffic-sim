@@ -14,6 +14,7 @@
 import { compile, exitLanesOf, laneAllowed, type Compiled, type Edge } from "@/engine/compile";
 import type { Poly } from "@/engine/geom";
 import type { Network } from "@/engine/types";
+import { tidySketch, type TidyReport } from "./sketch-tidy";
 import {
   emptySketch, nearestOn, surfaceAround,
   type JunctionLights, type LaneControl, type LightsPhase, type Pt, type Sketch, type SketchConnector, type SketchJunction, type SketchLane, type SketchCrossing, type SketchRoad,
@@ -54,7 +55,7 @@ function bends(pts: Pt[]): Pt[] {
   return out;
 }
 
-export interface ConvertReport { lanes: number; connectors: number; roads: number; junctions: number; roundabouts: number; lights: number; signs: number; crossings: number; skipped: string[] }
+export interface ConvertReport { lanes: number; connectors: number; roads: number; junctions: number; roundabouts: number; lights: number; signs: number; crossings: number; skipped: string[]; /** what the tidy did (see sketch-tidy.ts) */ tidy: TidyReport }
 
 export function networkToSketch(net: Network): { sketch: Sketch; report: ConvertReport } {
   const c: Compiled = compile(net, { outlines: false });
@@ -187,5 +188,7 @@ export function networkToSketch(net: Network): { sketch: Sketch; report: Convert
   if (net.geo) sk.geo = { lat: net.geo.lat, lon: net.geo.lon };
   if (net.stops.length) skipped.push(`${net.stops.length} bus stops (and ${net.lines.length} lines): not in V2 yet`);
   if (net.buildings?.length) skipped.push(`${net.buildings.length} buildings: not in V2 yet`);
-  return { sketch: sk, report: { lanes: sk.lanes.length, connectors: sk.connectors.length, roads: sk.roads.length, junctions: sk.junctions.length, roundabouts, lights, signs, crossings: crossings.length, skipped } };
+  // (tidied: lanes doubling back straightened, the very short lanes between connectors folded into them, short ways in and out made longer)
+  const { sketch: out, report: tidy } = tidySketch(sk);
+  return { sketch: out, report: { lanes: out.lanes.length, connectors: out.connectors.length, roads: out.roads.length, junctions: out.junctions.length, roundabouts, lights, signs, crossings: crossings.length, skipped, tidy } };
 }

@@ -279,7 +279,7 @@ export async function convertPlanToV2(id: string): Promise<{ id: string; report:
     if (!state) throw new Error("Plan not found");
     const { sketch, report } = networkToSketch(state.network);
     if (!sketch.lanes.length) throw new Error("This plan has no roads to convert.");
-    const r = await plans.createV2From(plan, user, { sketch, note: `Converted from V1: ${report.lanes} lanes, ${report.connectors} connectors, ${report.junctions} junctions` }, edit);
+    const r = await plans.createV2From(plan, user, { sketch, note: `Converted from V1: ${report.lanes} lanes, ${report.connectors} connectors, ${report.junctions} junctions${report.tidy.folded || report.tidy.kinks || report.tidy.extended ? ` (tidied: ${report.tidy.folded} very short lanes folded into their connectors, ${report.tidy.kinks} points doubling back taken out, ${report.tidy.extended} short ways in or out lengthened)` : ""}` }, edit);
     if (!r) throw new Error("Plan not found");
     return { ...r, report };
   });
