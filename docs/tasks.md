@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T78 | Agents City / Table: ghost duplicates after the restart (one agent per name, ended sessions merged, guests flagged) | Alex, Tom | 2026-10-09 | |
 | T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | |
 | T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | after T68, T72 |
 | T72 | Re-test of T69 | Ramona | 2026-10-09 | after T68 |
