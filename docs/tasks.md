@@ -15,18 +15,19 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T59 | Fixes from T50: bridge input checks (panel ids, strict types), docs, a one-off empty Sketch window, the window's Console under the replay bar | Tatiana | 2026-10-09 | |
 | T58 | Admin: team recipes, a Teams page to start or stop a whole team with one button (docs/team.md as the first recipe) | Alex | 2026-10-09 | design first |
 | T57 | Agents City Desk: its labels on Alex's OverlayLabel (removeChild on Table → City) | Tom | 2026-10-09 | |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | |
 | T55 | Re-run Bistrița seeds 1–3 with T46 (readings at 5, 10, 15 min) | Ramona | 2026-10-09 | after T50 |
 | T52 | V1→V2 quick wins: per-road speed limits, hover cards, zoom keys and cursor x/y, a colour-by-speed switch with a legend, the sim settings that map | Tatiana | 2026-10-09 | |
-| T50 | Re-test of T48, and a smoke test of Next.js 16.4 | Ramona | 2026-10-09 | |
 | T49 | Next.js 16.3 → 16.4.0 in trafficsim, then the admin (after the user's deploy) | Alex | 2026-10-09 | |
 
 ## Done
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T50 | Re-test of T48 plus a Next.js 16.4 smoke test: all pass; 3 bridge input-check bugs, a one-off glitch | Ramona | 2026-10-09 | /tmp/ramona/t50/ → T59 |
 | T54 | Agents City: collapsible side panel and sections | Tom | 2026-10-09 | admin-dev |
 | T53 | Agents City: City / Table switch for everyone (T key, deep links) | Tom | 2026-10-09 | admin-dev |
 | T46 | Bistrița after 5e8d5b7: give-way stop points, mutual waits read at the step's start, side-by-side lanes not crossings, U-turns, spawn room; 900 s deadlocks 344/422/401 → 9/49/3 | Bob | 2026-10-09 | 657bb2d |
