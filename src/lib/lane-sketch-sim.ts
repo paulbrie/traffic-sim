@@ -326,6 +326,9 @@ function applyTuning(t: Tuning) {
 }
 /** seconds a car takes to move over to the lane it changes to */
 const SHIFT_T = 2;
+/** a way in whose first metres (this many) cross another's way: no car let in while that crossing is taken, or one is
+ * within SPAWN_COMING metres of it */
+const SPAWN_CLEAR = 10, SPAWN_COMING = 15;
 /** a lane ahead with less than this left (metres): the connector after it is looked at too (see `beyond`) */
 const SHORT_AHEAD = 30;
 /** m/s²: the hardest braking a lane change may ask of the car changing or the one coming up behind it */
@@ -1346,10 +1349,16 @@ export class SketchSim {
           return false;
         })) continue;
       }
+      // (nor where its lane starts across the way of another lane or connector with a vehicle on it there, or coming up
+      // to it: it would come in on top of it, too late to give way)
+      // (on a ring: how far before or past the crossing, along it)
+      const toCross = (k: Conflict, w: SimVehicle) => (k.other.ring ? ((((k.otherAt - w.pos) % k.other.len) + k.other.len * 1.5) % k.other.len) - k.other.len / 2 : k.otherAt - w.pos);
+      if (s.lane.conflicts.some(k => !k.join && k.at - k.before < SPAWN_CLEAR && (byEdge.get(k.other) ?? NO_VEHICLES).some(w => { const d = toCross(k, w); return d < k.otherBefore + SPAWN_COMING && d > -(k.otherAfter + w.len); }))) continue;
       if (jw) s.wait!.shift(); else s.next = this.t + this.gap(s.rate);
       if (s.wait && !s.wait.length) delete s.wait;
-      // (no faster than it can stop from behind the last car in)
-      const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - S0 - 1)));
+      // (no faster than it can stop from behind the last car in, nor than it can stop before the first crossing on its lane)
+      const zone = s.lane.conflicts.reduce((m, k) => (k.join || k.at - k.before < 0 ? m : Math.min(m, k.at - k.before)), Infinity);
+      const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - S0 - 1)), Math.sqrt(2 * B_COMF * Math.max(0, zone - 1)));
       const v: SimVehicle = { id: this.nextId++, seenX: NaN, seenY: NaN, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, vf: truck ? this.tuning.truckSpeed / 100 : 1, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, turn: null, born: this.t, fuel: 0, broken: null };
       if (jw) this.journeys.find(j => j.def.id === jw.journey)!.sent++;
       else s.truck = undefined;
