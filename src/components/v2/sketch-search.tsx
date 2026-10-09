@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { Kbd } from "@/components/ui/kbd";
 import { isFullCircle, laneLength, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
@@ -83,6 +83,10 @@ export function SketchSearch({ sketch, contents, cars, onGo, onClose }: {
   onGo: (to: SearchTarget) => void; onClose: () => void;
 }) {
   const [q, setQ] = useState(""), [at, setAt] = useState(0);
+  // (autoFocus can lose to whatever had focus as the box opened (a closing panel's button): focus it again
+  // once it is up, so typing and Esc are the box's)
+  const box = useRef<HTMLInputElement>(null);
+  useEffect(() => { const f = requestAnimationFrame(() => box.current?.focus()); return () => cancelAnimationFrame(f); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const items = useMemo(() => catalogue(sketch, contents, cars), []);
   const hits = useMemo(() => search(items, q), [items, q]);
@@ -100,7 +104,7 @@ export function SketchSearch({ sketch, contents, cars, onGo, onClose }: {
       <div className="flex h-fit max-h-[70%] w-[min(680px,calc(100%-2rem))] flex-col overflow-hidden rounded-lg border bg-background shadow-lg" role="dialog" aria-label="Search the sketch">
         <div className="flex items-center gap-2 border-b px-3">
           <Search className="size-4 text-muted-foreground" />
-          <input autoFocus value={q} onChange={e => { setQ(e.target.value); setAt(0); }} onKeyDown={onKey}
+          <input ref={box} autoFocus value={q} onChange={e => { setQ(e.target.value); setAt(0); }} onKeyDown={onKey}
             placeholder="Search roads, junctions, lanes (l12), connectors, crossings, cars (#123)…" aria-label="Search the sketch"
             className="h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" />
           <Kbd>Esc</Kbd>
