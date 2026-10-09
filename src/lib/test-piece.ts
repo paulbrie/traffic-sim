@@ -7,7 +7,7 @@
  * the plan's last run if there was one. Framework-free.
  */
 import { tidySketch } from "./sketch-tidy";
-import { isFullCircle, junctionContents, laneById, laneLength, nearestOn, pointAt, splitShape, type LaneAt, type LaneShape, type Pt, type Sketch, type SketchConnector, type SketchLane } from "./lane-sketch";
+import { contentsOf, isFullCircle, junctionContents, laneById, laneLength, nearestOn, pointAt, splitShape, type LaneAt, type LaneShape, type Pt, type Sketch, type SketchConnector, type SketchLane } from "./lane-sketch";
 
 export interface TestPieceOptions {
   /** how much of each lane leading in or out is kept beyond where the piece's connectors meet it (m) */
@@ -23,10 +23,13 @@ const MIN_END = 15;
 /** the piece of `sk` round the junctions, lanes and connectors chosen (ids), as a sketch of its own */
 export function testPiece(sk: Sketch, sel: { lanes: string[]; junctions: string[]; connectors?: string[] }, opts: TestPieceOptions = {}): { sketch: Sketch; report: TestPieceReport } {
   const CUT = Math.max(MIN_END, opts.cut ?? 70);
-  const js = sk.junctions.filter(j => sel.junctions.includes(j.id));
+  // (a junction comes whole when some of what is on it is chosen, as the structure tree lists it: a box takes in part of one)
+  const taken = new Set(sel.junctions), lanesSel = new Set(sel.lanes), connsSel = new Set(sel.connectors ?? []);
+  for (const [j, c] of contentsOf(sk)) if (c.connectors.some(x => connsSel.has(x)) || c.lanes.some(x => lanesSel.has(x))) taken.add(j);
+  const js = sk.junctions.filter(j => taken.has(j.id));
   // what is wholly in: the lanes chosen and those on the junctions; their connectors and the junctions'
   const core = new Set(sel.lanes), conns = new Set<string>(sel.connectors ?? []);
-  for (const j of js) { const c = junctionContents(sk, j); c.lanes.forEach(l => core.add(l)); c.connectors.forEach(x => conns.add(x)); }
+  for (const j of js) { const c = contentsOf(sk).get(j.id) ?? junctionContents(sk, j); c.lanes.forEach(l => core.add(l)); c.connectors.forEach(x => conns.add(x)); }
   for (const c of sk.connectors) if (core.has(c.from.lane) && core.has(c.to.lane)) conns.add(c.id);
   // the lanes they lead from or to, kept only near where they meet them: `want` metres before (leading in) and after
   // (leading out); a lane shorter than that carries on into the lane before it (after it), the straightest way on
@@ -65,6 +68,10 @@ export function testPiece(sk: Sketch, sel: { lanes: string[]; junctions: string[
     if (leadsIn && lo < CUT) back(id, CUT - lo, 0);
     if (leadsOut && L - hi < CUT) on(id, CUT - (L - hi), 0);
   }
+  // (and the plan's connectors between lanes in the piece, where both their ends are in what is kept: a way out of a
+  // junction lane into a lane the piece has through another way, as in the plan)
+  const keeps = (a: LaneAt) => core.has(a.lane) || (span.has(a.lane) && a.s >= span.get(a.lane)![0] - 0.5 && a.s <= span.get(a.lane)![1] + 0.5);
+  for (const c of sk.connectors) if (!conns.has(c.id) && keeps(c.from) && keeps(c.to)) conns.add(c.id);
   const cs = sk.connectors.filter(c => conns.has(c.id));
   let cutN = 0;
   const lanes: SketchLane[] = [];

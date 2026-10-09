@@ -476,12 +476,14 @@ export function pastePart(sk: Sketch, part: Sketch, dx: number, dy: number): { s
   const connIds = new Map(part.connectors.map(c => [c.id, fresh("c")]));
   const connectors = part.connectors.map(c => ({ id: connIds.get(c.id)!, from: { ...c.from, lane: laneIds.get(c.from.lane)! }, to: { ...c.to, lane: laneIds.get(c.to.lane)! }, ...(c.via?.length ? { via: c.via.map(t.pt) } : {}), ...(c.straight ? { straight: true as const } : {}) }));
   const roadIds = new Map(part.roads.map(r => [r.id, fresh("r")]));
-  const roads = part.roads.map(r => ({ id: roadIds.get(r.id)!, name: `${r.name} copy`, lanes: r.lanes.map(l => laneIds.get(l)!) }));
+  // (a copy's name says so once: a copy of a copy is "… copy" still)
+  const copyName = (n: string) => (/ copy$/.test(n) ? n : `${n} copy`);
+  const roads = part.roads.map(r => ({ id: roadIds.get(r.id)!, name: copyName(r.name), lanes: r.lanes.map(l => laneIds.get(l)!) }));
   // (the lights' phases set by hand and the turning shares name connectors, roads and lanes: by their new ids)
   const way = (k: string) => (k.startsWith("lane:") ? (laneIds.has(k.slice(5)) ? `lane:${laneIds.get(k.slice(5))}` : null) : roadIds.get(k) ?? null);
   const lights = (l: JunctionLights): JunctionLights => (l.phases ? { ...l, phases: l.phases.map(p => ({ ...p, conns: p.conns.flatMap(c => (connIds.has(c) ? [connIds.get(c)!] : [])) })) } : { ...l });
   const splits = (ss: JunctionSplit[]) => ss.flatMap(x => { const from = way(x.from); if (!from) return []; const shares = Object.fromEntries(Object.entries(x.shares).flatMap(([k, v]) => { const w = way(k); return w ? [[w, v]] : []; })); return [{ from, shares }]; });
-  const junctions = part.junctions.map(j => { const sp = j.splits ? splits(j.splits) : []; return { id: fresh("j"), name: `${j.name} copy`, outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.lights ? { lights: lights(j.lights) } : {}), ...(sp.length ? { splits: sp } : {}) }; });
+  const junctions = part.junctions.map(j => { const sp = j.splits ? splits(j.splits) : []; return { id: fresh("j"), name: copyName(j.name), outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.lights ? { lights: lights(j.lights) } : {}), ...(sp.length ? { splits: sp } : {}) }; });
   return {
     sketch: { ...sk, lanes: [...sk.lanes, ...lanes], connectors: [...sk.connectors, ...connectors], roads: [...sk.roads, ...roads], junctions: [...sk.junctions, ...junctions] },
     piece: { lanes: lanes.map(l => l.id), connectors: connectors.map(c => c.id), junctions: junctions.map(j => j.id) },

@@ -343,9 +343,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       frame.current = 0;
       const c = canvas.current;
       if (!c) return;
-      // (the background, V2 plans only: the imagery where the plan is, the reference image)
+      // (the background: the imagery where the plan is, the reference image; in the Sketch window the imagery only, where it has a place on Earth)
       const l = live.current, bg = (x: typeof l): Background => ({ geo: x.sketch.geo ?? null, satellite: x.layers.satellite, sat: x.sat, underlay: x.layers.image ? x.underlay : null, img: x.ulImg, calib: x.calib, onTile: redraw });
-      const st: PaintState = { ...live.current, sketch: dragSk.current ?? live.current.sketch, ...(dragSk.current ? { contents: contentsOf(dragSk.current) } : {}), view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : null };
+      const st: PaintState = { ...live.current, sketch: dragSk.current ?? live.current.sketch, ...(dragSk.current ? { contents: contentsOf(dragSk.current) } : {}), view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : l.sketch.geo ? { ...bg(l), underlay: null, calib: null } : null };
       const w = c.clientWidth, h = c.clientHeight, v = view.current, key = `${w}x${h}:${v.cx},${v.cy},${v.scale}`;
       kept.current ??= { canvas: document.createElement("canvas"), stale: true, key: "" };
       const k = kept.current;
@@ -476,21 +476,26 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (!s.lanes.length && !s.junctions.length && !s.connectors.length) { toast("Select what to test first", { description: "A junction, lanes, a road, or a box round a few junctions." }); return; }
     // (the traffic measured in the plan's last run: each road's vehicles an hour shared among its lanes)
     const rates = new Map<string, number>(), t = Math.max(1, stats?.t ?? 0);
-    for (const r of stats?.roads ?? []) { const road = sk.roads.find(x => x.id === r.id); if (road?.lanes.length) for (const l of road.lanes) rates.set(l, ((r.through / t) * 3600) / road.lanes.length); }
+    // (each lane's own count where the run kept one: the flow that way, not both ways' spread over all)
+    for (const r of (stats?.roads ?? []) as (NonNullable<SimStats["roads"]>[number] & { lanes?: Record<string, number> })[]) {
+      const road = sk.roads.find(x => x.id === r.id);
+      if (road?.lanes.length) for (const l of road.lanes) rates.set(l, r.lanes ? ((r.lanes[l] ?? 0) / t) * 3600 : ((r.through / t) * 3600) / road.lanes.length);
+    }
     // (a run shorter than this hasn't filled the roads: what it measured is too little)
     const measured = !!stats && stats.t >= MEASURE_AFTER;
     const { sketch: piece, report } = testPiece(sk, s, { cut: tis.cut, rates: measured ? rates : undefined });
     if (!piece.lanes.length) { toast("Nothing to test there", { description: "The selection has no lanes, and no junction with lanes or connectors on it." }); return; }
-    let added = false;
+    let added = false, addedPiece: Piece | undefined;
     scratchSketch.edit(cur => {
       if (tis.mode === "replace" || (!cur.lanes.length && !cur.junctions.length)) return { ...piece, ...(piece.geo ?? cur.geo ? { geo: piece.geo ?? cur.geo } : {}) };
       // (beside what is there: where it is on the plan, as the Sketch's own origin has it, so the imagery still lines up)
       added = true;
       const o = geoShift(sk.geo, cur.geo), r = pastePart(cur, piece, o.x, o.y);
+      addedPiece = r.piece;
       return { ...r.sketch, ...(cur.geo ?? sk.geo ? { geo: cur.geo ?? sk.geo } : {}), ...(cur.traffic ?? piece.traffic ? { traffic: cur.traffic ?? piece.traffic } : {}) };
     });
     ui.getValue().sketch = true;
-    requestScratchFocus({ run: tis.run });
+    requestScratchFocus({ run: tis.run, piece: addedPiece });
     const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
     const what = report.junctions ? n(report.junctions, "junction") : n(report.lanes, "lane");
     toast.success(`Testing ${what} in the Sketch`, {
@@ -1071,8 +1076,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const f = takeScratchFocus();
       if (!f) return;
       setSel(NO_SEL); setSelCar(null);
-      if (sim.current) resetCars();
-      fit();
+      // (new cars for the piece: the cars before, reset, would still have the last sketch for a quarter of a second,
+      // starting on lanes that are going and with what came in where; then lost, and nothing coming in)
+      if (sim.current) {
+        sim.current.terminate();
+        const s = new SketchSimClient(live.current.sketch, live.current.sketch.traffic ?? DEFAULT_SIM, onSimFrame);
+        sim.current = s; store.setSim(s);
+        setStats(null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null);
+        if (running) s.run(true, simSpeed);
+      }
+      // (added beside what was there: the view on what was added)
+      if (f.piece) zoomTo(f.piece); else fit();
       if (f.run && !running) play();
     };
   });
@@ -2032,7 +2046,8 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
             onClick={e => { e.stopPropagation(); fold(o.key); }}><ChevronRight className={cn("size-3 transition-transform", !closed.has(o.key) && "rotate-90")} /></button>
         : <span className="size-4 shrink-0" />}
       <span className="min-w-0 flex-1 truncate">{o.label}</span>
-      {o.note !== undefined && <span className="shrink-0 truncate text-[11px] text-muted-foreground">{o.note}</span>}
+      {/* (the note gives way past 60% of the row: the name or id beside it stays readable, "l3222" not "L…") */}
+      {o.note !== undefined && <span className="max-w-[60%] min-w-0 truncate text-[11px] text-muted-foreground" title={typeof o.note === "string" ? o.note : undefined}>{o.note}</span>}
     </div>
   );
   const heading = (key: string, text: string, n: number) => (

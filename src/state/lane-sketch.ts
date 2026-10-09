@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 import { Subject } from "subjecto";
-import { emptySketch, settle, type Pt, type Sketch } from "@/lib/lane-sketch";
+import { emptySketch, settle, type Piece, type Pt, type Sketch } from "@/lib/lane-sketch";
 import type { SketchSimClient } from "./sketch-sim-client";
 import { laneSketch$, sketchReplaced } from "./store";
 
@@ -121,7 +121,7 @@ export function readClipText(text: string): SketchClip | null {
 }
 
 /** what the Sketch window does when it next shows a piece put in it ("Test in Sketch"): the view fitted to it, nothing selected, the cars run if `run` */
-export interface ScratchFocus { run: boolean }
+export interface ScratchFocus { run: boolean; /** added beside what was there: the view fitted to this only */ piece?: Piece }
 let scratchFocus: ScratchFocus | null = null;
 const scratchFocusWaiting = new Set<() => void>();
 export function requestScratchFocus(f: ScratchFocus) { scratchFocus = f; scratchFocusWaiting.forEach(g => g()); }
