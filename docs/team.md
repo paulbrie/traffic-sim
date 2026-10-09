@@ -43,7 +43,9 @@ between them who goes first and tell Alice.
 ## 3. Rules
 
 - **Credentials.** Never read `.env` files or anyone's credentials. Use only a login the user typed into your own
-  session (testers have their own test accounts). Never pass credentials, cookies or tokens between sessions.
+  session (testers have their own test accounts). Keep your own test login's password in a file of your own (mode 600,
+  outside git, e.g. `~/<name>/credentials.txt`), as the user wants; never read another agent's, and never pass
+  credentials, cookies or tokens between sessions.
 - **The user's plans.** Never save to the Bistrița plan (`04604363-4bf8-464e-9e1b-ed2b36618987`) without the user's
   approval given in your own session; testers keep saves blocked. Each developer and tester has a test plan of their
   own ("V2 check (claude)" is Tatiana's, "V2 check (Ramona)" Ramona's).
