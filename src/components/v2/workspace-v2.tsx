@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { useDeepSubject } from "subjecto/react";
 import Link from "next/link";
 import { ArrowLeft, Eye, PenLine } from "lucide-react";
@@ -23,10 +23,21 @@ import { startUnderlayImage } from "@/state/underlay-image";
  * (saved with it, in the sketch's `scratch`).
  */
 export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
-  // load once per mount (keyed by plan id), before the editor reads the stores
-  useState(() => { loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read", plan.sketch); startUnderlayImage(); return plan.id; });
+  // load once per mount (keyed by plan id), before the editor reads the stores: in a layout effect, the page
+  // shown only once it has run. (Not while rendering: going from one plan to another, this page renders while
+  // the last one is still up, and loading then put the new sketch under the old plan's header and updated
+  // the old editor from this render.)
+  const [loaded, setLoaded] = useState(false);
+  useLayoutEffect(() => {
+    loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read", plan.sketch);
+    startUnderlayImage();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the stores are outside React: loaded, the page can show
+    setLoaded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useAutosave(plan.id);
   useLive(plan.id);
+  if (!loaded) return null;
   return (
     <TooltipProvider>
       <div className="flex h-dvh flex-col overflow-hidden">

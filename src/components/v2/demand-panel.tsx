@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { addJourney, deleteJourney, demandWays, laneInRate, laneOutWeight, laneById, setInRate, setOutWeight, updateJourney, type DemandWay, type Pt, type Sketch, type SketchJourney } from "@/lib/lane-sketch";
 import type { JourneyStats } from "@/lib/lane-sketch-sim";
 import { useSketchStore } from "@/state/lane-sketch";
+import { compassNames } from "./compass-names";
 import { InspectorPanel } from "./inspector-panel";
 
 export function DemandPanel({ sketch, readOnly, onFocus, results, onGo }: {
@@ -75,29 +76,9 @@ export function DemandPanel({ sketch, readOnly, onFocus, results, onGo }: {
   );
 }
 
-const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-/**
- * The ways named so they can be told apart: those sharing a name (two roads both called Drumul Cetății) get
- * where each is from the middle of them, "Drumul Cetății (N)" and "(S)", and a number on top if they still
- * match. Copies: the ways themselves are shared.
- */
+/** the ways named so they can be told apart (two roads both called Drumul Cetății: "(N)", "(S)"); copies, the ways themselves are shared */
 function distinctNames({ entries, exits }: { entries: DemandWay[]; exits: DemandWay[] }) {
-  // (y grows southwards)
-  const dir = (p: Pt, m: Pt) => COMPASS[Math.round((((Math.atan2(p.x - m.x, m.y - p.y) * 180) / Math.PI + 360) % 360) / 45) % 8];
-  const name = (ways: DemandWay[]) => {
-    const same = new Map<string, DemandWay[]>();
-    for (const w of ways) same.set(w.name, [...(same.get(w.name) ?? []), w]);
-    const mid = new Map([...same].map(([n, ws]) => [n, { x: ws.reduce((a, w) => a + w.at.x, 0) / ws.length, y: ws.reduce((a, w) => a + w.at.y, 0) / ws.length }]));
-    const named = ways.map(w => (same.get(w.name)!.length > 1 ? { ...w, name: `${w.name} (${dir(w.at, mid.get(w.name)!)})` } : w));
-    const again = new Map<string, number>(), seen = new Map<string, number>();
-    for (const w of named) again.set(w.name, (again.get(w.name) ?? 0) + 1);
-    return named.map(w => {
-      if (again.get(w.name)! < 2) return w;
-      const n = (seen.get(w.name) ?? 0) + 1;
-      seen.set(w.name, n);
-      return { ...w, name: `${w.name.slice(0, -1)} ${n})` };
-    });
-  };
+  const name = (ways: DemandWay[]) => { const ns = compassNames(ways, w => w.name, w => w.at); return ways.map((w, i) => (ns[i] === w.name ? w : { ...w, name: ns[i] })); };
   return { entries: name(entries), exits: name(exits) };
 }
 

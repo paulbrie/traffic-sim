@@ -22,7 +22,7 @@ import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStat
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
-import { setSketchClip, sketchClip, useSketchStore } from "@/state/lane-sketch";
+import { clipText, readClipText, setSketchClip, sketchClip, useSketchStore } from "@/state/lane-sketch";
 import { readPalette, speedColor } from "@/render/palette";
 import { arrowGlyph } from "@/render/draw2d";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
@@ -536,9 +536,23 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (rh) editSketch(k => transformPiece(k, withLeads(k, turning(s)), rotation(rh.o, a)));
   };
   const copySel = () => {
-    const sk = live.current.sketch, s = live.current.sel, b = boundsOfPts(piecePoints(sk, s));
-    if (!b || (!s.lanes.length && !s.junctions.length)) return false;
-    setSketchClip({ part: copyPart(sk, s), centre: { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 }, pastes: 0 });
+    const sk = live.current.sketch, s0 = live.current.sel;
+    if (!s0.lanes.length && !s0.junctions.length) return false;
+    // (a junction comes with what is on it and the whole lanes its connectors join, so it pastes working)
+    const lanes = new Set(s0.lanes);
+    for (const id of s0.junctions) {
+      const j = sk.junctions.find(x => x.id === id);
+      if (!j) continue;
+      const c = live.current.contents.get(id) ?? junctionContents(sk, j);
+      for (const l of c.lanes) lanes.add(l);
+      for (const cid of c.connectors) { const x = sk.connectors.find(y => y.id === cid); if (x) { lanes.add(x.from.lane); lanes.add(x.to.lane); } }
+    }
+    const s = { ...s0, lanes: [...lanes] }, b = boundsOfPts(piecePoints(sk, s));
+    if (!b) return false;
+    const clip = { part: copyPart(sk, s), centre: { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 }, pastes: 0, stamp: Math.random().toString(36).slice(2) };
+    setSketchClip(clip);
+    // (and on the system clipboard, to paste in another tab; not allowed: this tab's copy is enough)
+    void navigator.clipboard?.writeText(clipText(clip)).catch(() => {});
     return true;
   };
   const place = (part: Sketch, dx: number, dy: number) => {
@@ -548,10 +562,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     changeTool("select");
   };
   /** the copied piece pasted at the cursor (or, with the cursor away, a little off the last one) */
-  const paste = () => {
-    const k = sketchClip();
+  const paste = async () => {
+    // (the system clipboard's piece if it is another than this tab's last copy (copied in another tab), else this tab's)
+    const c = cursor.current?.p, mine = sketchClip();
+    let k = mine;
+    try { const o = readClipText(await navigator.clipboard.readText()); if (o && o.stamp !== mine?.stamp) { setSketchClip(o); k = o; } } catch { /* not allowed: this tab's */ }
     if (!k) return;
-    const c = cursor.current?.p;
     const at = c ? { x: Math.round(c.x * 2) / 2, y: Math.round(c.y * 2) / 2 } : null;
     k.pastes++;
     place(k.part, at ? at.x - k.centre.x : 4 * k.pastes, at ? at.y - k.centre.y : 4 * k.pastes);
@@ -1022,7 +1038,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (mod && k === "y") { e.preventDefault(); redoSketch(); return; }
     if (mod && k === "c") { if (copySel()) e.preventDefault(); return; }
     if (mod && k === "x") { if (copySel()) { e.preventDefault(); deleteSel(); } return; }
-    if (mod && k === "v") { e.preventDefault(); paste(); return; }
+    if (mod && k === "v") { e.preventDefault(); void paste(); return; }
     if (mod && k === "d") { e.preventDefault(); duplicate(); return; }
     if (mod) return;
     if (k === " ") { e.preventDefault(); space.current = true; if (hand === "") setHand("grab"); return; }
@@ -1046,7 +1062,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "f") { fit(); return; }
     if (k === "p") { play(); return; }
     // (the replay: a step back or forward; Shift, a second)
-    if (k === "arrowleft" || k === "arrowright" || ((k === "," || k === ".") && live.current.replayT !== null)) {
+    // (not on a slider: the replay's own thumb steps it already, and once is enough)
+    if ((k === "arrowleft" || k === "arrowright" || ((k === "," || k === ".") && live.current.replayT !== null)) && !(e.target as HTMLElement).closest("[role=slider]")) {
       e.preventDefault();
       stepReplay((k === "arrowleft" || k === "," ? -1 : 1) * (e.shiftKey ? 1 : REPLAY_STEP));
       return;
@@ -1439,10 +1456,10 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover, now, onPick 
         <ToggleGroupItem value="custom" className="h-7 flex-1 px-1 text-[11px]" title="Phases set by hand: their order, greens, and which connectors go in each">By hand</ToggleGroupItem>
       </ToggleGroup>
       {!phases.length ? (
-        <div className="grid gap-0.5">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
           {plan.phases.map((p, i) => (
             <div key={i} className="flex justify-between gap-2 rounded px-1 text-xs hover:bg-muted" onMouseEnter={() => onHover({ conns: p.conns })} onMouseLeave={() => onHover(null)}>
-              <span className="truncate"><span className="text-muted-foreground">{p.name}:</span> {p.ways.map(name).join(" + ")}</span>
+              <span className="min-w-0 truncate"><span className="text-muted-foreground">{p.name}:</span> {timesEach(p.ways.map(name)).join(" + ")}</span>
               <span className="shrink-0 font-mono tabular text-muted-foreground">{p.green} s</span>
             </div>
           ))}
@@ -2092,6 +2109,12 @@ interface PaintState {
 }
 
 /** a marking's box (kept: markings are kept per sketch) */
+/** names, each once, with how many times it came ("Bulevardul Decebal ×2"), in the order first met */
+function timesEach(names: string[]): string[] {
+  const n = new Map<string, number>();
+  for (const x of names) n.set(x, (n.get(x) ?? 0) + 1);
+  return [...n].map(([x, k]) => (k > 1 ? `${x} ×${k}` : x));
+}
 const markBoxes = new WeakMap<{ pts: Pt[] }, { x0: number; y0: number; x1: number; y1: number }>();
 function markBox(m: { pts: Pt[] }) {
   let b = markBoxes.get(m);

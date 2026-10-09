@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ClipboardCopy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import type { Sketch } from "@/lib/lane-sketch";
+import { laneById, laneLength, pointAt, type Sketch } from "@/lib/lane-sketch";
 import type { SimStats } from "@/lib/lane-sketch-sim";
 import { cn } from "@/lib/utils";
+import { compassNames } from "./compass-names";
 import { InspectorPanel } from "./inspector-panel";
 
 /** a road's results as the sim keeps them (see `RoadStats` in lane-sketch-sim.ts) */
@@ -29,9 +30,10 @@ export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: Si
   const [{ by, flip }, setSort] = useState<{ by: Key | "name"; flip: boolean }>({ by: "delay", flip: false });
   const sortBy = (k: Key | "name") => setSort(s => ({ by: k, flip: s.by === k ? !s.flip : false }));
   const [n, setN] = useState(12);
+  const name = useMemo(() => roadNames(sketch), [sketch]);
   const list = (stats as SimStats & { roads?: RoadRow[] }).roads;
   if (!list?.length) return null;
-  const t = Math.max(1, stats.t), name = new Map(sketch.roads.map(r => [r.id, r.name]));
+  const t = Math.max(1, stats.t);
   const rows = list.filter(r => r.through > 0).map(r => ({
     r, rate: (r.through / t) * 3600, speed: r.vehHours > 0 ? r.vehKm / r.vehHours : 0, delay: r.delay / r.through, queue: r.queueMax,
   }));
@@ -79,6 +81,17 @@ export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: Si
       {rows.length > n && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setN(k => k + 25)}>Show {Math.min(25, rows.length - n)} more ({rows.length - n} of {rows.length} roads not shown yet)</button>}
     </InspectorPanel>
   );
+}
+
+/** each road's name, those sharing one told apart by where they lie ("Strada Zimbrului (N)", "(S)") */
+function roadNames(sk: Sketch): Map<string, string> {
+  // (a road's middle: the middle of its lanes' middles)
+  const mid = (lanes: string[]) => {
+    const ps = lanes.flatMap(id => { const l = laneById(sk, id); return l ? [pointAt(l.shape, laneLength(l.shape) / 2).p] : []; });
+    return ps.length ? { x: ps.reduce((a, p) => a + p.x, 0) / ps.length, y: ps.reduce((a, p) => a + p.y, 0) / ps.length } : { x: 0, y: 0 };
+  };
+  const ns = compassNames(sk.roads, r => r.name, r => mid(r.lanes));
+  return new Map(sk.roads.map((r, i) => [r.id, ns[i]]));
 }
 
 const fmtS = (s: number) => (s < 60 ? `${s.toFixed(s < 10 ? 1 : 0)} s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`);
