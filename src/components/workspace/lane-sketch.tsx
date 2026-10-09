@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { cn } from "@/lib/utils";
 import { unproject } from "@/lib/osm/area";
 import {
-  LANE_WIDTH, addLane, contentsOf, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, contentsOf, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, junctionHoles, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -24,6 +24,7 @@ import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { setSketchClip, sketchClip, useSketchStore } from "@/state/lane-sketch";
 import { readPalette, speedColor } from "@/render/palette";
+import { arrowGlyph } from "@/render/draw2d";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField, Stepper } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
@@ -2253,6 +2254,12 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       ctx.moveTo(p.x - d.x * k - d.y * k, p.y - d.y * k + d.x * k); ctx.lineTo(p.x, p.y); ctx.lineTo(p.x - d.x * k + d.y * k, p.y - d.y * k - d.x * k);
       ctx.stroke();
     }
+  }
+  // turn arrows near the ends of the lanes leading into junctions, painted on the road (over the lanes' lines), close up
+  if (S && !far && st.layers.markings && v.scale >= 3) {
+    const ap = new Path2D();
+    for (const a of turnArrows(sk)) if (vis.lanes.has(a.lane) && a.p.x > viewBox.x0 && a.p.x < viewBox.x1 && a.p.y > viewBox.y0 && a.p.y < viewBox.y1) arrowGlyph(ap, a.p, a.d, a.turns);
+    ctx.strokeStyle = pal.mark; ctx.lineWidth = 0.22; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke(ap); ctx.lineCap = "butt"; ctx.lineJoin = "miter";
   }
   // stop and yield lines across lane ends: on the surfaces, white as on the plan's map (a solid bar, a
   // dashed one); otherwise a red bar, or a row of teeth pointing at the traffic coming up

@@ -2286,3 +2286,40 @@ export function setSplit(sk: Sketch, junction: string, from: string, shares: Rec
 }
 /** the way in a lane is part of, as turning shares name it */
 export const approachKey = (a: Approach) => a.road ?? `lane:${a.lanes[0]}`;
+
+// ---------------------------------------------------------------- turn arrows
+
+/**
+ * A turn arrow painted on a lane, as V1's: `at` metres before its end (`p`, facing `d`), showing the ways its
+ * connectors leaving there go: L(eft), S(traight on), R(ight), U(-turn), in that order.
+ */
+export interface TurnArrow { lane: string; p: Pt; d: Pt; turns: string; level: number }
+const arrowsKept = new WeakMap<Sketch, TurnArrow[]>();
+/** the turn arrows of every lane (not a ring) at least 12 m long whose connectors leave at its end */
+export function turnArrows(sk: Sketch): TurnArrow[] {
+  let x = arrowsKept.get(sk);
+  if (x) return x;
+  x = [];
+  const outs = new Map<string, SketchConnector[]>();
+  for (const c of sk.connectors) (outs.get(c.from.lane) ?? outs.set(c.from.lane, []).get(c.from.lane)!).push(c);
+  for (const l of sk.lanes) {
+    const cs = outs.get(l.id);
+    if (!cs || isFullCircle(l.shape) || (l.shape.kind === "line" && l.shape.closed)) continue;
+    const L = laneLength(l.shape);
+    if (L < 12) continue;
+    const atEnd = cs.filter(c => c.from.s >= L - EXIT_CLEAR);
+    if (!atEnd.length) continue;
+    const end = pointAt(l.shape, L).d, set = new Set<string>();
+    for (const c of atEnd) {
+      const to = laneById(sk, c.to.lane);
+      if (!to) continue;
+      const b = pointAt(to.shape, c.to.s).d, ang = Math.atan2(end.x * b.y - end.y * b.x, end.x * b.x + end.y * b.y);
+      set.add(Math.abs(ang) < 0.5 ? "S" : Math.abs(ang) > 2.6 ? "U" : ang > 0 ? "R" : "L");
+    }
+    if (!set.size) continue;
+    const at = pointAt(l.shape, L - 6);
+    x.push({ lane: l.id, p: at.p, d: at.d, turns: ["L", "S", "R", "U"].filter(t => set.has(t)).join(""), level: l.level ?? 0 });
+  }
+  arrowsKept.set(sk, x);
+  return x;
+}

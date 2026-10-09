@@ -32,7 +32,7 @@ noted), **todo**, or **n/a** (not needed in V2).
 | Feature | V1 files | V2 status |
 |---|---|---|
 | Roads with lanes, curves; lanes side by side | `engine/types.ts`, `compile.ts`, `state/ops.ts` | done (lanes, arcs, rings, curved points, roads aligned) |
-| Lane connections, turns per lane, arrows | `lane-connections.tsx`, `lane-arrows.tsx`, `state/connections.ts` | partial: connectors drawn by hand; to do: turn arrows painted on lanes |
+| Lane connections, turns per lane, arrows | `lane-connections.tsx`, `lane-arrows.tsx`, `state/connections.ts` | done: connectors drawn by hand; turn arrows painted near each lane's end from where its connectors go (`turnArrows`, V1's glyphs) |
 | Splitting / merging roads | `merge-roads.ts`, `carriageways.ts` | partial: slice tool and road links; to do: merge two roads into one |
 | Junctions: shapes, surfaces | `state/junctions.ts`, `junction-shape.tsx` | done (drawn or automatic, smoothed, curved borders) |
 | Junction templates and library | `junction-library.tsx`, `server/data/templates.ts` | todo |
@@ -63,7 +63,7 @@ noted), **todo**, or **n/a** (not needed in V2).
 | Simulation in a web worker | `state/sim.worker.ts`, `sim-controller.ts` | done (`state/sketch-sim.worker.ts`, `sketch-sim-client.ts`) |
 | Speed, run / pause, restart | `workspace.tsx` | done (in the editor's header) |
 | Replay | `engine/sim/recorder.ts`, `replay-bar.tsx` | done (10 min; V1's replay bar) |
-| Stats, console, perf, data tables, hover info | `problem-console.tsx`, `perf-panel.tsx`, `dataview.tsx`, `hover-info.tsx` | partial: traffic panel and car inspector; to do: console, data tables |
+| Stats, console, perf, data tables, hover info | `problem-console.tsx`, `perf-panel.tsx`, `dataview.tsx`, `hover-info.tsx` | partial: traffic panel, car inspector, each junction's results (veh/h, delay, queue, fuel; `components/v2/junction-results.tsx`); to do: console, roads' table |
 | Fuel / emissions | `engine/fuel.ts`, `fuel.tsx` | done: V1's fuel model for the whole sketch, with CO₂ (`components/v2/fuel-panel.tsx`); to do: per junction |
 | Simulation settings, seed | `engine/params.ts`, `sim-settings.tsx` | done: drivers, trucks, junctions, pedestrians, breakdowns, fuel (`lib/sketch-tuning.ts`, `components/v2/sim-settings-v2.tsx`); a seed, Restart replays the run |
 | Trucks | `engine/params.ts` (Trucks), `engine/sim/*` | done: a share of the traffic, 12 m, cab and trailer, own acceleration / gap / speed |
