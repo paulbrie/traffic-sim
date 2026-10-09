@@ -214,6 +214,8 @@ export interface SimVehicle {
   stopped: boolean;
 }
 
+/** (no vehicles: a cell of the grid the collision check looks in, empty) */
+const NO_CARS: number[] = [];
 const LEN = 4.5, A_LAT = 2.5, LOOK = 120;
 /** a truck's cab, and how far its trailer reaches under it (to the hitch) */
 const CAB = 4, HITCH = 1;
@@ -413,6 +415,7 @@ export class SketchSim {
   setSketch(sk: Sketch) {
     if (sk === this.sketch) return;
     this.sketch = sk;
+    this.posed = null;
     this.note({ what: "edit", lanes: sk.lanes.length, connectors: sk.connectors.length });
     this.build();
   }
@@ -581,6 +584,7 @@ export class SketchSim {
   }
 
   reset() {
+    this.posed = null;
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
     this.log = []; this.frames = []; this.drawn.clear(); this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0;
     this.replay = []; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
@@ -961,6 +965,7 @@ export class SketchSim {
   }
 
   step(dt: number) {
+    this.posed = null;
     applyTuning(this.tuning);
     this.t += dt;
     if (Math.floor(this.t) !== Math.floor(this.t - dt)) this.breakDeadlocks();
@@ -1371,8 +1376,8 @@ export class SketchSim {
     this.record(drove);
   }
 
-  private stateOf(v: SimVehicle): CarState {
-    const { p, d } = this.poseOf(v);
+  private stateOf(v: SimVehicle, pose = this.poseOf(v)): CarState {
+    const { p, d } = pose;
     return {
       edge: v.edge.key, pos: r2(v.pos), v: r2(v.v), exit: v.exit?.key ?? null, run: r2(v.run),
       trail: v.trail ? `${v.trail.edge.key}@${r2(v.trail.pos)}` : null, x: r2(p.x), y: r2(p.y), heading: Math.round((Math.atan2(d.y, d.x) * 180) / Math.PI), why: v.why,
@@ -1383,6 +1388,8 @@ export class SketchSim {
   /** what is kept to replay: per frame, per car [id, x, y, dx, dy, v, share] and [edge, exit, why] as indexes into `tags` */
   /** per connector, the vehicles gone on past it with their backs still on it (as `step` found them) */
   private tails = new Map<Edge, { w: SimVehicle; pos: number }[]>();
+  /** the vehicles' bodies as the last step left them (until the next step, or the sketch or the run changes) */
+  private posed: Map<SimVehicle, Body & { trailer?: Body }> | null = null;
   private replay: { t: number; nums: Float32Array; tags: Uint32Array; peds?: { ids: Uint32Array; nums: Float32Array }; /** per truck [index, x, y, dx, dy, len] */ trailers?: Float32Array }[] = [];
   private tags: string[] = [""];
   private tagIndex = new Map<string, number>([["", 0]]);
@@ -1451,8 +1458,11 @@ export class SketchSim {
 
   private record(drove: Map<SimVehicle, number>) {
     const seen = new Set<number>();
+    // (each one's body once: for the state kept, the collisions, the replay and the page's next frame)
+    const posed = new Map(this.vehicles.map(v => [v, this.poseOf(v)]));
+    this.posed = posed;
     for (const v of this.vehicles) {
-      const st = this.stateOf(v), before = this.drawn.get(v.id), m = drove.get(v) ?? 0;
+      const st = this.stateOf(v, posed.get(v)), before = this.drawn.get(v.id), m = drove.get(v) ?? 0;
       seen.add(v.id);
       if (before) {
         const moved = Math.hypot(st.x - before.x, st.y - before.y);
@@ -1462,9 +1472,20 @@ export class SketchSim {
     }
     for (const id of this.drawn.keys()) if (!seen.has(id)) this.drawn.delete(id);
     // collisions: bodies overlapping (logged when they start to)
-    const now = new Set<string>(), cars = this.vehicles.map(v => ({ v, ...this.poseOf(v) }));
-    for (let i = 0; i < cars.length; i++) for (let j = i + 1; j < cars.length; j++) {
-      const a = cars[i], b = cars[j];
+    const now = new Set<string>(), cars = this.vehicles.map(v => ({ v, ...posed.get(v)! }));
+    // (only two in the same or neighbouring cells, as wide as the longest vehicle, can be that near; the pairs
+    // looked at in the vehicles' order, as when every pair was)
+    const cell = Math.max(LEN, ...cars.map(c => c.v.len)), grid = new Map<number, number[]>();
+    const cellKey = (cx: number, cy: number) => cx * 1_000_003 + cy;
+    cars.forEach((c, i) => { const key = cellKey(Math.floor(c.p.x / cell), Math.floor(c.p.y / cell)), g = grid.get(key); if (g) g.push(i); else grid.set(key, [i]); });
+    const pairs: number[] = [];
+    for (let i = 0; i < cars.length; i++) {
+      const cx = Math.floor(cars[i].p.x / cell), cy = Math.floor(cars[i].p.y / cell);
+      for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) for (const j of grid.get(cellKey(gx, gy)) ?? NO_CARS) if (j > i) pairs.push(i * cars.length + j);
+    }
+    pairs.sort((x, y) => x - y);
+    for (const ij of pairs) {
+      const a = cars[Math.floor(ij / cars.length)], b = cars[ij % cars.length];
       const far = (a.v.len + b.v.len) / 2;
       if (Math.abs(a.p.x - b.p.x) > far || Math.abs(a.p.y - b.p.y) > far) continue;
       const as = a.trailer ? [a, a.trailer] : [a], bs = b.trailer ? [b, b.trailer] : [b];
@@ -1534,7 +1555,7 @@ export class SketchSim {
    * from while it isn't all on this one), and its speed as a share of its desired speed.
    */
   poses() {
-    return this.vehicles.map(v => ({ id: v.id, ...this.poseOf(v), share: v.v / Math.max(1, v.edge.vmax) }));
+    return this.vehicles.map(v => ({ id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax) }));
   }
 
   /** the car under `p` (on its body, or within `tol` metres of it): the nearest; null if none */
