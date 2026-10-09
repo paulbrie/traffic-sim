@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T64 | trafficsim: "Restore from file" in a plan's History (summary of changes, a note, one new revision under the user) | Alex | 2026-10-09 | |
 | T62 | The 3D view in V2, phase 1: Plan / 3D toggle, orbit camera, ground and imagery, roads, junctions, markings, levels, cars, live lights, picking | Tatiana | 2026-10-09 | plan first |
 | T61 | Agents City Table: speech bubbles for messages, laptop-to-file links, poses for thinking (leaning back) and idle (coffee, pencil…) | Tom | 2026-10-09 | |
 | T60 | Re-test of T59 and T52 | Ramona | 2026-10-09 | after T55 |
