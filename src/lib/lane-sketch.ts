@@ -56,6 +56,31 @@ export interface Sketch {
   geo?: { lat: number; lon: number };
   /** zebra crossings drawn by hand (see `SketchCrossing`) */
   crossings?: SketchCrossing[];
+  /** journeys between a particular way in and way out (see `SketchJourney`) */
+  journeys?: SketchJourney[];
+}
+/**
+ * Journeys, as V1's transit flows: `rate` vehicles an hour coming in on the way in that lane `from` is one of
+ * (an entry lane; its road's entry lanes there with it) and going to the way out that lane `to` is one of,
+ * `trucks` per cent of them trucks; on top of the traffic coming in at each way's own rate.
+ */
+export interface SketchJourney { id: string; from: string; to: string; rate: number; trucks?: number }
+export const JOURNEY_RATE = 100;
+/** a new journey from the way in with lane `from` to the way out with lane `to` (the next free id) */
+export function addJourney(sk: Sketch, from: string, to: string): [Sketch, SketchJourney] {
+  const used = new Set((sk.journeys ?? []).map(x => x.id));
+  let n = used.size + 1;
+  while (used.has(`j${n}`)) n++;
+  const j: SketchJourney = { id: `j${n}`, from, to, rate: JOURNEY_RATE };
+  return [{ ...sk, journeys: [...(sk.journeys ?? []), j] }, j];
+}
+export function updateJourney(sk: Sketch, id: string, patch: Partial<Omit<SketchJourney, "id">>): Sketch {
+  return { ...sk, journeys: (sk.journeys ?? []).map(x => (x.id === id ? { ...x, ...patch } : x)) };
+}
+export function deleteJourney(sk: Sketch, id: string): Sketch {
+  const rest = (sk.journeys ?? []).filter(x => x.id !== id);
+  const { journeys: _, ...out } = sk;
+  return rest.length ? { ...out, journeys: rest } : out;
 }
 /**
  * A zebra crossing, as V1's: from one kerb `a` to the other `b`, `width` metres along the traffic, `peds`
@@ -1944,6 +1969,12 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     crossings.push({ id: x.id, a: ab[0], b: ab[1], width: num(x.width) ? Math.min(12, Math.max(1.5, x.width)) : CROSSING_WIDTH, peds: num(x.peds) ? Math.round(Math.min(5000, Math.max(0, x.peds))) : CROSSING_PEDS });
   }
   // (nothing drawn and nowhere placed: no sketch)
+  const journeys: SketchJourney[] = [];
+  for (const j of Array.isArray(o.journeys) ? o.journeys : []) {
+    if (!str(j?.id) || !str(j?.from) || !str(j?.to) || !num(j?.rate) || journeys.some(y => y.id === j.id)) continue;
+    const trucks = num(j.trucks) ? Math.round(Math.min(100, Math.max(0, j.trucks))) : 0;
+    journeys.push({ id: j.id, from: j.from, to: j.to, rate: Math.round(Math.min(5000, Math.max(0, j.rate))), ...(trucks ? { trucks } : {}) });
+  }
   if (!lanes.length && !junctions.length && !geo && !crossings.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}) };
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}) };
 }
