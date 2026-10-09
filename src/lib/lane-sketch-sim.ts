@@ -295,6 +295,8 @@ function applyTuning(t: Tuning) {
 }
 /** seconds a car takes to move over to the lane it changes to */
 const SHIFT_T = 2;
+/** a lane ahead with less than this left (metres): the connector after it is looked at too (see `beyond`) */
+const SHORT_AHEAD = 30;
 /** m/s²: the hardest braking a lane change may ask of the car changing or the one coming up behind it */
 const B_SAFE = 3;
 
@@ -1031,6 +1033,7 @@ export class SketchSim {
       out.push({ edge: e, a: v.pos, b: e.len, off: 0 });
       const t = e.to!;
       out.push({ edge: t.lane, a: t.s, b: t.lane.ring ? t.s + LOOK : Math.min(t.lane.len, t.s + LOOK), off: e.len - v.pos });
+      this.beyond(v, t.lane, t.s, e.len - v.pos, out);
       return out;
     }
     const exitAt = v.exit ? e.outs.find(o => o.conn === v.exit)!.s : null;
@@ -1040,8 +1043,28 @@ export class SketchSim {
       out.push({ edge: v.exit, a: 0, b: v.exit.len, off: toExit });
       const t = v.exit.to!;
       out.push({ edge: t.lane, a: t.s, b: t.s + LOOK, off: toExit + v.exit.len });
+      this.beyond(v, t.lane, t.s, toExit + v.exit.len, out);
     }
     return out;
+  }
+  /**
+   * Past a short lane it will be on (under SHORT_AHEAD metres left of it from `s`): the connector it is likeliest to take
+   * from its end too (the only one, or the one with the shortest way to where it is going), so it sees a queue there in
+   * time to stop; it hasn't chosen yet, and the lane is too short to stop on once it has.
+   */
+  private beyond(v: SimVehicle, lane: Edge, s: number, off: number, out: { edge: Edge; a: number; b: number; off: number }[]) {
+    if (lane.ring || lane.len - s > SHORT_AHEAD) return;
+    const ends = lane.outs.filter(o => o.s >= lane.len - EXIT_CLEAR && o.s >= s);
+    if (!ends.length) return;
+    let next = ends[0];
+    if (ends.length > 1) {
+      const rt = this.routes, dest = v.dest;
+      if (!rt || !dest) return;
+      let best = Infinity;
+      for (const o of ends) { const c = rt.viaConnector(o.conn.id, dest); if (c < best) { best = c; next = o; } }
+      if (best === Infinity) return;
+    }
+    out.push({ edge: next.conn, a: 0, b: next.conn.len, off: off + (next.s - s) });
   }
 
   /** metres from a car's front to the line (or lights) at the end of its lane, if it is to go past it */
