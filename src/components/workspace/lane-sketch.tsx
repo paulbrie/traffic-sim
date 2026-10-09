@@ -201,6 +201,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
   const setParams = (p: SimParams) => store.show({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}) } });
   const [readOnly] = useDeepSubject(ui, "readOnly");
+  // (the cars coloured by speed, or all one colour: in the V2 UI store, kept in the browser)
+  const [bySpeed] = useUiPath<boolean>("display/carsBySpeed");
   // (the plan's editor takes the keys: on opening the page, and when the sketch window over it closes)
   const [sketchOpen] = useDeepSubject(ui, "sketch");
   useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
@@ -217,7 +219,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed });
 
   // ------------------------------------------------------------ coordinates, snapping, picking
   const toWorld = (e: { clientX: number; clientY: number }): Pt => {
@@ -400,8 +402,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (a render: the kept image drawn again only if something it shows changed, not for the cars' stats)
   const shownBy = useRef<unknown[]>([]);
   useEffect(() => {
-    live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib };
-    const now = [sketch, sel, tool, contents, selPt, layers, page, sat, underlay, ulImg, calib];
+    live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed };
+    const now = [sketch, sel, tool, contents, selPt, layers, page, sat, underlay, ulImg, calib, bySpeed];
     const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
     shownBy.current = now;
     redraw(changed);
@@ -1350,6 +1352,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
             onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0}
             sides={{ left: consoleOpen ? 0 : CONSOLE_BUTTON_ROOM, right: ZOOM_ROOM }} />
+          {bySpeed && stats && layers.cars && <SpeedLegend above={consoleOpen ? CONSOLE_HEIGHT : 0} />}
           {/* (zoom in and out about the middle, and the whole sketch in view: + − F) */}
           <div className="absolute right-2 z-20 flex flex-col overflow-hidden rounded-md border bg-background/95 shadow-sm" style={{ bottom: (consoleOpen ? CONSOLE_HEIGHT : 0) + 8 }}>
             <Button size="icon-sm" variant="ghost" className="rounded-none" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomBy(1.25)}><Plus /></Button>
@@ -2048,6 +2051,7 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
       <ToggleGroup type="single" value={String(simSpeed)} onValueChange={v => v && setSimSpeed(Number(v))} aria-label="Simulation speed" className="w-full">
         {[1, 3, 10, 30].map(n => <ToggleGroupItem key={n} value={String(n)} className="h-7 flex-1 text-xs">{n}×</ToggleGroupItem>)}
       </ToggleGroup>
+      <BySpeedSwitch />
       {stats && (
         <div className="grid gap-0.5">
           {row("Time", clock(stats.t))}
@@ -2268,6 +2272,8 @@ interface PaintState {
   cursor: { p: Pt; snapped: boolean; alt: boolean } | null; hover: Hover | null;
   placeOn: (p: Pt) => LaneAt | null;
   selPt: { lane: string; i: number } | null;
+  /** the cars coloured by their speed (else all one colour, a truck's cab its own) */
+  bySpeed: boolean;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
   cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean }[] | null;
   /** the time of the cars shown (live or replayed), for the traffic lights; null with no cars */
@@ -2325,6 +2331,28 @@ function SpeedRow({ sketch, id, own, of, onSet }: { sketch: Sketch; id: string; 
       {own !== undefined
         ? <Button size="sm" variant="ghost" className="h-8 text-xs" title={`Back to the sketch's speed (${all} km/h, set in Traffic)`} onClick={() => onSet(null)}>The sketch&apos;s</Button>
         : <span className="pb-2 text-[11px] text-muted-foreground" title={`Until one is set here, the ${of} has the sketch's speed (Traffic)`}>the sketch&apos;s</span>}
+    </div>
+  );
+}
+
+/** the cars coloured by their speed, or all one colour */
+function BySpeedSwitch() {
+  const [on, set] = useUiPath<boolean>("display/carsBySpeed");
+  return (
+    <label className="flex items-center justify-between gap-2 text-xs" title="Each car coloured from red (stopped) through amber to green (at the speed it wants); off, all one colour">
+      Colour cars by speed <Switch checked={on} onCheckedChange={set} aria-label="Colour cars by speed" />
+    </label>
+  );
+}
+
+/** what the cars' colours mean while they show their speed (as V1's) */
+function SpeedLegend({ above }: { above: number }) {
+  return (
+    <div className="pointer-events-none absolute left-2 z-10 flex items-center gap-2.5 rounded-md bg-background/90 px-2 py-1 text-[11px] shadow-sm" style={{ bottom: above + 60 }} aria-label="Speed colours">
+      <span className="text-muted-foreground">Speed</span>
+      {([["var(--sig-stop)", "stopped"], ["var(--sig-slow)", "slow"], ["var(--sig-go)", "free flow"]] as const).map(([c, l]) => (
+        <span key={l} className="flex items-center gap-1"><span className="size-2.5 rounded-sm" style={{ background: c }} />{l}</span>
+      ))}
     </div>
   );
 }
@@ -2755,7 +2783,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     if (raised.length && k === carsNow.length - overBridges.length) drawRaised();
     const t = car.trailer;
     if (t) vehicleBody(t.p, t.d, t.len, "#e9e6dd", false, "rgba(20,28,34,0.7)");
-    vehicleBody(car.p, car.d, car.len, speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15), true, "rgba(20,28,34,0.45)");
+    vehicleBody(car.p, car.d, car.len, st.bySpeed ? speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15) : t ? pal.truck : pal.car, true, "rgba(20,28,34,0.45)");
     // (broken down: hazard lights flashing at its four corners, dim between flashes so they show when paused)
     if (car.broken) {
       const { p, d } = car, back = t ?? car, bl = t ? t.len : car.len, r = Math.max(0.35, 2.5 * px);

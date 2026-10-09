@@ -69,7 +69,8 @@ as `{ first, count }`), with no plan data, no results, nothing private, nothing 
   panels: { closed: { [panelId]: true } },       // the inspector's panels folded away (both editors')
   sketchWindow: { open, test: { cut, mode, run }, lastPiece: { junctions, lanes, mode, at } | null },
   layers: { surfaces, markings, lanes, connectors, signs, cars, names, demand, grid, satellite, image },  // shown or not
-  background: { brightness, source } }            // the satellite imagery's
+  background: { brightness, source },             // the satellite imagery's
+  display: { carsBySpeed } }                      // the cars coloured by speed, or all one colour
 Editor = { tool, selection: { lanes, connectors, junctions, road, link?, crossing? }, point, car, follow,
            view: { cx, cy, scale },        // at most 4 times a second
            run: { running, speed, t, replayT, playing, kept },   // t: at most 4 times a second
