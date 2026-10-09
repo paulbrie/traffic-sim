@@ -26,6 +26,12 @@ export interface SketchLane {
   inRate?: number;
   /** an exit lane: its share of the trips that end there, relative to the others (default 1; 0: closed) */
   outWeight?: number;
+  /**
+   * Elevation, as v1's roads: 0 the ground (missing), 1, 2, … bridges and flyovers above it, -1, … underpasses and
+   * tunnels. Lanes only meet by their connectors, so one passes over or under another it crosses at another level;
+   * its ends ramp to the level of the lanes it joins there (see `zAt`).
+   */
+  level?: number;
 }
 /** a place on a lane, `s` metres from its start */
 export interface LaneAt { lane: string; s: number }
@@ -1701,7 +1707,7 @@ function holesOf(sk: Sketch, c: JunctionContents, roadLanes: SketchLane[]): Pt[]
  * has a lane each way, a double solid line where it has more). Found where a lane has another of its
  * road beside it on its left, edge to edge (within half a metre).
  */
-export interface Marking { pts: Pt[]; kind: "lane" | "center"; dashed: boolean }
+export interface Marking { pts: Pt[]; kind: "lane" | "center"; dashed: boolean; /** the level of the lane it runs beside (drawn with it) */ level?: number }
 const markings = new WeakMap<Sketch, Marking[]>();
 /** a polyline moved `o` metres to its left (each point along the normal there) */
 function offsetPolyline(pts: Pt[], o: number): Pt[] {
@@ -1727,9 +1733,10 @@ export function roadMarkings(sk: Sketch): Marking[] {
       let run: Pt[] = [], runWith: { b: SketchLane; same: boolean } | null = null;
       const flush = () => {
         if (runWith && run.length >= 2) {
-          if (runWith.same) out.push({ pts: run, kind: "lane", dashed: true });
-          else if (lanes.length <= 2) out.push({ pts: run, kind: "center", dashed: true });
-          else for (const o of [-0.15, 0.15]) out.push({ pts: offsetPolyline(run, o), kind: "center", dashed: false });
+          const lv = a.level ? { level: a.level } : {};
+          if (runWith.same) out.push({ pts: run, kind: "lane", dashed: true, ...lv });
+          else if (lanes.length <= 2) out.push({ pts: run, kind: "center", dashed: true, ...lv });
+          else for (const o of [-0.15, 0.15]) out.push({ pts: offsetPolyline(run, o), kind: "center", dashed: false, ...lv });
         }
         run = []; runWith = null;
       };
@@ -2065,7 +2072,8 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     }
     if (!str(l?.id) || !shape || lanes.some(x => x.id === l.id)) continue;
     lanes.push({ id: l.id, shape, width: num(l.width) ? Math.min(8, Math.max(2, l.width)) : LANE_WIDTH, ...(l.control === "stop" || l.control === "yield" ? { control: l.control } : {}),
-      ...(num(l.inRate) && l.inRate >= 0 ? { inRate: Math.min(5000, l.inRate) } : {}), ...(num(l.outWeight) && l.outWeight >= 0 ? { outWeight: Math.min(100, l.outWeight) } : {}) });
+      ...(num(l.inRate) && l.inRate >= 0 ? { inRate: Math.min(5000, l.inRate) } : {}), ...(num(l.outWeight) && l.outWeight >= 0 ? { outWeight: Math.min(100, l.outWeight) } : {}),
+      ...(num(l.level) && Math.round(l.level) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(l.level))) } : {}) });
   }
   const ids = new Set(lanes.map(l => l.id));
   // (a place a hair before a lane's start, from rounding, is its start)
@@ -2136,4 +2144,88 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length) ? sc : null;
   if (!lanes.length && !junctions.length && !geo && !crossings.length && !scratch) return null;
   return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(scratch ? { scratch } : {}) };
+}
+
+// ---------------------------------------------------------------- elevation (as v1's)
+
+/** the levels a lane can be at: tunnels below the ground, bridges above it */
+export const LEVELS = { min: -3, max: 5 };
+/** metres of lane it takes to climb one level (as v1: 6 m in 100 m) */
+export const RAMP_PER_LEVEL = 100;
+export const laneLevel = (l: SketchLane | undefined) => l?.level ?? 0;
+
+/** the lanes' levels set (0: on the ground) */
+export function setLevel(sk: Sketch, ids: Iterable<string>, level: number): Sketch {
+  const want = new Set(ids), lv = Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(level)));
+  let changed = false;
+  const lanes = sk.lanes.map(l => {
+    if (!want.has(l.id) || laneLevel(l) === lv) return l;
+    changed = true;
+    const next = { ...l };
+    if (lv) next.level = lv; else delete next.level;
+    return next;
+  });
+  return changed ? { ...sk, lanes } : sk;
+}
+
+/**
+ * Each lane's levels: its own, and at its start and its end the lowest of its own and those of the lanes its
+ * connectors join there (as v1's junctions: at the lowest level of the roads meeting there). Kept per sketch.
+ */
+const levelsKept = new WeakMap<Sketch, Map<string, { L: number; a: number; b: number; len: number }>>();
+function levelsOf(sk: Sketch) {
+  let m = levelsKept.get(sk);
+  if (m) return m;
+  m = new Map();
+  for (const l of sk.lanes) { const L = laneLevel(l); m.set(l.id, { L, a: L, b: L, len: laneLength(l.shape) }); }
+  if (hasLevels(sk)) for (const c of sk.connectors) {
+    const f = m.get(c.from.lane), t = m.get(c.to.lane);
+    if (!f || !t) continue;
+    // (a connector leaving near a lane's end, or joining near the next one's start: they meet there)
+    if (f.len - c.from.s < 1) f.b = Math.min(f.b, t.L);
+    if (c.to.s < 1) t.a = Math.min(t.a, f.L);
+  }
+  levelsKept.set(sk, m);
+  return m;
+}
+
+/**
+ * The elevation (in levels) `s` metres along a lane: from the level at each end it climbs (smoothly, over at most
+ * 45% of the lane each side, a level per RAMP_PER_LEVEL metres) to its own level and stays there, so a bridge joining
+ * ground lanes rises out of them and comes back down (as v1's linkZ).
+ */
+export function zAt(sk: Sketch, lane: string, s: number): number {
+  const x = levelsOf(sk).get(lane);
+  if (!x) return 0;
+  const { L, a, b, len } = x;
+  if (a === L && b === L) return L;
+  const d = Math.min(len, Math.max(0, s)), sm = (u: number) => u * u * (3 - 2 * u);
+  const ra = Math.min(0.45 * len, RAMP_PER_LEVEL * Math.abs(L - a)), rb = Math.min(0.45 * len, RAMP_PER_LEVEL * Math.abs(L - b));
+  if (ra > 0 && d < ra) return a + (L - a) * sm(d / ra);
+  if (rb > 0 && d > len - rb) return b + (L - b) * sm((len - d) / rb);
+  return L;
+}
+/** a connector's level: where it leaves and where it joins, the lower (as v1's junction paths, at the junction's level) */
+export const connectorLevel = (sk: Sketch, c: SketchConnector) => Math.min(zAt(sk, c.from.lane, c.from.s), zAt(sk, c.to.lane, c.to.s));
+/** a junction's level: the lowest of what is on it (its lanes and connectors), as v1's; 0 with nothing on it */
+export function junctionLevel(sk: Sketch, c: JunctionContents): number {
+  if (!hasLevels(sk)) return 0;
+  let lv = Infinity;
+  for (const id of c.lanes) lv = Math.min(lv, laneLevel(laneById(sk, id)));
+  for (const id of c.connectors) { const x = connectorById(sk, id); if (x) lv = Math.min(lv, Math.round(connectorLevel(sk, x))); }
+  return Number.isFinite(lv) ? lv : 0;
+}
+/** is any lane off the ground? (most sketches: none, and nothing to work out) */
+const leveled = new WeakMap<SketchLane[], boolean>();
+export function hasLevels(sk: Sketch) {
+  let x = leveled.get(sk.lanes);
+  if (x === undefined) leveled.set(sk.lanes, (x = sk.lanes.some(l => l.level)));
+  return x;
+}
+/** a connector by its id (an index kept per list of connectors) */
+const connIndexKept = new WeakMap<SketchConnector[], Map<string, SketchConnector>>();
+export function connectorById(sk: Sketch, id: string) {
+  let m = connIndexKept.get(sk.connectors);
+  if (!m) connIndexKept.set(sk.connectors, (m = new Map(sk.connectors.map(c => [c.id, c]))));
+  return m.get(id);
 }

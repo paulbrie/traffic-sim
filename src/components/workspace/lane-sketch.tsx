@@ -14,9 +14,9 @@ import { unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, addLane, contentsOf, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
-  roadOf, rotation, samples, setControl, junctionHoles, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
+  roadOf, rotation, samples, setControl, junctionHoles, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
-  type Band, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
+  type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
 import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
 import { SketchSimClient } from "@/state/sketch-sim-client";
@@ -25,10 +25,11 @@ import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type 
 import { setSketchClip, sketchClip, useSketchStore } from "@/state/lane-sketch";
 import { readPalette, speedColor } from "@/render/palette";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
-import { NumberField } from "./fields";
+import { NumberField, Stepper } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
 import { FuelPanel, fmtFuel } from "@/components/v2/fuel-panel";
 import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
+import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
@@ -229,12 +230,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const d = nearestOn({ kind: "line", pts }, p).d;
       if (d <= 6 * px && d < bd) { bd = d; best = { connector: c.id }; }
     }
-    // (connectors are over the lanes: one under the pointer is picked before the lane it is on)
-    if (best) return best;
+    // (connectors are over the lanes: one under the pointer is picked before the lane it is on; but a lane a level
+    // above, a bridge, is over what passes beneath it: the highest under the pointer is picked)
+    const leveled = hasLevels(sk), cLevel = best && "connector" in best ? (leveled ? connectorLevel(sk, sk.connectors.find(x => x.id === (best as { connector: string }).connector)!) : 0) : -Infinity;
+    if (best && !leveled) return best;
+    let lane: string | null = null, ld = Infinity, lLevel = -Infinity;
     for (const id of near.lanes) {
-      const l = laneById(sk, id)!, d = nearestOn(l.shape, p).d - l.width / 2;
-      if (d <= 4 * px && d < bd) { bd = d; best = { lane: l.id }; }
+      const l = laneById(sk, id)!, q = nearestOn(l.shape, p), d = q.d - l.width / 2, lv = leveled ? zAt(sk, id, q.s) : 0;
+      if (d <= 4 * px && (lv > lLevel + 0.25 || (Math.abs(lv - lLevel) <= 0.25 && d < ld))) { ld = d; lane = l.id; lLevel = lv; }
     }
+    if (lane && (!best || lLevel > cLevel + 0.25)) return { lane };
     if (best) return best;
     // (a link's surface, between the road ends it joins)
     for (const k of sk.links ?? []) { const g = linkGeometry(sk, k); if (g && insidePolygon(p, g.outline)) return { link: k.id }; }
@@ -1337,7 +1342,27 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover, now, onPick 
         </div>
       )}
       <p className="text-[11px] text-muted-foreground">{plan.coord ? `A cycle of ${plan.cycle} s, in ${plan.coord.groupName}` : L.actuated ? `Up to ${plan.cycle} s round` : `A cycle of ${plan.cycle} s`}. Turning cars give way where their paths cross on green.</p>
+      {plan.phases.length >= 2 && <div><OptimizeLightsButton junction={junction.id} /></div>}
       <SignalGroupSection sketch={sketch} junction={junction} plan={plan} now={now} onPick={onPick} />
+    </div>
+  );
+}
+
+/** the level of a lane, or of a road's lanes (as v1's road Level): a bridge over what it crosses, or an underpass below it */
+function LevelRow({ sketch, lanes }: { sketch: Sketch; lanes: string[] }) {
+  const { edit: editSketch } = useSketchStore();
+  const lv = laneLevel(laneById(sketch, lanes[0])), mixed = lanes.some(id => laneLevel(laneById(sketch, id)) !== lv);
+  return (
+    <div className="grid gap-1">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs">Level{mixed ? " (its lanes differ)" : ""}</span>
+        <Stepper label="levels" value={lv} min={LEVELS.min} max={LEVELS.max} onChange={v => editSketch(s => setLevel(s, lanes, v))} />
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        {lv > 0 ? `A bridge, ${lv} level${lv === 1 ? "" : "s"} up: drawn over the lanes it crosses, which cars on it pass over; where it joins lanes on the ground it ramps down to them.`
+          : lv < 0 ? "Below ground (an underpass or tunnel): drawn faded, under the lanes it crosses."
+            : "Ground level. Raise it to make a bridge over the lanes it crosses, or lower it for an underpass. Lanes only meet by their connectors, never where they cross at different levels."}
+      </p>
     </div>
   );
 }
@@ -1448,6 +1473,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           </div>
         )}
         <GeometrySection sketch={sketch} lanes={road.align ? [road.align.ref] : road.lanes} lead={road.align?.ref ?? road.lanes[0]} />
+        <LevelRow sketch={sketch} lanes={road.lanes} />
         <div className="flex gap-1.5">
           <Button size="sm" variant="outline" className="flex-1" onClick={() => editSketch(sk => ({ ...sk, roads: sk.roads.filter(r => r.id !== road.id) }))}>Ungroup</Button>
           <Button size="sm" variant="ghost" onClick={onDelete} aria-label="Delete the road's lanes" title="Delete the road and its lanes"><Trash2 /></Button>
@@ -1551,6 +1577,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           {sh.kind === "arc" && <NumberField id="sk-sw" label="Sweep" unit="°" digits={0} value={deg(sh.sweep)} min={-360} max={360} onCommit={d => set({ ...sh, sweep: (d * Math.PI) / 180 })} />}
         </div>
         {!lead && <GeometrySection sketch={sketch} lanes={[lane.id]} lead={lane.id} />}
+        <LevelRow sketch={sketch} lanes={inRoad?.align ? inRoad.lanes : [lane.id]} />
         {sh.kind === "arc" && !lead && (
           <Button size="sm" variant="outline" title="Make it curved points along the same circle, to drag, add and curve like a drawn lane (a ring stays a ring); its connectors stay where they are"
             onClick={() => editSketch(s => arcToPoints(s, lane.id))}><Spline /> Edit as points</Button>
@@ -1923,6 +1950,8 @@ function markBox(m: { pts: Pt[] }) {
   return b;
 }
 
+/** how far a lane one level up casts its shadow (m, the sun from the upper left: as v1) */
+const SHADOW = { x: 1.2, y: 1.8 };
 /** where automatic junction surfaces are put together before going on the sketch */
 let scratch: HTMLCanvasElement | null = null;
 
@@ -1998,7 +2027,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   const loopsOf = new Map(autos.filter(j => j.smooth).map(j => [j.id, smoothJunction(sk, j, contentsOf(j))]));
   const bandsOf = new Map(autos.filter(j => !j.smooth).map(j => [j.id, junctionBands(sk, contentsOf(j))]));
   // (the ground they shut in: paved too; far out, a pixel or two, left out)
-  const holesOf = far ? [] : autos.flatMap(j => junctionHoles(sk, contentsOf(j)));
+  const holesOf = new Map(autos.map(j => [j.id, far ? [] : junctionHoles(sk, contentsOf(j))]));
   const loopsPath = (loops: Pt[][]) => { ctx.beginPath(); for (const l of loops) { l.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); } };
   const strokeBands = (g: CanvasRenderingContext2D, bands: Band[], extra: number) => {
     for (const b of bands) {
@@ -2026,32 +2055,53 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     // (every lane, in a road or not: a lane taken out of its road keeps its asphalt)
     const roadLanes = sk.lanes.filter(l => vis.lanes.has(l.id));
     ctx.lineCap = "butt"; ctx.lineJoin = "round";
-    // (far out the kerbs are under a pixel: the asphalt only)
-    for (const pass of far ? [1] : [0, 1]) {
-      ctx.strokeStyle = ctx.fillStyle = pass ? asphalt : kerb;
-      for (const j of drawn) { path(outlinePath(j)); ctx.closePath(); if (pass) ctx.fill(); else { ctx.lineWidth = kerbW; ctx.stroke(); } }
-      for (const loops of loopsOf.values()) { loopsPath(loops); if (pass) ctx.fill("evenodd"); else { ctx.lineWidth = kerbW; ctx.stroke(); } }
-      if (!far) for (const bands of bandsOf.values()) strokeBands(ctx, bands, pass ? 0 : kerbW);
-      if (pass && holesOf.length) { loopsPath(holesOf); ctx.fill("nonzero"); }
-      // (a link: its sides kerbed, not its ends, where it meets its roads)
-      for (const { g } of linkGeo) { if (pass) { path(g.outline); ctx.closePath(); ctx.fill(); } else { ctx.lineWidth = kerbW; for (const side of g.sides) { path(side); ctx.stroke(); } } }
-      // (the lanes of one width in one go)
-      const byWidth = new Map<number, typeof roadLanes>();
-      for (const l of roadLanes) byWidth.set(l.width, [...(byWidth.get(l.width) ?? []), l]);
-      for (const [wd, ls] of byWidth) {
-        ctx.beginPath();
-        for (const l of ls) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
-        ctx.lineWidth = wd + (pass ? 0 : kerbW); ctx.stroke();
+    // level by level, lowest first (as v1): a bridge, with its shadow, covers what passes beneath; one below the
+    // ground drawn faded. (Most sketches: one level, the ground)
+    const leveled = hasLevels(sk), jLevel = (j: SketchJunction) => (leveled ? junctionLevel(sk, contentsOf(j)) : 0);
+    const kLevel = (k: SketchLink) => (leveled ? Math.min(...[k.a.road, k.b.road].flatMap(id => sk.roads.find(r => r.id === id)?.lanes ?? []).map(id => laneLevel(laneById(sk, id)))) : 0);
+    const levels = leveled ? [...new Set([0, ...roadLanes.map(laneLevel), ...drawn.map(jLevel), ...autos.map(jLevel)])].sort((x, y) => x - y) : [0];
+    const marks = st.layers.markings && v.scale >= 1.5 ? roadMarkings(sk) : [];
+    for (const lv of levels) {
+      const at = <T,>(xs: T[], f: (x: T) => number) => (leveled ? xs.filter(x => f(x) === lv) : xs);
+      const js = at(drawn, jLevel), as = at(autos, jLevel), ks = at(linkGeo, x => kLevel(x.k)), ls = at(roadLanes, laneLevel);
+      ctx.globalAlpha = lv < 0 ? 0.55 : 1;
+      // (its shadow, cast further the higher it is: its lanes and junctions moved by it, in a shade of black)
+      if (lv > 0 && !far) {
+        ctx.save(); ctx.translate(SHADOW.x * lv, SHADOW.y * lv); ctx.globalAlpha = 0.28; ctx.strokeStyle = ctx.fillStyle = "#000";
+        for (const l of ls) { path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath(); ctx.lineWidth = l.width + kerbW; ctx.stroke(); }
+        for (const j of js) { path(outlinePath(j)); ctx.closePath(); ctx.fill(); }
+        ctx.restore();
       }
+      // (far out the kerbs are under a pixel: the asphalt only)
+      for (const pass of far ? [1] : [0, 1]) {
+        ctx.strokeStyle = ctx.fillStyle = pass ? asphalt : kerb;
+        for (const j of js) { path(outlinePath(j)); ctx.closePath(); if (pass) ctx.fill(); else { ctx.lineWidth = kerbW; ctx.stroke(); } }
+        for (const j of as) { const loops = loopsOf.get(j.id); if (loops) { loopsPath(loops); if (pass) ctx.fill("evenodd"); else { ctx.lineWidth = kerbW; ctx.stroke(); } } }
+        if (!far) for (const j of as) { const bands = bandsOf.get(j.id); if (bands) strokeBands(ctx, bands, pass ? 0 : kerbW); }
+        const holes = as.flatMap(j => holesOf.get(j.id) ?? []);
+        if (pass && holes.length) { loopsPath(holes); ctx.fill("nonzero"); }
+        // (a link: its sides kerbed, not its ends, where it meets its roads)
+        for (const { g } of ks) { if (pass) { path(g.outline); ctx.closePath(); ctx.fill(); } else { ctx.lineWidth = kerbW; for (const side of g.sides) { path(side); ctx.stroke(); } } }
+        // (the lanes of one width in one go)
+        const byWidth = new Map<number, typeof roadLanes>();
+        for (const l of ls) byWidth.set(l.width, [...(byWidth.get(l.width) ?? []), l]);
+        for (const [wd, lw] of byWidth) {
+          ctx.beginPath();
+          for (const l of lw) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
+          ctx.lineWidth = wd + (pass ? 0 : kerbW); ctx.stroke();
+        }
+      }
+      // the markings, as on the plan's map: dashed lines between lanes, the centre line in its yellow
+      ctx.lineCap = "butt";
+      for (const m of marks) {
+        if ((leveled && (m.level ?? 0) !== lv) || !boxesMeet(markBox(m), viewBox)) continue;
+        path(m.pts);
+        ctx.strokeStyle = m.kind === "center" ? pal.divider : pal.mark; ctx.lineWidth = Math.max(0.15, px);
+        ctx.setLineDash(m.dashed ? [3, 4] : []); ctx.stroke();
+      }
+      ctx.setLineDash([]);
     }
-    // the markings, as on the plan's map: dashed lines between lanes, the centre line in its yellow
-    ctx.lineCap = "butt";
-    for (const m of st.layers.markings && v.scale >= 1.5 ? roadMarkings(sk) : []) {
-      if (!boxesMeet(markBox(m), viewBox)) continue;
-      path(m.pts);
-      ctx.strokeStyle = m.kind === "center" ? pal.divider : pal.mark; ctx.lineWidth = Math.max(0.15, px);
-      ctx.setLineDash(m.dashed ? [3, 4] : []); ctx.stroke();
-    }
+    ctx.globalAlpha = 1;
     ctx.setLineDash([]);
     // (the junction or link selected or under the pointer, outlined)
     for (const { g, on, over } of linkGeo) if (on || over) { path(g.outline); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.globalAlpha = on ? 1 : 0.6; ctx.lineWidth = 2 * px; ctx.stroke(); ctx.globalAlpha = 1; }
@@ -2286,7 +2336,25 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     ctx.beginPath(); ws.forEach(([X, Y], i) => (i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y))); ctx.closePath();
     ctx.fillStyle = "rgba(20,28,34,0.55)"; ctx.fill();
   };
-  for (const car of st.layers.cars && D ? st.cars ?? [] : []) {
+  // (a bridge over the cars beneath it, as v1: those below its level first, its lanes drawn again over them, then those on it)
+  const carsNow = st.layers.cars && D ? st.cars ?? [] : [], zOfCar = (c: object) => ("z" in c && typeof c.z === "number" ? c.z : 0);
+  const raised = hasLevels(sk) && carsNow.some(c => zOfCar(c) >= 0.5) ? sk.lanes.filter(l => laneLevel(l) >= 1 && vis.lanes.has(l.id)) : [];
+  const overBridges = raised.length ? carsNow.filter(c => zOfCar(c) >= 0.5) : [];
+  const drawRaised = () => {
+    ctx.lineCap = "butt"; ctx.lineJoin = "round";
+    for (const pass of [0, 1]) for (const l of raised) {
+      path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath();
+      ctx.strokeStyle = pass ? pal.asphalt : pal.curb; ctx.lineWidth = l.width + (pass ? 0 : Math.max(0.6, 3 * px)); ctx.stroke();
+    }
+    if (st.layers.markings && v.scale >= 1.5) for (const m of roadMarkings(sk)) {
+      if ((m.level ?? 0) < 1) continue;
+      path(m.pts); ctx.strokeStyle = m.kind === "center" ? pal.divider : pal.mark; ctx.lineWidth = Math.max(0.15, px); ctx.setLineDash(m.dashed ? [3, 4] : []); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    if (st.layers.lanes) for (const l of raised) { path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath(); ctx.strokeStyle = col.lane; ctx.lineWidth = Math.max(0.2, 1.5 * px); ctx.stroke(); }
+  };
+  for (const [k, car] of [...carsNow.filter(c => !overBridges.includes(c)), ...overBridges].entries()) {
+    if (raised.length && k === carsNow.length - overBridges.length) drawRaised();
     const t = car.trailer;
     if (t) vehicleBody(t.p, t.d, t.len, "#e9e6dd", false, "rgba(20,28,34,0.7)");
     vehicleBody(car.p, car.d, car.len, speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15), true, "rgba(20,28,34,0.45)");

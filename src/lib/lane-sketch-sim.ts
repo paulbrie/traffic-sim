@@ -38,7 +38,7 @@
  * further from where it was drawn a step before than it drove.
  */
 import {
-  CHANGE_COST, connectorPts, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
+  CHANGE_COST, connectorPts, connectorById, connectorLevel, hasLevels, zAt, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
   onCrossing, crossingFrame,
   type LaneControl, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
 } from "./lane-sketch";
@@ -147,6 +147,8 @@ interface Edge {
   kind: "lane" | "conn";
   id: string;
   len: number;
+  /** its elevation (in levels) `pos` metres along it; null: on the ground all along (a sketch without levels) */
+  z: ((pos: number) => number) | null;
   /** a full ring: positions wrap round */
   ring: boolean;
   /** m/s: the desired speed, lower on bends */
@@ -498,7 +500,7 @@ export class SketchSim {
       const ring = isFullCircle(sh);
       paths.set(`lane:${l.id}`, samples(sh, 1));
       edges.set(`lane:${l.id}`, {
-        key: `lane:${l.id}`, kind: "lane", id: l.id, len, ring, outs: [], ins: [], from: null, to: null, siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
+        key: `lane:${l.id}`, kind: "lane", id: l.id, len, ring, z: null, outs: [], ins: [], from: null, to: null, siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
         control: ring || signals.has(l.id) ? null : l.control ?? null, minor: null, signal: ring ? null : signals.get(l.id) ?? null, atEnd: false,
         // (bends slow it down: arcs, and lines with curved points or closed round; a sharp drawn corner doesn't slow a whole lane)
         vmax: sh.kind === "arc" ? bendSpeed(sh.r, v0) : sh.curved?.some(Boolean) || ring ? bendSpeed(minRadius(samples(sh, 1)), v0) : v0,
@@ -512,7 +514,7 @@ export class SketchSim {
       const pl = polyline(pts);
       // (places rounded to the centimetre can be a hair past a lane's end)
       const e: Edge = {
-        key: `conn:${c.id}`, kind: "conn", id: c.id, len: Math.max(pl.len, 0.1), ring: false, outs: [], ins: [], siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
+        key: `conn:${c.id}`, kind: "conn", id: c.id, len: Math.max(pl.len, 0.1), ring: false, z: null, outs: [], ins: [], siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
         control: null, minor: from.control && c.from.s >= from.len - 1 ? from.control : null, signal: null, atEnd: c.from.s >= from.len - 1,
         from: { lane: from, s: Math.min(c.from.s, from.len) }, to: { lane: to, s: Math.min(c.to.s, to.len) }, vmax: bendSpeed(minRadius(pts), v0), locate: pl.locate,
       };
@@ -536,6 +538,11 @@ export class SketchSim {
       if (!e.to!.lane.ring) for (let i = e.onTo.length - 2; i >= 0; i--) e.onTo[i] = Math.min(e.onTo[i], e.onTo[i + 1]);
     }
     for (const lane of edges.values()) for (const o of lane.outs) o.conn.siblings = lane.outs.filter(x => x.conn !== o.conn && Math.abs(x.s - o.s) < 1).map(x => x.conn);
+    // (levels: each lane's height along it, ramps and all; a connector at the lower of its ends' (as v1's junction paths))
+    if (hasLevels(sk)) for (const e of edges.values()) {
+      if (e.kind === "lane") { const id = e.id; e.z = pos => zAt(sk, id, pos); }
+      else { const c = connectorById(sk, e.id), lv = c ? connectorLevel(sk, c) : 0; e.z = () => lv; }
+    }
     // lanes of a road beside each other the same way (about a lane's width apart): the longest stretch, at least 10 m
     const width = new Map(sk.lanes.map(l => [`lane:${l.id}`, l.width ?? 3.5]));
     for (const road of sk.roads) {
@@ -552,7 +559,8 @@ export class SketchSim {
           } else cur = null;
           if (cur && (!best || cur.a1 - cur.a0 > best.a1 - best.a0)) best = cur;
         }
-        if (best && best.a1 - best.a0 >= 10) A.neighbors.push(best);
+        // (not one at another level: a lane over or under it is no lane to change to)
+        if (best && best.a1 - best.a0 >= 10 && Math.abs(this.zOf(A, (best.a0 + best.a1) / 2) - this.zOf(B, best.map[best.map.length >> 1])) < 0.5) A.neighbors.push(best);
       }
     }
     // where lanes and connectors come close: crossing, side by side, ending at the same place (and,
@@ -579,6 +587,8 @@ export class SketchSim {
           if (B === A.to!.lane && r.a1 > A.len - 0.5) { A.mergeBefore = Math.max(A.mergeBefore, A.len - r.a0); continue; }
           if (A.siblings.includes(B) && r.a0 < 0.5) { A.shared.set(B, r.a1); B.shared.set(A, r.b1); continue; }
         }
+        // (one passing over or under the other, at another level there: they don't meet)
+        if (Math.abs(this.zOf(A, r.at) - this.zOf(B, r.otherAt)) >= 0.5) continue;
         // (lanes merging: from lanes of one road; from different roads they are traffic meeting, giving way as at a crossing)
         const join = A.kind === "conn" && B.kind === "conn" && A.to!.lane === B.to!.lane && Math.abs(A.to!.s - B.to!.s) < 1
           && r.a1 > A.len - 0.5 && r.b1 > B.len - 0.5 && !!roadOf.get(A.from!.lane.id) && roadOf.get(A.from!.lane.id) === roadOf.get(B.from!.lane.id);
@@ -782,6 +792,10 @@ export class SketchSim {
   }
 
   /** metres from `a` to `b` along a lane (round a ring) */
+  /** an edge's elevation `pos` metres along it (in levels) */
+  private zOf(e: Edge, pos: number) { return e.z ? e.z(pos) : 0; }
+  /** a vehicle's elevation, where its front is */
+  private zOfV(v: SimVehicle) { return v.edge.z ? v.edge.z(v.pos) : 0; }
   private along(e: Edge, a: number, b: number) {
     return e.ring ? (((b - a) % e.len) + e.len) % e.len : b - a;
   }
@@ -1170,8 +1184,9 @@ export class SketchSim {
       // (nor where its body, just before the lane's start, would be on another car's way: one there, or about to be)
       if (!s.lane.ring) {
         const st = s.lane.locate(0), c = { x: st.p.x - st.d.x * len / 2, y: st.p.y - st.d.y * len / 2 };
+        const z0 = this.zOf(s.lane, 0);
         if (near(c, len).some(w => {
-          if (w.edge === s.lane) return false;
+          if (w.edge === s.lane || Math.abs(this.zOfV(w) - z0) >= 0.5) return false;
           for (const { p, d, len: bl } of bodies(w))
             for (const t of [0, 0.75, 1.5]) if (Math.hypot(p.x + d.x * w.v * t - c.x, p.y + d.y * w.v * t - c.y) < (len + bl) / 2 + 0.5) return true;
           return false;
@@ -1729,6 +1744,8 @@ export class SketchSim {
       const a = cars[Math.floor(ij / cars.length)], b = cars[ij % cars.length];
       const far = (a.v.len + b.v.len) / 2;
       if (Math.abs(a.p.x - b.p.x) > far || Math.abs(a.p.y - b.p.y) > far) continue;
+      // (one over the other, at another level: not touching)
+      if (Math.abs(this.zOfV(a.v) - this.zOfV(b.v)) >= 0.5) continue;
       const as = a.trailer ? [a, a.trailer] : [a], bs = b.trailer ? [b, b.trailer] : [b];
       if (!as.some(x => bs.some(y => bodiesOverlap(x, y)))) continue;
       const key = a.v.id < b.v.id ? `${a.v.id}-${b.v.id}` : `${b.v.id}-${a.v.id}`;
@@ -1791,7 +1808,7 @@ export class SketchSim {
    * from while it isn't all on this one), and its speed as a share of its desired speed.
    */
   poses() {
-    return this.vehicles.map(v => ({ id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax), ...(v.broken !== null ? { broken: true } : {}) }));
+    return this.vehicles.map(v => ({ id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax), ...(v.broken !== null ? { broken: true } : {}), ...(v.edge.z ? { z: v.edge.z(v.pos) } : {}) }));
   }
 
   /** the car under `p` (on its body, or within `tol` metres of it): the nearest; null if none */
