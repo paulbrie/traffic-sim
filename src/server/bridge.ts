@@ -12,7 +12,7 @@ import { randomBytes, randomInt, timingSafeEqual } from "crypto";
 
 export interface Command { id: string; type: string; args: Record<string, unknown> }
 export interface CommandResult { ok: boolean; data?: unknown; error?: string }
-export interface BridgeEvent { seq: number; at: number; kind: "annotation" | "message"; pageId: string; [k: string]: unknown }
+export interface BridgeEvent { seq: number; at: number; kind: "annotation" | "message" | "ui"; pageId: string; [k: string]: unknown }
 /** an agent as a page shows it */
 export interface AgentView { id: string; name: string; color: string; hub: boolean }
 /** a tab as the hub and its agent see it */
@@ -58,6 +58,8 @@ interface Page {
 }
 
 const IDLE = 8 * 3600_000, CODE_LIFE = 10 * 60_000, TICKET_LIFE = 60_000, KEEP_EVENTS = 200;
+/** "ui" events (watched UI state that changed) kept at most, apart from the others: they never push out the user's annotations and messages */
+const KEEP_UI = 50;
 export const COMMAND_TIMEOUT = 30_000;
 /** how many tabs an agent may have open at once */
 export const MAX_TABS = 3;
@@ -228,13 +230,17 @@ function listeners(p: Page): Agent[] {
   if (p.tab) { const a = agents.get(p.tab.agentId); return a && !p.tab.left ? [a] : []; }
   return p.hub ? [...p.hub.agents.values()].filter(a => a.drivesHub) : [];
 }
-/** the page tells its agents something (an annotation, a message) */
+/** the page tells its agents something (an annotation, a message, the UI state they watch changed) */
 export function addEvent(p: Page, e: Record<string, unknown> & { kind: BridgeEvent["kind"] }): number {
   const to = listeners(p);
   for (const a of to) {
     const ev = { ...e, pageId: p.pageId, seq: ++a.seq, at: Date.now() } as BridgeEvent;
     a.events.push(ev);
-    if (a.events.length > KEEP_EVENTS) a.events.splice(0, a.events.length - KEEP_EVENTS);
+    // (the UI's changes: only the last KEEP_UI kept, and not counted with the user's own)
+    const ui = a.events.filter(x => x.kind === "ui");
+    if (ui.length > KEEP_UI) { const drop = new Set(ui.slice(0, ui.length - KEEP_UI)); a.events = a.events.filter(x => !drop.has(x)); }
+    const own = a.events.filter(x => x.kind !== "ui");
+    if (own.length > KEEP_EVENTS) { const drop = new Set(own.slice(0, own.length - KEEP_EVENTS)); a.events = a.events.filter(x => !drop.has(x)); }
     for (const w of [...a.eventWaiters]) w();
   }
   return to.length;

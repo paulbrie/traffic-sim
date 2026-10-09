@@ -10,7 +10,7 @@
  * shows whose it is, and can be taken over by the user.
  */
 import { basePath } from "@/lib/base-path";
-import { bridgeApp, bridgeCanvas, bridgeState } from "@/state/bridge-registry";
+import { bridgeApp, bridgeCanvas, bridgeState, bridgeUi } from "@/state/bridge-registry";
 import { describe, find, isBridgeUi, snapshot, type Target } from "@/components/bridge/a11y";
 
 export interface BridgeLogEntry { at: number; type: string; target: string; ok: boolean; error?: string }
@@ -66,7 +66,38 @@ const post = (path: string, body: Record<string, unknown>) => fetch(api(path), {
   method: "POST", headers: { "Content-Type": "application/json", ...(pairing ? { "x-bridge-page": pairing.pageToken } : {}) }, body: JSON.stringify(pairing ? { pageId: pairing.pageId, ...body } : body),
 });
 const keep = () => { if (pairing) sessionStorage.setItem(KEY, JSON.stringify(pairing)); else sessionStorage.removeItem(KEY); };
-const gone = (phase: BridgeView["phase"]) => { stream?.close(); stream = null; pairing = null; keep(); set({ phase, code: null, agent: null, cursor: null, agents: [], tabs: [], requests: [], agentCode: null }); };
+const gone = (phase: BridgeView["phase"]) => { unwatch(); stream?.close(); stream = null; pairing = null; keep(); set({ phase, code: null, agent: null, cursor: null, agents: [], tabs: [], requests: [], agentCode: null }); };
+
+// ---- the UI state the agent watches (a V2 plan's: see bridgeUi): its changes sent as "ui" events, at most 4 a second
+// (the page's own list, gone when the pairing ends or another agent takes it over)
+const UI_EVERY = 250;
+let watching: { paths: string[]; offs: (() => void)[] } | null = null, changed: Record<string, unknown> = {}, sentAt = 0, flush: ReturnType<typeof setTimeout> | null = null;
+const plainOf = (v: unknown): unknown => (v === undefined ? null : JSON.parse(JSON.stringify(v)));
+/** what is at `path` ("editors.plan.selection", or with slashes) in a copy of the UI state (undefined: nothing) */
+const at = (snap: unknown, path: string) => path.split(/[./]/).filter(Boolean).reduce<unknown>((o, k) => (o !== null && typeof o === "object" ? (o as Record<string, unknown>)[k] : undefined), snap);
+const noPath = (path: string, snap: Record<string, unknown>) => new Error(`no "${path}" in the UI state: its top-level keys are ${Object.keys(snap).join(", ")}`);
+function unwatch() {
+  watching?.offs.forEach(f => f());
+  watching = null; changed = {};
+  if (flush) { clearTimeout(flush); flush = null; }
+}
+function watch(paths: string[]) {
+  const u = bridgeUi();
+  if (!u) throw new Error("this page keeps no UI state to watch (a V2 plan's editor does)");
+  const snap = u.snapshot();
+  for (const p of paths) if (at(snap, p) === undefined) throw noPath(p, snap);
+  unwatch();
+  const send = () => {
+    flush = null; sentAt = Date.now();
+    const c = changed; changed = {};
+    if (pairing && Object.keys(c).length) void post("event", { kind: "ui", changed: c }).catch(() => {});
+  };
+  // (array items aren't watched by themselves: their list is)
+  watching = { paths, offs: paths.map(p => u.subscribe(p.split(/[./]/).filter(k => k && !/^\d+$/.test(k)).join("/"), v => {
+    changed[p] = plainOf(v);
+    flush ??= setTimeout(send, Math.max(0, sentAt + UI_EVERY - Date.now()));
+  })) };
+}
 
 /** pair the page as a hub: a code to give the agent, then the stream of its commands */
 export async function bridgePair() {
@@ -165,9 +196,9 @@ function listen() {
   stream = new EventSource(`${api("stream")}?pageId=${encodeURIComponent(pairing.pageId)}&t=${encodeURIComponent(pairing.pageToken)}`);
   stream.onopen = () => { failures = 0; bridgeHello(); };
   const on = <T,>(name: string, f: (d: T) => void) => stream!.addEventListener(name, e => f(JSON.parse((e as MessageEvent).data) as T));
-  on<{ name: string; color?: string } | null>("agent", a => { if (pairing?.mode === "hub") set({ agent: a?.name ?? null, agentColor: a?.color ?? null, phase: a ? "attached" : "waiting" }); });
+  on<{ name: string; color?: string } | null>("agent", a => { if (pairing?.mode === "hub") { if ((a?.name ?? null) !== view.agent) unwatch(); set({ agent: a?.name ?? null, agentColor: a?.color ?? null, phase: a ? "attached" : "waiting" }); } });
   on<{ allowTabs: boolean; agents: BridgeAgent[]; tabs: BridgeTab[] }>("hub", h => set({ allowTabs: h.allowTabs, agents: h.agents, tabs: h.tabs }));
-  on<NonNullable<BridgeView["tab"]>>("tab", t => set({ tab: { ...t, closed: false }, agent: t.agent, agentColor: t.color, phase: t.left ? "lost" : "attached" }));
+  on<NonNullable<BridgeView["tab"]>>("tab", t => { if (t.left || t.agent !== view.agent) unwatch(); set({ tab: { ...t, closed: false }, agent: t.agent, agentColor: t.color, phase: t.left ? "lost" : "attached" }); });
   // (an agent asks for a tab: opened at once if the browser lets it, else the user is asked)
   on<BridgeRequest>("openTab", q => {
     if (windows.has(q.ticket) || view.requests.some(x => x.ticket === q.ticket)) return;
@@ -230,9 +261,22 @@ async function exec(type: string, a: Record<string, unknown>, said: (t: string) 
       return { dataUrl, ...(a.target === "page" ? { note: "the map only: a picture of the whole page isn't available yet" } : {}) };
     }
     case "state": {
-      const keys = Array.isArray(a.keys) && a.keys.length ? a.keys.map(String) : bridgeState.names().filter(k => k !== "hitTest" && k !== "sketchJson");
+      const u = bridgeUi();
+      // (the UI state's paths watched, their changes sent as "ui" events; [] stops)
+      if (Array.isArray(a.watch)) { const ps = a.watch.map(String).filter(Boolean); if (ps.length) watch(ps); else unwatch(); return { watching: watching?.paths ?? [] }; }
+      // (a part of the UI state)
+      if (typeof a.path === "string") {
+        if (!u) throw new Error("this page keeps no UI state (a V2 plan's editor does)");
+        const snap = u.snapshot(), v = at(snap, a.path);
+        if (v === undefined) throw noPath(a.path, snap);
+        return { [a.path]: v };
+      }
+      const keys = Array.isArray(a.keys) && a.keys.length ? a.keys.map(String) : [...bridgeState.names().filter(k => k !== "hitTest" && k !== "sketchJson"), ...(u ? ["ui"] : [])];
       const out: Record<string, unknown> = {};
-      for (const k of keys) { const f = bridgeState.get(k); out[k] = f ? await f({}) : { error: "not offered on this page" }; }
+      for (const k of keys) {
+        if (k === "ui" && u) { out.ui = u.snapshot(); continue; }
+        const f = bridgeState.get(k); out[k] = f ? await f({}) : { error: "not offered on this page" };
+      }
       return out;
     }
     case "click": {

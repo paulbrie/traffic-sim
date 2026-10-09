@@ -46,7 +46,7 @@ process; a restart drops them: the page reconnects, the agent pairs again).
 |---|---|---|
 | `snapshot` | `{ root?: string }` (a CSS selector, default `body`) | `{ url, title, tree }`: the accessibility tree, compact text: one line per node `role "name" [value] {states}`, indented; regions, buttons, inputs, headings, tables (first rows), dialogs, toasts |
 | `screenshot` | `{ target?: "map" \| "page", maxWidth?: number }` | `{ dataUrl }` (PNG; `map`: the editor's canvas, `page`: the whole page, best effort) |
-| `state` | `{ keys?: string[] }` (`sketch`, `selection`, `stats`, `problems`, `view`, `run`) | `{ [key]: value }` (sketch: counts and ids, not the whole JSON; ask `sketchJson` for that) |
+| `state` | `{ keys?: string[] }` (`sketch`, `selection`, `stats`, `problems`, `view`, `run`, `ui`); or `{ path }`; or `{ watch: string[] }` | `{ [key]: value }` (sketch: counts and ids, not the whole JSON; ask `sketchJson` for that); `{ [path]: value }`; `{ watching }` (see "UI state") |
 | `click` | `{ role?, name?, nth?, selector?, text? }` | `{ clicked: "<role> \"<name>\"" }` |
 | `type` | `{ role?, name?, selector?, text, submit?: boolean }` | `{ typed }` |
 | `key` | `{ key: string }` (e.g. `"Control+k"`, `"Escape"`) | `{}` |
@@ -57,6 +57,30 @@ Targets by role and name follow Playwright's `getByRole` (name: case-insensitive
 Every command is shown to the user in the activity log; `click` / `type` / `key` move the agent's cursor there first
 (about 300 ms) so the user sees it. Commands that would edit the plan go through the normal undo.
 
+## UI state (a V2 plan's editor)
+
+A V2 plan keeps its editors' UI state in one store (`src/state/sketch-ui.ts`), and the bridge reads it as it is:
+nothing is registered by hand, so a field added there is readable at once. Small (about 1 KB; lists over 200 items come
+as `{ first, count }`), with no plan data, no results, nothing private, nothing each frame.
+
+```
+{ active: "plan" | "scratch",            // the editor the user is at: the Sketch window's while open and last used
+  editors: { plan: Editor, scratch: Editor } }   // the plan's, and the Sketch window's (Test in Sketch)
+Editor = { tool, selection: { lanes, connectors, junctions, road, link?, crossing? }, point, car, follow,
+           view: { cx, cy, scale },        // at most 4 times a second
+           run: { running, speed, t, replayT, playing, kept } }   // t: at most 4 times a second
+```
+
+- `state { keys: ["ui"] }`: all of it (also in the default answer with no keys).
+- `state { path: "editors.plan.selection" }` (dots or slashes): one part. A path that isn't there is an error naming
+  the top-level keys.
+- `state { watch: ["editors.plan.selection", "active", …] }`: the page sends the agent a `ui` event when any of those
+  changes, at most 4 a second, the changes since the last one together. The list belongs to the page: a new `watch`
+  replaces it, `watch: []` ends it, and it ends with the pairing or when another agent takes the page over. A path
+  that isn't there is an error, and the list stays as it was.
+
+The plan's own data stays out (`sketch`, `sketchJson`), and so do the account menu and the bridge's own panel.
+
 ## Events (page → agent)
 
 ```
@@ -64,7 +88,12 @@ Every command is shown to the user in the activity log; `click` / `type` / `key`
   under: { roles: string[], map?: { x, y, lanes: string[], connectors: string[], junctions: string[], car?: number } },
   url, simT? }
 { seq, at, kind: "message", text }
+{ seq, at, kind: "ui", changed: { [path]: value } }   // the UI state watched changed (see above)
 ```
+
+Events go to the agents of that page: a tab's own agent, the hub's to the agent driving it. An agent keeps its last
+200 annotations and messages, and apart from them its last 50 `ui` events, so watching never pushes out what the user
+sent.
 
 ## Agent tabs (several agents, tabs of their own)
 

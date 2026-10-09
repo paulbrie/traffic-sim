@@ -33,3 +33,12 @@ type ToWorld = (x: number, y: number) => { x: number; y: number } | null;
 let toWorld: ToWorld | null = null;
 export const setBridgeToWorld = (f: ToWorld) => { toWorld = f; return () => { if (toWorld === f) toWorld = null; }; };
 export const bridgeToWorld = (x: number, y: number) => toWorld?.(x, y) ?? null;
+
+/**
+ * The page's UI state, if it keeps one the bridge can read (a V2 plan: src/state/sketch-ui.ts): a copy of it (`state`
+ * "ui", or a path), and a path's changes (`state` with `watch`, sent to the agent as "ui" events).
+ */
+export interface BridgeUi { snapshot: () => Record<string, unknown>; subscribe: (path: string, fn: (v: unknown) => void) => () => void }
+let ui: BridgeUi | null = null;
+export const setBridgeUi = (u: BridgeUi) => { ui = u; return () => { if (ui === u) ui = null; }; };
+export const bridgeUi = () => ui;

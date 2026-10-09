@@ -22,6 +22,7 @@ import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStat
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
+import { NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
 import { clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
 import { testPiece } from "@/lib/test-piece";
 import { readPalette, speedColor } from "@/render/palette";
@@ -38,7 +39,7 @@ import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
 import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
-import { REPLAY_STEP, SketchReplayBar, type ReplayKept } from "@/components/v2/sketch-replay-bar";
+import { REPLAY_STEP, SketchReplayBar } from "@/components/v2/sketch-replay-bar";
 import { CONSOLE_HEIGHT, ProblemConsole } from "@/components/v2/problem-console";
 import { bridgeApp, bridgeState, setBridgeCanvas, setBridgeToWorld } from "@/state/bridge-registry";
 import { BackgroundPanel, drawBackground, loadSatOptions, saveSatOptions, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
@@ -46,7 +47,6 @@ import { underlayImg$ } from "@/state/underlay-image";
 import { stampRoundabout } from "@/lib/roundabout";
 import { tidySketch, type TidyReport } from "@/lib/sketch-tidy";
 
-type Tool = "select" | "lane" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing";
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
 const LAYERS = SKETCH_LAYERS, ALL_LAYERS = ALL_SKETCH_LAYERS;
@@ -64,8 +64,6 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
 const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
 
 interface View { cx: number; cy: number; /** px per metre */ scale: number }
-type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null };
-const NO_SEL: Sel = { lanes: [], connectors: [], junctions: [], road: null };
 type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[] };
@@ -158,20 +156,22 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const store = useSketchStore();
   const { edit: editSketch, undo: undoSketch, redo: redoSketch, record: recordSketch } = store, sketchSim = store.sim;
   const [sketch] = useSubject(store.sketch$);
-  const [tool, setTool] = useState<Tool>("lane");
-  const [rawSel, setSel] = useState<Sel>(NO_SEL);
+  // (the editor's own state, in the V2 UI store where agents (the Claude bridge) and other views can read it: src/state/sketch-ui.ts)
+  const ek: EditorKind = store.kind;
+  const [tool, setTool] = useEditorState(ek, "tool");
+  const [rawSel, setSel] = useEditorState(ek, "selection");
   /** a line lane's point picked (to curve or delete) */
-  const [selPt, setSelPt] = useState<{ lane: string; i: number } | null>(null);
+  const [selPt, setSelPt] = useEditorState(ek, "point");
   /** a car picked to inspect (by its number), and the view kept on it */
-  const [selCar, setSelCarId] = useState<number | null>(null);
+  const [selCar, setSelCarId] = useEditorState(ek, "car");
   const [carInfo, setCarInfo] = useState<ReturnType<SketchSim["inspect"]>>(null);
   /** replaying what was kept: the moment shown (null: the cars as they are), playing or not, and the span kept */
-  const [replayT, setReplayT] = useState<number | null>(null);
-  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replayT, setReplayT] = useEditorState(ek, "run/replayT");
+  const [replayPlaying, setReplayPlaying] = useEditorState(ek, "run/playing");
   /** the search over the sketch (Cmd/Ctrl+K) while open, with the cars running when it opened */
   const [searchOpen, setSearchOpen] = useState<{ cars: { id: number }[] } | null>(null);
-  const [replayRange, setReplayRange] = useState<ReplayKept | null>(() => sketchSim()?.replayRange() ?? null);
-  const [follow, setFollow] = useState(false);
+  const [replayRange, setReplayRange] = useEditorState(ek, "run/kept");
+  const [follow, setFollow] = useEditorState(ek, "follow");
   /** the layers shown (kept in the browser) */
   // (shared with the top bar's layers picker on a V2 plan)
   const [layers] = useSubject(sketchLayers$);
@@ -191,8 +191,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // cars on the sketch, to try it out (made when first run, kept with what they did when the window closes;
   // they follow the sketch as it is edited)
   const sim = useRef<SketchSimClient | null>(sketchSim());
-  const [running, setRunning] = useState(false);
-  const [simSpeed, setSimSpeed] = useState(1);
+  const [running, setRunning] = useEditorState(ek, "run/running");
+  const [simSpeed, setSimSpeed] = useEditorState(ek, "run/speed");
   /** the problem console open, under the map (the replay bar above it) */
   const [consoleOpen, setConsoleOpen] = useState(false);
   // (saved with the sketch: changing them isn't an undo step)
@@ -334,6 +334,38 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (the sketch drawn without what moves with the cars, kept between frames: redrawn when something
   // else changed, `full`, or the view or the canvas did; each frame then only the cars and lights over it)
   const kept = useRef<{ canvas: HTMLCanvasElement; stale: boolean; key: string } | null>(null);
+  // (the view and the cars' clock copied into the UI store at most 4 times a second, the last always: for agents, not each frame)
+  const mirrored = useRef<{ at: number; timer: ReturnType<typeof setTimeout> | null }>({ at: 0, timer: null });
+  const mirror = () => {
+    const m = mirrored.current;
+    if (m.timer) return;
+    const write = () => {
+      m.timer = null; m.at = performance.now();
+      const e = sketchUi.getValue().editors[ek], v = view.current, r = (x: number) => Math.round(x * 100) / 100;
+      if (e.view.cx !== r(v.cx) || e.view.cy !== r(v.cy) || e.view.scale !== r(v.scale)) e.view = { cx: r(v.cx), cy: r(v.cy), scale: r(v.scale) };
+      const t = Math.round((sim.current?.t ?? 0) * 10) / 10;
+      if (e.run.t !== t) e.run.t = t;
+    };
+    m.timer = setTimeout(write, Math.max(0, m.at + 250 - performance.now()));
+  };
+  // (a new editor starts as one: its state put back when it goes (the Sketch window closed, the page left); the
+  // replay kept by cars that stay, as before; the editor the user is at, for agents)
+  useEffect(() => {
+    const r = sketchSim()?.replayRange();
+    if (r) setReplayRange(r);
+    const el = panel.current, m = mirrored.current, at = () => { const u = sketchUi.getValue(), a = ek === "scratch" ? "scratch" : "plan"; if (u.active !== a) u.active = a; };
+    if (ek === "scratch") at();
+    el?.addEventListener("focusin", at); el?.addEventListener("pointerdown", at);
+    return () => {
+      el?.removeEventListener("focusin", at); el?.removeEventListener("pointerdown", at);
+      if (m.timer) clearTimeout(m.timer);
+      resetEditor(ek);
+      if (ek === "scratch" && sketchUi.getValue().active !== "plan") sketchUi.getValue().active = "plan";
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // (the UI store offered to the Claude bridge while a V2 plan's editor is up)
+  useEffect(() => (page ? offerSketchUiToBridge() : undefined), [page]);
   // (a drag's sketch, shown while the drag goes on: see dragShow)
   const dragSk = useRef<Sketch | null>(null);
   const redraw = (full = true) => {
@@ -349,7 +381,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const w = c.clientWidth, h = c.clientHeight, v = view.current, key = `${w}x${h}:${v.cx},${v.cy},${v.scale}`;
       kept.current ??= { canvas: document.createElement("canvas"), stale: true, key: "" };
       const k = kept.current;
-      if (k.stale || k.key !== key) { paint(k.canvas, st, "static", { w, h }); k.stale = false; k.key = key; }
+      if (k.stale || k.key !== key) { paint(k.canvas, st, "static", { w, h }); k.stale = false; k.key = key; mirror(); }
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
       const ctx = c.getContext("2d")!;
@@ -372,6 +404,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const onSimFrame = () => {
     const s = sim.current;
     if (!s) return;
+    mirror();
     // (the view kept on the car picked)
     const id = live.current.selCar, c = live.current.follow && id !== null && live.current.replayT === null ? s.inspect(id) : null;
     if (c) view.current = { ...view.current, cx: c.p.x, cy: c.p.y };

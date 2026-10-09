@@ -83,8 +83,8 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "bridge_state", description: "The app's own state, by key: sketch (counts and ids), selection, stats (the running cars' results), problems (the console), view (centre and zoom), run (running, speed, time).",
-    inputSchema: { type: "object", properties: { ...page, keys: { type: "array", items: { type: "string" } } } },
+    name: "bridge_state", description: "The app's own state, by key: sketch (counts and ids), selection, stats (the running cars' results), problems (the console), view (centre and zoom), run (running, speed, time), ui (a V2 plan's UI state: active editor, and each editor's tool, selection, view, run and replay). Or one part of the UI state by `path` (e.g. editors.plan.selection, editors.scratch.run, active). Or `watch` paths: their changes then come as 'ui' events in bridge_wait_events (at most 4 a second; [] stops).",
+    inputSchema: { type: "object", properties: { ...page, keys: { type: "array", items: { type: "string" } }, path: { type: "string", description: "a part of the UI state, dots or slashes: editors.plan.selection" }, watch: { type: "array", items: { type: "string" }, description: "UI state paths to be told about when they change ([] stops)" } } },
     run: async a => text(await command("state", a)),
   },
   { name: "bridge_click", description: "Click an element (the user sees your cursor go there first).", inputSchema: { type: "object", properties: target }, run: async a => text(await command("click", a)) },
@@ -101,13 +101,13 @@ const TOOLS: Tool[] = [
     run: async a => text(await command("app", { action: s(a.action), args: obj(a.args) })),
   },
   {
-    name: "bridge_wait_events", description: "The user's annotations and messages from the page since the last call, waiting up to `wait` seconds (25 max) for one. Annotations come with a note, a screenshot crop and what is under them.",
+    name: "bridge_wait_events", description: "The user's annotations and messages from the page since the last call, waiting up to `wait` seconds (25 max) for one. Annotations come with a note, a screenshot crop and what is under them. Also 'ui' events, { changed: { path: value } }, for the UI state paths you watch (bridge_state watch).",
     inputSchema: { type: "object", properties: { wait: { type: "number" } } },
     run: async a => {
       const r = await call(`/agent/events?after=${after}&wait=${Math.min(25, Math.max(0, Number(a.wait ?? 20)))}`);
       const evs = Array.isArray(r.events) ? r.events.map(obj) : [];
       after = Number(r.seq ?? after);
-      if (!evs.length) return text("No annotation or message yet.");
+      if (!evs.length) return text("No annotation, message or UI change yet.");
       const out: Content[] = [];
       for (const e of evs) {
         const { screenshot, ...rest } = e, m = s(screenshot)?.match(/^data:([^;]+);base64,(.*)$/);
