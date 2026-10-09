@@ -684,11 +684,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       bridgeApp.register("select", a => { goTo(a as SearchTarget); }),
       bridgeApp.register("goTo", a => { goTo(a as SearchTarget); }),
       bridgeApp.register("view", a => { centerOnPts([{ x: Number(a.x), y: Number(a.y) }], a.scale === undefined); if (a.scale !== undefined) { view.current = { ...view.current, scale: Number(a.scale) }; redraw(); } }),
-      bridgeApp.register("run", () => { setRunning(true); }),
-      bridgeApp.register("pause", () => { setRunning(false); }),
-      bridgeApp.register("speed", a => { setSimSpeed(Number(a.speed) || 1); }),
-      bridgeApp.register("replay", a => { showAt(Number(a.t)); }),
-      bridgeApp.register("restart", () => { resetCars(); }),
+      // (as the Run button: the cars made the first time, out of the replay; running already, left so)
+      bridgeApp.register("run", () => { if (!running) play(); return { running: true }; }),
+      bridgeApp.register("pause", () => { setRunning(false); return { running: false }; }),
+      bridgeApp.register("speed", a => { const v = Number(a.speed) || 1; setSimSpeed(v); return { speed: v }; }),
+      bridgeApp.register("replay", a => {
+        if (!sim.current || !replayRange) throw new Error("nothing kept to replay yet: run the cars first");
+        const t = Math.max(replayRange.from, Math.min(replayRange.to, Number(a.t)));
+        showAt(t);
+        return { t };
+      }),
+      bridgeApp.register("restart", () => { resetCars(); return { running }; }),
       bridgeState.register("sketch", () => {
         const s = sk();
         return { lanes: s.lanes.length, connectors: s.connectors.length, roads: s.roads.length, junctions: s.junctions.length, crossings: s.crossings?.length ?? 0, links: s.links?.length ?? 0,
