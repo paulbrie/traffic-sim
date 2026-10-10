@@ -22,7 +22,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
 | T100 | Re-test of T88 (Apply merges field by field) in the browser | Ramona | 2026-10-10 | after T97, T98 |
-| T96 | Agents City Table: a table of normal height for the avatars (top at their seated elbow height, 2.8 = 0.35 of standing height, the user's choice), chairs and a floor, so avatars can stand and walk; camera re-framed | Tom | 2026-10-10 | before T95 |
 | T95 | Agents City Table: commits as books on a bookshelf left of the whiteboard; Alice's avatar walks over and shelves each; the coffee mug removed if it costs frames | Tom | 2026-10-10 | after T92–T94, T96 |
 | T94 | Agents City Table: the City's lightning between the laptops and the files' buildings (shared with the City's lightning.tsx) | Tom (Alex for lightning.tsx) | 2026-10-10 | after T85 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
@@ -42,6 +41,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T96 | Agents City Table: table top at the avatars' seated elbow height (2.75 = 0.35 of standing, the user's choice), feet on a floor, chairs on it, a walking ring and the bookshelf's spot; camera re-framed | Tom | 2026-10-10 | admin: beaa4ee |
 | T110 | genie: the 2xlarge size (16 vCPU, 32 GB, disk unknown) in the API docs, the size list, both create forms and the tools' text | Alex, Alice | 2026-10-10 | genie: a4414f6 (pushed by Alice at the user's request) |
 | T98 | A raised lane (Level 1) over a junction: model, tooltip and 2D pass; tilted 3D shot not reached (→ T112); the 3D screenshot is the bridge's, works for 2D and 3D | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t98 |
 | T97 | Route tracer in the browser: way in/out and lane picking, the orange route, a test car followed to arrival, the lane menu, the 3D route, the bridge's route pass; route.test stays null (→ T112); blue reroute not reachable on a one-path plan | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t97 |
