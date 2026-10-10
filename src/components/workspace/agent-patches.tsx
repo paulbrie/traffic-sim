@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useDeepSubject } from "subjecto/react";
@@ -45,6 +45,14 @@ export function AgentPatchesButton({ planId, canApply }: { planId: string; canAp
 
   const pending = rows?.filter(r => r.status === "pending").length ?? 0;
   const [picked, setPicked] = useState<AgentPatchView | null>(null);
+  // Back (or Esc) from a patch returns to the list: kept mounted meanwhile (its scroll stays), and focus goes back to
+  // the patch's row (focus left on nothing would read as leaving the dialog, which closes it)
+  const rowRefs = useRef(new Map<number, HTMLButtonElement>());
+  const back = () => {
+    const id = picked?.id;
+    setPicked(null);
+    if (id !== undefined) requestAnimationFrame(() => rowRefs.current.get(id)?.focus());
+  };
 
   // (nothing to show to one who can't see the plan, or before any patch)
   if (rows === null || (rows.length === 0 && !error)) return null;
@@ -54,11 +62,10 @@ export function AgentPatchesButton({ planId, canApply }: { planId: string; canAp
         <Bot /> Agent patches {pending > 0 && <Badge className="ml-0.5 h-4 min-w-4 px-1 text-[10px]">{pending}</Badge>}
       </Button>
       <Dialog open={open} onOpenChange={o => { setOpen(o); if (!o) setPicked(null); }}>
-        <DialogContent className="sm:max-w-2xl">
-          {picked ? (
-            <PatchDetail planId={planId} p={picked} canApply={canApply} onBack={() => setPicked(null)} onDecided={() => { setPicked(null); load(); }} />
-          ) : (
-            <>
+        <DialogContent className="sm:max-w-2xl" onEscapeKeyDown={e => { if (picked) { e.preventDefault(); back(); } }}>
+          {picked && <PatchDetail planId={planId} p={picked} canApply={canApply} onBack={back} onDecided={() => { setPicked(null); load(); }} />}
+          <div className={picked ? "hidden" : "contents"}>
+            {!picked && (
               <DialogHeader>
                 <DialogTitle>Agent patches</DialogTitle>
                 <DialogDescription>
@@ -66,11 +73,12 @@ export function AgentPatchesButton({ planId, canApply }: { planId: string; canAp
                   {canApply ? " applying it saves one new version (in the history, so it can be undone)." : " the plan's editors apply or reject them."}
                 </DialogDescription>
               </DialogHeader>
+            )}
               {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
               <ol className="max-h-[60vh] divide-y overflow-y-auto rounded-lg border">
                 {rows.map(r => (
                   <li key={r.id}>
-                    <button type="button" onClick={() => setPicked(r)} className={`flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-muted/50 ${r.status === "pending" ? "" : "opacity-60"}`}>
+                    <button type="button" ref={el => { if (el) rowRefs.current.set(r.id, el); else rowRefs.current.delete(r.id); }} onClick={() => setPicked(r)} className={`flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-muted/50 ${r.status === "pending" ? "" : "opacity-60"}`}>
                       <span className="mt-1.5 size-2.5 shrink-0 rounded-full" style={{ background: authorColor(r.author) }} />
                       <span className="min-w-0 flex-1">
                         <span className="flex flex-wrap items-center gap-2 text-sm">
@@ -87,8 +95,7 @@ export function AgentPatchesButton({ planId, canApply }: { planId: string; canAp
                   </li>
                 ))}
               </ol>
-            </>
-          )}
+          </div>
         </DialogContent>
       </Dialog>
     </>
