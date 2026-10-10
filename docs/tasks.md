@@ -15,7 +15,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T131 | V2: per-road and per-lane speed limits (T52) dropped on every save and load (sanitizeSketch doesn't keep `speed`) | Tatiana | 2026-10-10 | found by Tom; first |
 | T130 | V2: a semi-transparent fill over a junction while it's drawn or selected for editing | Tatiana | 2026-10-10 | after T128 |
 | T129 | V2 editor: draw zones (neighbourhoods): labelled, coloured polygons stored in the plan, a Zone tool, panel, layer, label click | Tom (Tatiana for the editor files), Ramona checks | 2026-10-10 | |
 | T128 | V2 editor: merge two lanes (one continuing the other) or two roads into one, refusing clearly when they don't line up | Tatiana | 2026-10-10 | after T126 |
@@ -38,6 +37,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T131 | V2: road and lane speed limits now survive save and load (sanitizeSketch keeps `speed`, 10–130 km/h); limits set before were lost and must be set again | Tatiana | 2026-10-10 | 0beb836 |
 | T126 | V2: the connector being drawn shows in yellow (#facc15 over a dark edge, yellow start, bend and end dots) until placed | Tatiana | 2026-10-10 | d43863c |
 | T125 | V2 map: clicking a junction's name selects the junction (shape highlighted, panel open), a road's name selects the road; hover highlights, pointer cursor (3D has no labels) | Tatiana | 2026-10-10 | 99dd87d |
 | T121 | Agents City: no more nameless "pid NNNNN" agents in short windows (a day of transcripts read for pairing and names; names from /rename or "You are <Name>"; only agents active in the window listed) | Alex | 2026-10-10 | admin: 563903d |
