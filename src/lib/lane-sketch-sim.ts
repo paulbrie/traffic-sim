@@ -1743,9 +1743,10 @@ export class SketchSim {
             if (dW + k.otherAfter < -reach(w) || ws > (minor ? LOOK : 70)) continue;
             const wIn = ws > 0 && w.edge === k.other && k.other.kind === "conn" && this.inRun(k.other, w.pos, k.otherAt - k.otherBefore);
             // (stopped short of the zone, waiting for this one as this one would for it: the one standing in another's way goes, that
-            // way clear; else the one with the lower number — the same from either side)
+            // way clear; else the one with the lower number — the same from either side. Short of it or at its edge: held 0.5 m short
+            // of another zone it may stand up to 0.5 m into this one, not on its way through it)
             const wWhy = whyWas.get(w) ?? null;
-            if (ws > 0.1 && w.v < 0.3 && wWhy?.endsWith(`for car ${v.id}`) && this.goesFirst(v, w)) continue;
+            if (ws > -0.5 && w.v < 0.3 && wWhy?.endsWith(`for car ${v.id}`) && this.goesFirst(v, w)) continue;
             // (stopped short of the zone for something else, the car ahead, keeping another crossing clear,
             // joining a lane: it isn't on its way through here, and waiting for it would lock the junction; one held by
             // nothing is setting off. So too in among zones running on along a connector: queued there, it is no nearer
