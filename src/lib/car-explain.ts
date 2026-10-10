@@ -41,6 +41,8 @@ export interface CarExplain {
 }
 
 export const edgeName = (key: string) => key.replace(/^lane:/, "lane ").replace(/^conn:/, "connector ");
+/** the sim's own words (a `why`), with the edges named as above */
+export const tagWords = (why: string) => why.replace(/\blane:(\S+)/g, "lane $1").replace(/\bconn:(\S+)/g, "connector $1");
 const m1 = (x: number) => `${x.toFixed(1)} m`;
 const s1 = (x: number) => `${x.toFixed(1)} s`;
 const kmh = (x: number) => x.toFixed(0);
@@ -55,12 +57,18 @@ export const RULE_WORDS: Record<ExplainRule, string> = {
 export function headline(x: CarExplain): { text: string; car?: number } {
   const r = x.rule?.kind, b = x.blocker, on = (e?: string) => (e ? ` on ${edgeName(e)}` : "");
   const speedNow = x.speed ? `${kmh(x.speed.kmh)} of ${kmh(x.speed.desiredKmh)} km/h` : null;
-  if (x.deadlock) return { text: `Deadlock: ${x.deadlock.join(" → ")} → ${x.deadlock[0]} all wait on each other`, car: x.deadlock[0] };
+  if (x.deadlock) return { text: `${x.deadlock.includes(x.car) ? "Deadlock" : "Waiting on a deadlock"}: ${x.deadlock.join(" → ")} → ${x.deadlock[0]} all wait on each other`, car: x.deadlock[0] };
   if (!r) return { text: speedNow ? `Free road, ${speedNow}` : "Free road" };
   if (r === "follow" && x.leader) return { text: `Following car ${x.leader.car}, ${x.leader.gap.toFixed(0)} m gap${speedNow ? `, ${speedNow}` : ""}`, car: x.leader.car };
   if ((r === "merge" || r === "lane-change") && b?.gap !== undefined && b.needGap !== undefined)
     return { text: `${r === "merge" ? `Merging onto ${edgeName(x.rule?.edge ?? b.edge)}` : `Changing to ${edgeName(x.rule?.edge ?? b.edge)}`}: gap ${m1(b.gap)} too short (needs ${b.needGap.toFixed(0)} m)`, car: b.car };
-  if (b && (r === "give-way" || r === "priority" || r === "zone" || r === "keep-clear" || r === "merge" || r === "ring-full"))
+  if (r === "merge" && b) {
+    const onto = edgeName(x.rule?.edge ?? b.edge);
+    if (x.rule?.detail === "zip") return { text: `Zipping onto ${onto}: car ${b.car} goes first (${s1(x.since)})`, car: b.car };
+    if (x.rule?.detail === "no room") return { text: `Waiting to join ${onto}: no room past where it joins, behind car ${b.car} (${s1(x.since)})`, car: b.car };
+    return { text: `Giving way to join ${onto}, to car ${b.car} (${s1(x.since)})`, car: b.car };
+  }
+  if (b && (r === "give-way" || r === "priority" || r === "zone" || r === "keep-clear" || r === "ring-full"))
     return { text: `Waiting for car ${b.car} crossing its path${on(b.edge)} (${RULE_WORDS[r]}, ${s1(x.since)})`, car: b.car };
   if (r === "letting-in" && b) return { text: `Letting car ${b.car} in (${s1(x.since)})`, car: b.car };
   if (r === "signal") return { text: `At the light${on(x.rule?.edge)}${x.rule?.detail ? ` (${x.rule.detail})` : ""}, ${s1(x.since)}` };
@@ -81,7 +89,7 @@ export function explainText(x: CarExplain, clock: (t: number) => string): string
     const b = x.blocker, extra = [b.gap !== undefined ? `gap ${m1(b.gap)}` : "", b.needGap !== undefined ? `needs ${m1(b.needGap)}` : "", b.theirSec !== undefined ? `it reaches the zone in ${s1(b.theirSec)}` : "", b.mySec !== undefined ? `this one clears it in ${s1(b.mySec)}` : ""].filter(Boolean);
     out.push(`Held by: car ${b.car} on ${edgeName(b.edge)}${extra.length ? ` (${extra.join(", ")})` : ""}`);
   }
-  if (x.stopAt) out.push(`Holding for: ${x.stopAt.why}, ${m1(x.stopAt.dist)} ahead (${edgeName(x.stopAt.edge)} at ${m1(x.stopAt.s)})`);
+  if (x.stopAt) out.push(`Holding for: ${tagWords(x.stopAt.why)}, ${m1(x.stopAt.dist)} ahead (${edgeName(x.stopAt.edge)} at ${m1(x.stopAt.s)})`);
   if (x.chain.length) out.push(`Blocking chain: ${[x.car, ...x.chain].join(" → ")}${x.deadlock ? `  DEADLOCK ring: ${x.deadlock.join(", ")}` : ""}`);
   if (x.plan) {
     const p = x.plan;
@@ -90,7 +98,7 @@ export function explainText(x: CarExplain, clock: (t: number) => string): string
   }
   if (x.log.length) {
     out.push("Recent decisions:");
-    for (const l of x.log) out.push(`  ${clock(l.t)} ${l.what}: ${l.text}`);
+    for (const l of x.log) out.push(`  ${clock(l.t)} ${l.what}: ${tagWords(l.text)}`);
   }
   return out.join("\n");
 }

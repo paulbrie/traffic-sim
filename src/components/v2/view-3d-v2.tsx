@@ -44,6 +44,8 @@ export interface View3DProps {
   simT: () => number | null; signals: () => SignalController[] | null;
   /** the car picked's way on to the end of its trip (drawn on the road), if it has one */
   carWay?: () => Pt[] | null;
+  /** what holds the car picked (T157): where its leader and blocker are, the conflict zone on both paths */
+  carWhy?: () => { leader: Pt | null; blocker: Pt | null; zone: { mine: Pt[]; theirs: Pt[] } | null } | null;
   /** what is selected (drawn over the scene at its own height), the car picked (a ring round it) */
   selection: Piece; car: number | null;
   /** the route traced (orange), and a test car's other way (blue) */
@@ -386,18 +388,40 @@ export function View3DV2(props: View3DProps) {
       const p = live.current, pts = p.car !== null ? p.carWay?.() ?? null : null;
       wayLine.visible = !!pts && pts.length > 1;
       if (!wayLine.visible) return;
-      const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car), y = (c?.z ?? 0) * LEVEL_H + 0.3, hw = 1.2;
-      // (a quad a piece, some two thirds of a lane wide)
+      const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car), y = (c?.z ?? 0) * LEVEL_H + 0.3;
+      setRibbon(wayLine, pts!, y, 1.2);
+    };
+    /** `mesh` made a ribbon `hw` either side of `pts` at height `y`: a quad a piece */
+    const setRibbon = (mesh: THREE.Mesh, pts: Pt[], y: number, hw: number) => {
       const pos: number[] = [];
-      for (let i = 1; i < pts!.length; i++) {
-        const a = pts![i - 1], b = pts![i], l = Math.hypot(b.x - a.x, b.y - a.y);
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], b = pts[i], l = Math.hypot(b.x - a.x, b.y - a.y);
         if (l < 1e-3) continue;
         const nx = (-(b.y - a.y) / l) * hw, ny = ((b.x - a.x) / l) * hw;
         pos.push(a.x + nx, y, a.y + ny, b.x + nx, y, b.y + ny, b.x - nx, y, b.y - ny, a.x + nx, y, a.y + ny, b.x - nx, y, b.y - ny, a.x - nx, y, a.y - ny);
       }
-      wayLine.geometry.dispose();
-      wayLine.geometry = new THREE.BufferGeometry();
-      wayLine.geometry.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      mesh.geometry.dispose();
+      mesh.geometry = new THREE.BufferGeometry();
+      mesh.geometry.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    };
+    // the car picked, why it does what it does (T157): the conflict zone on its path (amber) and the other's (red), a thin
+    // ribbon to the car ahead and a red one to the car holding it (as the map draws them; at most 4 times a second)
+    const whyMat = (color: string, opacity: number) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -10, polygonOffsetUnits: -10, side: THREE.DoubleSide });
+    const whyMeshes = [whyMat("#f59e0b", 0.75), whyMat("#ef4444", 0.75), whyMat("#0ea5e9", 0.9), whyMat("#ef4444", 0.95)].map(m => {
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), m);
+      mesh.renderOrder = 6; mesh.frustumCulled = false; mesh.visible = false; scene.add(mesh);
+      return mesh;
+    });
+    let whyAt = 0;
+    const syncWhy = (now: number) => {
+      if (now - whyAt < 250) return;
+      whyAt = now;
+      const p = live.current, w = p.car !== null ? p.carWhy?.() ?? null : null;
+      const c = w ? (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car) : null, y = (c?.z ?? 0) * LEVEL_H + 0.35;
+      // (a zone shorter than the 1 m its points are apart: a small square where it is)
+      const zone = (pts: Pt[] | undefined) => (!pts?.length ? null : pts.length > 1 ? pts : [{ x: pts[0].x - 1.6, y: pts[0].y }, { x: pts[0].x + 1.6, y: pts[0].y }]);
+      const lines: [Pt[] | null, number][] = [[zone(w?.zone?.mine), 1.6], [zone(w?.zone?.theirs), 1.6], [c && w?.leader ? [c.p, w.leader] : null, 0.15], [c && w?.blocker ? [c.p, w.blocker] : null, 0.3]];
+      lines.forEach(([pts, hw], i) => { const m = whyMeshes[i]; m.visible = !!pts && pts.length > 1; if (m.visible) setRibbon(m, pts!, y + i * 0.02, hw); });
     };
     // a click (not a drag) picks what is under it: the highest level first (a bridge before the road under it)
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hitP = new THREE.Vector3();
@@ -433,7 +457,7 @@ export function View3DV2(props: View3DProps) {
       frame = 0;
       if (disposed) return;
       if (now - lastSync > 500) { lastSync = now; syncSat(); syncUnderlay(); }
-      syncRoads(); syncZones(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now);
+      syncRoads(); syncZones(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now); syncWhy(now);
       stepHome(now);
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);

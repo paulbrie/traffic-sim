@@ -17,6 +17,7 @@
     "db:seed": "tsx scripts/seed.ts",
     "engine:check": "tsx scripts/engine-check.ts",
     "explain:check": "tsx scripts/explain-check.ts",
+    "explain-text:check": "tsx scripts/car-explain-check.ts",
     "osm:check": "tsx scripts/osm-check.ts",
     "restore:check": "tsx scripts/restore-file-check.ts",
     "patch:submit": "tsx scripts/patch-submit.ts",

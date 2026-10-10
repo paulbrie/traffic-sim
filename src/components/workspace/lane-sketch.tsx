@@ -63,6 +63,8 @@ import { SketchPicker } from "@/components/v2/sketch-picker";
 import { newSketch } from "@/lib/sketch-list";
 import { deleteLanes, dropDangling, takeOutOfRoad } from "@/lib/road-lanes";
 import { carWay, type CarWay } from "@/lib/car-way";
+import { explainMarks, type CarExplain } from "@/lib/car-explain";
+import { CarWhy } from "./car-explain";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
@@ -214,6 +216,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** a car picked to inspect (by its number), and the view kept on it */
   const [selCar, setSelCarId] = useEditorState(ek, "car");
   const [carInfo, setCarInfo] = useState<ReturnType<SketchSim["inspect"]>>(null);
+  /** the picked car's explanation at the moment replayed (asked of the recording; T157) */
+  const replayWhy = useRef<CarExplain | null>(null);
+  const [replayWhyShown, setReplayWhyShown] = useState<CarExplain | null>(null);
   /** replaying what was kept: the moment shown (null: the cars as they are), playing or not, and the span kept */
   const [replayT, setReplayT] = useEditorState(ek, "run/replayT");
   const [replayPlaying, setReplayPlaying] = useEditorState(ek, "run/playing");
@@ -399,10 +404,25 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the cars to draw, and the one picked: as they are, or as they were at the moment replayed */
   const carsShown = () => {
     const s = sim.current, t = live.current.replayT, id = live.current.selCar;
-    if (!s) return { cars: null, car: null, peds: null };
-    if (t === null) return { cars: s.poses(), car: id !== null ? s.inspect(id) : null, peds: s.peds() };
+    if (!s) return { cars: null, car: null, peds: null, why: null };
+    // (the picked car's leader, blocker and conflict zone, where they are drawn now: T157)
+    const marks = (cars: { id: number; p: Pt }[], x: CarExplain | null) => explainMarks(x, c => cars.find(q => q.id === c)?.p ?? null);
+    if (t === null) { const cars = s.poses(), car = id !== null ? s.inspect(id) : null; return { cars, car, peds: s.peds(), why: marks(cars, explainOf(car)) }; }
     const f = s.replayAt(t), cars = f?.cars ?? [];
-    return { cars, car: replayInfo(cars.find(c => c.id === id)), peds: f?.peds ?? [] };
+    return { cars, car: replayInfo(cars.find(c => c.id === id)), peds: f?.peds ?? [], why: marks(cars, replayWhy.current?.car === id ? replayWhy.current : null) };
+  };
+  /** the picked car's explanation, as it is or at the moment replayed (null: none, or the sim hasn't said) */
+  const whyNow = (): CarExplain | null => {
+    const id = live.current.selCar;
+    if (id === null || !sim.current) return null;
+    return live.current.replayT === null ? explainOf(sim.current.inspect(id)) : replayWhy.current?.car === id ? replayWhy.current : null;
+  };
+  /** the picked car's explanation at moment `t` of the replay, asked of the recording (the last asked wins) */
+  const whyAsked = useRef(0);
+  const askWhy = (id: number | null, t: number | null) => {
+    const n = ++whyAsked.current;
+    if (id === null || t === null || !sim.current) { replayWhy.current = null; setReplayWhyShown(null); return; }
+    void sim.current.explain(id, t).then(x => { if (n !== whyAsked.current) return; replayWhy.current = x; setReplayWhyShown(x); redraw(false); });
   };
   /** a car's details: as it is, or as it was at the moment replayed */
   const carInfoAt = (id: number, t: number | null) => (t === null ? sim.current?.inspect(id) ?? null : replayInfo(sim.current?.replayAt(t)?.cars.find(c => c.id === id)));
@@ -413,13 +433,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     live.current.replayT = t;
     setReplayT(t);
     const id = live.current.selCar;
+    askWhy(id, t);
     if (id === null) return;
     const info = carInfoAt(id, t);
     setCarInfo(info);
     if (info && live.current.follow) view.current = { ...view.current, cx: info.p.x, cy: info.p.y };
   };
   const goLive = () => {
-    setReplayT(null); setReplayPlaying(false);
+    setReplayT(null); setReplayPlaying(false); askWhy(null, null);
     const id = live.current.selCar;
     setCarInfo(id !== null ? sim.current?.inspect(id) ?? null : null);
   };
@@ -531,7 +552,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   useEffect(() => { if (sim.current) sim.current.onFrame = onSimFrame; });
   const changeTool = (t: Tool) => { draft.current = null; setTool(t); redraw(); };
   /** a car picked to inspect (null: none) */
-  const setSelCar = (id: number | null) => { setSelCarId(id); setCarInfo(id !== null ? carInfoAt(id, live.current.replayT) : null); };
+  const setSelCar = (id: number | null) => { setSelCarId(id); setCarInfo(id !== null ? carInfoAt(id, live.current.replayT) : null); askWhy(id, live.current.replayT); };
 
   // ------------------------------------------------------------ cars
   // (the sketch sent to the cars once it has stayed the same for a quarter of a second: not at every move of a drag)
@@ -629,7 +650,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       plan: u.planId, revision: u.save.revision,
       moment: { time: mo.time, live: t === null, now: mo.now, kept: mo.kept },
       view: { cx: Math.round(v.cx * 10) / 10, cy: Math.round(v.cy * 10) / 10, width: Math.round(hw * 20) / 10, height: Math.round(hh * 20) / 10 },
-      selection: { ...live.current.sel, car: live.current.selCar }, params: mo.params, stats: mo.stats,
+      selection: { ...live.current.sel, car: live.current.selCar, ...(live.current.selCar !== null ? { explain: whyNow() } : {}) }, params: mo.params, stats: mo.stats,
       cars: mo.cars, lights: mo.lights.map(l => ({ ...l, name: names.get(l.junction) ?? null })),
       events: mo.events.length ? mo.events : "none within a minute",
     };
@@ -1010,7 +1031,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           roadNames: s.roads.slice(0, 200).map(r => `${r.id} ${r.name}`), junctionNames: s.junctions.slice(0, 200).map(j => `${j.id} ${j.name}`) };
       }),
       bridgeState.register("sketchJson", () => sk()),
-      bridgeState.register("selection", () => ({ ...live.current.sel, car: live.current.selCar })),
+      bridgeState.register("selection", () => ({ ...live.current.sel, car: live.current.selCar, ...(live.current.selCar !== null ? { explain: whyNow() } : {}) })),
       bridgeState.register("stats", () => sim.current?.stats() ?? null),
       bridgeState.register("problems", () => sim.current?.problems() ?? null),
       bridgeState.register("view", () => ({ ...view.current })),
@@ -1693,7 +1714,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           </div>
           {in3d && (
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed}
-              selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c && live.current.replayT === null ? carWay(live.current.sketch, c)?.pts ?? null : null; }} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
+              selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c && live.current.replayT === null ? carWay(live.current.sketch, c)?.pts ?? null : null; }} carWhy={() => carsShown().why} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
           )}
@@ -1726,7 +1747,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
-            <CarPanel info={carInfo} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
+            <CarPanel info={carInfo} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
               onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
               onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
               onCopy={async () => {
@@ -1850,13 +1871,18 @@ function makeCurve(editSketch: (f: (s: Sketch) => Sketch) => void, ids: string[]
   if (worst.off > LANE_WIDTH / 2) toast.warning(`Lane ${worst.lane} now strays up to ${worst.off.toFixed(1)} m from where it ran`, { description: "It bends more than one curve can follow: drag its curved point, or undo (Ctrl+Z) and use Fewer points instead." });
 }
 
+/** the sim's explanation of the car watched, as `inspect` passes it on (T157) */
+const explainOf = (info: ReturnType<SketchSim["inspect"]>): CarExplain | null => (info && "explain" in info ? info.explain ?? null : null);
+
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
   return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
-function CarPanel({ info, id, follow, running, replayT, way, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
+function CarPanel({ info, why, id, follow, running, replayT, way, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
   info: ReturnType<SketchSim["inspect"]>; id: number; follow: boolean; running: boolean; replayT: number | null;
+  /** why it does what it does (T157), if the sim says */
+  why: CarExplain | null;
   /** its way on to the end of its trip (drawn on the map), if it has one */
   way: CarWay | null;
   /** its engine fails now; it is towed away now */
@@ -1879,6 +1905,7 @@ function CarPanel({ info, id, follow, running, replayT, way, onFollow, onPick, o
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h</span>)}
           {info.exit && row("Going", edgeName(info.exit))}
           {row("Then", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          <CarWhy x={why} live={replayT === null} onPick={onPick} />
           <Button size="sm" variant={follow ? "secondary" : "outline"} className="h-7" aria-pressed={follow} onClick={() => onFollow(!follow)} title="Keep the view on the car while the replay plays">
             <Crosshair /> {follow ? "Following" : "Follow"}
           </Button>
@@ -1907,6 +1934,7 @@ function CarPanel({ info, id, follow, running, replayT, way, onFollow, onPick, o
           )}
           {row("Going", info.goal ? (info.goal.startsWith("end:") ? `off the end of ${edgeName(info.goal.slice(4))}` : edgeName(info.goal)) : info.leaves ? `off the end of ${edgeName(info.edge)}` : info.exit ? `${edgeName(info.exit)}, then ${edgeName(info.then ?? "")}` : info.then ? `onto ${edgeName(info.then)}` : "round the ring")}
           {row("Now", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          <CarWhy x={why} live={replayT === null} onPick={onPick} />
           {Number.isFinite(info.fuel) && row("Fuel so far", <span className="font-mono tabular">{fmtFuel(info.fuel / 1000)}</span>)}
           {info.journey && row("Journey", <span className="font-mono">{info.journey}</span>)}
           {info.reroutes > 0 && row("Went another way", `${info.reroutes} time${info.reroutes === 1 ? "" : "s"}`)}
@@ -2850,6 +2878,8 @@ interface PaintState {
   bg: Background | null;
   /** the car picked to inspect, with the way it will go */
   car: ReturnType<SketchSim["inspect"]>;
+  /** what holds the car picked (T157): where its leader and blocker are drawn, the conflict zone on both paths */
+  why: ReturnType<typeof explainMarks>;
   /** the moment replayed (null: live) */
   replayT?: number | null;
   /** the zebras' pedestrians, if running (live or replayed) */
@@ -3403,6 +3433,27 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       ctx.fillStyle = col.sel; arrowHead(b, { x: (b.x - a.x) / l, y: (b.y - a.y) / l }, 9 * px);
     }
     ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(3.2, 14 * px), 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.lineWidth = 2 * px; ctx.stroke();
+    // (why it does what it does, T157: the conflict zone on its path (amber) and the other's (red), a thin sky-blue line to
+    // the car ahead, a red arrowed one to the car holding it; for the car picked only)
+    const w = st.why;
+    if (w) {
+      ctx.lineCap = "round";
+      // (a zone shorter than the 1 m its points are apart: a disc where it is)
+      if (w.zone) for (const [pts, c] of [[w.zone.mine, "rgba(245,158,11,0.75)"], [w.zone.theirs, "rgba(239,68,68,0.75)"]] as const) {
+        if (pts.length > 1) { path(pts); ctx.strokeStyle = c; ctx.lineWidth = Math.max(0.8, 9 * px); ctx.stroke(); }
+        else if (pts.length) { ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, Math.max(1.2, 6 * px), 0, Math.PI * 2); ctx.fillStyle = c; ctx.fill(); }
+      }
+      if (w.leader) {
+        path([p, w.leader]); ctx.strokeStyle = "#0ea5e9"; ctx.lineWidth = 2 * px; ctx.stroke();
+        ctx.beginPath(); ctx.arc(w.leader.x, w.leader.y, Math.max(2.4, 10 * px), 0, Math.PI * 2); ctx.lineWidth = 1.5 * px; ctx.stroke();
+      }
+      if (w.blocker) {
+        const b = w.blocker, l = dist(p, b) || 1;
+        path([p, b]); ctx.strokeStyle = "#ef4444"; ctx.lineWidth = 2.5 * px; ctx.stroke();
+        ctx.fillStyle = "#ef4444"; arrowHead(b, { x: (b.x - p.x) / l, y: (b.y - p.y) / l }, 9 * px);
+        ctx.beginPath(); ctx.arc(b.x, b.y, Math.max(3.2, 12 * px), 0, Math.PI * 2); ctx.lineWidth = 2 * px; ctx.stroke();
+      }
+    }
   }
   // (what moves is drawn: the rest is in the image kept)
   if (D) return;
