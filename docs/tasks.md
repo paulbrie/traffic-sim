@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T141 | V2 Lane panel: a "Smooth" button that curves every interior point of the lane (or of each selected lane / road) | Tatiana | 2026-10-10 | before T139 |
 | T140 | Agent patches: removals (`remove: {lanes, connectors, junctions, roads, zones}`), checked (ids exist, a lane's connectors listed too), shown struck-through in the review | Alex | 2026-10-10 | blocks Bob's T134 B, C, A and the j534 duplicates |
 | T139 | V2: dead ends with a U-turn drawn as turning circles (2D and 3D, display only); an info line in the console | Tatiana | 2026-10-10 | after T124 |
 | T134 | Bistrița: 172 dead-end U-turn stubs on rev 92: A 71 → after following OSM: 7 missing links (6 + j341) connected in one patch A1, the rest real dead ends (D), tracks not modelled (the user's choices), B 4 at the edge (ways in/out, one patch), C 15 unused (delete, one patch), D 82 real dead ends (keep; drawn as turning circles, T139): the user's choices | Bob | 2026-10-10 | list: /home/genie/bob-scratch/trafficsim/t134/T134-list.md |
