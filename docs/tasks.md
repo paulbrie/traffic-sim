@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T164 | Admin Table: whiteboard larger with shorter legs (more board surface), writing one step larger, post-its 10% larger | Tom | 2026-10-10 | |
 | T163 | Admin: a 2D 'Ops' view (agent cards + swimlanes + isometric repo map, the user's choice), the default, drawn on change; 2D/3D toggle | Alex | 2026-10-10 | after T162; approved by the user |
 | T161 | Priority model for roundabouts and complex junctions (ring priority, geometry/sign-based conflicts, first come first served only as last resort, no flip-flop) and editor warnings; proposal first | Bob | 2026-10-10 | approved by the user: build all; user report: car 93 waited 28 s at J696 |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | causes in the drawing (cross lanes, one-lane bottleneck, slips); version 1 submitted as agent patch #5, a Sketch-window try-out (the user's choice); the main-plan patch kept ready |
