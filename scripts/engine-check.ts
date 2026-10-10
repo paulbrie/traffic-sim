@@ -22,6 +22,8 @@ import { bayOutline, rowEnds } from "../src/engine/parking";
 import { mergeNetworks, mergeSettings } from "../src/state/merge";
 import { addNode, deleteLink, updateLink } from "../src/state/ops";
 import { mergeLanes as mergeSketchLanes, mergeRoads as mergeSketchRoads } from "../src/lib/sketch-merge";
+import { CONNECTOR_KINK_LIMIT, connectorKinks, turnsAt, unkinkPts } from "../src/lib/connector-kinks";
+import { tidySketch } from "../src/lib/sketch-tidy";
 import { alignmentOf, laneLength, settle as settleSketch, sliceRoad, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
 const net = sampleTown();
 const c = compile(net);
@@ -1439,5 +1441,29 @@ function alongKerb(input: any): any {
     && m.sketch.roads[0].lanes.every(id => Math.abs(len(m.sketch, id) - 100) < 0.05) && c9?.from.lane === "l1" && Math.abs(c9.from.s - 100) < 0.05 && m.dropped.some(d => /name/.test(d));
   const ok = aOk && bOk && refused && rOk;
   console.log(`sketch merge: lanes right there ${aOk}, through a connector ${bOk}, refused (apart, a way off, a loop, a junction) ${refused} [${[far, fork, loop, onJ].map(x => (x.ok ? "merged!" : x.reason.slice(0, 40))).join(" | ")}], a road cut and merged again ${rOk} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// V2 sketch: connectors turning back on themselves at a bend (connector-kinks.ts, from Bob's finder, T56): Bistrița's real shapes
+{
+  const P = (a: [number, number][]) => a.map(([x, y]) => ({ x, y }));
+  // (each from its start on its lane, through its bends, to its end: c5048 at j578, c5150 at j534, and c221, an ordinary U-turn)
+  const c5048 = P([[838.7, -606.78], [837.9, -610.82], [838.4, -609.15], [839.2, -612.69], [839.74, -619.26], [841.35, -625.61]]);
+  const c5150 = P([[501.84, -947.47], [503.14, -943.78], [501.81, -940.41], [500.01, -939.34], [501.67, -936.61], [503.31, -937.58], [501.14, -935.47], [497.39, -933.2]]);
+  const uTurn = P([[-504.76, 1119.61], [-502.18, 1121.24], [-501.89, 1118.2]]);
+  const worst = (pts: { x: number; y: number }[]) => Math.max(...turnsAt(pts));
+  const flagged = Math.round(worst(c5048)) === 175 && Math.round(worst(c5150)) === 166 && Math.round(worst(uTurn)) === 117
+    && worst(c5048) > CONNECTOR_KINK_LIMIT && worst(c5150) > CONNECTOR_KINK_LIMIT && worst(uTurn) < CONNECTOR_KINK_LIMIT;
+  const ends = (a: { x: number; y: number }[], b: { x: number; y: number }[]) => a[0] === b[0] && a[a.length - 1] === b[b.length - 1];
+  const fa = unkinkPts(c5048), fb = unkinkPts(c5150), fu = unkinkPts(uTurn);
+  const fixed = fa.dropped >= 1 && fb.dropped >= 1 && worst(fa.pts) <= CONNECTOR_KINK_LIMIT && worst(fb.pts) <= CONNECTOR_KINK_LIMIT && ends(fa.pts, c5048) && ends(fb.pts, c5150) && fu.dropped === 0;
+  // (in a sketch: the console's finder lists it, Tidy straightens it out, then nothing is listed)
+  const lane = (id: string, a: [number, number], b: [number, number]): SketchLane => ({ id, width: 3.5, shape: { kind: "line", pts: P([a, b]) } });
+  const sk: Sketch = { lanes: [lane("a", [501.84, -987.47], [501.84, -947.47]), lane("b", [497.39, -933.2], [457.39, -933.2])], roads: [], junctions: [],
+    connectors: [{ id: "c5150", from: { lane: "a", s: 40 }, to: { lane: "b", s: 0 }, via: c5150.slice(1, -1) }] };
+  const before = connectorKinks(sk), tidied = tidySketch(sk), after = connectorKinks(tidied.sketch);
+  const inSketch = before.length === 1 && before[0].connector === "c5150" && before[0].angle === 166 && tidied.report.connectorKinks === 1 && after.length === 0;
+  const ok = flagged && fixed && inSketch;
+  console.log(`connectors turning back (over ${CONNECTOR_KINK_LIMIT}°): c5048 ${worst(c5048).toFixed(0)}°, c5150 ${worst(c5150).toFixed(0)}°, a U-turn ${worst(uTurn).toFixed(0)}° | flagged right ${flagged}, fixed (${fa.dropped} + ${fb.dropped} bends out, ends kept, the U-turn left) ${fixed}, in a sketch through Tidy ${inSketch} | ok ${ok}`);
   if (!ok) process.exit(1);
 }

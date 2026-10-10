@@ -1369,15 +1369,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the sketch tidied (see sketch-tidy.ts), and what was done told */
   const tidy = () => {
     let rep: TidyReport | null = null;
-    editSketch(s => { const t = tidySketch(s); rep = t.report; return t.report.kinks || t.report.folded || t.report.extended ? t.sketch : s; });
+    editSketch(s => { const t = tidySketch(s); rep = t.report; return t.report.kinks || t.report.connectorKinks || t.report.folded || t.report.extended ? t.sketch : s; });
     const r = rep as TidyReport | null;
-    // (the three checks, each said: what it found, or that it found nothing)
+    // (the four checks, each said: what it found, or that it found nothing)
     const checks = (x: TidyReport | null) => [
       x?.kinks ? `${x.kinks} points doubling back taken out` : "no lane doubling back",
+      x?.connectorKinks ? `${x.connectorKinks} connectors turning back on themselves straightened out (the bends doing it taken out)` : "no connector turning back",
       x?.folded ? `${x.folded} lanes too short for a car folded into ${x.added} connectors` : "no lane too short for a car",
       x?.extended ? `${x.extended} short ways in or out made 15 m long` : "no way in or out too short",
     ];
-    if (!r || !(r.kinks || r.folded || r.extended)) { toast("Nothing to tidy", { description: [...checks(r), r?.kept.length ? `${r.kept.length} short lanes left as they are (a sign, a level, lights, a journey or turning shares, or a road joined at that end)` : ""].filter(Boolean).join(" · ") }); return; }
+    if (!r || !(r.kinks || r.connectorKinks || r.folded || r.extended)) { toast("Nothing to tidy", { description: [...checks(r), r?.kept.length ? `${r.kept.length} short lanes left as they are (a sign, a level, lights, a journey or turning shares, or a road joined at that end)` : ""].filter(Boolean).join(" · ") }); return; }
     setSel(NO_SEL);
     toast.success("Tidied", { description: [...checks(r), r.kept.length ? `${r.kept.length} short lanes left as they are` : "", "⌘Z brings it back"].filter(Boolean).join(" · ") });
   };
@@ -1525,7 +1526,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Fit the sketch in view" title="The whole sketch in view (F)" onClick={() => (in3d ? api3d.current?.fit() : fit())}><Maximize /></Button>
           </div>
           <ProblemConsole open={consoleOpen} onOpen={setConsoleOpen} sim={() => sim.current} stats={stats} sketch={sketch} contents={contents} replayFrom={replayRange?.from ?? null} onReplay={showAt}
-            onGo={(p, car) => { if (sim.current?.poses().some(c => c.id === car)) { setSel(NO_SEL); setSelCar(car); } centerOnPts([p], true); redraw(); }} />
+            onGo={(p, car) => { if (sim.current?.poses().some(c => c.id === car)) { setSel(NO_SEL); setSelCar(car); } centerOnPts([p], true); redraw(); }}
+            onSelect={id => { setSelCar(null); setSel({ ...NO_SEL, connectors: [id] }); redraw(); }} />
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
@@ -1560,7 +1562,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
             <Button size="sm" variant="outline" disabled={empty || readOnly} onClick={tidy}
-              title="Tidy: straighten lanes that double back on themselves, fold lanes too short for a car (under 4 m) between connectors into those connectors, and make short ways in and out 15 m long (as a conversion from V1 does; undo brings it back)"><Wand2 /> Tidy</Button>
+              title="Tidy: straighten lanes that double back on themselves and connectors that turn back at a bend, fold lanes too short for a car (under 4 m) between connectors into those connectors, and make short ways in and out 15 m long (as a conversion from V1 does; undo brings it back)"><Wand2 /> Tidy</Button>
             <Button size="sm" variant="ghost" aria-label="Clear the sketch" title="Clear the sketch (undo brings it back)" disabled={empty}
               onClick={() => { editSketch(s => ({ ...emptySketch(), ...(s.geo ? { geo: s.geo } : {}), ...(s.traffic ? { traffic: s.traffic } : {}) })); setSel(NO_SEL); }}><Trash2 /></Button>
           </div>

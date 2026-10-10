@@ -10,13 +10,16 @@
  *  - a lane that doubles back on itself (a hairpin of a few points, left by a conversion) is straightened
  *    there: those points taken out (its connectors kept where they were along it); and one that crosses itself in
  *    a small loop (an inside corner offset too far) cut at the crossing.
+ *  - a connector turning back on itself at a bend (more than CONNECTOR_KINK_LIMIT, see connector-kinks.ts) has the
+ *    bends that make it taken out, the sharpest first (its ends stay).
  * Left as they are: lanes with a sign or a level, held by lights, named by a journey or a junction's turning
  * shares, rings, arcs. Framework-free.
  */
+import { unkinkConnectors } from "./connector-kinks";
 import { dist, laneById, laneLength, leadOf, nearestOn, pointAt, remove, settle, signalPlans, type Pt, type Sketch, type SketchConnector, type SketchLane } from "./lane-sketch";
 
 export interface TidyOptions { /** lanes shorter than this between connectors are folded (m) */ stub?: number; /** ways in and out shorter than this are made this long (m) */ minEnd?: number }
-export interface TidyReport { kinks: number; folded: number; added: number; removed: number; extended: number; kept: { lane: string; why: string }[] }
+export interface TidyReport { kinks: number; /** connectors turning back on themselves straightened out */ connectorKinks: number; folded: number; added: number; removed: number; extended: number; kept: { lane: string; why: string }[] }
 
 const r2 = (x: number) => Math.round(x * 100) / 100;
 /** the longest loop cut out of a lane crossing itself (m): one longer is drawn so */
@@ -31,7 +34,7 @@ function crossing(a: Pt, b: Pt, c: Pt, d: Pt): Pt | null {
 
 export function tidySketch(sk0: Sketch, opts: TidyOptions = {}): { sketch: Sketch; report: TidyReport } {
   const STUB = opts.stub ?? 4, MIN_END = opts.minEnd ?? 15;
-  const report: TidyReport = { kinks: 0, folded: 0, added: 0, removed: 0, extended: 0, kept: [] };
+  const report: TidyReport = { kinks: 0, connectorKinks: 0, folded: 0, added: 0, removed: 0, extended: 0, kept: [] };
   let sk = sk0;
   // (what must stay: lanes and connectors the lights hold or a journey or turning share names)
   const held = new Set(signalPlans(sk).flatMap(p => p.controlled));
@@ -83,6 +86,9 @@ export function tidySketch(sk0: Sketch, opts: TidyOptions = {}): { sketch: Sketc
     };
     sk = { ...sk, connectors: sk.connectors.map(c => (moved.has(c.from.lane) || moved.has(c.to.lane) ? { ...c, from: { ...c.from, s: place(c.from.lane, c.from.s) }, to: { ...c.to, s: place(c.to.lane, c.to.s) } } : c)) };
   }
+
+  // 0b. connectors turning back on themselves at a bend: the bends that make it taken out (before folding: what is folded starts from clean bends)
+  { const k = unkinkConnectors(sk); sk = k.sketch; report.connectorKinks = k.fixed.length; }
 
   // 1. folding the short lanes between connectors, one at a time (a chain of them folds into one)
   for (let guard = 0; guard < 5000; guard++) {
