@@ -27,7 +27,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T96 | Agents City Table: a table of normal height (about 0.75 m for a 1.75 m avatar), chairs and a floor, so avatars can stand and walk; camera re-framed | Tom | 2026-10-10 | before T95 |
 | T95 | Agents City Table: commits as books on a bookshelf left of the whiteboard; Alice's avatar walks over and shelves each; the coffee mug removed if it costs frames | Tom | 2026-10-10 | after T92–T94, T96 |
 | T94 | Agents City Table: the City's lightning between the laptops and the files' buildings (shared with the City's lightning.tsx) | Tom (Alex for lightning.tsx) | 2026-10-10 | after T85 |
-| T93 | Agents City Table: while thinking, an avatar's eyes glance around like a person's (quick glances, holds, now and then the head follows) | Tom | 2026-10-10 | after T85, T92 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Plan fix (r1560, J574) approved by the user in Alice's session 2026-10-10, with four more drawn-over spots; Bob extends the patch, then the user applies it through History. Notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
@@ -45,6 +44,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T93 | Agents City Table: while thinking, the eyes glance around (80–120 ms glances, 0.6–2.5 s holds, mostly up-left/up-right, some blinks, the head follows long holds), seeded per agent | Tom | 2026-10-10 | admin: 18908ff |
 | T105 | Agents City Table: an agent asking the user a question (AskUserQuestion) looks at the camera and waves, at once then every 6–8 s; permission prompts keep the still look; a plain question at the end of a turn isn't detectable yet | Tom | 2026-10-10 | admin: ac5b812 |
 | T103 | Agents City: Escape closes one thing per press (input, overlay, selection or follow, the Table's board close-up), then flies the camera to its default | Alex, Tom | 2026-10-10 | admin: c004240, cc11ccf |
 | T102 | Agents City Table: who's using a browser: a small browser screen at the owner's seat (host, page title, CPU bar, label), unowned sessions stacked in front; data from /api/agents3d/browsers (host only) | Alex, Tom | 2026-10-10 | admin: 91fc749, cc11ccf |
