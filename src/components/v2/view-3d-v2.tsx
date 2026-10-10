@@ -58,10 +58,12 @@ export interface View3DApi { fit: () => void; dolly: (f: number) => void; home: 
 export type Camera3DUi = NonNullable<EditorUi["camera"]>;
 
 const FOV = 40, TILT = (55 * Math.PI) / 180;
+/** how long a turn signal is lit, then dark (ms; V1's) */
+const BLINK_MS = 380;
 /** how long the camera takes back to where it arrived (ms) */
 const HOME_MS = 700;
 /** a car as the editor shows it: its middle, heading, length, speed as a share of what it wants; a truck's trailer; broken down; its level */
-export interface Car3D { p: { x: number; y: number }; d: { x: number; y: number }; len: number; share: number; trailer?: { p: { x: number; y: number }; d: { x: number; y: number }; len: number }; broken?: boolean; z?: number }
+export interface Car3D { p: { x: number; y: number }; d: { x: number; y: number }; len: number; share: number; trailer?: { p: { x: number; y: number }; d: { x: number; y: number }; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1; z?: number }
 /** instances at most: bodies (a truck's cab and trailer two), their glass, hazard lamps */
 const MAXV = 24000, MAXL = 4000;
 /** how high a car's body is, and a truck's */
@@ -214,7 +216,7 @@ export function View3DV2(props: View3DProps) {
       Q.setFromAxisAngle(UP, yaw); P.set(x, y, z); S.set(l, h, w); M.compose(P, Q, S); m.setMatrixAt(i, M);
     };
     const syncCars = (now: number) => {
-      const p = live.current, cars = p.cars() ?? [], flash = Math.floor(now / 400) % 2 === 0;
+      const p = live.current, cars = p.cars() ?? [], flash = Math.floor(now / 400) % 2 === 0, blinkOn = Math.floor(now / BLINK_MS) % 2 === 0;
       let nb = 0, ng = 0, nl = 0;
       for (const c of cars) {
         if (nb + 2 > MAXV) break;
@@ -226,6 +228,12 @@ export function View3DV2(props: View3DProps) {
         if (c.broken && flash && nl + 4 <= MAXL) {
           const n = { x: -c.d.y, y: c.d.x }, hl = c.len / 2, hw = (truck ? TRUCK_W : CAR_W) / 2 + 0.05;
           for (const [f, s2] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) { P.set(c.p.x + c.d.x * hl * f + n.x * hw * s2, y + 0.9, c.p.y + c.d.y * hl * f + n.y * hw * s2); M.makeTranslation(P.x, P.y, P.z); lamps.setMatrixAt(nl++, M); }
+        } else if (c.blink && blinkOn && nl + 2 <= MAXL) {
+          // (its turn signal: on that side, at the front and the back (a truck's trailer's), as V1's)
+          const hw = (truck ? TRUCK_W : CAR_W) / 2 + 0.05, b = c.trailer ?? c;
+          for (const [q, dd, k] of [[c.p, c.d, c.len / 2], [b.p, b.d, -b.len / 2]] as const) {
+            P.set(q.x + dd.x * k - dd.y * hw * c.blink, y + 0.9, q.y + dd.y * k + dd.x * hw * c.blink); M.makeTranslation(P.x, P.y, P.z); lamps.setMatrixAt(nl++, M);
+          }
         }
       }
       bodies.count = nb; glass.count = ng; lamps.count = nl;

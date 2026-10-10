@@ -2451,7 +2451,7 @@ interface PaintState {
   /** the route traced (its lanes and connectors), drawn over the map; and where a test car drove another way */
   route: { lanes: Set<string>; conns: Set<string>; driven: { lanes: Set<string>; conns: Set<string> } } | null;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
-  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean }[] | null;
+  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1 }[] | null;
   /** the time of the cars shown (live or replayed), for the traffic lights; null with no cars */
   simT: number | null;
   /** the traffic lights as they run with the cars (null: worked out from the fixed cycle) */
@@ -2470,6 +2470,8 @@ interface PaintState {
   labels?: NameLabel[];
 }
 
+/** a car's turn signal: its colour and how long it is lit, then dark (ms; V1's) */
+export const BLINK = "#ffab1a", BLINK_MS = 380;
 /** a connector being drawn: yellow, over a dark edge (only while it is drawn: placed, it looks as the others) */
 const DRAWING = "#facc15", DRAWING_EDGE = "rgba(24, 24, 27, 0.75)";
 /** a marking's box (kept: markings are kept per sketch) */
@@ -2985,6 +2987,14 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       }));
       ctx.fillStyle = Math.floor(performance.now() / 400) % 2 ? "#a86f00" : "#ffb000";
       for (const c of corners) { ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.fill(); }
+    }
+    // (turning, or changing lane: its signal on that side, at its front and back corners, blinking as V1's; nothing between flashes)
+    else if (car.blink && Math.floor(performance.now() / BLINK_MS) % 2 === 0) {
+      const back = t ?? car, bl = t ? t.len : car.len, r = Math.max(0.3, 2.2 * px), side = car.blink;
+      ctx.fillStyle = BLINK;
+      for (const [q, dd, k] of [[car.p, car.d, car.len / 2], [back.p, back.d, -bl / 2]] as const) {
+        ctx.beginPath(); ctx.arc(q.x + dd.x * k - dd.y * side * 0.8, q.y + dd.y * k + dd.x * side * 0.8, r, 0, Math.PI * 2); ctx.fill();
+      }
     }
   }
   // the car picked: the way it will go, and a ring round it
