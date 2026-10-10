@@ -71,6 +71,8 @@ interface View { cx: number; cy: number; /** px per metre */ scale: number }
 type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[] };
+/** a road's or a junction's name as drawn on the map: what it names, and its pill (px on the canvas) */
+type NameLabel = { kind: "road" | "junction"; id: string; x0: number; y0: number; x1: number; y1: number };
 /** a point to drag: a lane's, a connector's bend or end (moved along its lane or onto another), a junction's corner */
 type Handle = { kind: "lane" | "bend" | "corner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" };
 
@@ -209,6 +211,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const drag = useRef<Drag | null>(null);
   const cursor = useRef<{ p: Pt; snapped: boolean; alt: boolean } | null>(null);
   const hover = useRef<Hover | null>(null);
+  /** the names drawn on the map now (the kept image's): a click or the pointer on one is on what it names */
+  const labels = useRef<NameLabel[]>([]);
   const space = useRef(false);
   // cars on the sketch, to try it out (made when first run, kept with what they did when the window closes;
   // they follow the sketch as it is edited)
@@ -272,6 +276,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     return best ? { p: best, snapped: true } : { p: { x: Math.round(p.x * 2) / 2, y: Math.round(p.y * 2) / 2 }, snapped: false };
   };
+  /** the name under the pointer, if any (the last drawn, on top, first) */
+  const labelAt = (e: { clientX: number; clientY: number }): NameLabel | null => {
+    const r = canvas.current?.getBoundingClientRect();
+    if (!r) return null;
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    for (let i = labels.current.length - 1; i >= 0; i--) { const b = labels.current[i]; if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) return b; }
+    return null;
+  };
+  /** what a name shows lit while the pointer is on it: its junction, or its road's lanes */
+  const labelHover = (b: NameLabel): Hover => (b.kind === "junction" ? { junction: b.id } : { lanes: live.current.sketch.roads.find(r => r.id === b.id)?.lanes ?? [] });
   /** what is under `p`: zebras, then connectors (on top of the lanes), then lanes, then the smallest junction surface */
   const pick = (p: Pt): Hit | null => {
     const sk = live.current.sketch, px = 1 / view.current.scale;
@@ -425,7 +439,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       if (!c || live.current.in3d) return;
       // (the background: the imagery where the plan is, the reference image; in the Sketch window the imagery only, where it has a place on Earth)
       const l = live.current, bg = (x: typeof l): Background => ({ geo: x.sketch.geo ?? null, satellite: x.layers.satellite, sat: x.sat, underlay: x.layers.image ? x.underlay : null, img: x.ulImg, calib: x.calib, onTile: redraw });
-      const st: PaintState = { ...live.current, sketch: dragSk.current ?? live.current.sketch, ...(dragSk.current ? { contents: contentsOf(dragSk.current) } : {}), view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : l.sketch.geo ? { ...bg(l), underlay: null, calib: null } : null };
+      const st: PaintState = { ...live.current, sketch: dragSk.current ?? live.current.sketch, ...(dragSk.current ? { contents: contentsOf(dragSk.current) } : {}), view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, labels: labels.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : l.sketch.geo ? { ...bg(l), underlay: null, calib: null } : null };
       const w = c.clientWidth, h = c.clientHeight, v = view.current, key = `${w}x${h}:${v.cx},${v.cy},${v.scale}`;
       kept.current ??= { canvas: document.createElement("canvas"), stale: true, key: "" };
       const k = kept.current;
@@ -960,11 +974,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         // (Alt on a junction's corner: rounded off, or a corner again)
         if (h?.kind === "corner" && e.altKey) { editSketch(k => ({ ...k, junctions: k.junctions.map(j => (j.id === h.id ? toggleCorner(j, h.i) : j)) })); return; }
         if (h) { drag.current = { kind: "handle", base: sk, h }; return; }
+        // (a name: what it names, as a click on it would pick it; a road's, the whole road, as a double-click on a lane of it)
+        const lab = labelAt(e), road = lab?.kind === "road" ? sk.roads.find(r => r.id === lab.id) : null;
+        if (road) { setSelCar(null); setSel(e.shiftKey ? { ...s, road: null, lanes: [...new Set([...s.lanes, ...road.lanes])] } : { ...NO_SEL, lanes: road.lanes, road: road.id }); redraw(); return; }
         // a car, to inspect (over what it drives on)
-        const rt = live.current.replayT, car = (rt !== null ? sim.current?.replayCarAt(rt, raw, 4 / view.current.scale) : sim.current?.carAt(raw, 4 / view.current.scale)) ?? null;
+        const rt = live.current.replayT, car = lab ? null : (rt !== null ? sim.current?.replayCarAt(rt, raw, 4 / view.current.scale) : sim.current?.carAt(raw, 4 / view.current.scale)) ?? null;
         if (car !== null && !e.shiftKey) { setSelCar(car); setSel(NO_SEL); redraw(); return; }
         setSelCar(null);
-        const hit = pick(raw);
+        const hit = lab?.kind === "junction" ? { junction: lab.id } : pick(raw);
         if (!hit) {
           if (!e.shiftKey) setSel(NO_SEL);
           drag.current = { kind: "box", a: raw, b: raw, add: e.shiftKey };
@@ -1115,8 +1132,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     hoverTimer.current = setTimeout(() => {
       hoverTimer.current = null;
       // (a car, live, over what it drives on; else what is there)
-      const car = live.current.replayT === null ? sim.current?.carAt(p, 4 / view.current.scale) ?? null : null;
-      const hit = car !== null ? { car } : (pick(p) as HoverHit | null);
+      const lab = labelAt(e), lr = lab?.kind === "road" ? live.current.sketch.roads.find(r => r.id === lab.id)?.lanes[0] : null;
+      const car = !lab && live.current.replayT === null ? sim.current?.carAt(p, 4 / view.current.scale) ?? null : null;
+      const hit = lab ? (lab.kind === "junction" ? { junction: lab.id } : lr ? { lane: lr } : null) : car !== null ? { car } : (pick(p) as HoverHit | null);
       hoverCarId.current = car;
       if (hit) setHoverCard({ hit, x, y, car: car !== null ? sim.current?.inspect(car) ?? null : null });
     }, 450);
@@ -1167,9 +1185,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       g.angle = a;
       dragShow(settle(transformPiece(g.base, g.piece, rotation(g.o, a))));
     }
+    // (a name under the pointer: what it names is lit, and the pointer says it can be clicked)
+    const lab = tool === "select" && !g ? labelAt(e) : null;
     if (canvas.current && tool === "select" && !g) {
       const rh = rotateHandle(live.current.sketch, live.current.sel, v.scale);
-      canvas.current.style.cursor = (rh && dist(raw, rh.h) <= 8 / v.scale) || handleAt(raw) ? "grab" : "";
+      canvas.current.style.cursor = (rh && dist(raw, rh.h) <= 8 / v.scale) || handleAt(raw) ? "grab" : lab ? "pointer" : "";
     }
     const d = draft.current;
     if (d?.kind === "arc" && d.start) {
@@ -1178,7 +1198,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       d.start.last = a;
     }
     cursor.current = { ...(tool === "select" || tool === "connector" || tool === "slice" ? { p: raw, snapped: false } : snap(raw)), alt: e.altKey };
-    hover.current = g ? null : pick(raw);
+    hover.current = g ? null : lab ? labelHover(lab) : pick(raw);
     redraw();
   };
 
@@ -2407,6 +2427,8 @@ interface PaintState {
   layers: Layers;
   /** what each junction takes in */
   contents: Map<string, JunctionContents>;
+  /** filled with the names drawn and where (the kept image's), for clicks and the pointer on them */
+  labels?: NameLabel[];
 }
 
 /** a marking's box (kept: markings are kept per sketch) */
@@ -2546,6 +2568,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     ctx.fillStyle = col.pill; ctx.beginPath(); ctx.roundRect(sx - tw / 2 - 5, sy - 9, tw + 10, 18, 4); ctx.fill();
     ctx.fillStyle = color; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(text, sx, sy + 0.5);
     ctx.restore();
+    return { x0: sx - tw / 2 - 5, y0: sy - 9, x1: sx + tw / 2 + 5, y1: sy + 9 };
   };
   const square = (p: Pt) => { ctx.fillStyle = col.bg; ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.fillRect(p.x - 3.5 * px, p.y - 3.5 * px, 7 * px, 7 * px); ctx.strokeRect(p.x - 3.5 * px, p.y - 3.5 * px, 7 * px, 7 * px); };
   const dot = (p: Pt, r: number, fill: string) => { ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill(); };
@@ -3097,17 +3120,18 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     for (const w of entries) tag(w.lanes, false, `→ ${Math.round(w.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0))}/h`, dark ? "#4ade80" : "#15803d");
     for (const w of exits) { const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0); tag(w.lanes, true, ws === 0 ? "closed" : `${sumW ? Math.round((ws / sumW) * 100) : 0}% →`, dark ? "#93c5fd" : "#1d4ed8"); }
   }
-  // (a road's name once on the screen, a street cut into several roads named once)
+  // (a road's name once on the screen, a street cut into several roads named once; each name kept with where it is)
+  if (st.labels) st.labels.length = 0;
   const named = new Set<string>();
   for (const r of st.layers.names && v.scale >= 1.5 ? sk.roads : []) {
     const l = laneById(sk, r.lanes[0]), p = l && pointAt(l.shape, laneLength(l.shape) / 2).p;
     if (!p || named.has(r.name) || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
     named.add(r.name);
-    label(r.name, p, col.text);
+    st.labels?.push({ kind: "road", id: r.id, ...label(r.name, p, col.text) });
   }
   for (const j of st.layers.names && v.scale >= 3 ? sk.junctions : []) {
     const top = j.outline.reduce((a, p) => (p.y < a.y ? p : a), j.outline[0]);
-    if (top) label(j.name, { x: top.x, y: top.y - 14 * px }, col.jText);
+    if (top) st.labels?.push({ kind: "junction", id: j.id, ...label(j.name, { x: top.x, y: top.y - 14 * px }, col.jText) });
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.font = "10px ui-monospace, monospace"; ctx.fillStyle = dark ? "#a1a1aa" : "#78716c"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
