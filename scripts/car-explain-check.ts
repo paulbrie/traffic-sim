@@ -1,6 +1,6 @@
 // The per-car explanation's words (T157): the headline for the kinds of hold the user named, the text copied.
 import { strict as assert } from "node:assert";
-import { explainText, headline, type CarExplain } from "../src/lib/car-explain";
+import { explainText, headline, patienceNote, type CarExplain } from "../src/lib/car-explain";
 
 const base: CarExplain = { car: 200, t: 125, traced: true, why: null, rule: null, speed: { kmh: 22, desiredKmh: 50, targetKmh: 24, accel: 0.4 }, leader: null, blocker: null, stopAt: null, since: 0, chain: [], deadlock: null, plan: null, log: [] };
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
@@ -25,6 +25,26 @@ t("text: every part that is known, the chain with the ring, the log", () => {
   for (const bit of ["Car 200 at 2:05", "Held by: car 147 on lane l3254 (it reaches the zone in 1.4 s, this one clears it in 2.6 s)", "Blocking chain: 200 → 147 → 344 → 147  DEADLOCK ring: 147, 344", "turned down at 2:00: lane l3254, gap 5.1 m < 9.0 m", "2:01 state: give way to car 147"])
     assert.ok(s.includes(bit), `missing "${bit}" in\n${s}`);
   assert.match(explainText({ ...base, traced: false, speed: null }, clock), /from the recording/);
+});
+
+t("crossing waits with the junction rules' reasons (T161): in words, unknown ones as they come; the patience note", () => {
+  const w = (kind: "give-way" | "priority" | "zone", detail?: string) => headline({ ...base, rule: { kind, edge: "conn:c7", ...(detail ? { detail } : {}) }, blocker: { car: 147, edge: "lane:l3254" }, since: 3.2 }).text;
+  assert.equal(w("priority", "from the right"), "Waiting for car 147 crossing its path on lane l3254 (it comes from the right, 3.2 s)");
+  assert.equal(w("priority", "main road"), "Waiting for car 147 crossing its path on lane l3254 (it's on the main road, 3.2 s)");
+  assert.equal(w("priority", "roundabout"), "Waiting for car 147 crossing its path on lane l3254 (the roundabout goes first, 3.2 s)");
+  assert.equal(w("give-way", "left turn"), "Waiting for car 147 crossing its path on lane l3254 (you're turning left across it, 3.2 s)");
+  assert.equal(w("priority", "already in the zone"), "Waiting for car 147 crossing its path on lane l3254 (already in the crossing, 3.2 s)");
+  assert.equal(w("priority", "set off first"), "Waiting for car 147 crossing its path on lane l3254 (it set off first, 3.2 s)");
+  assert.equal(w("zone", "first come"), "Waiting for car 147 crossing its path on lane l3254 (first come, first served, 3.2 s)");
+  assert.equal(w("zone", "something new"), "Waiting for car 147 crossing its path on lane l3254 (something new, 3.2 s)");
+  // (the setting off: no detail but "already in the zone", or none: as before)
+  assert.equal(w("zone"), "Waiting for car 147 crossing its path on lane l3254 (first come, first served, 3.2 s)");
+  const x = (kind: "give-way" | "zone" | "priority", detail?: string): CarExplain => ({ ...base, rule: { kind, ...(detail ? { detail } : {}) }, blocker: { car: 147, edge: "lane:l3254" }, since: 3.2 });
+  assert.equal(patienceNote(x("give-way", "give-way line")), "Patience: 3.2 of 10 s at the give-way; then it goes once car 147 can still stop comfortably.");
+  assert.equal(patienceNote(x("zone", "first come")), "Patience: 3.2 of 6 s; then the one waiting longer goes.");
+  assert.equal(patienceNote(x("priority", "from the right")), null);
+  assert.equal(patienceNote(x("zone", "already in the zone")), null);
+  assert.match(explainText(x("give-way", "give-way line"), clock), /\nPatience: 3\.2 of 10 s at the give-way/);
 });
 
 console.log(`car-explain: ${ok} checks passed`);

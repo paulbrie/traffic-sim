@@ -53,6 +53,33 @@ export const RULE_WORDS: Record<ExplainRule, string> = {
   zebra: "zebra crossing", "keep-clear": "keeping the junction clear", "letting-in": "letting a car in", "lane-change": "changing lane", broken: "broken down", forced: "let go (deadlock)",
 };
 
+/**
+ * Why the other car goes first at a crossing (the sim's rule.detail on give-way / priority / zone waits; with the
+ * junction rules setting on, T161), in words; anything else is shown as the sim says it.
+ */
+export const REASON_WORDS: Record<string, string> = {
+  roundabout: "the roundabout goes first",
+  "give-way line": "you have a give-way line",
+  lights: "the lights decide",
+  "main road": "it's on the main road",
+  "left turn": "you're turning left across it",
+  "from the right": "it comes from the right",
+  "first come": "first come, first served",
+  "already in the zone": "already in the crossing",
+  "set off first": "it set off first",
+};
+/** the default patience (s): at a give-way, then a car goes once the other can still stop comfortably; equal standing ("first come"), then the one waiting longer goes */
+export const PATIENCE = { giveWay: 10, firstCome: 6 };
+
+/** a crossing wait's patience, in words: how long it has waited of how long, and what happens then; null for other holds */
+export function patienceNote(x: CarExplain): string | null {
+  const r = x.rule?.kind, b = x.blocker;
+  if (!b || (r !== "give-way" && r !== "zone")) return null;
+  if (r === "give-way") return `Patience: ${x.since.toFixed(1)} of ${PATIENCE.giveWay} s at the give-way; then it goes once car ${b.car} can still stop comfortably.`;
+  if (x.rule?.detail === "first come") return `Patience: ${x.since.toFixed(1)} of ${PATIENCE.firstCome} s; then the one waiting longer goes.`;
+  return null;
+}
+
 /** the explanation's headline in plain words, with the car it is about (to link) */
 export function headline(x: CarExplain): { text: string; car?: number } {
   const r = x.rule?.kind, b = x.blocker, on = (e?: string) => (e ? ` on ${edgeName(e)}` : "");
@@ -68,7 +95,11 @@ export function headline(x: CarExplain): { text: string; car?: number } {
     if (x.rule?.detail === "no room") return { text: `Waiting to join ${onto}: no room past where it joins, behind car ${b.car} (${s1(x.since)})`, car: b.car };
     return { text: `Giving way to join ${onto}, to car ${b.car} (${s1(x.since)})`, car: b.car };
   }
-  if (b && (r === "give-way" || r === "priority" || r === "zone" || r === "keep-clear" || r === "ring-full"))
+  if (b && (r === "give-way" || r === "priority" || r === "zone")) {
+    const d = x.rule?.detail, why = d ? REASON_WORDS[d] ?? d : RULE_WORDS[r];
+    return { text: `Waiting for car ${b.car} crossing its path${on(b.edge)} (${why}, ${s1(x.since)})`, car: b.car };
+  }
+  if (b && (r === "keep-clear" || r === "ring-full"))
     return { text: `Waiting for car ${b.car} crossing its path${on(b.edge)} (${RULE_WORDS[r]}, ${s1(x.since)})`, car: b.car };
   if (r === "letting-in" && b) return { text: `Letting car ${b.car} in (${s1(x.since)})`, car: b.car };
   if (r === "signal") return { text: `At the light${on(x.rule?.edge)}${x.rule?.detail ? ` (${x.rule.detail})` : ""}, ${s1(x.since)}` };
@@ -82,6 +113,8 @@ export function headline(x: CarExplain): { text: string; car?: number } {
 /** the explanation as plain text, to copy (for pasting into a conversation, and the bridge) */
 export function explainText(x: CarExplain, clock: (t: number) => string): string {
   const out = [`Car ${x.car} at ${clock(x.t)}${x.traced ? "" : " (from the recording: a car not watched then)"}: ${headline(x).text}`];
+  const pn = patienceNote(x);
+  if (pn) out.push(pn);
   if (x.rule) out.push(`Rule: ${RULE_WORDS[x.rule.kind]}${x.rule.edge ? ` on ${edgeName(x.rule.edge)}` : ""}${x.rule.detail ? ` (${x.rule.detail})` : ""}, for ${s1(x.since)}`);
   if (x.speed) out.push(`Speed: ${kmh(x.speed.kmh)} km/h now, ${kmh(x.speed.desiredKmh)} desired, ${kmh(x.speed.targetKmh)} target (${x.speed.accel.toFixed(1)} m/s²)`);
   if (x.leader) out.push(`Leader: car ${x.leader.car}, ${m1(x.leader.gap)} ahead at ${kmh(x.leader.kmh)} km/h`);

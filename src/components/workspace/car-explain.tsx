@@ -3,7 +3,7 @@
 import { ClipboardCopy, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { edgeName, explainText, headline, RULE_WORDS, tagWords, type CarExplain } from "@/lib/car-explain";
+import { edgeName, explainText, headline, patienceNote, RULE_WORDS, tagWords, type CarExplain } from "@/lib/car-explain";
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const one = (x: number) => x.toFixed(1);
@@ -19,7 +19,7 @@ export function CarWhy({ x, live, onPick }: { x: CarExplain | null; live: boolea
   const row = (label: string, value: React.ReactNode) => (
     <div className="flex justify-between gap-2"><span className="shrink-0 text-muted-foreground">{label}</span><span className="min-w-0 text-right">{value}</span></div>
   );
-  const ring = new Set(x.deadlock ?? []);
+  const ring = new Set(x.deadlock ?? []), patience = patienceNote(x);
   const copy = () => void navigator.clipboard.writeText(explainText(x, clock)).then(() => toast.success(`Car ${x.car}'s explanation copied`), () => toast.error("Couldn't copy"));
   return (
     <div className="grid gap-1 rounded border bg-background/60 px-2 py-1.5 text-xs" aria-label="Why">
@@ -31,6 +31,7 @@ export function CarWhy({ x, live, onPick }: { x: CarExplain | null; live: boolea
         {x.deadlock && <TriangleAlert className="mr-1 inline size-3.5" />}
         {h.text}
       </p>
+      {patience && <p className="text-[11px] text-muted-foreground">{patience}</p>}
       {!x.traced && (
         <p className="text-[11px] text-muted-foreground">
           {live ? "Just picked, from the recording: its speeds, plan and the gaps it turns down are traced from the next step (Run)." : "From the recording (it wasn't picked then): its speeds, plan and the gaps it turned down weren't traced."}
