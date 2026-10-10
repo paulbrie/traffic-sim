@@ -17,7 +17,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test); 3D tilt by drag not reachable in Ramona's script | Tatiana | 2026-10-10 | from T97, T98 |
 | T111 | Agents City: a plain question at the end of a turn counts as asking the user (session data), so that agent waves too | Alex (data), Tom (wave) | 2026-10-10 | after T110 |
-| T109 | Admin: back up /opt/project's local work (branch, tarball, stash) and move its main to origin/main; go/no-go list for the user's deploy | Alex | 2026-10-10 | backups done (backup/local-main-2026-10-10, /home/genie/alex-scratch/t109); first: carry the new local-only content onto origin and untrack nginx/projects.conf (the user's choices), then the checkout; the user deploys |
 | T108 | Agents City (City and Table): an accessed file's building lifts into the air while the touch lingers, then settles; edits higher than reads | Alex (City, the shared curve), Tom (Table) | 2026-10-10 | City and lib/lift.ts: admin 3a899b3; Table after T96 |
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
@@ -41,6 +40,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T109 | Admin: local-only content carried to origin (eu-funding workflow and agents, AGENTS-IMPROVEMENTS.md, TASKS.md), nginx/projects.conf untracked; /opt/project moved to origin/main, clean; backups: branch backup/local-main-2026-10-10, stash@{0}, /home/genie/alex-scratch/t109 | Alex, Alice | 2026-10-10 | admin: 5e606f7; ready for the user's deploy |
 | T96 | Agents City Table: table top at the avatars' seated elbow height (2.75 = 0.35 of standing, the user's choice), feet on a floor, chairs on it, a walking ring and the bookshelf's spot; camera re-framed | Tom | 2026-10-10 | admin: beaa4ee |
 | T110 | genie: the 2xlarge size (16 vCPU, 32 GB, disk unknown) in the API docs, the size list, both create forms and the tools' text | Alex, Alice | 2026-10-10 | genie: a4414f6 (pushed by Alice at the user's request) |
 | T98 | A raised lane (Level 1) over a junction: model, tooltip and 2D pass; tilted 3D shot not reached (→ T112); the 3D screenshot is the bridge's, works for 2D and 3D | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t98 |
