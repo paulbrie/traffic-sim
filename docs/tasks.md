@@ -17,7 +17,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T113 | V2: the tab's renderer grew 5.4 → 7.9 GB in minutes at 30× with a test car followed (Bistrița copy): find and fix the growth | Tatiana (Bob if in the sim) | 2026-10-10 | after T112 |
 | T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test) | Tatiana | 2026-10-10 | from T97 (the 3D tilt was a test artifact, dropped) |
-| T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Plan fix (r1560, J574) approved by the user in Alice's session 2026-10-10, with four more drawn-over spots; Bob extends the patch, then the user applies it through History. Notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
@@ -35,6 +34,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T106 | Agents City Table: messages fly as paper planes (sender's colour band, 2.2 s arc with bank and bob, unfold on landing; off the table edge for absentees; staggered) | Tom | 2026-10-10 | admin: d2bc2ee |
 | T95 | Agents City Table: commits as books on a bookshelf left of the whiteboard (newest 90, hover for hash, repo, subject); Alice walks over to shelve each new one (one trip for several); the commit tower and the mug removed | Tom | 2026-10-10 | admin: f84128e |
 | T116 | Re-test of T115 on a fresh page: {id, width} applies at once; refused-only files say "Nothing would change: 1 item was left out" in red with the reason, Apply disabled: pass | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t116 |
 | T107 | Browser test of T104: camera back to the arrival framing, a drag stops the ease, Escape in search / menus / dialogs only closes them: pass | Ramona, Tatiana | 2026-10-10 | /home/genie/ramona-scratch/t107 |
