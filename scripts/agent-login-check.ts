@@ -10,9 +10,10 @@ const t = (name: string, f: () => void) => { f(); ok++; console.log(`ok  ${name}
 t("listed agents sign in as their own test account; any case", () => {
   assert.deepEqual(agentAccount("ramona"), { ok: true, email: "ramona@test.com" });
   assert.deepEqual(agentAccount("Tatiana"), { ok: true, email: "tatiana@test.com" });
+  for (const n of ["alex", "bob", "tom"]) assert.deepEqual(agentAccount(n), { ok: true, email: `${n}@test.com` });
 });
 t("names not on the list are refused (the user's, other real accounts, made-up ones)", () => {
-  for (const n of ["paul", "admin", "alice", "bob", "claude-tests", "", "ramona@test.com", "__proto__", "constructor"]) assert.equal(agentAccount(n).ok, false, n);
+  for (const n of ["paul", "admin", "alice", "claude-tests", "", "ramona@test.com", "__proto__", "constructor"]) assert.equal(agentAccount(n).ok, false, n);
 });
 t("only test email domains", () => {
   for (const e of ["ramona@test.com", "x@gridlock.test", "Y@TEST.COM"]) assert.equal(isTestEmail(e), true, e);

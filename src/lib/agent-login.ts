@@ -7,8 +7,11 @@
 
 /** the agents with a test account of their own (others: ask Alice and the user first) */
 export const AGENT_ACCOUNTS: Readonly<Record<string, string>> = {
+  alex: "alex@test.com",
+  bob: "bob@test.com",
   ramona: "ramona@test.com",
   tatiana: "tatiana@test.com",
+  tom: "tom@test.com",
 };
 /** email domains of test accounts only */
 export const TEST_DOMAINS = ["test.com", "gridlock.test"] as const;
