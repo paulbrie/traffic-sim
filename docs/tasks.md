@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T161b | Car explainer's plain words for the priority model's reasons (from the right, main road, left turn, roundabout, patience) | Alex | 2026-10-10 | with Bob's T161 setting |
 | T165 | V2: show junction warnings (console, tree badges, panel count; computed off the main thread after edits) and a 'Junction rules: first come / priority' toggle in sim settings | Tatiana | 2026-10-10 | approved by the user |
 | T161 | Priority model for roundabouts and complex junctions (ring priority, geometry/sign-based conflicts, first come first served only as last resort, no flip-flop) and editor warnings; proposal first | Bob | 2026-10-10 | warnings pushed 45439df; model behind a setting, off by default (the user's choice after mixed numbers: J696 deadlocks up at 20/h, −70% at 120/h); user report: car 93 waited 28 s at J696 |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | causes in the drawing (cross lanes, one-lane bottleneck, slips); version 1 submitted as agent patch #5, a Sketch-window try-out (the user's choice); the main-plan patch kept ready |
