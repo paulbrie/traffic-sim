@@ -15,7 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T135 | V2 map: click a way-in or way-out label ("→ 120/h", "1% →") to edit its rate or share in place | Tatiana | 2026-10-10 | after T127's drawing |
+| T135 | V2 map: click a way-in or way-out label ("→ 120/h", "1% →") to edit its rate or share in place | Tatiana | 2026-10-10 | 58e7e07; browser check on 7000 pending |
 | T134 | Bistrița: dead-end junctions whose only connector is a U-turn (e.g. Junction 448): find all on rev 92, classify (stub short of a street, map edge, leftover), propose fixes as agent patches, and a detector for the console | Bob | 2026-10-10 | the user's screenshot; read-only |
 | T132 | Agent patches: agents submit plan patches (with description, task, numbers) to a DB queue; the V2 plan page lists them with History's preview, and the user applies or rejects them | Alex, Ramona checks | 2026-10-10 | the user's rule: agents no longer edit Bistrița; first, then T127 |
 | T130 | V2: a semi-transparent fill over a junction while it's drawn or selected for editing | Tatiana | 2026-10-10 | after T128 |
