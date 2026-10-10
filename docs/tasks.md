@@ -17,7 +17,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T111 | Agents City: a plain question at the end of a turn counts as asking the user (session data), so that agent waves too | Alex (data), Tom (wave) | 2026-10-10 | after T110 |
 | T110 | genie: document the 2xlarge size (docs, the create form, the size list, the tools' text); unknown values marked unknown | Alex | 2026-10-10 | after T109 |
-| T109 | Admin: back up /opt/project's local work (branch, tarball, stash) and move its main to origin/main; go/no-go list for the user's deploy | Alex | 2026-10-10 | approved by the user in Alice's session; the user deploys |
+| T109 | Admin: back up /opt/project's local work (branch, tarball, stash) and move its main to origin/main; go/no-go list for the user's deploy | Alex | 2026-10-10 | backups done (backup/local-main-2026-10-10, /home/genie/alex-scratch/t109); first: carry the new local-only content onto origin and untrack nginx/projects.conf (the user's choices), then the checkout; the user deploys |
 | T108 | Agents City (City and Table): an accessed file's building lifts into the air while the touch lingers, then settles; edits higher than reads | Alex (City, the shared curve), Tom (Table) | 2026-10-10 | City and lib/lift.ts: admin 3a899b3; Table after T96 |
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
