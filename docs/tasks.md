@@ -15,7 +15,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T136 | Agents City: repos with no project share the key "null/" (the admin's commits land on another repo's shelf and city) | Alex | 2026-10-10 | after T132 |
 | T135 | V2 map: click a way-in or way-out label ("→ 120/h", "1% →") to edit its rate or share in place | Tatiana | 2026-10-10 | after T127's drawing |
 | T134 | Bistrița: dead-end junctions whose only connector is a U-turn (e.g. Junction 448): find all on rev 92, classify (stub short of a street, map edge, leftover), propose fixes as agent patches, and a detector for the console | Bob | 2026-10-10 | the user's screenshot; read-only |
 | T132 | Agent patches: agents submit plan patches (with description, task, numbers) to a DB queue; the V2 plan page lists them with History's preview, and the user applies or rejects them | Alex, Ramona checks | 2026-10-10 | the user's rule: agents no longer edit Bistrița; first, then T127 |
@@ -40,6 +39,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T136 | Agents City: commits matched to their repo by its directory (repos with no project no longer share "null/"; the admin's commits stay the admin's) | Alex | 2026-10-10 | admin: ab0a188 |
 | T133 | Agents City Table: bookshelf 1.4× bigger, one shelf per project on the table in the cities' order, name plates, up to 6 shelves then "Other projects"; Alice reaches to the right shelf | Tom | 2026-10-10 | admin: f845abe |
 | T128 | V2: merge two lanes (end to start, directly or through one connector) or two roads (V1's Merge roads ported): M, the lane menu, the selection panel; clear refusals; one undo step | Tatiana | 2026-10-10 | df7fc4b |
 | T131 | V2: road and lane speed limits now survive save and load (sanitizeSketch keeps `speed`, 10–130 km/h); limits set before were lost and must be set again | Tatiana | 2026-10-10 | 0beb836 |
