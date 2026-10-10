@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T84 | Agents City Table: all post-its yellow, the agent's colour only as a small cue | Tom | 2026-10-10 | after T82 |
 | T83 | Agents City Table: bigger cities on the table, a file's name on hover, neighbourhood (folder) names when zoomed in | Tom | 2026-10-10 | after T82 |
 | T82 | Agents City Table: an agent idle for more than 30 s stays in the sleeping posture | Tom | 2026-10-10 | |
 | T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | |
