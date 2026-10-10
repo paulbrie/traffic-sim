@@ -50,6 +50,7 @@ import { BackgroundPanel, drawBackground, type Background, type Calibration, typ
 import { underlayImg$ } from "@/state/underlay-image";
 import { stampRoundabout } from "@/lib/roundabout";
 import { tidySketch, type TidyReport } from "@/lib/sketch-tidy";
+import { mergeLanes, mergeRoads, type MergeResult } from "@/lib/sketch-merge";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
@@ -1319,6 +1320,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       return;
     }
     if (k === "g") { groupSel(); return; }
+    if (k === "m") { if (!readOnly) mergeSelection(live.current.sketch, live.current.sel, editSketch, setSel); return; }
     if (k === "r") { reverseSel(); return; }
     if (k === "q" || k === "e") { rotateSel(((k === "e" ? 1 : -1) * (e.shiftKey ? 1 : 15) * Math.PI) / 180); return; }
     if (k === "f") { if (in3d) api3d.current?.fit(); else fit(); return; }
@@ -1434,6 +1436,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                   <DropdownMenuItem disabled={readOnly || !menu.ring} onSelect={() => editSketch(s => circleLanes(s, menu.lanes))}>
                     Make a circle <span className="ml-auto text-[11px] text-muted-foreground">a ring, made round</span>
                   </DropdownMenuItem>
+                  {(() => { const t = mergeTarget(sketch, sel); return (
+                    <DropdownMenuItem disabled={readOnly || !t} onSelect={() => mergeSelection(sketch, sel, editSketch, setSel)}>
+                      {t?.kind === "roads" ? "Merge the roads" : "Merge lanes"} <span className="ml-auto text-[11px] text-muted-foreground">{t ? "the two selected · M" : "select two · M"}</span>
+                    </DropdownMenuItem>
+                  ); })()}
                 </>}
                 {page && menu.lanes.length === 1 && <>
                   <DropdownMenuSeparator />
@@ -1875,6 +1882,30 @@ function GeometrySection({ sketch, lanes, lead }: { sketch: Sketch; lanes: strin
   );
 }
 
+/** what the selection can be merged as: two whole roads (the first picked keeping its name), else two lanes; null if neither */
+function mergeTarget(sk: Sketch, sel: Sel): { kind: "roads" | "lanes"; a: string; b: string } | null {
+  if (sel.connectors.length || sel.junctions.length || sel.link || sel.crossing) return null;
+  const roads = [...new Set(sel.lanes.map(id => roadOf(sk, id)?.id ?? null))];
+  if (roads.length === 2 && roads.every(r => r && sk.roads.find(x => x.id === r)!.lanes.every(l => sel.lanes.includes(l)))) return { kind: "roads", a: roads[0]!, b: roads[1]! };
+  return sel.lanes.length === 2 ? { kind: "lanes", a: sel.lanes[0], b: sel.lanes[1] } : null;
+}
+/** the selection merged (one undo step), what came of it selected and said; or why not */
+function mergeSelection(sk: Sketch, sel: Sel, edit: (f: (s: Sketch) => Sketch) => void, setSel: (s: Sel) => void) {
+  const t = mergeTarget(sk, sel);
+  if (!t) { toast.error("Nothing to merge", { description: "Select two lanes where one carries on the other, or two whole roads (double-click a lane of each, or click their names; Shift adds)." }); return; }
+  const name = (id: string) => sk.roads.find(r => r.id === id)?.name ?? id;
+  let r: MergeResult | null = null;
+  edit(s => { r = t.kind === "roads" ? mergeRoads(s, t.a, t.b) : mergeLanes(s, t.a, t.b); return r.ok ? r.sketch : s; });
+  const res = r as MergeResult | null;
+  if (!res) return;
+  if (!res.ok) { toast.error(t.kind === "roads" ? `Can't merge ${name(t.a)} and ${name(t.b)}` : `Can't merge lanes ${t.a} and ${t.b}`, { description: res.reason }); return; }
+  const kept = t.kind === "roads" ? res.sketch.roads.find(x => x.id === t.a) : null, lane = res.sketch.lanes.find(l => l.id === t.a || l.id === t.b);
+  setSel(kept ? { ...NO_SEL, lanes: kept.lanes, road: kept.id } : lane ? { ...NO_SEL, lanes: [lane.id] } : NO_SEL);
+  toast.success(kept ? `${kept.name}: one road now` : `Lane ${lane?.id}: one lane now`, {
+    description: [res.dropped.length ? `Kept the first's; dropped: ${res.dropped.join("; ")}` : "Nothing differed between them", "⌘Z brings them back"].join(" · "),
+  });
+}
+
 function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover, now = null, results = null }: {
   sketch: Sketch; sel: Sel; setSel: (s: Sel) => void; contents: Map<string, JunctionContents>; junctionSel: (ids: string[]) => Sel;
   selPt: { lane: string; i: number } | null; onCurvePoint: (lane: string, i: number) => void; onDeletePoint: (lane: string, i: number) => void;
@@ -1898,6 +1929,8 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
   let body: React.ReactNode;
   // (roads the selected lanes are in: two of them can be linked)
   const selRoads = [...new Set(sel.lanes.map(id => roadOf(sketch, id)?.id).filter((x): x is string => !!x))];
+  // (and two lanes, or two whole roads, merged)
+  const merging = mergeTarget(sketch, sel);
   const linkSel = () => {
     const next = linkRoads(sketch, selRoads[0], selRoads[1], nextId("k", (sketch.links ?? []).map(k => k.id)));
     if (!next) { toast.error("Can't link them", { description: "Their nearest ends are already linked." }); return; }
@@ -2113,6 +2146,12 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
         {selRoads.length === 2 && (
           <Button size="sm" variant="outline" onClick={linkSel} title="Join the two roads at their nearest ends so the road carries on: a surface between them, its lines, and a connector for each lane">
             Link {roadName(selRoads[0])} and {roadName(selRoads[1])}
+          </Button>
+        )}
+        {merging && (
+          <Button size="sm" variant="outline" onClick={() => mergeSelection(sketch, sel, editSketch, setSel)}
+            title={merging.kind === "roads" ? "Make the two roads one, where one carries on the other: each lane merged with the one it carries on, the first road's name kept (M)" : "Make the two lanes one, where one carries on the other (end to start, or through one connector between just them): the first's width and speed kept (M)"}>
+            Merge {merging.kind === "roads" ? `${roadName(merging.a)} and ${roadName(merging.b)}` : `lanes ${merging.a} and ${merging.b}`}
           </Button>
         )}
         <Button size="sm" variant="ghost" className="justify-start" onClick={onDelete}><Trash2 /> Delete</Button>
