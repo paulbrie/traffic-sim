@@ -8,7 +8,8 @@
  *  - a short lane where traffic comes in or leaves (nothing joining it at that end, at its road's end) is
  *    made longer there, so the ways in and out start and end on a lane a car fits on.
  *  - a lane that doubles back on itself (a hairpin of a few points, left by a conversion) is straightened
- *    there: those points taken out (its connectors kept where they were along it).
+ *    there: those points taken out (its connectors kept where they were along it); and one that crosses itself in
+ *    a small loop (an inside corner offset too far) cut at the crossing.
  * Left as they are: lanes with a sign or a level, held by lights, named by a journey or a junction's turning
  * shares, rings, arcs. Framework-free.
  */
@@ -18,6 +19,15 @@ export interface TidyOptions { /** lanes shorter than this between connectors ar
 export interface TidyReport { kinks: number; folded: number; added: number; removed: number; extended: number; kept: { lane: string; why: string }[] }
 
 const r2 = (x: number) => Math.round(x * 100) / 100;
+/** the longest loop cut out of a lane crossing itself (m): one longer is drawn so */
+const LOOP = 40;
+/** where segments a–b and c–d cross (not just touch), or null */
+function crossing(a: Pt, b: Pt, c: Pt, d: Pt): Pt | null {
+  const rx = b.x - a.x, ry = b.y - a.y, sx = d.x - c.x, sy = d.y - c.y, den = rx * sy - ry * sx;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / den, u = ((c.x - a.x) * ry - (c.y - a.y) * rx) / den;
+  return t > 1e-6 && t < 1 - 1e-6 && u > 1e-6 && u < 1 - 1e-6 ? { x: a.x + rx * t, y: a.y + ry * t } : null;
+}
 
 export function tidySketch(sk0: Sketch, opts: TidyOptions = {}): { sketch: Sketch; report: TidyReport } {
   const STUB = opts.stub ?? 4, MIN_END = opts.minEnd ?? 15;
@@ -42,6 +52,20 @@ export function tidySketch(sk0: Sketch, opts: TidyOptions = {}): { sketch: Sketc
       for (let i = 1; i + 1 < pts.length; i++) {
         const ax = pts[i].x - pts[i - 1].x, ay = pts[i].y - pts[i - 1].y, bx = pts[i + 1].x - pts[i].x, by = pts[i + 1].y - pts[i].y, la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
         if (la > 1e-6 && lb > 1e-6 && (ax * bx + ay * by) / (la * lb) < -0.5) { pts = pts.filter((_, k) => k !== i); curved = curved?.filter((_, k) => k !== i); n++; again = true; break; }
+      }
+      // (and a small loop, the lane crossing itself, as an inside corner offset too far leaves: cut at the crossing;
+      // the cars on it would run through one another there, nothing telling them they cross)
+      for (let i = 0; !again && i + 3 < pts.length; i++) {
+        let run = 0;
+        for (let j = i + 2; j + 1 < pts.length; j++) {
+          run += dist(pts[j - 1], pts[j]);
+          if (run > LOOP) break;
+          const x = crossing(pts[i], pts[i + 1], pts[j], pts[j + 1]);
+          if (!x) continue;
+          pts = [...pts.slice(0, i + 1), { x: r2(x.x), y: r2(x.y) }, ...pts.slice(j + 1)];
+          curved = curved && [...curved.slice(0, i + 1), false, ...curved.slice(j + 1)];
+          n += j - i - 1; again = true; break;
+        }
       }
     }
     if (!n) return l;
