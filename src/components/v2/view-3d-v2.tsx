@@ -3,7 +3,7 @@
 /**
  * The V2 plan in 3D (as V1's view-3d.tsx, in plain three.js): over the plan editor's map while its mode is "3d", the
  * editor staying up underneath (its cars, its state), so the same cars drive here. An orbit camera (drag to turn, right
- * drag to pan, wheel to zoom), arriving over where the plan view was and leaving it where the 3D view is; the ground, the
+ * drag to pan, wheel to zoom), arriving over where the plan view was (and eased back there by `home`) and leaving it where the 3D view is; the ground, the
  * satellite imagery where the sketch has a place on Earth, and the reference image. Drawn only while shown and the tab is
  * visible; everything it made is let go when it goes.
  *
@@ -21,14 +21,17 @@ import type { Underlay } from "@/lib/underlay";
 import { readPalette } from "@/render/palette";
 import { satelliteMosaic, type SatSource } from "@/render/satellite";
 import type { SatOptions } from "@/state/sat-options";
+import type { EditorUi } from "@/state/sketch-ui";
 
 /** the plan view's place: its middle (m) and zoom (px a metre) */
 export interface PlanView { cx: number; cy: number; scale: number }
 /** what the editor gives the 3D view */
 export interface View3DProps {
   sketch: Sketch; contents: Map<string, JunctionContents>; layers: SketchLayers;
-  /** what the editor's keys and buttons ask of the 3D view: the whole sketch in view, closer or further */
-  apiRef: React.MutableRefObject<{ fit: () => void; dolly: (f: number) => void } | null>;
+  /** what the editor's keys and buttons ask of the 3D view: the whole sketch in view, closer or further, back where it arrived; where the camera is */
+  apiRef: React.MutableRefObject<View3DApi | null>;
+  /** the camera moved (for the UI store's copy of it) */
+  onMove: () => void;
   /** the plan view as it is (where 3D arrives) */
   planView: () => PlanView;
   /** where the plan view should be on leaving 3D */
@@ -50,7 +53,13 @@ export interface View3DProps {
   canvasRef: React.MutableRefObject<(() => HTMLCanvasElement | null) | null>;
 }
 
+export interface View3DApi { fit: () => void; dolly: (f: number) => void; home: () => void; camera: () => Camera3DUi }
+/** where the camera is (as the UI store keeps it) */
+export type Camera3DUi = NonNullable<EditorUi["camera"]>;
+
 const FOV = 40, TILT = (55 * Math.PI) / 180;
+/** how long the camera takes back to where it arrived (ms) */
+const HOME_MS = 700;
 /** a car as the editor shows it: its middle, heading, length, speed as a share of what it wants; a truck's trailer; broken down; its level */
 export interface Car3D { p: { x: number; y: number }; d: { x: number; y: number }; len: number; share: number; trailer?: { p: { x: number; y: number }; d: { x: number; y: number }; len: number }; broken?: boolean; z?: number }
 /** instances at most: bodies (a truck's cab and trailer two), their glass, hazard lamps */
@@ -96,20 +105,45 @@ export function View3DV2(props: View3DProps) {
     };
     size();
     { const v = live.current.planView(), w = el.clientWidth || 1; place(v.cx, v.cy, w / v.scale); }
+    // (where it arrived: Escape, with nothing else to do, eases it back there; a drag or the wheel stops that)
+    const homeAt = { target: controls.target.clone(), offset: new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target)) };
+    let homing: { t0: number; target: THREE.Vector3; offset: THREE.Spherical } | null = null;
+    const home = () => { homing = { t0: performance.now(), target: controls.target.clone(), offset: new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target)) }; };
+    const stepHome = (now: number) => {
+      if (!homing) return;
+      const u = Math.min(1, (now - homing.t0) / HOME_MS), k = u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2, a = homing.offset, b = homeAt.offset;
+      // (turning the shorter way round, the distance by its ratio)
+      let dt = (b.theta - a.theta) % (2 * Math.PI);
+      if (dt > Math.PI) dt -= 2 * Math.PI; else if (dt < -Math.PI) dt += 2 * Math.PI;
+      const o = new THREE.Spherical(a.radius * (b.radius / a.radius) ** k, a.phi + (b.phi - a.phi) * k, a.theta + dt * k);
+      controls.target.lerpVectors(homing.target, homeAt.target, k);
+      camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(o));
+      if (u >= 1) homing = null;
+    };
+    const onStart = () => { homing = null; };
+    controls.addEventListener("start", onStart);
+    const onChange = () => live.current.onMove();
+    controls.addEventListener("change", onChange);
+    const cameraNow = (): Camera3DUi => {
+      const t = controls.target, r = (x: number) => Math.round(x * 10) / 10;
+      return { x: r(t.x), y: r(t.z), distance: r(camera.position.distanceTo(t)), heading: r((((-controls.getAzimuthalAngle() * 180) / Math.PI) % 360 + 360) % 360), tilt: r((controls.getPolarAngle() * 180) / Math.PI) };
+    };
     // (the whole sketch in view)
     const fit = () => {
       const sk = live.current.sketch;
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       for (const l of sk.lanes) { const L = laneLength(l.shape); for (let s = 0; s <= L; s += Math.max(1, L / 8)) { const p = pointAt(l.shape, s).p; x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } }
       if (!Number.isFinite(x0)) return;
+      homing = null;
       place((x0 + x1) / 2, (y0 + y1) / 2, Math.max(60, (x1 - x0) * 1.15, ((y1 - y0) * 1.15 * (el.clientWidth || 1)) / (el.clientHeight || 1)));
     };
     const dolly = (f: number) => {
+      homing = null;
       const t = controls.target, d = camera.position.clone().sub(t);
       camera.position.copy(t).add(d.multiplyScalar(Math.min(controls.maxDistance / d.length(), Math.max(controls.minDistance / d.length(), 1 / f))));
       controls.update();
     };
-    live.current.apiRef.current = { fit, dolly };
+    live.current.apiRef.current = { fit, dolly, home, camera: cameraNow };
 
     // the roads, junctions and what is painted on them: made again when the sketch (or what shows) changes
     let built: Sketch3D | null = null, builtFor: unknown[] = [];
@@ -352,6 +386,7 @@ export function View3DV2(props: View3DProps) {
       if (disposed) return;
       if (now - lastSync > 500) { lastSync = now; syncSat(); syncUnderlay(); }
       syncRoads(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing();
+      stepHome(now);
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
     };
@@ -372,6 +407,7 @@ export function View3DV2(props: View3DProps) {
       document.removeEventListener("visibilitychange", onVisible);
       ro.disconnect(); mo.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onDown); renderer.domElement.removeEventListener("pointerup", onUp);
+      controls.removeEventListener("start", onStart); controls.removeEventListener("change", onChange);
       // (the plan view to where the 3D view looks: its middle, and a zoom showing as much across)
       const t = controls.target, d = camera.position.distanceTo(t), across = 2 * d * Math.tan(((FOV * Math.PI) / 180) / 2) * camera.aspect;
       live.current.onLeave({ cx: t.x, cy: t.z, scale: Math.min(80, Math.max(0.3, (el.clientWidth || 1) / Math.max(1, across))) });

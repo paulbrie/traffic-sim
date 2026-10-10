@@ -37,6 +37,10 @@ export interface EditorUi {
   follow: boolean;
   /** where the view is: its middle (metres) and zoom (px a metre), copied in at most 4 times a second */
   view: { cx: number; cy: number; scale: number };
+  /** in 3D, where the camera is (null from above): the point it looks at (m), how far off (m), its heading (degrees
+   * clockwise from north) and tilt (degrees from straight down); copied in at most 4 times a second. Escape, with nothing
+   * else to do, eases it back to where it arrived */
+  camera: { x: number; y: number; distance: number; heading: number; tilt: number } | null;
   run: {
     running: boolean;
     /** the simulation speed (1, 3, 10, 30) */
@@ -93,7 +97,7 @@ export interface SketchUiState {
 }
 
 const editor = (tool: Tool): EditorUi => ({
-  mode: "plan", tool, selection: NO_SEL, point: null, car: null, follow: false, view: { cx: 0, cy: 0, scale: 6 },
+  mode: "plan", tool, selection: NO_SEL, point: null, car: null, follow: false, view: { cx: 0, cy: 0, scale: 6 }, camera: null,
   run: { running: false, speed: 1, t: 0, replayT: null, playing: false, kept: null },
   dialogs: { search: { open: false, query: "" }, console: { open: false, kind: "all", text: "", clearedAt: -1 }, settings: false, optimizer: { open: false, junction: null, chosen: [], effort: "quick", stage: "setup" } },
   tables: { junctions: { by: "delay", flip: false, shown: 12 }, roads: { by: "delay", flip: false, shown: 12 } },

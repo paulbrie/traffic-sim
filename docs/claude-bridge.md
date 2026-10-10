@@ -74,6 +74,10 @@ as `{ first, count }`), with no plan data, no results, nothing private, nothing 
 Editor = { mode: "plan" | "3d",                  // the map from above or in 3D (the plan's editor; the Sketch window's later)
            tool, selection: { lanes, connectors, junctions, road, link?, crossing? }, point, car, follow,
            view: { cx, cy, scale },        // at most 4 times a second
+           camera: { x, y, distance, heading, tilt } | null,   // in 3D (null from above): the point looked at (m), how far off (m),
+                                           // heading (° clockwise from north), tilt (° from straight down); at most 4 times a second.
+                                           // Escape, with nothing else to do (no draft, nothing selected, no car picked), eases it back
+                                           // to where it arrived on entering 3D (`key` { key: "Escape" })
            run: { running, speed, t, replayT, playing, kept },   // t: at most 4 times a second
            dialogs: { search: { open, query }, console: { open, kind, text, clearedAt }, settings,
                       optimizer: { open, junction, chosen, effort, stage } },

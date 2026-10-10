@@ -40,7 +40,7 @@ import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
 import { describeHover, SketchHoverCard, type HoverHit } from "@/components/v2/sketch-hover-card";
-import { View3DV2 } from "@/components/v2/view-3d-v2";
+import { View3DV2, type View3DApi } from "@/components/v2/view-3d-v2";
 import { RoutePanel } from "@/components/v2/route-panel";
 import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar } from "@/components/v2/sketch-replay-bar";
@@ -177,7 +177,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const in3d = page && mode === "3d";
   /** the 3D view's canvas while it shows (the bridge's screenshot), and what its keys and buttons ask of it */
   const canvas3d = useRef<(() => HTMLCanvasElement | null) | null>(null);
-  const api3d = useRef<{ fit: () => void; dolly: (f: number) => void } | null>(null);
+  const api3d = useRef<View3DApi | null>(null);
   // (in 3D, nothing is drawn: the Select tool only, as V1)
   useEffect(() => { if (in3d && tool !== "select") setTool("select"); }, [in3d, tool, setTool]);
   const [rawSel, setSel] = useEditorState(ek, "selection");
@@ -383,6 +383,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       m.timer = null; m.at = performance.now();
       const e = sketchUi.getValue().editors[ek], v = view.current, r = (x: number) => Math.round(x * 100) / 100;
       if (e.view.cx !== r(v.cx) || e.view.cy !== r(v.cy) || e.view.scale !== r(v.scale)) e.view = { cx: r(v.cx), cy: r(v.cy), scale: r(v.scale) };
+      const cam = (live.current.in3d && api3d.current?.camera()) || null, was = e.camera;
+      if (cam ? !was || (Object.keys(cam) as (keyof typeof cam)[]).some(k => cam[k] !== was[k]) : was) e.camera = cam;
       const t = Math.round((sim.current?.t ?? 0) * 10) / 10;
       if (e.run.t !== t) e.run.t = t;
     };
@@ -1269,7 +1271,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (mod && k === "d") { e.preventDefault(); duplicate(); return; }
     if (mod) return;
     if (k === " ") { e.preventDefault(); space.current = true; if (hand === "") setHand("grab"); return; }
-    if (k === "escape") { if (d) draft.current = null; else { setSel(NO_SEL); setSelCar(null); } redraw(); return; }
+    if (k === "escape") {
+      // (a menu or dialog took it already)
+      if (e.defaultPrevented) return;
+      if (d) draft.current = null;
+      // (in 3D, with nothing to let go: the camera back where it arrived)
+      else if (in3d && !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && live.current.selCar === null) api3d.current?.home();
+      else { setSel(NO_SEL); setSelCar(null); }
+      redraw();
+      return;
+    }
     if (k === "enter") { finishLane(); finishJunction(); return; }
     if (k === "backspace" && d && (d.kind === "lane" || d.kind === "junction" || d.kind === "connector")) {
       e.preventDefault();
@@ -1431,7 +1442,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
           {in3d && (
-            <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} bySpeed={bySpeed}
+            <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed}
               selection={sel} car={selCar} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
