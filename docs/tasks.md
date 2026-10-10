@@ -15,6 +15,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T154 | V2 junctions: edit the shape: drag, add and remove corners, curve them (Automatic surfaces too, turning Drawn), visible handles and menu | Tatiana | 2026-10-10 | after T153 |
+| T153 | V2: a selected car's itinerary to its end, as in V1 (2D, 3D, panel list), live, updated on reroute | Tatiana (Bob for the sim) | 2026-10-10 | |
 | T152 | Agent patches can add a piece to the plan's Sketch window (beside the current content, never replacing it; main plan untouched) | Alex | 2026-10-10 | for Bob's J696 version 1 (T148), the user's choice |
 | T149 | V2: align selected lanes as in a design tool (left, centre, right, top, middle, bottom) against the first-selected lane; roads move as a unit | Tom | 2026-10-10 | after T147 |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | the user's aerial photo; read-only |
