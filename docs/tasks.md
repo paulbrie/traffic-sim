@@ -34,10 +34,10 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T70 | Admin: a Team menu (Teams; Comms, Agents City, Tasks) and a Kanban task board with filters and a task's thread; /chrome owners of agent-browser sessions | Alex | 2026-10-09 | admin (deployed 20:50) |
 | T62 | The 3D view in V2, phase 1: toggle, orbit camera, imagery, roads, junctions, markings, bridges, cars, live lights, picking with overlays at their height; bridge mode and 3D screenshots | Tatiana | 2026-10-09 | 6cd84df, 1507df6, 3b20b0b, 119d579 |
 | T76 | The deployed admin work as one clean commit on origin/main (only our features) | Alex, Alice | 2026-10-09 | admin: 403e63d |
-| T78 | Agents City / Table: ghost duplicates after the restart: one agent per name, ended sessions merged, guests flagged and hidden behind "Show guests" | Alex, Tom | 2026-10-09 | admin, next deploy |
-| T79 | Agents City Table: no headphones on the avatars (Alex's headset removed) | Tom | 2026-10-09 | admin, next deploy |
+| T78 | Agents City / Table: ghost duplicates after the restart: one agent per name, ended sessions merged, guests flagged and hidden behind "Show guests" | Alex, Tom | 2026-10-09 | admin: 537799f (deployed 10-10) |
+| T79 | Agents City Table: no headphones on the avatars (Alex's headset removed) | Tom | 2026-10-09 | admin: 537799f (deployed 10-10) |
 | T77 | Agents City Table: the thought cloud fades in or out in 0.6 s on wall-clock time | Tom | 2026-10-09 | admin, next deploy |
-| T75 | The shared task parser: STATUS/DONE without ACK, several ids in one tag, TASK after a lead-in, untagged progress notes | Alex | 2026-10-09 | admin (deployed 20:50); follow-ups (sub-ids, no id-less DONE, reports only from owner/manager): next deploy |
+| T75 | The shared task parser: STATUS/DONE without ACK, several ids in one tag, TASK after a lead-in, untagged progress notes | Alex | 2026-10-09 | admin (deployed 20:50); follow-ups (sub-ids, no id-less DONE, reports only from owner/manager): admin: 537799f (deployed 10-10) |
 | T65 | Agents City Table: round table, thinking cloud and 9 postures, working pose, glowing links, 8 dances, laptop closed for naps, longer bubbles, 4-line post-its | Tom | 2026-10-09 | admin (deployed 20:50) |
 | T71 | Admin /chrome: the stream fixed (direct DevTools capture; the global Playwright it called was missing), pipe instances explained, owners, failure messages | Alex | 2026-10-09 | admin (deployed 20:50) |
 | T67 | Fixes from T60: strict bridge arguments (required, ranges, ids that exist), editors open on Select, the lat/lon readout on a pill | Tatiana | 2026-10-09 | fad11f8 |
