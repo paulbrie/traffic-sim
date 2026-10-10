@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T127 | V2: cars' blinkers when turning, as in V1 (2D and 3D) | Alex (Tatiana for the views, Bob for the sim), Ramona checks | 2026-10-10 | |
 | T126 | V2: the connector being drawn shows in yellow until it's placed | Tatiana | 2026-10-10 | after T125 |
 | T124 | V2: a Problems-console warning and a Tidy step for connectors that turn back sharply (over 150° per segment pair; 5 on Bistrița rev 92) | Tatiana (Bob for sketch-tidy.ts) | 2026-10-10 | from T56 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
