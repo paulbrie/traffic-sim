@@ -132,6 +132,8 @@ export class SketchSimClient {
   /** car `id`'s engine fails now (it stops where it is until towed away); or it is towed away now */
   breakDown(id: number) { this.send({ type: "breakDown", id }); }
   tow(id: number) { this.send({ type: "tow", id }); }
+  /** a test car sent now from the start of lane `from` to the end of exit lane `to`: its id (negative; null if it couldn't come in), and the cars' time then */
+  sendTest(from: string, to: string) { return this.ask<Extract<FromSimWorker, { type: "sendTest" }>>({ type: "sendTest", from, to }).then(r => ({ id: r.id, t: r.t })); }
   unwatch() { if (this.watching !== null) { this.watching = null; this.watched = null; this.send({ type: "watch", id: null }); } }
   /** the car under `p` (on its body, or within `tol` metres), from the cars last sent */
   carAt(p: Pt, tol: number): number | null {
@@ -170,6 +172,8 @@ export class SketchSimClient {
   /** the problems the run has had, and the cars stuck now (for the console) */
   problems() { return this.ask<Extract<FromSimWorker, { type: "problems" }>>({ type: "problems" }).then(r => ({ problems: r.problems, stuck: r.stuck })); }
   /** the moment `t` as it was, to copy: the cars in `box` (the view), the lights and the events a minute either side */
+  /** why car `id` does what it does at `t` (the car watched: traced as it ran; another, or in the replay: from the recording) */
+  explain(id: number, t: number) { return this.ask<Extract<FromSimWorker, { type: "explain" }>>({ type: "explain", id, t }).then(r => r.explain); }
   moment(t: number, box: Parameters<SketchSim["moment"]>[1]) { return this.ask<Extract<FromSimWorker, { type: "moment" }>>({ type: "moment", t, box }).then(r => r.moment); }
   /** a car's last 10 s and what happened to it */
   car(id: number) { return this.ask<Extract<FromSimWorker, { type: "car" }>>({ type: "car", id }).then(r => ({ frames: r.frames, events: r.events })); }

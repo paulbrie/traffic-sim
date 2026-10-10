@@ -64,6 +64,13 @@
       "when": 1791484327503,
       "tag": "0008_plan_engine",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791642050655,
+      "tag": "0009_agent_patches",
+      "breakpoints": true
     }
   ]
 }

@@ -18,12 +18,14 @@ import { useSketchStore } from "@/state/lane-sketch";
 import { compassNames } from "./compass-names";
 import { InspectorPanel } from "./inspector-panel";
 
-export function DemandPanel({ sketch, readOnly, onFocus, results, onGo }: {
+export function DemandPanel({ sketch, readOnly, onFocus, results, heldBack, onGo }: {
   sketch: Sketch; readOnly: boolean; onFocus?: (lanes: string[] | null) => void;
   /** the view glided to a way in or out (where its lanes start or end) */
   onGo?: (at: Pt) => void;
   /** the journeys' results so far, while the cars run (by journey id) */
   results?: JourneyStats[] | null;
+  /** while the cars run: arrivals that couldn't come in so far, by entry lane */
+  heldBack?: Record<string, number> | null;
 }) {
   const { edit: editSketch } = useSketchStore();
   const { entries, exits } = distinctNames(demandWays(sketch));
@@ -45,6 +47,10 @@ export function DemandPanel({ sketch, readOnly, onFocus, results, onGo }: {
           <div key={w.key} className={row} onMouseEnter={() => onFocus?.(w.lanes)} onMouseLeave={() => onFocus?.(null)}>
             <button type="button" onClick={() => onGo?.(w.at)} className={cn("min-w-0 flex-1 truncate text-left hover:underline", !own(w.lanes) && "text-muted-foreground")}
               title={`${w.name}: ${w.lanes.join(", ")}${own(w.lanes) ? "" : " (the sketch's rate per lane)"} · click to go there`}>{w.name}</button>
+            {(() => {
+              const n = w.lanes.reduce((a, id) => a + (heldBack?.[id] ?? 0), 0);
+              return n > 0 && <span className="font-mono text-[11px] text-amber-700 tabular dark:text-amber-500" title={`${n} arrivals couldn't come in here: no room where the lanes start (a queue back to them, or a crossing there kept clear)`}>−{n}</span>;
+            })()}
             {readOnly ? <span className="font-mono tabular">{Math.round(total(w.lanes))}</span> : (
               <NumberField id={`dm-in-${w.key}`} label={`${w.name} vehicles per hour`} hideLabel unit="veh/h" digits={0} min={0} max={5000} step={50} className="w-32 min-w-20 shrink"
                 value={total(w.lanes)} onCommit={v => editSketch(s => setInRate(s, w.lanes, v))} />

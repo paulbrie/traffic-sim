@@ -8,8 +8,9 @@
  */
 import { connectorPts, isFullCircle, laneById, laneLength, speedLimitOf, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
 import type { SimStats, SketchSim } from "@/lib/lane-sketch-sim";
+import { formatArea, zoneArea } from "@/lib/sketch-zones";
 
-export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { link: string } | { car: number };
+export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { link: string } | { zone: string } | { car: number };
 export interface HoverInfo { title: string; sub?: string; rows: [string, string][] }
 
 const m = (x: number) => (x >= 1000 ? `${(x / 1000).toFixed(2)} km` : `${x.toFixed(x < 10 ? 1 : 0)} m`);
@@ -76,6 +77,10 @@ export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, J
   if ("crossing" in hit) {
     const x = sk.crossings?.find(y => y.id === hit.crossing);
     return x ? { title: `Zebra crossing ${x.id}`, rows: [["Pedestrians", `${x.peds} /h`], ["Width", m(x.width)]] } : null;
+  }
+  if ("zone" in hit) {
+    const z = sk.zones?.find(x => x.id === hit.zone);
+    return z ? { title: z.name, sub: z.note ? (z.note.length > 80 ? `${z.note.slice(0, 80)}…` : z.note) : undefined, rows: [["Area", formatArea(zoneArea(z.outline))]] } : null;
   }
   if ("link" in hit) {
     const k = sk.links?.find(x => x.id === hit.link);

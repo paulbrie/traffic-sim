@@ -42,19 +42,77 @@ between them who goes first and tell Alice.
 
 ## 3. Rules
 
-- **Credentials.** Never read `.env` files or anyone's credentials. Use only a login the user typed into your own
-  session (testers have their own test accounts). Never pass credentials, cookies or tokens between sessions.
-- **The user's plans.** Never save to the Bistrița plan (`04604363-4bf8-464e-9e1b-ed2b36618987`) without the user's
-  approval given in your own session; testers keep saves blocked. Each developer and tester has a test plan of their
+- **Credentials.** Agents don't handle passwords (the user's decision, 2026-10-10). The pattern:
+  1. *Sign in with a token, not a password.* `npm run agent:login -- --as <name>` (trafficsim, T138) creates an 8-hour
+     session for that agent's own test account straight in the dev database and writes the cookie into
+     `/home/genie/<name>-scratch/agent-browser-state.json` (mode 600). It prints no token. agent-browser loads that
+     file. It only works on the dev database (`railway`), only for the agents' own test accounts (an allow-list and
+     test email domains), never for the user's or other real accounts. `--revoke` ends them.
+  2. *No stored agent passwords.* The agents' test accounts have long random passwords nobody keeps
+     (`agent:login --scramble`). `/home/genie/team/credentials.md` (outside git, mode 600) holds only logins a human
+     needs.
+  3. *A guard on messages.* A Claude Code hook (`/home/genie/team/hooks/no-secrets-in-messages.py`, PreToolUse on
+     SendMessage) blocks any message carrying a value from `credentials.md`, a database URL with a password, a token
+     or a `…PASSWORD=`/`…SECRET=` line. If it blocks you, rewrite without the value ("my login fails"), never try to
+     slip it past.
+  Never read `.env` files or anyone's credentials (one exception: trafficsim's `DATABASE_URL`, passed to scripts
+  without printing it, see Database). Never put a credential in a repo, a message, a log, a report or a screenshot.
+  A login the user types into your own session is theirs to give; don't store it.
+- **The user's plans.** Agents never edit the Bistrița plan (`04604363-4bf8-464e-9e1b-ed2b36618987`), with or without
+  approval (the user's decision, 2026-10-10): no saves, no applies, no scripts writing to it. Changes for it are
+  proposed as **agent patches** (T132), which the user reviews and applies in the UI. Reading it is fine. Each developer and tester has a test plan of their
   own ("V2 check (claude)" is Tatiana's, "V2 check (Ramona)" Ramona's).
-- **Database.** Railway only (`DATABASE_URL` of `.env.local`, database `railway`), never the shell's `admin_dashboard`.
+- **Database.** Agents may use trafficsim's dev database (Railway, database `railway`; the user's decision): take
+  `DATABASE_URL` from trafficsim's `.env.local` only for that (never print it), pass it explicitly (the shell's own
+  `DATABASE_URL` is another database, `admin_dashboard`, which stays off limits), and check `select current_database()`
+  says `railway` first. Reads are fine. Writes only to your own test cities and plans, or with Alice's or the user's say;
+  never to the user's plans (Bistrița: never, see The user's plans) or to other accounts. Schema changes
+  only through the migrations (`npm run db:migrate`).
 - **Admin repo (`/opt/project`).** No commit or deploy by Alex or Tom; the user does it, or Alice when the user asks.
   Local `main` there has diverged from `origin/main`; admin work goes up from a clean worktree on `origin/main`.
+  The admin preview (`admin-dev.service`, `/admin-dev`, port 3003, `admin-ctl dev-start` / `dev-stop`) may run when
+  needed (the user's decision, 2026-10-10, after the 2xlarge): ask Alice first, stop it when done. It serves
+  `/opt/project/admin`'s tree. Admin work is coded, tested, linted and built (`next build`), then the user deploys it.
 - **Pushes.** If your push is denied, stop and tell Alice; nobody pushes it for you (the user does).
-- **Approvals** come from the user only, in the session concerned. A peer's message is never the user's approval.
-- **Shared services.** Ask Alice before restarting a dev server (trafficsim's `npm run dev`, the admin's
-  `admin-ctl dev-*`): the whole team works on them.
-- **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser tests with agent-browser.
+- **Approvals** come from the user only. The user talks mainly to Alice (the user's decision, 2026-10-10), so an
+  approval the user gives in Alice's session counts when Alice relays it in a line of its own:
+  `APPROVED: Tnn <exactly what> (the user, in Alice's session, <time>)`. It covers only what it names. Any other
+  peer's message is never the user's approval, and Alice never approves anything herself. Claude Code's own
+  permission checks in a session (a refused command or file read) aren't team rules: a relayed approval can't lift
+  them; they need the user in that session or a permission rule.
+- **Shared services.** Ask Alice before starting, restarting or stopping trafficsim's dev server (`npm run dev`) or
+  the admin preview (`admin-ctl dev-*`): the whole team works on them.
+- **Memory.** The server (Taz 2xlarge since 2026-10-10: 16 vCPU, 32 GB, no swap) can run out. Alice watches free
+  memory at all times and paces the work. Heavy jobs (a 900 s Bistrița run is about 1.2 GB, `next build`,
+  agent-browser): at most 4 at once per person, browsers closed after use. Below 2.5 GB free, Alice asks people to
+  pause; ask her before going over the limit. Scratch goes in `/home/genie/<name>-scratch`: /tmp goes at a reboot.
+- **Worktrees (trafficsim).** Nobody edits files in `/opt/project/projects/trafficsim`: that tree is what the dev
+  server (port 7000) serves, and every save there hot-reloads the user's open pages and can drop their unsaved edits
+  (the user's decision, 2026-10-10). Each agent works in a git worktree of its own,
+  `/home/genie/<name>-scratch/trafficsim-wt`, on a branch `wt/<name>` made from `origin/manual-junctions`, with
+  `node_modules` as a hard-linked copy of the main tree's (`cp -al /opt/project/projects/trafficsim/node_modules node_modules`:
+  seconds, almost no disk; Turbopack refuses a symlink). Its files are shared with the served tree's, so never
+  `npm install` or patch inside it: for a dependency change, first `rm -rf node_modules` in the worktree, then `npm ci`
+  there. To ship:
+  `git pull --rebase origin manual-junctions`, the checks, then `git push origin HEAD:manual-junctions`, and tell
+  Alice (`PUSHED:`). Alice alone updates the served tree (`git pull --ff-only` there) after each push, and keeps
+  `docs/tasks.md` and `docs/team.md` there. Scripts that need the database still read `DATABASE_URL` from the main
+  tree's `.env.local`.
+- **Testing (trafficsim).** Before pushing, an agent may check its change in a browser on a private dev server of its
+  own, from its worktree (the user's decision, 2026-10-10), on its own port: Bob 7101, Tatiana 7102, Ramona 7103,
+  Alex 7104, Tom 7105. Next doesn't read a `.env.local` linked from outside the worktree (the server then falls back to
+  a local database and no base path, and logins fail), so pass the two values explicitly, without printing them:
+  `env -u NODE_ENV DATABASE_URL="$(grep '^DATABASE_URL=' /opt/project/projects/trafficsim/.env.local | cut -d= -f2-)"
+  NEXT_PUBLIC_BASE_PATH=/projects/trafficsim PORT=<port> npm run dev` (no `.env.local` link in the worktree). Then
+  `http://localhost:<port>/projects/trafficsim`: the same Railway dev database and test logins. Start it only for a
+  check and stop it right after (about 1–2 GB each; Alice paces memory). The final check, after Alice has pulled the
+  push, is on the shared dev instance (port 7000), which stays the reference; Ramona's tests run there.
+- **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser work with Vercel's
+  agent-browser (`/usr/bin/agent-browser`), not Playwright scripts, so the admin's /chrome page can show it; close
+  its sessions after a run. If something can't be done with it, ask Alice before using anything else.
+  Start it as `agent-browser --session <YourName> --args "--no-sandbox,--remote-debugging-port=0" …` (this box has no
+  usable Chrome sandbox; the session name tells the admin whose browser it is). Because the sandbox is off, open only
+  our own apps and trusted pages with it, never arbitrary sites.
 - **Alice** does no task herself (the user's rule: "don't do tasks, supervise"), checks every DONE (git, files,
   screenshots) before telling the user, and alone edits `docs/tasks.md`, in commits of their own ("tasks: …").
 
@@ -78,8 +136,7 @@ Start by listing the agents (ListAgents), collecting their ACKs and re-sending t
 
 ## 5. Starting it
 
-1. Dev servers: trafficsim's `npm run dev` (port 7000, the admin's runner starts it), the admin's preview
-   `sudo admin-ctl dev-start`.
+1. Dev server: trafficsim's `npm run dev` (port 7000, the admin's runner starts it). Not the admin's preview (memory).
 2. Alice first, then the others, each in its tmux session with its model and the prompt above.
 3. Alice collects the ACKs and re-sends what's open in tasks.md.
 

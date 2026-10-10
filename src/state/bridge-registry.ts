@@ -42,3 +42,17 @@ export interface BridgeUi { snapshot: () => Record<string, unknown>; subscribe: 
 let ui: BridgeUi | null = null;
 export const setBridgeUi = (u: BridgeUi) => { ui = u; return () => { if (ui === u) ui = null; }; };
 export const bridgeUi = () => ui;
+
+/**
+ * An action's argument checked as it must be (true or false, a string, a number), else an error saying so: nothing
+ * like "yes" taken for true, or 42 for "42". `undefined` answered when it isn't there and isn't required.
+ */
+export function argOf(a: Record<string, unknown>, key: string, type: "boolean", required?: boolean): boolean | undefined;
+export function argOf(a: Record<string, unknown>, key: string, type: "string", required?: boolean): string | undefined;
+export function argOf(a: Record<string, unknown>, key: string, type: "number", required?: boolean): number | undefined;
+export function argOf(a: Record<string, unknown>, key: string, type: "boolean" | "string" | "number", required = false): unknown {
+  const v = a[key];
+  if (v === undefined) { if (required) throw new Error(`"${key}" is needed (${type === "boolean" ? "true or false" : `a ${type}`})`); return undefined; }
+  if (typeof v !== type || (type === "number" && !Number.isFinite(v as number))) throw new Error(`"${key}" must be ${type === "boolean" ? "true or false" : `a ${type}`}, not ${JSON.stringify(v)}`);
+  return v;
+}

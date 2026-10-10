@@ -18,6 +18,9 @@ import { cityAccess } from "./proofs/city-access";
 import { planAccess } from "./proofs/plan-access";
 import { userIsAdmin } from "./proofs/user-is-admin";
 import { versionOfPlan } from "./proofs/version-of-plan";
+import { restoreFromFile, type RestoreFileDeps, type RestoreFileInput, type RestoreFileResult } from "./restore-file";
+import * as agentPatches from "./data/agent-patches";
+import { patchNote } from "@/lib/agent-patch";
 import { canEditCity, canEditPlan, canOwnCity, canOwnPlan, refusal } from "./proofs/policy";
 import * as cities from "./data/cities";
 import * as plans from "./data/plans";
@@ -279,7 +282,7 @@ export async function convertPlanToV2(id: string): Promise<{ id: string; report:
     if (!state) throw new Error("Plan not found");
     const { sketch, report } = networkToSketch(state.network);
     if (!sketch.lanes.length) throw new Error("This plan has no roads to convert.");
-    const r = await plans.createV2From(plan, user, { sketch, note: `Converted from V1: ${report.lanes} lanes, ${report.connectors} connectors, ${report.junctions} junctions${report.tidy.folded || report.tidy.kinks || report.tidy.extended ? ` (tidied: ${report.tidy.folded} very short lanes folded into their connectors, ${report.tidy.kinks} points doubling back taken out, ${report.tidy.extended} short ways in or out lengthened)` : ""}` }, edit);
+    const r = await plans.createV2From(plan, user, { sketch, note: `Converted from V1: ${report.lanes} lanes, ${report.connectors} connectors, ${report.junctions} junctions${report.tidy.folded || report.tidy.kinks || report.tidy.connectorKinks || report.tidy.extended ? ` (tidied: ${report.tidy.folded} very short lanes folded into their connectors, ${report.tidy.kinks} points doubling back taken out, ${report.tidy.connectorKinks} connectors turning back straightened out, ${report.tidy.extended} short ways in or out lengthened)` : ""}` }, edit);
     if (!r) throw new Error("Plan not found");
     return { ...r, report };
   });
@@ -380,6 +383,83 @@ export async function restorePlanVersion(planId: string, versionId: string): Pro
   });
   if (res.ok) revalidatePath(`/plans/${planId}`);
   return res;
+}
+
+/**
+ * A V2 plan's sketch from a file (History's "Restore from file…" / "Apply changes from file…"), saved as one new
+ * revision through the normal save path, with the note, if nobody saved since `revision` (the one the user
+ * compared it with).
+ */
+export async function restorePlanFromFile(planId: string, input: RestoreFileInput): Promise<RestoreFileResult> {
+  const me = await assertUser();
+  assertId(planId);
+  const res = await name(me.id, PlanId(planId), async (user, plan) => {
+    const edit = canEditPlan(await planAccess(user, plan));
+    // (a patch's own note and kind are only for applying agent patches, below: never from the page's input)
+    return restoreFromFile({ ...input, patch: undefined }, fileDeps(user, plan, edit));
+  });
+  if (res.ok) revalidatePath(`/plans/${planId}`);
+  return res;
+}
+
+/** the plan as a file action reads and saves it, for one who may edit it (else refused) */
+function fileDeps<U, P>(user: Parameters<typeof plans.savePlan<U, P>>[1], plan: Parameters<typeof plans.savePlan<U, P>>[0], edit: Parameters<typeof plans.savePlan<U, P>>[3] | null | undefined | false): RestoreFileDeps {
+  return {
+    canEdit: !!edit,
+    current: async () => {
+      const row = edit && (await plans.getPlan(plan, edit));
+      return row ? { engine: row.plan.engine, network: row.plan.network, settings: row.plan.settings, underlay: row.plan.underlay, sketch: row.plan.sketch } : null;
+    },
+    save: async s => (edit ? plans.savePlan(plan, user, s, edit) : { ok: false, reason: "forbidden" }),
+  };
+}
+
+// ---------------------------------------------------------------- agent patches (T132)
+
+/** The plan's agent patches, for anyone who can see the plan (none for others). */
+export async function listAgentPatches(planId: string): Promise<agentPatches.AgentPatchView[]> {
+  const me = await assertUser();
+  assertId(planId);
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const view = await planAccess(user, plan);
+    return view ? agentPatches.listAgentPatches(plan, view) : [];
+  });
+}
+
+/**
+ * Applies a pending agent patch, by one who may edit the plan, from the revision its preview was made against:
+ * the same path as "Apply changes from file", one new version noted "Agent patch #n (T56, Bob): title".
+ */
+export async function applyAgentPatch(planId: string, id: number, revision: number): Promise<RestoreFileResult> {
+  const me = await assertUser();
+  assertId(planId);
+  if (!Number.isInteger(id) || id <= 0) return { ok: false, error: "Unknown patch." };
+  const res = await name(me.id, PlanId(planId), async (user, plan) => {
+    const edit = canEditPlan(await planAccess(user, plan));
+    if (!edit) return refuse("You can't change this plan.");
+    const pt = await agentPatches.pendingPatch(plan, id, edit);
+    if (!pt) return refuse("That patch was already decided, or isn't this plan's.");
+    const r = await restoreFromFile({ mode: "apply", file: pt.patch, revision, patch: { note: patchNote(pt), sketchName: pt.title } }, fileDeps(user, plan, edit));
+    if (r.ok) await agentPatches.decideAgentPatch(plan, user, id, { status: "applied", revision: r.revision }, edit);
+    return r;
+  });
+  if (res.ok) revalidatePath(`/plans/${planId}`);
+  return res;
+}
+
+const refuse = (error: string): RestoreFileResult => ({ ok: false, error });
+
+/** Rejects a pending agent patch (with an optional note), by one who may edit the plan. */
+export async function rejectAgentPatch(planId: string, id: number, note: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const me = await assertUser();
+  assertId(planId);
+  if (!Number.isInteger(id) || id <= 0) return { ok: false, error: "Unknown patch." };
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const edit = canEditPlan(await planAccess(user, plan));
+    if (!edit) return { ok: false, error: "You can't change this plan." };
+    const done = await agentPatches.decideAgentPatch(plan, user, id, { status: "rejected", note: typeof note === "string" ? note.replace(/\s+/g, " ").trim().slice(0, 500) : "" }, edit);
+    return done ? { ok: true } : { ok: false, error: "That patch was already decided, or isn't this plan's." };
+  });
 }
 
 // ---------------------------------------------------------------- the signed-in user's own preferences

@@ -9,6 +9,7 @@
  * go through the bend points they were drawn with, if any.
  */
 import { sanitizeTuning, type Tuning } from "./sketch-tuning";
+import { copyZones, pasteZones, sanitizeZones, type SketchZone } from "./sketch-zones";
 
 export interface Pt { x: number; y: number }
 /**
@@ -67,6 +68,8 @@ export function setLaneSpeed(sk: Sketch, id: string, kmh: number | null): Sketch
 export interface SketchJunction { id: string; name: string; outline: Pt[]; /** corners rounded off, as a line lane's curved points */ curved?: boolean[]; shape?: "auto";
   /** automatic: its notches rounded off to this radius, metres (see `smoothSurface`) */
   smooth?: number;
+  /** automatic: its whole inside paved, the slivers and holes between its connectors filled (see junction-fill.ts) */
+  fill?: true;
   /** traffic lights on the ways in (instead of signs; see `JunctionLights`) */
   lights?: JunctionLights;
   /**
@@ -90,9 +93,20 @@ export interface Sketch {
   journeys?: SketchJourney[];
   /** junctions' lights run together (see `SketchSignalGroup`) */
   signalGroups?: SketchSignalGroup[];
-  /** a V2 plan's ideas sketched apart (its Sketch window, as V1's): saved with the plan, never part of it */
+  /** areas drawn and labelled (neighbourhoods, zones; see sketch-zones.ts): for reading the plan, the cars don't see them */
+  zones?: SketchZone[];
+  /** a V2 plan's ideas sketched apart (its Sketch window, as V1's): saved with the plan, never part of it; the sketch open */
   scratch?: Sketch;
+  /**
+   * The plan's saved sketches (see sketch-list.ts): each named, the one open's content in `scratch`, the others' in their
+   * own `sketch`; none: one, "Sketch 1", the `scratch`
+   */
+  sketches?: SavedSketch[];
+  /** the saved sketch open in the Sketch window (its id) */
+  sketchOpen?: string;
 }
+/** one of a plan's saved sketches: its name, when made and last changed (ms), the view it was left at, and (not open) its content */
+export interface SavedSketch { id: string; name: string; created: number; updated: number; view?: { cx: number; cy: number; scale: number }; sketch?: Sketch }
 /**
  * Journeys, as V1's transit flows: `rate` vehicles an hour coming in on the way in that lane `from` is one of
  * (an entry lane; its road's entry lanes there with it) and going to the way out that lane `to` is one of,
@@ -157,8 +171,8 @@ export function deleteCrossing(sk: Sketch, id: string): Sketch {
 }
 /** what a junction's surface takes in, and the roads its connectors join */
 export interface JunctionContents { lanes: string[]; connectors: string[]; roads: string[] }
-/** some of a sketch, by ids (what is selected, copied, moved…) */
-export interface Piece { lanes: string[]; connectors: string[]; junctions: string[] }
+/** some of a sketch, by ids (what is selected, copied, moved…); `zones` only when some are in it */
+export interface Piece { lanes: string[]; connectors: string[]; junctions: string[]; zones?: string[] }
 
 export const emptySketch = (): Sketch => ({ lanes: [], connectors: [], roads: [], junctions: [] });
 export const LANE_WIDTH = 3.5;
@@ -339,8 +353,29 @@ export function bezierPts([p0, p1, p2, p3]: [Pt, Pt, Pt, Pt], n = 24): Pt[] {
 
 // (lookups by id, kept per sketch: a sketch is never changed, only replaced; a lane list or road list
 // replaced or grown in place since is noticed)
-const laneIndex = new WeakMap<Sketch, { lanes: SketchLane[]; n: number; map: Map<string, SketchLane> }>();
-const roadIndex = new WeakMap<Sketch, { roads: SketchRoad[]; n: number; map: Map<string, SketchRoad> }>();
+/**
+ * A cache of what was worked out for the last few keys only (a sketch, or its lane or connector list), where a WeakMap
+ * would keep it as long as the key lives: the undo history keeps the last 200 sketches, and with a WeakMap each kept
+ * its spatial index, markings, turn arrows… (on Bistrița some 3 MB an edit: hours of editing ran the tab out of memory,
+ * T146). The plan's sketch, the Sketch window's, a drag's and an undo or two are what is drawn and asked about.
+ */
+export class LastFew<K extends object, V> {
+  private keys: K[] = [];
+  private vals: V[] = [];
+  constructor(private n = 6) {}
+  get(k: K): V | undefined { const i = this.keys.indexOf(k); return i < 0 ? undefined : this.vals[i]; }
+  has(k: K): boolean { return this.keys.includes(k); }
+  set(k: K, v: V): this {
+    const i = this.keys.indexOf(k);
+    if (i >= 0) { this.keys.splice(i, 1); this.vals.splice(i, 1); }
+    this.keys.push(k); this.vals.push(v);
+    if (this.keys.length > this.n) { this.keys.shift(); this.vals.shift(); }
+    return this;
+  }
+}
+
+const laneIndex = new LastFew<Sketch, { lanes: SketchLane[]; n: number; map: Map<string, SketchLane> }>();
+const roadIndex = new LastFew<Sketch, { roads: SketchRoad[]; n: number; map: Map<string, SketchRoad> }>();
 export const laneById = (sk: Sketch, id: string) => {
   let x = laneIndex.get(sk);
   if (!x || x.lanes !== sk.lanes || x.n !== sk.lanes.length) laneIndex.set(sk, (x = { lanes: sk.lanes, n: sk.lanes.length, map: new Map(sk.lanes.map(l => [l.id, l])) }));
@@ -449,6 +484,8 @@ export function transformPiece(sk: Sketch, piece: Piece, t: Transform): Sketch {
     lanes: sk.lanes.map(l => (lanes.has(l.id) ? { ...l, shape: t.shape(l.shape) } : l)),
     connectors: sk.connectors.map(c => (c.via?.length && (conns.has(c.id) || (lanes.has(c.from.lane) && lanes.has(c.to.lane))) ? { ...c, via: c.via.map(t.pt) } : c)),
     junctions: sk.junctions.map(j => (js.has(j.id) ? { ...j, outline: j.outline.map(t.pt) } : j)),
+    // (its zones, when it has some: moved and turned as the rest)
+    ...(piece.zones?.length && sk.zones ? { zones: sk.zones.map(z => (piece.zones!.includes(z.id) ? { ...z, outline: z.outline.map(t.pt) } : z)) } : {}),
   };
 }
 
@@ -458,6 +495,7 @@ export function piecePoints(sk: Sketch, piece: Piece): Pt[] {
   for (const id of piece.lanes) { const l = laneById(sk, id); if (l) out.push(...samples(l.shape, 2)); }
   for (const id of piece.connectors) { const c = sk.connectors.find(x => x.id === id), p = c && connectorPts(sk, c); if (p) out.push(...p); }
   for (const id of piece.junctions) out.push(...(sk.junctions.find(j => j.id === id)?.outline ?? []));
+  for (const id of piece.zones ?? []) out.push(...(sk.zones?.find(z => z.id === id)?.outline ?? []));
   return out;
 }
 export function boundsOfPts(pts: Pt[]) {
@@ -474,18 +512,26 @@ export function nextId(prefix: string, ids: string[]) {
   return `${prefix}${n + 1}`;
 }
 
-/** a piece to paste: its lanes with every connector between them and their roads (only the lanes copied), and its junctions */
+/** a piece to paste: its lanes with every connector between them and their roads (only the lanes copied), its junctions and its zones */
 export function copyPart(sk: Sketch, piece: Piece): Sketch {
-  const set = new Set(piece.lanes), js = new Set(piece.junctions);
+  const set = new Set(piece.lanes), js = new Set(piece.junctions), zones = copyZones(sk, piece.zones ?? []);
   return {
     lanes: sk.lanes.filter(l => set.has(l.id)),
     connectors: sk.connectors.filter(c => set.has(c.from.lane) && set.has(c.to.lane)),
     roads: sk.roads.map(r => ({ ...r, lanes: r.lanes.filter(l => set.has(l)) })).filter(r => r.lanes.length),
     junctions: sk.junctions.filter(j => js.has(j.id)),
+    ...(zones.length ? { zones } : {}),
   };
 }
 
 /** a piece pasted in with fresh ids, moved by (dx, dy); answers the sketch and what was pasted */
+/** metres east and south from origin `to` to origin `from` (both latitude / longitude; nothing if either is missing): where
+ * a piece of one sketch lies in another placed elsewhere on Earth (Test in Sketch → Add, an agent patch's piece) */
+export function geoShift(from?: { lat: number; lon: number }, to?: { lat: number; lon: number }): Pt {
+  if (!from || !to) return { x: 0, y: 0 };
+  return { x: (from.lon - to.lon) * 111320 * Math.cos((to.lat * Math.PI) / 180), y: (to.lat - from.lat) * 110540 };
+}
+
 export function pastePart(sk: Sketch, part: Sketch, dx: number, dy: number): { sketch: Sketch; piece: Piece } {
   const ids = { l: sk.lanes.map(l => l.id), c: sk.connectors.map(c => c.id), r: sk.roads.map(r => r.id), j: sk.junctions.map(j => j.id) };
   const fresh = (k: keyof typeof ids) => { const id = nextId(k, ids[k]); ids[k].push(id); return id; };
@@ -501,10 +547,12 @@ export function pastePart(sk: Sketch, part: Sketch, dx: number, dy: number): { s
   const way = (k: string) => (k.startsWith("lane:") ? (laneIds.has(k.slice(5)) ? `lane:${laneIds.get(k.slice(5))}` : null) : roadIds.get(k) ?? null);
   const lights = (l: JunctionLights): JunctionLights => (l.phases ? { ...l, phases: l.phases.map(p => ({ ...p, conns: p.conns.flatMap(c => (connIds.has(c) ? [connIds.get(c)!] : [])) })) } : { ...l });
   const splits = (ss: JunctionSplit[]) => ss.flatMap(x => { const from = way(x.from); if (!from) return []; const shares = Object.fromEntries(Object.entries(x.shares).flatMap(([k, v]) => { const w = way(k); return w ? [[w, v]] : []; })); return [{ from, shares }]; });
-  const junctions = part.junctions.map(j => { const sp = j.splits ? splits(j.splits) : []; return { id: fresh("j"), name: copyName(j.name), outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.lights ? { lights: lights(j.lights) } : {}), ...(sp.length ? { splits: sp } : {}) }; });
+  const junctions = part.junctions.map(j => { const sp = j.splits ? splits(j.splits) : []; return { id: fresh("j"), name: copyName(j.name), outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.fill ? { fill: true as const } : {}), ...(j.lights ? { lights: lights(j.lights) } : {}), ...(sp.length ? { splits: sp } : {}) }; });
+  const withLanes: Sketch = { ...sk, lanes: [...sk.lanes, ...lanes], connectors: [...sk.connectors, ...connectors], roads: [...sk.roads, ...roads], junctions: [...sk.junctions, ...junctions] };
+  const z = pasteZones(withLanes, part.zones ?? [], dx, dy);
   return {
-    sketch: { ...sk, lanes: [...sk.lanes, ...lanes], connectors: [...sk.connectors, ...connectors], roads: [...sk.roads, ...roads], junctions: [...sk.junctions, ...junctions] },
-    piece: { lanes: lanes.map(l => l.id), connectors: connectors.map(c => c.id), junctions: junctions.map(j => j.id) },
+    sketch: z.sketch,
+    piece: { lanes: lanes.map(l => l.id), connectors: connectors.map(c => c.id), junctions: junctions.map(j => j.id), ...(z.ids.length ? { zones: z.ids } : {}) },
   };
 }
 
@@ -1188,7 +1236,7 @@ export class SignalController {
 }
 
 /** every junction's lights, as plans (what the cars and the drawing go by) */
-const plansKept = new WeakMap<Sketch, SignalPlan[]>();
+const plansKept = new LastFew<Sketch, SignalPlan[]>();
 export function signalPlans(sk: Sketch): SignalPlan[] {
   // (kept per sketch: drawn every frame while the cars run)
   let x = plansKept.get(sk);
@@ -1425,7 +1473,7 @@ export function polygonArea(poly: Pt[]) {
  * What a junction's surface takes in: the lanes in no road and the connectors that are mostly on
  * it, and the roads those connectors join.
  */
-const inRoads = new WeakMap<Sketch, Set<string>>();
+const inRoads = new LastFew<Sketch, Set<string>>();
 /** every lane in a road (kept per sketch) */
 function lanesInRoads(sk: Sketch) {
   let x = inRoads.get(sk);
@@ -1550,7 +1598,7 @@ export const onBands = (bands: Band[], p: Pt) => bands.some(b => {
 });
 
 /** a grid (from `x0`, `y0`, `cell` apart) with 1 where a point is within `r` of a band */
-function rasterBands(bands: Band[], x0: number, y0: number, cell: number, nx: number, ny: number, r: number): Uint8Array {
+export function rasterBands(bands: Band[], x0: number, y0: number, cell: number, nx: number, ny: number, r: number): Uint8Array {
   const grown = new Uint8Array(nx * ny);
   for (const b of bands) {
     const pts = b.closed ? [...b.pts, b.pts[0]] : b.pts;
@@ -1573,7 +1621,7 @@ function rasterBands(bands: Band[], x0: number, y0: number, cell: number, nx: nu
   return grown;
 }
 /** where `g` (on a grid from `x0`, `y0`, `cell` apart) is 0: marching squares, the pieces chained into loops */
-function traceLoops(x0: number, y0: number, cell: number, nx: number, ny: number, g: (i: number, j: number) => number): Pt[][] {
+export function traceLoops(x0: number, y0: number, cell: number, nx: number, ny: number, g: (i: number, j: number) => number): Pt[][] {
   const at = (i: number, j: number, i2: number, j2: number) => {
     const a = g(i, j), b = g(i2, j2), t = a === b ? 0.5 : a / (a - b);
     return { x: x0 + (i + (i2 - i) * t) * cell, y: y0 + (j + (j2 - j) * t) * cell };
@@ -1661,8 +1709,8 @@ export function smoothJunction(sk: Sketch, j: SketchJunction, c: JunctionContent
 const SLIT = 1;
 // (kept while what they come from is the same: the contents, their lanes and connectors, the lanes of
 // the roads joined; and for each sketch, so drawing it again finds them at once)
-const holesKept = new WeakMap<JunctionContents, { deps: object[]; holes: Pt[][] }>(), holesNow = new WeakMap<Sketch, Map<JunctionContents, Pt[][]>>();
-const byId = new WeakMap<Sketch, { conns: Map<string, SketchConnector>; roads: Map<string, SketchRoad> }>();
+const holesKept = new WeakMap<JunctionContents, { deps: object[]; holes: Pt[][] }>(), holesNow = new LastFew<Sketch, Map<JunctionContents, Pt[][]>>();
+const byId = new LastFew<Sketch, { conns: Map<string, SketchConnector>; roads: Map<string, SketchRoad> }>();
 /**
  * The ground an automatic junction's surface shuts in (its bands and the roads it joins all round it,
  * but for slits under a metre), to pave too: everything under a junction is road. Not what a ring lane
@@ -1741,7 +1789,7 @@ function holesOf(sk: Sketch, c: JunctionContents, roadLanes: SketchLane[]): Pt[]
  * road beside it on its left, edge to edge (within half a metre).
  */
 export interface Marking { pts: Pt[]; kind: "lane" | "center"; dashed: boolean; /** the level of the lane it runs beside (drawn with it) */ level?: number }
-const markings = new WeakMap<Sketch, Marking[]>();
+const markings = new LastFew<Sketch, Marking[]>();
 /** a polyline moved `o` metres to its left (each point along the normal there) */
 function offsetPolyline(pts: Pt[], o: number): Pt[] {
   return pts.map((p, i) => {
@@ -1823,7 +1871,7 @@ export function surfaceAround(pts: Pt[], pad = 2): Pt[] {
 export const ENTRY_CLEAR = 10;
 /** a lane leads nowhere (cars leave the sketch at its end) only if nothing leaves it within its last `EXIT_CLEAR` metres */
 export const EXIT_CLEAR = 10;
-const entries = new WeakMap<Sketch, SketchLane[]>(), exits = new WeakMap<Sketch, SketchLane[]>();
+const entries = new LastFew<Sketch, SketchLane[]>(), exits = new LastFew<Sketch, SketchLane[]>();
 export function entryLanes(sk: Sketch): SketchLane[] {
   let x = entries.get(sk);
   if (x) return x;
@@ -1962,7 +2010,7 @@ export class RouteTable {
  * lane in no road on its own.
  */
 export interface DemandWay { key: string; name: string; lanes: string[]; at: Pt }
-const ways = new WeakMap<Sketch, { entries: DemandWay[]; exits: DemandWay[] }>();
+const ways = new LastFew<Sketch, { entries: DemandWay[]; exits: DemandWay[] }>();
 export function demandWays(sk: Sketch): { entries: DemandWay[]; exits: DemandWay[] } {
   let x = ways.get(sk);
   if (!x) ways.set(sk, (x = demandWaysOf(sk)));
@@ -2055,7 +2103,7 @@ export class SketchIndex {
   /** what may be within `r` metres of a point */
   near(p: Pt, r: number) { return this.query({ x0: p.x - r, y0: p.y - r, x1: p.x + r, y1: p.y + r }); }
 }
-const indexes = new WeakMap<Sketch, SketchIndex>();
+const indexes = new LastFew<Sketch, SketchIndex>();
 /** the sketch's index (made when first asked for, then kept) */
 export function sketchIndex(sk: Sketch): SketchIndex {
   let x = indexes.get(sk);
@@ -2106,7 +2154,9 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     if (!str(l?.id) || !shape || lanes.some(x => x.id === l.id)) continue;
     lanes.push({ id: l.id, shape, width: num(l.width) ? Math.min(8, Math.max(2, l.width)) : LANE_WIDTH, ...(l.control === "stop" || l.control === "yield" ? { control: l.control } : {}),
       ...(num(l.inRate) && l.inRate >= 0 ? { inRate: Math.min(5000, l.inRate) } : {}), ...(num(l.outWeight) && l.outWeight >= 0 ? { outWeight: Math.min(100, l.outWeight) } : {}),
-      ...(num(l.level) && Math.round(l.level) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(l.level))) } : {}) });
+      ...(num(l.level) && Math.round(l.level) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(l.level))) } : {}),
+      // (its own speed limit, km/h, as the traffic's speed is kept)
+      ...(num(l.speed) ? { speed: Math.min(130, Math.max(10, l.speed)) } : {}) });
   }
   const ids = new Set(lanes.map(l => l.id));
   // (a place a hair before a lane's start, from rounding, is its start)
@@ -2125,14 +2175,14 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const align = al && typeof al.ref === "string" && rl.includes(al.ref) && Array.isArray(al.lanes)
       ? { ref: al.ref as string, lanes: (al.lanes as { id: unknown; offset: unknown; reverse: unknown }[]).filter(x => typeof x?.id === "string" && rl.includes(x.id) && num(x.offset)).map(x => ({ id: x.id as string, offset: x.offset as number, reverse: !!x.reverse })) }
       : undefined;
-    roads.push({ id: r.id, name: typeof r.name === "string" ? r.name.slice(0, 80) : r.id, lanes: rl, ...(align ? { align } : {}) });
+    roads.push({ id: r.id, name: typeof r.name === "string" ? r.name.slice(0, 80) : r.id, lanes: rl, ...(align ? { align } : {}), ...(num(r.speed) ? { speed: Math.min(130, Math.max(10, r.speed)) } : {}) });
   }
   const junctions: SketchJunction[] = [];
   for (const j of Array.isArray(o.junctions) ? o.junctions : []) {
     const outline = pts(j?.outline, 3);
     if (!str(j?.id) || !outline || junctions.some(x => x.id === j.id)) continue;
     const curved = Array.isArray(j.curved) && j.curved.length === outline.length ? { curved: (j.curved as unknown[]).map(Boolean) } : {};
-    junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...lightsOf(j.lights), ...splitsOf(j.splits) });
+    junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...(j.fill === true ? { fill: true as const } : {}), ...lightsOf(j.lights), ...splitsOf(j.splits) });
   }
   const g = o.geo as Sketch["geo"];
   const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;
@@ -2172,11 +2222,24 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     }
     if (members.length) signalGroups.push({ id: g.id, name: typeof g.name === "string" && g.name.trim() ? g.name.trim().slice(0, 80) : g.id, cycle, speed: num(g.speed) ? Math.min(130, Math.max(10, g.speed)) : GROUP_SPEED, members });
   }
-  // (the ideas sketched apart: a sketch of their own, without ideas of theirs)
-  const sc = o.scratch && typeof o.scratch === "object" ? sanitizeSketch({ ...(o.scratch as object), scratch: undefined }) : null;
-  const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length) ? sc : null;
-  if (!lanes.length && !junctions.length && !geo && !crossings.length && !scratch) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(scratch ? { scratch } : {}) };
+  // (the ideas sketched apart: a sketch of their own, without ideas or saved sketches of theirs)
+  const inner = (x: unknown) => (x && typeof x === "object" ? sanitizeSketch({ ...(x as object), scratch: undefined, sketches: undefined, sketchOpen: undefined }) : null);
+  const sc = inner(o.scratch);
+  // (the saved sketches: each named once, the one open with no content of its own (it is the scratch))
+  const sketches: SavedSketch[] = [];
+  for (const x of Array.isArray(o.sketches) ? o.sketches : []) {
+    if (!str(x?.id) || sketches.some(y => y.id === x.id) || sketches.length >= 100) continue;
+    const v = x.view, content = x.id === o.sketchOpen ? null : inner(x.sketch);
+    sketches.push({ id: x.id, name: typeof x.name === "string" && x.name.trim() ? x.name.trim().slice(0, 80) : x.id, created: num(x.created) ? x.created : 0, updated: num(x.updated) ? x.updated : 0,
+      ...(v && num(v.cx) && num(v.cy) && num(v.scale) && v.scale > 0 ? { view: { cx: v.cx, cy: v.cy, scale: v.scale } } : {}), ...(content ? { sketch: content } : {}) });
+  }
+  const sketchOpen = sketches.length ? (sketches.some(x => x.id === o.sketchOpen) ? (o.sketchOpen as string) : sketches[0].id) : null;
+  if (sketchOpen) { const k = sketches.findIndex(x => x.id === sketchOpen); if (sketches[k].sketch) { const { sketch: _, ...rest } = sketches[k]; sketches[k] = rest; } }
+  // (the zones drawn: a sketch with only zones is a sketch still)
+  const zones = sanitizeZones(o.zones);
+  const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.zones?.length) ? sc : null;
+  if (!lanes.length && !junctions.length && !geo && !crossings.length && !zones.length && !scratch && !sketches.length) return null;
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
 }
 
 // ---------------------------------------------------------------- elevation (as v1's)
@@ -2205,7 +2268,7 @@ export function setLevel(sk: Sketch, ids: Iterable<string>, level: number): Sket
  * Each lane's levels: its own, and at its start and its end the lowest of its own and those of the lanes its
  * connectors join there (as v1's junctions: at the lowest level of the roads meeting there). Kept per sketch.
  */
-const levelsKept = new WeakMap<Sketch, Map<string, { L: number; a: number; b: number; len: number }>>();
+const levelsKept = new LastFew<Sketch, Map<string, { L: number; a: number; b: number; len: number }>>();
 function levelsOf(sk: Sketch) {
   let m = levelsKept.get(sk);
   if (m) return m;
@@ -2249,14 +2312,14 @@ export function junctionLevel(sk: Sketch, c: JunctionContents): number {
   return Number.isFinite(lv) ? lv : 0;
 }
 /** is any lane off the ground? (most sketches: none, and nothing to work out) */
-const leveled = new WeakMap<SketchLane[], boolean>();
+const leveled = new LastFew<SketchLane[], boolean>();
 export function hasLevels(sk: Sketch) {
   let x = leveled.get(sk.lanes);
   if (x === undefined) leveled.set(sk.lanes, (x = sk.lanes.some(l => l.level)));
   return x;
 }
 /** a connector by its id (an index kept per list of connectors) */
-const connIndexKept = new WeakMap<SketchConnector[], Map<string, SketchConnector>>();
+const connIndexKept = new LastFew<SketchConnector[], Map<string, SketchConnector>>();
 export function connectorById(sk: Sketch, id: string) {
   let m = connIndexKept.get(sk.connectors);
   if (!m) connIndexKept.set(sk.connectors, (m = new Map(sk.connectors.map(c => [c.id, c]))));
@@ -2321,7 +2384,7 @@ export const approachKey = (a: Approach) => a.road ?? `lane:${a.lanes[0]}`;
  * connectors leaving there go: L(eft), S(traight on), R(ight), U(-turn), in that order.
  */
 export interface TurnArrow { lane: string; p: Pt; d: Pt; turns: string; level: number }
-const arrowsKept = new WeakMap<Sketch, TurnArrow[]>();
+const arrowsKept = new LastFew<Sketch, TurnArrow[]>();
 /** the turn arrows of every lane (not a ring) at least 12 m long whose connectors leave at its end */
 export function turnArrows(sk: Sketch): TurnArrow[] {
   let x = arrowsKept.get(sk);

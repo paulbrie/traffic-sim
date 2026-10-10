@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Car, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,9 +12,9 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { cn } from "@/lib/utils";
 import { unproject } from "@/lib/osm/area";
 import {
-  LANE_WIDTH, addLane, contentsOf, setLaneSpeed, setRoadSpeed, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
-  roadOf, rotation, samples, setControl, junctionHoles, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
+  roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
   type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
@@ -22,9 +22,10 @@ import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStat
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
-import { EditorKindContext, NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, useUiPath, type TestOptions, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
-import { clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
+import { EditorKindContext, editorBack, NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, useUiPath, type TestOptions, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
+import { changeSketches, clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
 import { testPiece } from "@/lib/test-piece";
+import { offRoute } from "@/lib/route-trace";
 import { readPalette, speedColor } from "@/render/palette";
 import { arrowGlyph } from "@/render/draw2d";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
@@ -36,17 +37,35 @@ import { RoadResults } from "@/components/v2/road-results";
 import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
+import { ZonePanel } from "@/components/v2/zone-panel";
+import { ALIGN_BUTTONS, AlignLanes } from "@/components/v2/align-lanes";
+import { alignLanes, canAlign } from "@/lib/lane-align";
+import { FILL_GAP, fillAllJunctions, junctionSurfaceHoles, unfilledJunctions } from "@/lib/junction-fill";
+import { paintZoneDraft, paintZones, zoneAt, zoneEditAt } from "@/components/v2/zone-tools";
+import { addZone, deleteZone, formatArea, insertZoneCorner, moveZoneCorner, nextZoneColor, removeZoneCorner, zoneArea, zoneLabelPoint } from "@/lib/sketch-zones";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
 import { describeHover, SketchHoverCard, type HoverHit } from "@/components/v2/sketch-hover-card";
+import { View3DV2, type View3DApi } from "@/components/v2/view-3d-v2";
+import { RoutePanel } from "@/components/v2/route-panel";
 import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
 import { REPLAY_STEP, SketchReplayBar } from "@/components/v2/sketch-replay-bar";
 import { CONSOLE_HEIGHT, ProblemConsole } from "@/components/v2/problem-console";
-import { bridgeApp, bridgeState, setBridgeCanvas, setBridgeToWorld } from "@/state/bridge-registry";
+import { argOf, bridgeApp, bridgeState, setBridgeCanvas, setBridgeToWorld } from "@/state/bridge-registry";
 import { BackgroundPanel, drawBackground, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
 import { stampRoundabout } from "@/lib/roundabout";
 import { tidySketch, type TidyReport } from "@/lib/sketch-tidy";
+import { mergeLanes, mergeRoads, type MergeResult } from "@/lib/sketch-merge";
+import { translucentArea } from "@/render/area-fill";
+import { MemoryGauge } from "@/components/v2/top-bar-tools";
+import { SketchPicker } from "@/components/v2/sketch-picker";
+import { newSketch } from "@/lib/sketch-list";
+import { deleteLanes, dropDangling, takeOutOfRoad } from "@/lib/road-lanes";
+import { carWay, type CarWay } from "@/lib/car-way";
+import { explainMarks, type CarExplain } from "@/lib/car-explain";
+import { CarWhy } from "./car-explain";
+import { deadEndTurnarounds } from "@/lib/dead-ends";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
@@ -61,15 +80,22 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
   { id: "slice", key: "K", label: "Slice", icon: <Scissors />, hint: "Click a road to cut it across there into two roads (Shift: keep them linked, so the road carries on; Alt: only the lane under the pointer) · its connectors stay with the piece they are on" },
   { id: "crossing", key: "X", label: "Zebra crossing", icon: <Footprints />, hint: "Click one kerb, then the other: the zebra runs between them (4 m wide, 300 pedestrians an hour; set them in its panel) · Esc cancels" },
   { id: "junction", key: "J", label: "Junction", icon: <Pentagon />, hint: "Click the junction's corners; click the first again (or Enter, or double-click) to close it. The lanes in no road and the connectors on it are its own" },
+  { id: "zone", key: "Z", label: "Zone", icon: <LandPlot />, hint: "Click the zone's corners; click the first again (or Enter, or double-click) to close it · Backspace takes the last corner back · Esc cancels. A labelled area (a neighbourhood, a zone) for reading the plan: the cars don't see it" },
 ];
 const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
 
 interface View { cx: number; cy: number; /** px per metre */ scale: number }
-type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string };
+type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { zone: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[] };
+/** a road's or a junction's name as drawn on the map: what it names, and its pill (px on the canvas) */
+type NameLabel = { kind: "road" | "junction" | "in" | "out" | "zone"; id: string; /** a way in's or out's lanes */ lanes?: string[]; x0: number; y0: number; x1: number; y1: number };
+/** a way in's traffic, or a way out's share of the trips, being edited on its label: its lanes, where (px), the value it had */
+type WayEdit = { kind: "in" | "out"; lanes: string[]; x: number; y: number; value: number };
 /** a point to drag: a lane's, a connector's bend or end (moved along its lane or onto another), a junction's corner */
-type Handle = { kind: "lane" | "bend" | "corner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" };
+type Handle = { kind: "lane" | "bend" | "corner" | "zcorner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" }
+  /** the middle of a selected junction's edge after corner `i`: a corner put in there */
+  | { kind: "jmid"; id: string; i: number; p: Pt };
 
 type Draft =
   | { kind: "lane"; pts: Pt[] }
@@ -78,11 +104,12 @@ type Draft =
   | { kind: "roundabout"; c: Pt }
   | { kind: "connector"; from: LaneAt; via: Pt[] }
   | { kind: "junction"; pts: Pt[] }
+  | { kind: "zone"; pts: Pt[] }
   | { kind: "crossing"; a: Pt };
 type Drag =
   | { kind: "pan"; x0: number; y0: number; v0: View; /** with the right button: a click without moving opens the menu */ right?: boolean }
   | { kind: "move"; base: Sketch; from: Pt; piece: Piece }
-  | { kind: "handle"; base: Sketch; h: Handle }
+  | { kind: "handle"; base: Sketch; h: Handle; /** dragged from this (a corner just put in), undone back to `base` */ from?: Sketch }
   | { kind: "box"; a: Pt; b: Pt; add: boolean }
   | { kind: "rotate"; base: Sketch; o: Pt; a0: number; piece: Piece; angle: number }
   /** a zebra crossing: moved whole, or one kerb end */
@@ -93,7 +120,7 @@ const isEmpty = (p: Piece) => !p.lanes.length && !p.connectors.length && !p.junc
  * What turns of a selection: its lanes and junctions. Connectors don't turn by themselves (their ends are on
  * their lanes); the bends of those between two lanes that turn go with them.
  */
-const turning = (p: Piece): Piece => ({ lanes: p.lanes, connectors: [], junctions: p.junctions });
+const turning = (p: Piece): Piece => ({ lanes: p.lanes, connectors: [], junctions: p.junctions, ...(p.zones?.length ? { zones: p.zones } : {}) });
 /** the box round what turns of the selection, its centre and the handle to turn it by (over the box, 28 px up) */
 function rotateHandle(sk: Sketch, piece: Piece, scale: number) {
   const b = boundsOfPts(piecePoints(sk, turning(piece)));
@@ -122,6 +149,8 @@ function prune(sel: Sel, sk: Sketch): Sel {
   const ids = new Set(sk.lanes.map(l => l.id)), cids = new Set(sk.connectors.map(c => c.id)), jids = new Set(sk.junctions.map(j => j.id));
   const linkOk = !sel.link || !!sk.links?.some(k => k.id === sel.link), crossingOk = !sel.crossing || !!sk.crossings?.some(x => x.id === sel.crossing);
   if (!crossingOk) return { ...sel, crossing: null };
+  // (a zone deleted, or undone away: let go)
+  if (sel.zones?.some(id => !sk.zones?.some(z => z.id === id))) return { ...sel, zones: sel.zones.filter(id => sk.zones?.some(z => z.id === id)) };
   if (linkOk && sel.lanes.every(l => ids.has(l)) && sel.connectors.every(c => cids.has(c)) && sel.junctions.every(j => jids.has(j)) && (!sel.road || sk.roads.some(r => r.id === sel.road))) return sel;
   return { lanes: sel.lanes.filter(l => ids.has(l)), connectors: sel.connectors.filter(c => cids.has(c)), junctions: sel.junctions.filter(j => jids.has(j)), road: sk.roads.some(r => r.id === sel.road) ? sel.road : null, link: linkOk ? sel.link : null };
 }
@@ -136,6 +165,8 @@ function exportSketch(sk: Sketch, contents: Map<string, JunctionContents>) {
     connectors: sk.connectors.map(c => ({ ...c, junction: junctionOf("connectors", c.id) })),
     roads: sk.roads,
     junctions: sk.junctions.map(j => ({ ...j, ...contents.get(j.id) })),
+    // (the zones, with their area: a file to restore from keeps them)
+    ...(sk.zones?.length ? { zones: sk.zones.map(z => ({ ...z, area: Math.round(zoneArea(z.outline)) })) } : {}),
   };
 }
 
@@ -160,12 +191,34 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (the editor's own state, in the V2 UI store where agents (the Claude bridge) and other views can read it: src/state/sketch-ui.ts)
   const ek: EditorKind = store.kind;
   const [tool, setTool] = useEditorState(ek, "tool");
+  // (the plan's map in 3D: over the map, this editor staying up under it; the plan's editor only, for now)
+  const [mode] = useEditorState(ek, "mode");
+  // (the route traced: its lanes and connectors drawn over the map)
+  const [route, setRoute] = useEditorState(ek, "route");
+  const routeShown = useMemo(() => {
+    if (!route.result?.ok) return null;
+    const lanes = new Set(route.result.steps.flatMap(x => (x.kind === "lane" ? [x.id] : []))), conns = new Set(route.result.steps.flatMap(x => (x.kind === "connector" ? [x.id] : [])));
+    // (the test car's way, where it went another: what it drove off the traced way)
+    const keys = route.test?.otherWay ? offRoute(sketch, route.result.steps, route.test.path) : [];
+    return { lanes, conns, driven: { lanes: new Set(keys.filter(k => k.startsWith("lane:")).map(k => k.slice(5))), conns: new Set(keys.filter(k => k.startsWith("conn:")).map(k => k.slice(5))) } };
+  }, [sketch, route.result, route.test]);
+  const in3d = page && mode === "3d";
+  /** the 3D view's canvas while it shows (the bridge's screenshot), and what its keys and buttons ask of it */
+  const canvas3d = useRef<(() => HTMLCanvasElement | null) | null>(null);
+  const api3d = useRef<View3DApi | null>(null);
+  // (in 3D, nothing is drawn: the Select tool only, as V1)
+  useEffect(() => { if (in3d && tool !== "select") setTool("select"); }, [in3d, tool, setTool]);
   const [rawSel, setSel] = useEditorState(ek, "selection");
   /** a line lane's point picked (to curve or delete) */
   const [selPt, setSelPt] = useEditorState(ek, "point");
+  /** a selected junction's corner picked (to take out with Delete) */
+  const [selCorner, setSelCorner] = useState<{ junction: string; i: number } | null>(null);
   /** a car picked to inspect (by its number), and the view kept on it */
   const [selCar, setSelCarId] = useEditorState(ek, "car");
   const [carInfo, setCarInfo] = useState<ReturnType<SketchSim["inspect"]>>(null);
+  /** the picked car's explanation at the moment replayed (asked of the recording; T157) */
+  const replayWhy = useRef<CarExplain | null>(null);
+  const [replayWhyShown, setReplayWhyShown] = useState<CarExplain | null>(null);
   /** replaying what was kept: the moment shown (null: the cars as they are), playing or not, and the span kept */
   const [replayT, setReplayT] = useEditorState(ek, "run/replayT");
   const [replayPlaying, setReplayPlaying] = useEditorState(ek, "run/playing");
@@ -189,6 +242,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const drag = useRef<Drag | null>(null);
   const cursor = useRef<{ p: Pt; snapped: boolean; alt: boolean } | null>(null);
   const hover = useRef<Hover | null>(null);
+  /** the names drawn on the map now (the kept image's): a click or the pointer on one is on what it names */
+  const labels = useRef<NameLabel[]>([]);
   const space = useRef(false);
   // cars on the sketch, to try it out (made when first run, kept with what they did when the window closes;
   // they follow the sketch as it is edited)
@@ -201,6 +256,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
   const setParams = (p: SimParams) => store.show({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}) } });
   const [readOnly] = useDeepSubject(ui, "readOnly");
+  // (the cars coloured by speed, or all one colour: in the V2 UI store, kept in the browser)
+  const [bySpeed] = useUiPath<boolean>("display/carsBySpeed");
   // (the plan's editor takes the keys: on opening the page, and when the sketch window over it closes)
   const [sketchOpen] = useDeepSubject(ui, "sketch");
   useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
@@ -212,12 +269,29 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // the hand shown over the map: open while Space is held (ready to drag it), closed while it is dragged
   const [hand, setHand] = useState<"" | "grab" | "grabbing">("");
   // the menu a right click opens, where it was clicked, and the lanes it is for
-  const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null; /** the place on the lane clicked a point can go (a line lane, not following a lead) */ add: { lane: string; p: Pt } | null } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null; /** the place on the lane clicked a point can go (a line lane, not following a lead) */ add: { lane: string; p: Pt } | null;
+    /** on a selected junction's corner: that corner (its own items) */ corner?: { junction: string; i: number; curved: boolean } | null } | null>(null);
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
+  // (the test car's results, from the cars' stats as they come: into the route's state; the stats of the car sent from it
+  // only (by its number and when it was sent), and once the cars start again without it, no test car any more. A frame
+  // from before it was sent can still come in after: the cars' clock behind its start is a fresh start only once it was
+  // seen in them)
+  const testSeen = useRef<number | null>(null);
+  useEffect(() => {
+    const T = route.test, t = stats?.test;
+    if (!T || !stats || !route.result?.ok) return;
+    if (t && t.id === T.car && t.t0 === T.t0) {
+      testSeen.current = T.car;
+      // (another lane of the same road beside the traced one is the same way: where ways as short tie, cars take either)
+      const otherWay = T.path.length === t.path.length ? T.otherWay : offRoute(sketch, route.result.steps, t.path).length > 0;
+      const next = { ...T, state: t.state, time: Math.round(((t.t1 ?? stats.t) - t.t0) * 10) / 10, stops: t.stops, path: t.path, otherWay };
+      if (JSON.stringify(next) !== JSON.stringify(T)) setRoute(r => ({ ...r, test: next }));
+    } else if ((stats.t < T.t0 && testSeen.current === T.car) || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
+  }, [stats, sketch, route.result, route.test, setRoute]);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown });
 
   // ------------------------------------------------------------ coordinates, snapping, picking
   const toWorld = (e: { clientX: number; clientY: number }): Pt => {
@@ -233,6 +307,23 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       for (const q of [pointAt(l.shape, 0).p, pointAt(l.shape, laneLength(l.shape)).p]) { const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
     }
     return best ? { p: best, snapped: true } : { p: { x: Math.round(p.x * 2) / 2, y: Math.round(p.y * 2) / 2 }, snapped: false };
+  };
+  /** the name under the pointer, if any (the last drawn, on top, first) */
+  const labelAt = (e: { clientX: number; clientY: number }): NameLabel | null => {
+    const r = canvas.current?.getBoundingClientRect();
+    if (!r) return null;
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    for (let i = labels.current.length - 1; i >= 0; i--) { const b = labels.current[i]; if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) return b; }
+    return null;
+  };
+  /** what a name shows lit while the pointer is on it: its junction, or its road's lanes */
+  const labelHover = (b: NameLabel): Hover => (b.kind === "junction" ? { junction: b.id } : b.kind === "zone" ? { zone: b.id } : b.lanes ? { lanes: b.lanes } : { lanes: live.current.sketch.roads.find(r => r.id === b.id)?.lanes ?? [] });
+  // (a way in's or out's label clicked: its number edited right there)
+  const [wayEdit, setWayEdit] = useState<WayEdit | null>(null);
+  const saveWay = (w: WayEdit, v: number) => {
+    setWayEdit(null);
+    if (Math.round(v * 10) !== Math.round(w.value * 10)) editSketch(s => (w.kind === "in" ? setInRate(s, w.lanes, Math.round(v)) : setOutShare(s, w.lanes, v)));
+    panel.current?.focus();
   };
   /** what is under `p`: zebras, then connectors (on top of the lanes), then lanes, then the smallest junction surface */
   const pick = (p: Pt): Hit | null => {
@@ -264,11 +355,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const inJ = (j: SketchJunction) => {
       if (j.shape !== "auto") return insidePolygon(p, outlinePath(j));
       const c = live.current.contents.get(j.id) ?? { lanes: [], connectors: [], roads: [] };
-      return (j.smooth ? insideLoops(p, smoothJunction(sk, j, c)) : onBands(junctionBands(sk, c), p)) || junctionHoles(sk, c).some(h => insidePolygon(p, h));
+      return (j.smooth ? insideLoops(p, smoothJunction(sk, j, c)) : onBands(junctionBands(sk, c), p)) || junctionSurfaceHoles(sk, j, c).some(h => insidePolygon(p, h));
     };
     const jn = sketchIndex(sk).near(p, 1).junctions;
     const js = sk.junctions.filter(j => jn.has(j.id) && inJ(j)).sort((a, b) => polygonArea(a.outline) - polygonArea(b.outline));
-    return js.length ? { junction: js[0].id } : null;
+    if (js.length) return { junction: js[0].id };
+    // (a zone: under everything, the smallest holding the pointer; not while hidden. A selected one's border
+    // counts a little outside too (6 px), so a double-click just off it still adds a corner there)
+    if (!live.current.layers.zones) return null;
+    const mine = live.current.sel.zones ?? [];
+    const z = zoneAt(sk.zones, p) ?? (sk.zones ?? []).find(x => mine.includes(x.id) && nearestOn({ kind: "line", pts: [...x.outline, x.outline[0]] }, p).d <= 6 * px) ?? null;
+    return z ? { zone: z.id } : null;
   };
   /** a place on the lane under `p` (connectors over it don't hide it), snapped to the lane's ends within 12 px */
   const placeOn = (p: Pt): LaneAt | null => {
@@ -284,7 +381,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the selection's point under `p` */
   const handleAt = (p: Pt): Handle | null => {
     const sk = live.current.sketch, s = live.current.sel, tol = 7 / view.current.scale;
-    const find = (kind: "lane" | "bend" | "corner", id: string, pts: Pt[] | undefined) => { const i = pts?.findIndex(q => dist(p, q) <= tol) ?? -1; return i >= 0 ? { kind, id, i } : null; };
+    const find = (kind: "lane" | "bend" | "corner" | "zcorner", id: string, pts: Pt[] | undefined) => { const i = pts?.findIndex(q => dist(p, q) <= tol) ?? -1; return i >= 0 ? { kind, id, i } : null; };
+    // (a junction selected: its corners before what is on it, then the "+" in each edge's middle)
+    for (const id of s.junctions) { const h = find("corner", id, sk.junctions.find(j => j.id === id)?.outline); if (h) return h; }
+    if (s.junctions.length === 1) {
+      const j = sk.junctions.find(x => x.id === s.junctions[0]);
+      if (j) for (const [i, m] of edgeMiddles(j.outline).entries()) if (dist(p, m) <= tol) return { kind: "jmid", id: j.id, i, p: m };
+    }
     for (const id of s.connectors) {
       const c = sk.connectors.find(x => x.id === id);
       if (!c) continue;
@@ -294,17 +397,32 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     // (a lane following a lead in a side-by-side road is shaped by its lead)
     for (const id of s.lanes) { const l = laneById(sk, id); const h = l?.shape.kind === "line" && !leadOf(sk, id) ? find("lane", id, l.shape.pts) : null; if (h) return h; }
-    for (const id of s.junctions) { const h = find("corner", id, sk.junctions.find(j => j.id === id)?.outline); if (h) return h; }
+    for (const id of s.zones ?? []) { const h = find("zcorner", id, sk.zones?.find(z => z.id === id)?.outline); if (h) return h; }
     return null;
   };
 
   /** the cars to draw, and the one picked: as they are, or as they were at the moment replayed */
   const carsShown = () => {
     const s = sim.current, t = live.current.replayT, id = live.current.selCar;
-    if (!s) return { cars: null, car: null, peds: null };
-    if (t === null) return { cars: s.poses(), car: id !== null ? s.inspect(id) : null, peds: s.peds() };
+    if (!s) return { cars: null, car: null, peds: null, why: null };
+    // (the picked car's leader, blocker and conflict zone, where they are drawn now: T157)
+    const marks = (cars: { id: number; p: Pt }[], x: CarExplain | null) => explainMarks(x, c => cars.find(q => q.id === c)?.p ?? null);
+    if (t === null) { const cars = s.poses(), car = id !== null ? s.inspect(id) : null; return { cars, car, peds: s.peds(), why: marks(cars, explainOf(car)) }; }
     const f = s.replayAt(t), cars = f?.cars ?? [];
-    return { cars, car: replayInfo(cars.find(c => c.id === id)), peds: f?.peds ?? [] };
+    return { cars, car: replayInfo(cars.find(c => c.id === id)), peds: f?.peds ?? [], why: marks(cars, replayWhy.current?.car === id ? replayWhy.current : null) };
+  };
+  /** the picked car's explanation, as it is or at the moment replayed (null: none, or the sim hasn't said) */
+  const whyNow = (): CarExplain | null => {
+    const id = live.current.selCar;
+    if (id === null || !sim.current) return null;
+    return live.current.replayT === null ? explainOf(sim.current.inspect(id)) : replayWhy.current?.car === id ? replayWhy.current : null;
+  };
+  /** the picked car's explanation at moment `t` of the replay, asked of the recording (the last asked wins) */
+  const whyAsked = useRef(0);
+  const askWhy = (id: number | null, t: number | null) => {
+    const n = ++whyAsked.current;
+    if (id === null || t === null || !sim.current) { replayWhy.current = null; setReplayWhyShown(null); return; }
+    void sim.current.explain(id, t).then(x => { if (n !== whyAsked.current) return; replayWhy.current = x; setReplayWhyShown(x); redraw(false); });
   };
   /** a car's details: as it is, or as it was at the moment replayed */
   const carInfoAt = (id: number, t: number | null) => (t === null ? sim.current?.inspect(id) ?? null : replayInfo(sim.current?.replayAt(t)?.cars.find(c => c.id === id)));
@@ -315,13 +433,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     live.current.replayT = t;
     setReplayT(t);
     const id = live.current.selCar;
+    askWhy(id, t);
     if (id === null) return;
     const info = carInfoAt(id, t);
     setCarInfo(info);
     if (info && live.current.follow) view.current = { ...view.current, cx: info.p.x, cy: info.p.y };
   };
   const goLive = () => {
-    setReplayT(null); setReplayPlaying(false);
+    setReplayT(null); setReplayPlaying(false); askWhy(null, null);
     const id = live.current.selCar;
     setCarInfo(id !== null ? sim.current?.inspect(id) ?? null : null);
   };
@@ -349,6 +468,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       m.timer = null; m.at = performance.now();
       const e = sketchUi.getValue().editors[ek], v = view.current, r = (x: number) => Math.round(x * 100) / 100;
       if (e.view.cx !== r(v.cx) || e.view.cy !== r(v.cy) || e.view.scale !== r(v.scale)) e.view = { cx: r(v.cx), cy: r(v.cy), scale: r(v.scale) };
+      const cam = (live.current.in3d && api3d.current?.camera()) || null, was = e.camera;
+      if (cam ? !was || (Object.keys(cam) as (keyof typeof cam)[]).some(k => cam[k] !== was[k]) : was) e.camera = cam;
       const t = Math.round((sim.current?.t ?? 0) * 10) / 10;
       if (e.run.t !== t) e.run.t = t;
     };
@@ -357,6 +478,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (a new editor starts as one: its state put back when it goes (the Sketch window closed, the page left); the
   // replay kept by cars that stay, as before; the editor the user is at, for agents)
   useEffect(() => {
+    editorBack(ek, ui.getValue().planId);
     const r = sketchSim()?.replayRange();
     if (r) setReplayRange(r);
     const el = panel.current, m = mirrored.current, at = () => { const u = sketchUi.getValue(), a = ek === "scratch" ? "scratch" : "plan"; if (u.active !== a) u.active = a; };
@@ -380,10 +502,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
       const c = canvas.current;
-      if (!c) return;
+      // (under the 3D view the map isn't seen: not drawn)
+      if (!c || live.current.in3d) return;
       // (the background: the imagery where the plan is, the reference image; in the Sketch window the imagery only, where it has a place on Earth)
       const l = live.current, bg = (x: typeof l): Background => ({ geo: x.sketch.geo ?? null, satellite: x.layers.satellite, sat: x.sat, underlay: x.layers.image ? x.underlay : null, img: x.ulImg, calib: x.calib, onTile: redraw });
-      const st: PaintState = { ...live.current, sketch: dragSk.current ?? live.current.sketch, ...(dragSk.current ? { contents: contentsOf(dragSk.current) } : {}), view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : l.sketch.geo ? { ...bg(l), underlay: null, calib: null } : null };
+      const st: PaintState = { ...live.current, sketch: dragSk.current ?? live.current.sketch, ...(dragSk.current ? { contents: contentsOf(dragSk.current) } : {}), view: view.current, draft: draft.current, drag: drag.current, cursor: cursor.current, hover: hover.current, labels: labels.current, placeOn, ...carsShown(), simT: sim.current ? (live.current.replayT ?? sim.current.t) : null, signals: sim.current?.signals ?? null, bg: l.page ? bg(l) : l.sketch.geo ? { ...bg(l), underlay: null, calib: null } : null };
       const w = c.clientWidth, h = c.clientHeight, v = view.current, key = `${w}x${h}:${v.cx},${v.cy},${v.scale}`;
       kept.current ??= { canvas: document.createElement("canvas"), stale: true, key: "" };
       const k = kept.current;
@@ -399,8 +522,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (a render: the kept image drawn again only if something it shows changed, not for the cars' stats)
   const shownBy = useRef<unknown[]>([]);
   useEffect(() => {
-    live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib };
-    const now = [sketch, sel, tool, contents, selPt, layers, page, sat, underlay, ulImg, calib];
+    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown };
+    const now = [sketch, sel, tool, contents, selPt, selCorner, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown];
     const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
     shownBy.current = now;
     redraw(changed);
@@ -429,7 +552,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   useEffect(() => { if (sim.current) sim.current.onFrame = onSimFrame; });
   const changeTool = (t: Tool) => { draft.current = null; setTool(t); redraw(); };
   /** a car picked to inspect (null: none) */
-  const setSelCar = (id: number | null) => { setSelCarId(id); setCarInfo(id !== null ? carInfoAt(id, live.current.replayT) : null); };
+  const setSelCar = (id: number | null) => { setSelCarId(id); setCarInfo(id !== null ? carInfoAt(id, live.current.replayT) : null); askWhy(id, live.current.replayT); };
 
   // ------------------------------------------------------------ cars
   // (the sketch sent to the cars once it has stayed the same for a quarter of a second: not at every move of a drag)
@@ -442,6 +565,21 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   useEffect(() => { sim.current?.setParams(params); }, [params]);
   // the cars run in the worker, at the speed picked (it sends a frame after each go: see onSimFrame)
   useEffect(() => { sim.current?.run(running, simSpeed); }, [running, simSpeed]);
+  // (an edit begins while they run live: they pause, and a toast offers to go on (T158). The sketch reaches
+  // them as before, a quarter second after it stops changing: they carry on from where they were)
+  const pauseForEdit = useRef(() => {});
+  useEffect(() => {
+    pauseForEdit.current = () => {
+      if (!running || live.current.replayT !== null) return;
+      setRunning(false);
+      toast("Paused for editing", {
+        id: `edit-pause:${store.kind}`,
+        description: "The cars wait while you change the map; what you change reaches them as you go.",
+        action: { label: "Resume", onClick: () => setRunning(true) },
+      });
+    };
+  });
+  useEffect(() => store.onEdit(() => pauseForEdit.current()), [store]);
   // (while they run, the cars drawn at every frame of the page: on their way between the worker's frames)
   useEffect(() => {
     if (!running) return;
@@ -469,6 +607,20 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replayPlaying, simSpeed]);
+  /** a test car on the route traced: sent now, the cars running, the view following it (its number; or why it couldn't go) */
+  const sendTestCar = async (): Promise<number> => {
+    const r = sketchUi.getValue().editors[ek].route, res = r.result;
+    if (!r.from || !res?.ok) throw new Error(res && !res.ok ? `no route: ${res.reason}` : "no route traced: choose a way in and a way out first");
+    const last = [...res.steps].reverse().find(x => x.kind === "lane") as { id: string } | undefined;
+    if (!last) throw new Error("the route has no lane");
+    if (!sim.current) { sim.current = new SketchSimClient(live.current.sketch, params, onSimFrame); store.setSim(sim.current); }
+    if (live.current.replayT !== null) goLive();
+    const { id, t } = await sim.current.sendTest(r.from, last.id);
+    if (id === null) throw new Error("the test car couldn't come in: no room at the start of its lane just now; try again in a moment");
+    setRoute(x => ({ ...x, test: { car: id, t0: t, state: "driving", time: 0, stops: 0, path: [], otherWay: false } }));
+    setSel(NO_SEL); setSelCar(id); setFollow(true); setRunning(true);
+    return id;
+  };
   const play = () => {
     if (!sim.current) { sim.current = new SketchSimClient(live.current.sketch, params, onSimFrame); store.setSim(sim.current); }
     // (running carries on from now: out of the replay)
@@ -498,7 +650,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       plan: u.planId, revision: u.save.revision,
       moment: { time: mo.time, live: t === null, now: mo.now, kept: mo.kept },
       view: { cx: Math.round(v.cx * 10) / 10, cy: Math.round(v.cy * 10) / 10, width: Math.round(hw * 20) / 10, height: Math.round(hh * 20) / 10 },
-      selection: { ...live.current.sel, car: live.current.selCar }, params: mo.params, stats: mo.stats,
+      selection: { ...live.current.sel, car: live.current.selCar, ...(live.current.selCar !== null ? { explain: whyNow() } : {}) }, params: mo.params, stats: mo.stats,
       cars: mo.cars, lights: mo.lights.map(l => ({ ...l, name: names.get(l.junction) ?? null })),
       events: mo.events.length ? mo.events : "none within a minute",
     };
@@ -527,8 +679,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const { sketch: piece, report } = testPiece(sk, s, { cut: tis.cut, rates: measured ? rates : undefined });
     if (!piece.lanes.length) { toast("Nothing to test there", { description: "The selection has no lanes, and no junction with lanes or connectors on it." }); return; }
     let added = false, addedPiece: Piece | undefined;
+    const what0 = report.junctions ? (sk.junctions.find(j => j.id === s.junctions[0])?.name ?? "junctions") : `${report.lanes} lanes`;
+    // (into a new sketch: the user's others kept as they are)
+    if (tis.mode === "new") changeSketches(k => newSketch(k, `Test: ${what0}`, Date.now()).sketch);
     scratchSketch.edit(cur => {
-      if (tis.mode === "replace" || (!cur.lanes.length && !cur.junctions.length)) return { ...piece, ...(piece.geo ?? cur.geo ? { geo: piece.geo ?? cur.geo } : {}) };
+      if (tis.mode !== "add" || (!cur.lanes.length && !cur.junctions.length)) return { ...piece, ...(piece.geo ?? cur.geo ? { geo: piece.geo ?? cur.geo } : {}) };
       // (beside what is there: where it is on the plan, as the Sketch's own origin has it, so the imagery still lines up)
       added = true;
       const o = geoShift(sk.geo, cur.geo), r = pastePart(cur, piece, o.x, o.y);
@@ -537,7 +692,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     });
     ui.getValue().sketch = true;
     requestScratchFocus({ run: tis.run, piece: addedPiece });
-    sketchUi.getValue().sketchWindow.lastPiece = { junctions: report.junctions, lanes: report.lanes, mode: added ? "add" : "replace", at: Date.now() };
+    sketchUi.getValue().sketchWindow.lastPiece = { junctions: report.junctions, lanes: report.lanes, mode: added ? "add" : tis.mode === "new" ? "new" : "replace", at: Date.now() };
     const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
     const what = report.junctions ? n(report.junctions, "junction") : n(report.lanes, "lane");
     toast.success(`Testing ${what} in the Sketch`, {
@@ -572,6 +727,18 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     redraw();
   };
+  const finishZone = () => {
+    const d = draft.current;
+    if (d?.kind !== "zone") return;
+    const pts = d.pts.filter((q, i) => i === 0 || dist(q, d.pts[i - 1]) > 0.05);
+    draft.current = null;
+    if (pts.length >= 3) {
+      let made = "";
+      editSketch(k => { const [next, z] = addZone(k, pts); made = z.id; return next; });
+      if (made) { setSel({ ...NO_SEL, zones: [made] }); changeTool("select"); }
+    }
+    redraw();
+  };
   const addShape = (shape: LaneShape) => {
     const id = nextId("l", live.current.sketch.lanes.map(l => l.id));
     editSketch(s => addLane(s, { id, shape, width: LANE_WIDTH }));
@@ -581,9 +748,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const s = live.current.sel;
     if (s.link) { const id = s.link; editSketch(sk => unlink(sk, id)); setSel(NO_SEL); return; }
     if (s.crossing) { const id = s.crossing; editSketch(sk => deleteCrossing(sk, id)); setSel(NO_SEL); return; }
-    if (isEmpty(s)) return;
-    editSketch(sk => remove(sk, s));
+    // (zones with it or on their own: one undo step for it all)
+    const zones = s.zones ?? [];
+    if (isEmpty(s) && !zones.length) return;
+    const dropZones = (sk: Sketch) => zones.reduce((k, id) => deleteZone(k, id), sk);
+    // (what named what goes let go too: journeys, turning shares; a road's last lane: the road goes, said)
+    const sk0 = live.current.sketch, gone = new Set(s.lanes), roadsGone = s.road ? [] : sk0.roads.filter(r => r.lanes.every(l => gone.has(l))).map(r => r.name);
+    editSketch(sk => (isEmpty(s) ? dropZones(sk) : dropDangling(remove(dropZones(sk), s))));
     setSel(NO_SEL);
+    if (roadsGone.length) toast(`${roadsGone.length === 1 ? roadsGone[0] : `${roadsGone.length} roads`}: no lane left, the road went too`, { description: "⌘Z brings it back" });
   };
   const groupSel = () => {
     const s = live.current.sel, sk = live.current.sketch;
@@ -617,7 +790,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
   const copySel = () => {
     const sk = live.current.sketch, s0 = live.current.sel;
-    if (!s0.lanes.length && !s0.junctions.length) return false;
+    if (!s0.lanes.length && !s0.junctions.length && !s0.zones?.length) return false;
     // (a junction comes with what is on it and the whole lanes its connectors join, so it pastes working)
     const lanes = new Set(s0.lanes);
     for (const id of s0.junctions) {
@@ -655,7 +828,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the selection copied a little off (leaves what was copied alone) */
   const duplicate = () => {
     const sk = live.current.sketch, s = live.current.sel;
-    if (s.lanes.length || s.junctions.length) place(copyPart(sk, s), 4, 4);
+    if (s.lanes.length || s.junctions.length || s.zones?.length) place(copyPart(sk, s), 4, 4);
   };
   const fit = () => { const sk = live.current.sketch; zoomTo({ lanes: sk.lanes.map(l => l.id), connectors: [], junctions: sk.junctions.map(j => j.id) }); };
   /** zoomed in (f > 1) or out about the middle of the view, within the wheel's limits */
@@ -711,6 +884,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       case "junction": setSel(junctionSel(sk, [to.id])); centerOn(piece({ junctions: [to.id] })); break;
       case "link": { const k = sk.links?.find(x => x.id === to.id); if (k) { setSel({ ...NO_SEL, link: k.id }); centerOn(piece({ connectors: k.conns })); } break; }
       case "crossing": { const x = sk.crossings?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, crossing: x.id }); centerOnPts([x.a, x.b]); } break; }
+      case "zone": { const z = sk.zones?.find(y => y.id === to.id); if (z) { setSel({ ...NO_SEL, zones: [z.id] }); centerOnPts(z.outline); } break; }
     }
     redraw();
   };
@@ -734,14 +908,38 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
   }, [page, panel, ek]);
+  /** a junction's corners edited, one undo step; an Automatic surface made the Drawn one its border makes, said */
+  const editCorners = (id: string, f: (j: SketchJunction) => SketchJunction) => {
+    const was = live.current.sketch.junctions.find(j => j.id === id);
+    editSketch(k => ({ ...k, junctions: k.junctions.map(j => (j.id === id ? asDrawn(f(j)) : j)) }));
+    if (was?.shape === "auto") drawnNow(was.name);
+  };
+  /** a junction's corner taken out (not below three) */
+  const removeJunctionCorner = (id: string, i: number) => {
+    const j = live.current.sketch.junctions.find(x => x.id === id);
+    if (!j) return;
+    if (j.outline.length <= 3) { toast("A junction keeps three corners at least", { description: "Delete the junction instead (its panel's bin)." }); return; }
+    editCorners(id, x => removeCorner(x, i));
+    setSelCorner(null);
+  };
   /** a point added to a selected connector (a bend) or junction (a corner) where it was double-clicked; on a point, the point taken out */
   const editPoints = (p: Pt) => {
     const sk = live.current.sketch, s = live.current.sel, h = handleAt(p);
     if (h?.kind === "end") return true;
     if (h?.kind === "lane") { deletePoint(h.id, h.i); return true; }
     if (h?.kind === "bend") { editSketch(k => ({ ...k, connectors: k.connectors.map(c => (c.id === h.id ? { ...c, via: c.via!.filter((_, i) => i !== h.i) } : c)) })); return true; }
-    if (h?.kind === "corner") {
-      editSketch(k => ({ ...k, junctions: k.junctions.map(j => (j.id === h.id ? removeCorner(j, h.i) : j)) }));
+    if (h?.kind === "corner") { removeJunctionCorner(h.id, h.i); return true; }
+    if (h?.kind === "jmid") { editCorners(h.id, j => insertCorner(j, h.i + 1, snap(h.p).p)); return true; }
+    // (a selected junction's border: a corner put in there, before its own lanes and connectors under it get a point)
+    for (const id of s.junctions) {
+      const j = sk.junctions.find(x => x.id === id)!, border = outlinePath(j);
+      if (nearestOn({ kind: "line", pts: [...border, border[0]] }, p).d > 6 / view.current.scale) continue;
+      const q = snap(p).p, i = insertIndex(j.outline, q, true);
+      editCorners(id, x => insertCorner(x, i, q));
+      return true;
+    }
+    if (h?.kind === "zcorner") {
+      editSketch(k => ({ ...k, zones: (k.zones ?? []).map(z => (z.id === h.id ? removeZoneCorner(z, h.i) : z)) }));
       return true;
     }
     const hit = pick(p), q = snap(p).p;
@@ -761,12 +959,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       editSketch(k => ({ ...k, connectors: k.connectors.map(x => (x.id === c.id ? { ...x, via: [...via.slice(0, i), q, ...via.slice(i)] } : x)) }));
       return true;
     }
-    for (const id of s.junctions) {
-      const j = sk.junctions.find(x => x.id === id)!;
-      const border = outlinePath(j);
-      if (nearestOn({ kind: "line", pts: [...border, border[0]] }, p).d > 6 / view.current.scale) continue;
-      const i = insertIndex(j.outline, q, true);
-      editSketch(k => ({ ...k, junctions: k.junctions.map(x => (x.id === id ? insertCorner(x, i, q) : x)) }));
+    // (on a selected zone's border: a corner put in there; see zoneEditAt)
+    for (const id of s.zones ?? []) {
+      const z = sk.zones?.find(x => x.id === id), act = z ? zoneEditAt(z, p, 6 / view.current.scale) : null;
+      if (act?.kind !== "insert") continue;
+      editSketch(k => ({ ...k, zones: (k.zones ?? []).map(x => (x.id === id ? insertZoneCorner(x, act.i, q) : x)) }));
       return true;
     }
     return false;
@@ -782,34 +979,59 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     setSelPt({ lane: a.lane, i: shape.pts.findIndex(x => x === a.p) });
   };
 
+  /** an agent's select/goTo: { kind, id }, checked (a car's id a number, the others' a string) */
+  const target = (a: Record<string, unknown>): SearchTarget => {
+    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "zone", "car"];
+    if (!kinds.includes(kind)) throw new Error(`kind: one of ${kinds.join(", ")}`);
+    const sk = live.current.sketch;
+    if (kind === "car") {
+      const id = argOf(a, "id", "number", true)!;
+      if (!sim.current?.poses().some(c => c.id === id)) throw new Error(`no car ${id} on the ${page ? "plan" : "sketch"} now`);
+      return { kind, id };
+    }
+    const id = argOf(a, "id", "string", true)!;
+    const there = kind === "road" ? sk.roads.some(x => x.id === id) : kind === "lane" ? sk.lanes.some(x => x.id === id) : kind === "connector" ? sk.connectors.some(x => x.id === id)
+      : kind === "junction" ? sk.junctions.some(x => x.id === id) : kind === "link" ? (sk.links ?? []).some(x => x.id === id)
+      : kind === "zone" ? (sk.zones ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
+    if (!there) throw new Error(`no ${kind} ${id}`);
+    return { kind: kind as Exclude<SearchTarget["kind"], "car">, id };
+  };
   // ------------------------------------------------------------ the Claude bridge (docs/claude-bridge.md): what this editor offers an agent
   // (registered again after each render, so they see the editor as it is; taken away when it goes)
   useEffect(() => {
     const sk = () => live.current.sketch;
     const offs = [
-      setBridgeCanvas(() => canvas.current),
+      setBridgeCanvas(() => (in3d && canvas3d.current ? canvas3d.current() : canvas.current)),
       setBridgeToWorld((x, y) => { const c = canvas.current, r = c?.getBoundingClientRect(); return c && r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? toWorld({ clientX: x, clientY: y }) : null; }),
-      bridgeApp.register("select", a => { goTo(a as SearchTarget); }),
-      bridgeApp.register("goTo", a => { goTo(a as SearchTarget); }),
-      bridgeApp.register("view", a => { centerOnPts([{ x: Number(a.x), y: Number(a.y) }], a.scale === undefined); if (a.scale !== undefined) { view.current = { ...view.current, scale: Number(a.scale) }; redraw(); } }),
+      bridgeApp.register("select", a => { goTo(target(a)); }),
+      bridgeApp.register("goTo", a => { goTo(target(a)); }),
+      bridgeApp.register("view", a => {
+        const x = argOf(a, "x", "number", true)!, y = argOf(a, "y", "number", true)!, scale = argOf(a, "scale", "number");
+        if (Math.abs(x) > 1e6 || Math.abs(y) > 1e6) throw new Error("x and y: metres from the plan's origin, within 1,000 km of it");
+        if (scale !== undefined && (scale < 0.3 || scale > 80)) throw new Error("scale: pixels a metre, from 0.3 to 80 (the editor's zoom)");
+        centerOnPts([{ x, y }], scale === undefined);
+        if (scale !== undefined) { view.current = { ...view.current, scale }; redraw(); }
+      }),
       // (as the Run button: the cars made the first time, out of the replay; running already, left so)
       bridgeApp.register("run", () => { if (!running) play(); return { running: true }; }),
       bridgeApp.register("pause", () => { setRunning(false); return { running: false }; }),
-      bridgeApp.register("speed", a => { const v = Number(a.speed) || 1; setSimSpeed(v); return { speed: v }; }),
+      bridgeApp.register("speed", a => { const v = argOf(a, "speed", "number", true)!; if (![1, 3, 10, 30].includes(v)) throw new Error("\"speed\": 1, 3, 10 or 30 (as the speed buttons)"); setSimSpeed(v); return { speed: v }; }),
       bridgeApp.register("replay", a => {
         if (!sim.current || !replayRange) throw new Error("nothing kept to replay yet: run the cars first");
-        const t = Math.max(replayRange.from, Math.min(replayRange.to, Number(a.t)));
+        const t = Math.max(replayRange.from, Math.min(replayRange.to, argOf(a, "t", "number", true)!));
         showAt(t);
         return { t };
       }),
       bridgeApp.register("restart", () => { resetCars(); return { running }; }),
+      // (as the Route panel's button: a test car on the route traced, its trip in editors.<editor>.route.test)
+      bridgeApp.register("testCar", async () => ({ car: await sendTestCar() })),
       bridgeState.register("sketch", () => {
         const s = sk();
         return { lanes: s.lanes.length, connectors: s.connectors.length, roads: s.roads.length, junctions: s.junctions.length, crossings: s.crossings?.length ?? 0, links: s.links?.length ?? 0,
           roadNames: s.roads.slice(0, 200).map(r => `${r.id} ${r.name}`), junctionNames: s.junctions.slice(0, 200).map(j => `${j.id} ${j.name}`) };
       }),
       bridgeState.register("sketchJson", () => sk()),
-      bridgeState.register("selection", () => ({ ...live.current.sel, car: live.current.selCar })),
+      bridgeState.register("selection", () => ({ ...live.current.sel, car: live.current.selCar, ...(live.current.selCar !== null ? { explain: whyNow() } : {}) })),
       bridgeState.register("stats", () => sim.current?.stats() ?? null),
       bridgeState.register("problems", () => sim.current?.problems() ?? null),
       bridgeState.register("view", () => ({ ...view.current })),
@@ -833,6 +1055,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const viewNow = () => { const c = canvas.current, v = view.current; return { cx: v.cx, cy: v.cy, wm: (c?.clientWidth ?? 800) / v.scale, hm: (c?.clientHeight ?? 600) / v.scale }; };
   const openMenu = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const sk = live.current.sketch, s = live.current.sel, raw = toWorld(e), l = laneUnder(sk, raw, 1 / view.current.scale);
+    // (on a selected junction's corner: that corner's menu)
+    const h = handleAt(raw);
+    if (h?.kind === "corner") {
+      const j = sk.junctions.find(x => x.id === h.id), r0 = e.currentTarget.getBoundingClientRect();
+      setSelCorner({ junction: h.id, i: h.i });
+      setMenu({ x: e.clientX - r0.left, y: e.clientY - r0.top, lanes: [], straightenable: false, ring: false, geo: null, add: null, corner: { junction: h.id, i: h.i, curved: !!j?.curved?.[h.i] } });
+      return;
+    }
     // (on a lane of the selection: all the lanes selected; on another: that one, selected; off any: the lanes selected, if any)
     const lanes = l ? (s.lanes.includes(l.id) ? s.lanes : [l.id]) : s.lanes;
     // (where on Earth, the sketch placed on the map: the spot to open in Google Maps, as in V1)
@@ -878,13 +1108,36 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           if (e.altKey) { curvePoint(h.id, h.i); return; }
         } else setSelPt(null);
         // (Alt on a junction's corner: rounded off, or a corner again)
-        if (h?.kind === "corner" && e.altKey) { editSketch(k => ({ ...k, junctions: k.junctions.map(j => (j.id === h.id ? toggleCorner(j, h.i) : j)) })); return; }
+        if (h?.kind === "corner" && e.altKey) { editCorners(h.id, j => toggleCorner(j, h.i)); return; }
+        setSelCorner(h?.kind === "corner" ? { junction: h.id, i: h.i } : null);
+        // (an edge's "+": a corner put in its middle, and dragged from there; one undo step)
+        if (h?.kind === "jmid") {
+          const q = snap(h.p).p, from = { ...sk, junctions: sk.junctions.map(j => (j.id === h.id ? asDrawn(insertCorner(j, h.i + 1, q)) : j)) };
+          dragShow(from);
+          drag.current = { kind: "handle", base: sk, from, h: { kind: "corner", id: h.id, i: h.i + 1 } };
+          setSelCorner({ junction: h.id, i: h.i + 1 });
+          return;
+        }
         if (h) { drag.current = { kind: "handle", base: sk, h }; return; }
+        // (a name: what it names, as a click on it would pick it; a road's, the whole road, as a double-click on a lane of it)
+        const lab = labelAt(e), road = lab?.kind === "road" ? sk.roads.find(r => r.id === lab.id) : null;
+        // (a way in's or out's label: its number edited there, as in Demand)
+        if (lab && lab.lanes && (lab.kind === "in" || lab.kind === "out")) {
+          if (readOnly) return;
+          const lane = (id: string) => laneById(sk, id)!, ws = (ids: string[]) => ids.reduce((b, id) => b + laneOutWeight(lane(id)), 0);
+          const all = ws(demandWays(sk).exits.flatMap(w => w.lanes));
+          const value = lab.kind === "in" ? Math.round(lab.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0)) : all > 0 ? Math.round((ws(lab.lanes) / all) * 100) : 0;
+          // (opened once the press has put the focus on the editor, not before: else the field would lose it at once)
+          const edit = { kind: lab.kind, lanes: lab.lanes, x: lab.x0, y: lab.y0, value };
+          setTimeout(() => setWayEdit(edit), 0);
+          return;
+        }
+        if (road) { setSelCar(null); setSel(e.shiftKey ? { ...s, road: null, lanes: [...new Set([...s.lanes, ...road.lanes])] } : { ...NO_SEL, lanes: road.lanes, road: road.id }); redraw(); return; }
         // a car, to inspect (over what it drives on)
-        const rt = live.current.replayT, car = (rt !== null ? sim.current?.replayCarAt(rt, raw, 4 / view.current.scale) : sim.current?.carAt(raw, 4 / view.current.scale)) ?? null;
+        const rt = live.current.replayT, car = lab ? null : (rt !== null ? sim.current?.replayCarAt(rt, raw, 4 / view.current.scale) : sim.current?.carAt(raw, 4 / view.current.scale)) ?? null;
         if (car !== null && !e.shiftKey) { setSelCar(car); setSel(NO_SEL); redraw(); return; }
         setSelCar(null);
-        const hit = pick(raw);
+        const hit = lab?.kind === "junction" ? { junction: lab.id } : lab?.kind === "zone" ? { zone: lab.id } : pick(raw);
         if (!hit) {
           if (!e.shiftKey) setSel(NO_SEL);
           drag.current = { kind: "box", a: raw, b: raw, add: e.shiftKey };
@@ -894,6 +1147,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         if ("link" in hit) { setSel({ ...NO_SEL, link: hit.link }); return; }
         // (a zebra crossing: selected on its own, dragged whole)
         if ("crossing" in hit) { setSel({ ...NO_SEL, crossing: hit.crossing }); drag.current = { kind: "crossing", base: sk, id: hit.crossing, part: "move", from: raw }; return; }
+        // (a zone: selected on its own, dragged whole)
+        if ("zone" in hit) {
+          const zs = s.zones?.includes(hit.zone) ? s : { ...NO_SEL, zones: [hit.zone] };
+          if (zs !== s) setSel(zs);
+          drag.current = { kind: "move", base: sk, from: snap(raw).p, piece: zs };
+          return;
+        }
         const has = "lane" in hit ? s.lanes.includes(hit.lane) : "connector" in hit ? s.connectors.includes(hit.connector) : s.junctions.includes(hit.junction);
         if (e.shiftKey) {
           setSel("lane" in hit ? { ...s, road: null, lanes: toggle(s.lanes, hit.lane) } : "connector" in hit ? { ...s, road: null, connectors: toggle(s.connectors, hit.connector) }
@@ -943,6 +1203,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         const p = snap(raw).p;
         if (d?.kind !== "junction") { draft.current = { kind: "junction", pts: [p] }; break; }
         if (d.pts.length >= 3 && dist(raw, d.pts[0]) <= 10 / view.current.scale) { finishJunction(); return; }
+        d.pts.push(p);
+        break;
+      }
+      case "zone": {
+        const p = snap(raw).p;
+        if (d?.kind !== "zone") { draft.current = { kind: "zone", pts: [p] }; break; }
+        if (d.pts.length >= 3 && dist(raw, d.pts[0]) <= 10 / view.current.scale) { finishZone(); return; }
         d.pts.push(p);
         break;
       }
@@ -997,6 +1264,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         break;
       }
     }
+    // (a drawing tool's first click begins an edit, though nothing is in the sketch yet: T158)
+    if (!d && draft.current) store.beginEdit();
     redraw();
   };
 
@@ -1004,7 +1273,28 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
    * A drag's sketch shown as it goes, but kept in the editor until the drag ends (then made the plan's
    * sketch once: the panels, the cars, saving and undo see the result, not every move of the drag).
    */
-  const dragShow = (sk: Sketch) => { dragSk.current = sk; redraw(); };
+  const dragShow = (sk: Sketch) => { if (!dragSk.current) store.beginEdit(); dragSk.current = sk; redraw(); };
+  /** a click in the 3D view at `p` on level `lv`: a car there, else what the plan view would pick there if it is on that level */
+  const pickAt3d = (p: Pt, lv: number) => {
+    const sk = live.current.sketch, car = live.current.replayT === null ? sim.current?.carAt(p, 1.5) ?? null : null;
+    if (car !== null && Math.abs((sim.current?.poses().find(c => c.id === car)?.z ?? 0) - lv) < 0.5) { setSel(NO_SEL); setSelCar(car); return true; }
+    const hit = pick(p);
+    if (!hit) return false;
+    if ("lane" in hit) {
+      const l = laneById(sk, hit.lane);
+      if (!l || Math.abs(zAt(sk, l.id, nearestOn(l.shape, p).s) - lv) > 0.5) return false;
+      setSel({ ...NO_SEL, lanes: [hit.lane] });
+    } else if ("junction" in hit) {
+      const c = live.current.contents.get(hit.junction);
+      if (c && junctionLevel(sk, c) !== lv) return false;
+      setSel(junctionSel(sk, [hit.junction]));
+    } else if ("connector" in hit) setSel({ ...NO_SEL, connectors: [hit.connector] });
+    else if ("link" in hit) setSel({ ...NO_SEL, link: hit.link });
+    else if ("crossing" in hit) setSel({ ...NO_SEL, crossing: hit.crossing });
+    else setSel({ ...NO_SEL, zones: [hit.zone] });
+    setSelCar(null);
+    return true;
+  };
   // what the pointer is over, in a card by it once it rests a moment (as V1's): not while drawing, dragging or pressing
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverOff = () => { if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; } hoverCarId.current = null; setHoverCard(c => (c ? null : c)); };
@@ -1015,8 +1305,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     hoverTimer.current = setTimeout(() => {
       hoverTimer.current = null;
       // (a car, live, over what it drives on; else what is there)
-      const car = live.current.replayT === null ? sim.current?.carAt(p, 4 / view.current.scale) ?? null : null;
-      const hit = car !== null ? { car } : (pick(p) as HoverHit | null);
+      const lab = labelAt(e), lr = lab?.kind === "road" ? live.current.sketch.roads.find(r => r.id === lab.id)?.lanes[0] : null;
+      const car = !lab && live.current.replayT === null ? sim.current?.carAt(p, 4 / view.current.scale) ?? null : null;
+      const hit = lab ? (lab.kind === "junction" ? { junction: lab.id } : lab.kind === "zone" ? { zone: lab.id } : lr ? { lane: lr } : null) : car !== null ? { car } : (pick(p) as HoverHit | null);
       hoverCarId.current = car;
       if (hit) setHoverCard({ hit, x, y, car: car !== null ? sim.current?.inspect(car) ?? null : null });
     }, 450);
@@ -1038,15 +1329,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       if (place && !(place.lane === other.lane && Math.abs(place.s - other.s) < 0.5 && !c.via?.length))
         dragShow({ ...b, connectors: b.connectors.map(x => (x.id === id ? { ...x, [end]: place } : x)) });
     } else if (g?.kind === "handle" && g.h.kind !== "end") {
-      const { kind, id, i } = g.h, b = g.base;
+      const { kind, id, i } = g.h as Extract<Handle, { i: number }>, b = g.from ?? g.base;
       if (kind === "lane") {
         const l = laneById(b, id)!;
         if (l.shape.kind === "line") dragShow(settle(reshape(b, id, { ...l.shape, pts: l.shape.pts.map((q, k) => (k === i ? snap(raw, id).p : q)) })));
       } else if (kind === "bend") {
         const q = { x: Math.round(raw.x * 4) / 4, y: Math.round(raw.y * 4) / 4 };
         dragShow({ ...b, connectors: b.connectors.map(c => (c.id === id ? { ...c, via: c.via!.map((x, k) => (k === i ? q : x)) } : c)) });
+      } else if (kind === "zcorner") {
+        dragShow({ ...b, zones: (b.zones ?? []).map(z => (z.id === id ? moveZoneCorner(z, i, snap(raw).p) : z)) });
       } else {
-        dragShow({ ...b, junctions: b.junctions.map(j => (j.id === id ? { ...j, outline: j.outline.map((x, k) => (k === i ? snap(raw).p : x)) } : j)) });
+        dragShow({ ...b, junctions: b.junctions.map(j => (j.id === id ? asDrawn({ ...j, outline: j.outline.map((x, k) => (k === i ? snap(raw).p : x)) }) : j)) });
       }
     } else if (g?.kind === "crossing") {
       // (to the half metre, as points are; Shift: off the grid)
@@ -1067,9 +1360,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       g.angle = a;
       dragShow(settle(transformPiece(g.base, g.piece, rotation(g.o, a))));
     }
+    // (a name under the pointer: what it names is lit, and the pointer says it can be clicked)
+    const lab = tool === "select" && !g ? labelAt(e) : null;
     if (canvas.current && tool === "select" && !g) {
       const rh = rotateHandle(live.current.sketch, live.current.sel, v.scale);
-      canvas.current.style.cursor = (rh && dist(raw, rh.h) <= 8 / v.scale) || handleAt(raw) ? "grab" : "";
+      const way = lab?.kind === "in" || lab?.kind === "out";
+      canvas.current.style.cursor = (rh && dist(raw, rh.h) <= 8 / v.scale) || handleAt(raw) ? "grab" : lab && !(way && readOnly) ? "pointer" : "";
+      canvas.current.title = way && !readOnly ? (lab.kind === "in" ? "Click to edit the traffic coming in here (veh/h)" : "Click to edit this way out's share of the trips (%)") : "";
     }
     const d = draft.current;
     if (d?.kind === "arc" && d.start) {
@@ -1078,7 +1375,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       d.start.last = a;
     }
     cursor.current = { ...(tool === "select" || tool === "connector" || tool === "slice" ? { p: raw, snapped: false } : snap(raw)), alt: e.altKey };
-    hover.current = g ? null : pick(raw);
+    hover.current = g ? null : lab ? labelHover(lab) : pick(raw);
     redraw();
   };
 
@@ -1091,6 +1388,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     // a right click (not a right drag): the menu for the lane under it, or the lanes selected
     if (g?.kind === "pan" && g.right && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) { openMenu(e); return; }
     if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || (g?.kind === "crossing" && store.sketch$.getValue() !== g.base)) recordSketch(g.base);
+    // (an Automatic junction's corner moved, or put in: its surface Drawn now, said)
+    if (g?.kind === "handle" && g.h.kind === "corner" && store.sketch$.getValue() !== g.base) { const j = g.base.junctions.find(x => x.id === (g.h as { id: string }).id); if (j?.shape === "auto") drawnNow(j.name); }
     if (g?.kind === "box" && dist(g.a, g.b) * view.current.scale > 3) {
       const sk = live.current.sketch, x0 = Math.min(g.a.x, g.b.x), x1 = Math.max(g.a.x, g.b.x), y0 = Math.min(g.a.y, g.b.y), y1 = Math.max(g.a.y, g.b.y);
       const inside = (pts: Pt[] | null) => !!pts?.length && pts.every(p => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1);
@@ -1108,6 +1407,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const onDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (tool === "lane") { finishLane(); return; }
     if (tool === "junction") { finishJunction(); return; }
+    if (tool === "zone") { finishZone(); return; }
     if (tool !== "select") return;
     const p = toWorld(e);
     if (editPoints(p)) return;
@@ -1140,6 +1440,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const f = takeScratchFocus();
       if (!f) return;
       setSel(NO_SEL); setSelCar(null);
+      // (another saved sketch opened: the cars of the one before let go, only the open one's kept; its view as it was left)
+      if (f.fresh) {
+        sim.current?.terminate(); sim.current = null; store.setSim(null);
+        setRunning(false); setStats(null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null);
+        if (f.view) { view.current = { ...f.view }; redraw(); } else fit();
+        return;
+      }
       // (new cars for the piece: the cars before, reset, would still have the last sketch for a quarter of a second,
       // starting on lanes that are going and with what came in where; then lost, and nothing coming in)
       if (sim.current) {
@@ -1174,13 +1481,37 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (mod && k === "v") { e.preventDefault(); void paste(); return; }
     if (mod && k === "d") { e.preventDefault(); duplicate(); return; }
     if (mod) return;
+    // (Alt+A / H / D, W / V / S: the selected lanes aligned, as in a design tool; by the key's place, as Alt changes its letter on a Mac)
+    if (e.altKey && !e.shiftKey) {
+      const b = ALIGN_BUTTONS.find(x => x.code === e.code);
+      if (b) {
+        e.preventDefault();
+        const ids = live.current.sel.lanes;
+        if (!readOnly && canAlign(live.current.sketch, ids)) editSketch(sk => alignLanes(sk, ids, b.how));
+        return;
+      }
+    }
     if (k === " ") { e.preventDefault(); space.current = true; if (hand === "") setHand("grab"); return; }
-    if (k === "escape") { if (d) draft.current = null; else { setSel(NO_SEL); setSelCar(null); } redraw(); return; }
-    if (k === "enter") { finishLane(); finishJunction(); return; }
-    if (k === "backspace" && d && (d.kind === "lane" || d.kind === "junction" || d.kind === "connector")) {
+    if (k === "escape") {
+      // (a menu or dialog took it already)
+      if (e.defaultPrevented) return;
+      if (d) draft.current = null;
+      // (in 3D, with nothing to let go: the camera back where it arrived)
+      else if (in3d && !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.zones?.length && live.current.selCar === null) api3d.current?.home();
+      else { setSel(NO_SEL); setSelCar(null); }
+      redraw();
+      return;
+    }
+    if (k === "enter") { finishLane(); finishJunction(); finishZone(); return; }
+    if (k === "backspace" && d && (d.kind === "lane" || d.kind === "junction" || d.kind === "zone" || d.kind === "connector")) {
       e.preventDefault();
       if (d.kind === "connector") { if (!d.via.pop()) draft.current = null; } else { d.pts.pop(); if (!d.pts.length) draft.current = null; }
       redraw();
+      return;
+    }
+    if ((k === "delete" || k === "backspace") && live.current.selCorner && live.current.sel.junctions.includes(live.current.selCorner.junction)) {
+      e.preventDefault();
+      removeJunctionCorner(live.current.selCorner.junction, live.current.selCorner.i);
       return;
     }
     if (k === "delete" || k === "backspace") {
@@ -1190,11 +1521,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       return;
     }
     if (k === "g") { groupSel(); return; }
+    if (k === "m") { if (!readOnly) mergeSelection(live.current.sketch, live.current.sel, editSketch, setSel); return; }
     if (k === "r") { reverseSel(); return; }
     if (k === "q" || k === "e") { rotateSel(((k === "e" ? 1 : -1) * (e.shiftKey ? 1 : 15) * Math.PI) / 180); return; }
-    if (k === "f") { fit(); return; }
-    if (k === "+" || k === "=") { e.preventDefault(); zoomBy(1.25); return; }
-    if (k === "-" || k === "_") { e.preventDefault(); zoomBy(1 / 1.25); return; }
+    if (k === "f") { if (in3d) api3d.current?.fit(); else fit(); return; }
+    if (k === "+" || k === "=") { e.preventDefault(); if (in3d) api3d.current?.dolly(1.25); else zoomBy(1.25); return; }
+    if (k === "-" || k === "_") { e.preventDefault(); if (in3d) api3d.current?.dolly(1 / 1.25); else zoomBy(1 / 1.25); return; }
     if (k === "p") { play(); return; }
     // (the replay: a step back or forward; Shift, a second)
     // (not on a slider: the replay's own thumb steps it already, and once is enough)
@@ -1204,26 +1536,45 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       return;
     }
     if (k === "t" && e.shiftKey && canTest) { e.preventDefault(); testInSketch(); return; }
+    // (in 3D, no drawing tools: their keys do nothing there)
+    if (in3d) return;
     const t = TOOLS.find(t => t.key.toLowerCase() === k);
     if (t) changeTool(t.id);
   };
   const onKeyUp = (e: React.KeyboardEvent) => { if (e.key === " ") { space.current = false; if (drag.current?.kind !== "pan") setHand(""); } };
 
   const toolInfo = TOOLS.find(t => t.id === tool)!;
+  // (a zone selected on its own: its panel)
+  const zoneSel = sel.zones?.length === 1 && isEmpty(sel) ? sketch.zones?.find(z => z.id === sel.zones![0]) ?? null : null;
   /** the sketch tidied (see sketch-tidy.ts), and what was done told */
   const tidy = () => {
     let rep: TidyReport | null = null;
-    editSketch(s => { const t = tidySketch(s); rep = t.report; return t.report.kinks || t.report.folded || t.report.extended ? t.sketch : s; });
+    editSketch(s => { const t = tidySketch(s); rep = t.report; return t.report.kinks || t.report.connectorKinks || t.report.folded || t.report.extended ? t.sketch : s; });
     const r = rep as TidyReport | null;
-    // (the three checks, each said: what it found, or that it found nothing)
+    // (the four checks, each said: what it found, or that it found nothing)
     const checks = (x: TidyReport | null) => [
       x?.kinks ? `${x.kinks} points doubling back taken out` : "no lane doubling back",
+      x?.connectorKinks ? `${x.connectorKinks} connectors turning back on themselves straightened out (the bends doing it taken out)` : "no connector turning back",
       x?.folded ? `${x.folded} lanes too short for a car folded into ${x.added} connectors` : "no lane too short for a car",
       x?.extended ? `${x.extended} short ways in or out made 15 m long` : "no way in or out too short",
     ];
-    if (!r || !(r.kinks || r.folded || r.extended)) { toast("Nothing to tidy", { description: [...checks(r), r?.kept.length ? `${r.kept.length} short lanes left as they are (a sign, a level, lights, a journey or turning shares, or a road joined at that end)` : ""].filter(Boolean).join(" · ") }); return; }
+    if (!r || !(r.kinks || r.connectorKinks || r.folded || r.extended)) { toast("Nothing to tidy", { description: [...checks(r), r?.kept.length ? `${r.kept.length} short lanes left as they are (a sign, a level, lights, a journey or turning shares, or a road joined at that end)` : ""].filter(Boolean).join(" · "), ...fillOffer() }); return; }
     setSel(NO_SEL);
-    toast.success("Tidied", { description: [...checks(r), r.kept.length ? `${r.kept.length} short lanes left as they are` : "", "⌘Z brings it back"].filter(Boolean).join(" · ") });
+    toast.success("Tidied", { description: [...checks(r), r.kept.length ? `${r.kept.length} short lanes left as they are` : "", "⌘Z brings it back"].filter(Boolean).join(" · "), ...fillOffer() });
+  };
+  /** Tidy's offer (T147), opt-in: "Fill holes" ticked on every automatic junction not filled yet (one undo step; each unticks again) */
+  const fillOffer = () => {
+    const n = unfilledJunctions(live.current.sketch).length;
+    if (!n || readOnly) return {};
+    return {
+      action: {
+        label: `Fill holes in ${plural(n, "junction")}`,
+        onClick: () => {
+          editSketch(s => fillAllJunctions(s).sketch);
+          toast.success(`Holes filled in ${plural(n, "junction")}`, { description: "Their whole inside paved (Fill holes ticked on each: untick it in a junction's panel) · ⌘Z brings it back" });
+        },
+      },
+    };
   };
   const copy = () => {
     void navigator.clipboard.writeText(JSON.stringify(exportSketch(sketch, contents), null, 2))
@@ -1240,11 +1591,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       {!page && <ResizeEdges start={start} />}
       <div className={cn("flex items-center gap-2 border-b px-3 py-1.5 select-none", !page && "cursor-move touch-none")} title={page ? undefined : "Drag to move · double-click to put back"}
         onPointerDown={e => { if (!page && !(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!page && !(e.target as HTMLElement).closest("button")) reset(); }}>
-        {!page && <span className="text-sm font-medium">{store.kind === "scratch" ? "Sketch" : "Lane sketch"} <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : store.kind === "scratch" ? "ideas apart from the plan, saved with it" : "saved with the plan"}</span></span>}
+        {!page && store.kind === "scratch" && <span className="flex items-center gap-1"><SketchPicker view={() => view.current} readOnly={readOnly} /><span className="text-xs text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "ideas apart from the plan, saved with it"}</span></span>}
+        {!page && store.kind !== "scratch" && <span className="text-sm font-medium">Lane sketch <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "saved with the plan"}</span></span>}
         <ToggleGroup type="single" value={tool} onValueChange={v => v && changeTool(v as Tool)} aria-label="Drawing tool" className="ml-2">
-          {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={tip(t)} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
+          {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={in3d && t.id !== "select" ? "Not in 3D: back to the plan to draw" : tip(t)} disabled={in3d && t.id !== "select"} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
         </ToggleGroup>
         <div className="ml-auto flex items-center gap-0.5">
+          {/* (the Sketch window over the plan: the page's memory here too, the plan's header being under it) */}
+          {!page && <span className="mr-2"><MemoryGauge /></span>}
           <Button size="sm" variant={running ? "secondary" : "default"} className="mr-0.5 h-7 w-20" onClick={play} title={running ? "Pause the cars (P)" : "Run cars on the sketch (P)"}>
             {running ? <><Pause /> Pause</> : <><Play /> Run</>}
           </Button>
@@ -1286,6 +1640,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <DropdownMenu open onOpenChange={o => { if (!o) setMenu(null); }}>
               <DropdownMenuTrigger asChild><span className="absolute size-px" style={{ left: menu.x, top: menu.y }} aria-hidden /></DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56" onCloseAutoFocus={e => { e.preventDefault(); panel.current?.focus(); }}>
+                {menu.corner && <>
+                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Corner {menu.corner.i + 1} of {sketch.junctions.find(j => j.id === menu.corner!.junction)?.name ?? menu.corner.junction}</DropdownMenuLabel>
+                  <DropdownMenuItem disabled={readOnly} onSelect={() => { const c = menu.corner!; editCorners(c.junction, j => toggleCorner(j, c.i)); }}>
+                    {menu.corner.curved ? "Make sharp" : "Make a curve"} <span className="ml-auto text-[11px] text-muted-foreground">Alt-click</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={readOnly} onSelect={() => { const c = menu.corner!; removeJunctionCorner(c.junction, c.i); }}>
+                    <Trash2 /> Take out this corner <span className="ml-auto text-[11px] text-muted-foreground">Del · double-click</span>
+                  </DropdownMenuItem>
+                </>}
                 {menu.lanes.length > 0 && <>
                   <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{menu.lanes.length === 1 ? `Lane ${menu.lanes[0]}` : `${menu.lanes.length} lanes`}</DropdownMenuLabel>
                   <DropdownMenuItem disabled={readOnly || !menu.add} onSelect={() => addPointAt(menu.add!)}>
@@ -1303,6 +1666,24 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                   <DropdownMenuItem disabled={readOnly || !menu.ring} onSelect={() => editSketch(s => circleLanes(s, menu.lanes))}>
                     Make a circle <span className="ml-auto text-[11px] text-muted-foreground">a ring, made round</span>
                   </DropdownMenuItem>
+                  {menu.lanes.some(id => roadOf(sketch, id)) && <>
+                    <DropdownMenuItem disabled={readOnly} onSelect={() => deleteRoadLanes(sketch, menu.lanes, editSketch, setSel)}>
+                      <Trash2 /> {menu.lanes.length === 1 ? "Delete this lane" : "Delete these lanes"} <span className="ml-auto text-[11px] text-muted-foreground">the road keeps the rest</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem disabled={readOnly} onSelect={() => takeLanesOut(sketch, menu.lanes, editSketch, setSel)}>
+                      Take out of the road <span className="ml-auto text-[11px] text-muted-foreground">kept, in no road</span>
+                    </DropdownMenuItem>
+                  </>}
+                  {(() => { const t = mergeTarget(sketch, sel); return (
+                    <DropdownMenuItem disabled={readOnly || !t} onSelect={() => mergeSelection(sketch, sel, editSketch, setSel)}>
+                      {t?.kind === "roads" ? "Merge the roads" : "Merge lanes"} <span className="ml-auto text-[11px] text-muted-foreground">{t ? "the two selected · M" : "select two · M"}</span>
+                    </DropdownMenuItem>
+                  ); })()}
+                </>}
+                {page && menu.lanes.length === 1 && <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setRoute(r => ({ ...r, from: menu.lanes[0] }))}>Route from here <span className="ml-auto text-[11px] text-muted-foreground">lane {menu.lanes[0]}</span></DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setRoute(r => ({ ...r, to: menu.lanes[0] }))}>Route to here <span className="ml-auto text-[11px] text-muted-foreground">lane {menu.lanes[0]}</span></DropdownMenuItem>
                 </>}
                 {canTest && (menu.lanes.length > 0 || hasSel(sel)) && <>
                   <DropdownMenuSeparator />
@@ -1326,9 +1707,23 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
             onPointerLeave={() => { cursor.current = null; hover.current = null; hoverOff(); redraw(); }}
             onDoubleClick={onDoubleClick} onContextMenu={e => e.preventDefault()} />
-          <div className="pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
-            <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
+          <div className={cn("pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm", in3d && "hidden")}>
+            {tool === "select" && sel.junctions.length === 1 && !sel.connectors.some(c => !contents.get(sel.junctions[0])?.connectors.includes(c))
+              ? <><span className="font-medium text-foreground">Junction shape:</span> {JUNCTION_HINT} · </>
+              : <><span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · </>}scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
+          {in3d && (
+            <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed}
+              selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c && live.current.replayT === null ? carWay(live.current.sketch, c)?.pts ?? null : null; }} carWhy={() => carsShown().why} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
+              cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
+              satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
+          )}
+          {in3d && (
+            <div className="pointer-events-none absolute inset-x-2 top-2 z-[6] rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
+              <span className="font-medium text-foreground">3D:</span> drag turns and tilts (up towards the horizon, down to straight down) · right-drag or Shift-drag pans · scroll zooms · click picks · F the whole sketch · Esc back where it arrived
+            </div>
+          )}
+          {wayEdit && <WayEditor key={`${wayEdit.lanes.join()}:${wayEdit.kind}`} edit={wayEdit} onSave={v => saveWay(wayEdit, v)} onCancel={() => { setWayEdit(null); panel.current?.focus(); }} />}
           {hoverCard && (() => {
             const info = describeHover(hoverCard.hit, sketch, contents, stats, hoverCard.car);
             return info ? <SketchHoverCard info={info} x={hoverCard.x} y={hoverCard.y} /> : null;
@@ -1337,19 +1732,22 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             commands={canTest && hasSel(sel) ? [{ title: "Test in Sketch", sub: "the selection, on its own in the Sketch window · ⇧T", run: () => testInSketch() }] : []}
             onGo={goTo} onClose={() => { setSearchShown(false); panel.current?.focus(); }} />}
           <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
-            onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0} />
+            onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0}
+            sides={{ left: consoleOpen ? 0 : CONSOLE_BUTTON_ROOM, right: ZOOM_ROOM }} />
+          {bySpeed && stats && layers.cars && <SpeedLegend above={consoleOpen ? CONSOLE_HEIGHT : 0} />}
           {/* (zoom in and out about the middle, and the whole sketch in view: + − F) */}
           <div className="absolute right-2 z-20 flex flex-col overflow-hidden rounded-md border bg-background/95 shadow-sm" style={{ bottom: (consoleOpen ? CONSOLE_HEIGHT : 0) + 8 }}>
-            <Button size="icon-sm" variant="ghost" className="rounded-none" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomBy(1.25)}><Plus /></Button>
-            <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoomBy(1 / 1.25)}><Minus /></Button>
-            <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Fit the sketch in view" title="The whole sketch in view (F)" onClick={fit}><Maximize /></Button>
+            <Button size="icon-sm" variant="ghost" className="rounded-none" aria-label="Zoom in" title="Zoom in (+)" onClick={() => (in3d ? api3d.current?.dolly(1.25) : zoomBy(1.25))}><Plus /></Button>
+            <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Zoom out" title="Zoom out (−)" onClick={() => (in3d ? api3d.current?.dolly(1 / 1.25) : zoomBy(1 / 1.25))}><Minus /></Button>
+            <Button size="icon-sm" variant="ghost" className="rounded-none border-t" aria-label="Fit the sketch in view" title="The whole sketch in view (F)" onClick={() => (in3d ? api3d.current?.fit() : fit())}><Maximize /></Button>
           </div>
           <ProblemConsole open={consoleOpen} onOpen={setConsoleOpen} sim={() => sim.current} stats={stats} sketch={sketch} contents={contents} replayFrom={replayRange?.from ?? null} onReplay={showAt}
-            onGo={(p, car) => { if (sim.current?.poses().some(c => c.id === car)) { setSel(NO_SEL); setSelCar(car); } centerOnPts([p], true); redraw(); }} />
+            onGo={(p, car) => { if (sim.current?.poses().some(c => c.id === car)) { setSel(NO_SEL); setSelCar(car); } centerOnPts([p], true); redraw(); }}
+            onSelect={id => { setSelCar(null); setSel({ ...NO_SEL, connectors: [id] }); redraw(); }} />
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
-            <CarPanel info={carInfo} id={selCar} follow={follow} running={running} replayT={replayT}
+            <CarPanel info={carInfo} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
               onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
               onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
               onCopy={async () => {
@@ -1360,7 +1758,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                 void navigator.clipboard.writeText(text).then(() => toast.success(`Car ${selCar}'s data copied`, { description: "Its state, its last 10 s and what happened to it. Paste it into the conversation." }), () => toast.error("Couldn't copy"));
               }} />
           )}
-          {sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
+          {zoneSel ? (
+            <ZonePanel sketch={sketch} zone={zoneSel} readOnly={readOnly} onDelete={deleteSel} />
+          ) : sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
             <CrossingPanel x={sketch.crossings.find(x => x.id === sel.crossing)!} readOnly={readOnly} onDelete={deleteSel}
               live={stats ? peds.find(q => q.id === sel.crossing) ?? null : null} />
           ) : (
@@ -1374,12 +1774,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
           {stats ? <RoadResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "road", id })} /> : null}
-          <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys}
+          {page && <RoutePanel sketch={sketch} onGo={x => goTo({ kind: x.kind, id: x.id })} onSendTest={() => sendTestCar().catch((e: Error) => toast.error("No test car", { description: e.message }))} />}
+          <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} heldBack={stats?.heldBackBy}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
             <Button size="sm" variant="outline" disabled={empty || readOnly} onClick={tidy}
-              title="Tidy: straighten lanes that double back on themselves, fold lanes too short for a car (under 4 m) between connectors into those connectors, and make short ways in and out 15 m long (as a conversion from V1 does; undo brings it back)"><Wand2 /> Tidy</Button>
+              title="Tidy: straighten lanes that double back on themselves and connectors that turn back at a bend, fold lanes too short for a car (under 4 m) between connectors into those connectors, and make short ways in and out 15 m long (as a conversion from V1 does; undo brings it back)"><Wand2 /> Tidy</Button>
             <Button size="sm" variant="ghost" aria-label="Clear the sketch" title="Clear the sketch (undo brings it back)" disabled={empty}
               onClick={() => { editSketch(s => ({ ...emptySketch(), ...(s.geo ? { geo: s.geo } : {}), ...(s.traffic ? { traffic: s.traffic } : {}) })); setSel(NO_SEL); }}><Trash2 /></Button>
           </div>
@@ -1391,6 +1792,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
 }
 
 const fmtM = (m: number) => `${m.toFixed(1)} m`;
+const kmOrM = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`);
 const deg = (r: number) => (r * 180) / Math.PI;
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
@@ -1419,6 +1821,48 @@ function reasonOf(why: string | null, kmh: number): { text: string; car?: number
  * Lanes made one curve each, their two ends and a curved point (see curveLanes); a warning for one that
  * bends more than one curve can follow (straying more than half a lane's width from where it ran).
  */
+/** the lanes Smooth would change: each line lane's own (a road's following lane: its lead), those with a point between their ends (any, a ring's) not curved yet */
+function smoothable(sk: Sketch, ids: string[]): string[] {
+  return [...new Set(ids.map(id => leadOf(sk, id) ?? id))].filter(id => {
+    const sh = laneById(sk, id)?.shape;
+    return sh?.kind === "line" && sh.pts.some((_, i) => (sh.closed || (i > 0 && i < sh.pts.length - 1)) && !sh.curved?.[i]);
+  });
+}
+/**
+ * Lanes smoothed: every point between their ends curved, as Alt-click does (a ring's every point), those curved already
+ * kept; a lane following its road's lead: the lead (the others are laid out from it again). Connectors on any lane whose
+ * shape changed stay where they were: at its ends still, elsewhere at the nearest place on the new shape.
+ */
+function smoothLanes(sk: Sketch, ids: string[]): { sketch: Sketch; n: number } {
+  const which = smoothable(sk, ids);
+  if (!which.length) return { sketch: sk, n: 0 };
+  const before = new Map(sk.lanes.map(l => [l.id, l.shape]));
+  const out = settle({ ...sk, lanes: sk.lanes.map(l => {
+    if (!which.includes(l.id) || l.shape.kind !== "line") return l;
+    const sh = l.shape;
+    return { ...l, shape: { ...sh, curved: sh.pts.map((_, i) => !!sh.curved?.[i] || !!sh.closed || (i > 0 && i < sh.pts.length - 1)) } };
+  }) });
+  const moved = new Map(out.lanes.filter(l => before.get(l.id) !== l.shape).map(l => [l.id, { was: before.get(l.id)!, now: l.shape }]));
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  const place = (a: LaneAt): LaneAt => {
+    const m = moved.get(a.lane);
+    if (!m) return a;
+    const L0 = laneLength(m.was), L1 = laneLength(m.now);
+    return { ...a, s: a.s <= 0.01 ? a.s : a.s >= L0 - 0.01 ? r2(L1) : r2(nearestOn(m.now, pointAt(m.was, a.s).p).s) };
+  };
+  return { sketch: { ...out, connectors: out.connectors.map(c => (moved.has(c.from.lane) || moved.has(c.to.lane) ? { ...c, from: place(c.from), to: place(c.to) } : c)) }, n: which.length };
+}
+/** the Smooth button: the lanes smoothed (one undo step), or why it can't */
+function SmoothButton({ sketch, ids, className }: { sketch: Sketch; ids: string[]; className?: string }) {
+  const { edit: editSketch } = useSketchStore();
+  const can = smoothable(sketch, ids).length > 0;
+  return (
+    <Button size="sm" variant="outline" className={className} disabled={!can}
+      title={can ? "Every point between the ends curved, as Alt-click does (those curved already stay; a road side by side: its lead lane, the others follow); its connectors stay where they are" : "Nothing to smooth: no point between the ends that isn't curved already (a lane of two points has none)"}
+      onClick={() => editSketch(s => smoothLanes(s, ids).sketch)}><Spline /> Smooth</Button>
+  );
+}
+
 function makeCurve(editSketch: (f: (s: Sketch) => Sketch) => void, ids: string[]) {
   let off: { lane: string; off: number }[] = [];
   editSketch(s => { const r = curveLanes(s, ids); off = r.off; return r.sketch; });
@@ -1427,13 +1871,20 @@ function makeCurve(editSketch: (f: (s: Sketch) => Sketch) => void, ids: string[]
   if (worst.off > LANE_WIDTH / 2) toast.warning(`Lane ${worst.lane} now strays up to ${worst.off.toFixed(1)} m from where it ran`, { description: "It bends more than one curve can follow: drag its curved point, or undo (Ctrl+Z) and use Fewer points instead." });
 }
 
+/** the sim's explanation of the car watched, as `inspect` passes it on (T157) */
+const explainOf = (info: ReturnType<SketchSim["inspect"]>): CarExplain | null => (info && "explain" in info ? info.explain ?? null : null);
+
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
   return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
-function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
+function CarPanel({ info, why, id, follow, running, replayT, way, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
   info: ReturnType<SketchSim["inspect"]>; id: number; follow: boolean; running: boolean; replayT: number | null;
+  /** why it does what it does (T157), if the sim says */
+  why: CarExplain | null;
+  /** its way on to the end of its trip (drawn on the map), if it has one */
+  way: CarWay | null;
   /** its engine fails now; it is towed away now */
   onBreakDown: () => void; onTow: () => void;
   onFollow: (on: boolean) => void; onPick: (id: number) => void; onClose: () => void; onCopy: () => void;
@@ -1445,7 +1896,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
   );
   const reason = info ? reasonOf(info.why, info.kmh) : null;
   return (
-    <InspectorPanel id="car" title={`${info?.truck ? "Truck" : "Car"} ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
+    <InspectorPanel id="car" title={id < 0 ? `Test car ${-id}` : `${info?.truck ? "Truck" : "Car"} ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
       actions={<button className="rounded p-0.5 hover:bg-muted" aria-label="Stop inspecting the car" title="Stop inspecting (Esc)" onClick={onClose}><X className="size-3.5" /></button>}>
       {!info ? <p className="text-xs text-muted-foreground">{replayT !== null ? `Not on the ${where} at this moment.` : `It has left the ${where}.`}</p> : replayT !== null ? (
         <>
@@ -1454,6 +1905,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h</span>)}
           {info.exit && row("Going", edgeName(info.exit))}
           {row("Then", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          <CarWhy x={why} live={replayT === null} onPick={onPick} />
           <Button size="sm" variant={follow ? "secondary" : "outline"} className="h-7" aria-pressed={follow} onClick={() => onFollow(!follow)} title="Keep the view on the car while the replay plays">
             <Crosshair /> {follow ? "Following" : "Follow"}
           </Button>
@@ -1464,9 +1916,25 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
           {row("On", <span className="font-mono">{edgeName(info.edge)} · {info.pos.toFixed(1)}{info.ring ? "" : ` of ${info.len.toFixed(1)}`} m</span>)}
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h <span className="text-muted-foreground">of {info.desiredKmh.toFixed(0)}</span></span>)}
           {info.changeTo && row("Changing to", <span className="font-mono">{edgeName(info.changeTo)}</span>)}
-          {row("Heading for", info.dest ? `the exit at the end of lane ${info.dest}` : "anywhere (no exit it can reach)")}
+          {row("Heading for", info.dest ? `the exit at the end of lane ${info.dest}${way ? ` (${way.destName})` : ""}` : "anywhere (no exit it can reach)")}
+          {way && (
+            <div className="grid gap-0.5 rounded border bg-background/60 px-2 py-1.5 text-xs" aria-label="Its way to the end">
+              <div className="flex justify-between gap-2"><span className="text-muted-foreground">Its way on</span>
+                <span className="font-mono tabular" title="Metres left; the time left at the speed it has now, and at the speed limits">
+                  {kmOrM(way.length)} · {info.kmh >= 3 ? clock(way.length / (info.kmh / 3.6)) : "—"} <span className="text-muted-foreground">({clock(way.freeTime)} at the limits)</span>
+                </span>
+              </div>
+              <ol className="grid gap-px">
+                {way.roads.slice(0, 12).map((r, i) => (
+                  <li key={i} className="flex justify-between gap-2"><span className="truncate">{i + 1}. {r.name}</span><span className="shrink-0 font-mono text-muted-foreground tabular">{kmOrM(r.m)}</span></li>
+                ))}
+                {way.roads.length > 12 && <li className="text-muted-foreground">… {way.roads.length - 12} more, to {way.destName}</li>}
+              </ol>
+            </div>
+          )}
           {row("Going", info.goal ? (info.goal.startsWith("end:") ? `off the end of ${edgeName(info.goal.slice(4))}` : edgeName(info.goal)) : info.leaves ? `off the end of ${edgeName(info.edge)}` : info.exit ? `${edgeName(info.exit)}, then ${edgeName(info.then ?? "")}` : info.then ? `onto ${edgeName(info.then)}` : "round the ring")}
           {row("Now", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          <CarWhy x={why} live={replayT === null} onPick={onPick} />
           {Number.isFinite(info.fuel) && row("Fuel so far", <span className="font-mono tabular">{fmtFuel(info.fuel / 1000)}</span>)}
           {info.journey && row("Journey", <span className="font-mono">{info.journey}</span>)}
           {info.reroutes > 0 && row("Went another way", `${info.reroutes} time${info.reroutes === 1 ? "" : "s"}`)}
@@ -1725,6 +2193,100 @@ function GeometrySection({ sketch, lanes, lead }: { sketch: Sketch; lanes: strin
   );
 }
 
+/** a way out's share of the trips set to `pct` %: its lanes' weight made so, the other ways' kept (none else: any share is all of it) */
+function setOutShare(sk: Sketch, lanes: string[], pct: number): Sketch {
+  const w = (id: string) => laneOutWeight(laneById(sk, id)!);
+  const other = demandWays(sk).exits.flatMap(x => x.lanes).filter(id => !lanes.includes(id)).reduce((a, id) => a + w(id), 0);
+  if (pct <= 0) return setOutWeight(sk, lanes, 0);
+  if (other <= 0) return setOutWeight(sk, lanes, 1);
+  return setOutWeight(sk, lanes, Number(Math.min(100, (pct * other) / (100 - pct) / lanes.length).toFixed(3)));
+}
+/** a way in's traffic (veh/h) or a way out's share (%) edited on its label: Enter or a click away saves, Esc leaves it; ↑↓ step it */
+function WayEditor({ edit, onSave, onCancel }: { edit: WayEdit; onSave: (v: number) => void; onCancel: () => void }) {
+  const inWay = edit.kind === "in", max = inWay ? 5000 : 99, step = inWay ? 10 : 1;
+  const [text, setText] = useState(String(edit.value));
+  const done = useRef(false);
+  const v = Number(text.replace(",", ".")), ok = text.trim() !== "" && Number.isFinite(v) && v >= 0 && v <= max;
+  const leave = (save: boolean) => { if (done.current) return; done.current = true; if (save && ok) onSave(v); else onCancel(); };
+  return (
+    <div className="absolute z-[7] flex items-center gap-1 rounded bg-background/95 px-1 py-0.5 shadow-md" style={{ left: edit.x - 2, top: edit.y - 4 }}>
+      <input autoFocus onFocus={e => e.currentTarget.select()} value={text} inputMode="numeric" aria-invalid={!ok}
+        aria-label={inWay ? "Traffic coming in here, vehicles per hour" : "This way out's share of the trips, per cent"}
+        title={ok ? (inWay ? "Vehicles per hour, 0 to 5000 · Enter saves, Esc leaves it · ↑↓ ±10 (Shift ±100)" : "Per cent of the trips, 0 to 99 · Enter saves, Esc leaves it · ↑↓ ±1 (Shift ±10)") : `A number from 0 to ${max}`}
+        className={cn("h-6 w-16 rounded border bg-transparent px-1 text-right font-mono text-xs tabular outline-none", ok ? "border-input focus:border-primary" : "border-red-500 text-red-600")}
+        onChange={e => setText(e.target.value)}
+        onBlur={() => leave(true)}
+        onKeyDown={e => {
+          e.stopPropagation();
+          if (e.key === "Enter") { e.preventDefault(); if (ok) leave(true); }
+          else if (e.key === "Escape") { e.preventDefault(); leave(false); }
+          else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+            e.preventDefault();
+            const d = (e.key === "ArrowUp" ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
+            setText(String(Math.min(max, Math.max(0, Math.round((ok ? v : edit.value) + d)))));
+          }
+        }} />
+      <span className="text-[11px] text-muted-foreground">{inWay ? "veh/h" : "% of trips"}</span>
+    </div>
+  );
+}
+/** the middle of each edge of a closed outline (edge i: from corner i to the next) */
+const edgeMiddles = (pts: Pt[]) => pts.map((p, i) => { const q = pts[(i + 1) % pts.length]; return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }; });
+/** how a selected junction's shape is edited (the map's hint line, and its panel) */
+const JUNCTION_HINT = "drag a corner to move it · drag a + (an edge's middle) to add one, or double-click the edge · click a corner, then Delete (or double-click it) to take it out · Alt-click or right-click a corner to curve it · one ⌘Z undoes each";
+/** a junction whose corners are edited: an Automatic surface (its border only saying what it takes in) made the Drawn one its border makes */
+const asDrawn = (j: SketchJunction): SketchJunction => { if (j.shape !== "auto") return j; const { shape: _, ...rest } = j; return rest; };
+/** said once an Automatic junction's corners were edited */
+const drawnNow = (name: string) => toast(`${name}: its surface is Drawn now`, {
+  description: "Automatic, its border only said what it takes in; with its corners edited, the surface is the border. ⌘Z brings it back (or Surface: Automatic, in its panel).",
+});
+/** lanes of a road deleted (the road keeps the rest, laid out again side by side), one undo step; said what went */
+function deleteRoadLanes(sk: Sketch, ids: string[], edit: (f: (s: Sketch) => Sketch) => void, setSel: (s: Sel) => void) {
+  if (!ids.length) return;
+  const roadsGone = deleteLanes(sk, ids).roadsGone, road = roadOf(sk, ids[0]);
+  edit(s => deleteLanes(s, ids).sketch);
+  const left = road && !roadsGone.includes(road.name) ? road.lanes.filter(l => !ids.includes(l)) : [];
+  setSel(left.length ? { ...NO_SEL, lanes: left, road: road!.id } : NO_SEL);
+  toast.success(`${ids.length === 1 ? `Lane ${ids[0]}` : `${ids.length} lanes`} deleted`, {
+    description: [roadsGone.length ? `${roadsGone.join(", ")}: no lane left, the road went too` : road ? `${road.name} has ${left.length} lane${left.length === 1 ? "" : "s"} now` : "", "its connectors, journeys and turning shares naming it went with it", "⌘Z brings it back"].filter(Boolean).join(" · "),
+  });
+}
+/** lanes taken out of their road, kept as lanes in no road, one undo step; said what went */
+function takeLanesOut(sk: Sketch, ids: string[], edit: (f: (s: Sketch) => Sketch) => void, setSel: (s: Sel) => void) {
+  const inRoad = ids.filter(id => roadOf(sk, id));
+  if (!inRoad.length) return;
+  const road = roadOf(sk, inRoad[0])!, roadsGone = takeOutOfRoad(sk, inRoad).roadsGone;
+  edit(s => takeOutOfRoad(s, inRoad).sketch);
+  setSel({ ...NO_SEL, lanes: inRoad });
+  toast.success(`${inRoad.length === 1 ? `Lane ${inRoad[0]}` : `${inRoad.length} lanes`} taken out of ${road.name}`, {
+    description: [roadsGone.length ? `${roadsGone.join(", ")}: no lane left, the road went` : `${road.name} keeps the rest, where they are`, road.speed !== undefined ? `now in no road, with the road's speed limit (${road.speed} km/h) as its own` : "now in no road", "⌘Z brings it back"].join(" · "),
+  });
+}
+
+/** what the selection can be merged as: two whole roads (the first picked keeping its name), else two lanes; null if neither */
+function mergeTarget(sk: Sketch, sel: Sel): { kind: "roads" | "lanes"; a: string; b: string } | null {
+  if (sel.connectors.length || sel.junctions.length || sel.link || sel.crossing) return null;
+  const roads = [...new Set(sel.lanes.map(id => roadOf(sk, id)?.id ?? null))];
+  if (roads.length === 2 && roads.every(r => r && sk.roads.find(x => x.id === r)!.lanes.every(l => sel.lanes.includes(l)))) return { kind: "roads", a: roads[0]!, b: roads[1]! };
+  return sel.lanes.length === 2 ? { kind: "lanes", a: sel.lanes[0], b: sel.lanes[1] } : null;
+}
+/** the selection merged (one undo step), what came of it selected and said; or why not */
+function mergeSelection(sk: Sketch, sel: Sel, edit: (f: (s: Sketch) => Sketch) => void, setSel: (s: Sel) => void) {
+  const t = mergeTarget(sk, sel);
+  if (!t) { toast.error("Nothing to merge", { description: "Select two lanes where one carries on the other, or two whole roads (double-click a lane of each, or click their names; Shift adds)." }); return; }
+  const name = (id: string) => sk.roads.find(r => r.id === id)?.name ?? id;
+  let r: MergeResult | null = null;
+  edit(s => { r = t.kind === "roads" ? mergeRoads(s, t.a, t.b) : mergeLanes(s, t.a, t.b); return r.ok ? r.sketch : s; });
+  const res = r as MergeResult | null;
+  if (!res) return;
+  if (!res.ok) { toast.error(t.kind === "roads" ? `Can't merge ${name(t.a)} and ${name(t.b)}` : `Can't merge lanes ${t.a} and ${t.b}`, { description: res.reason }); return; }
+  const kept = t.kind === "roads" ? res.sketch.roads.find(x => x.id === t.a) : null, lane = res.sketch.lanes.find(l => l.id === t.a || l.id === t.b);
+  setSel(kept ? { ...NO_SEL, lanes: kept.lanes, road: kept.id } : lane ? { ...NO_SEL, lanes: [lane.id] } : NO_SEL);
+  toast.success(kept ? `${kept.name}: one road now` : `Lane ${lane?.id}: one lane now`, {
+    description: [res.dropped.length ? `Kept the first's; dropped: ${res.dropped.join("; ")}` : "Nothing differed between them", "⌘Z brings them back"].join(" · "),
+  });
+}
+
 function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover, now = null, results = null }: {
   sketch: Sketch; sel: Sel; setSel: (s: Sel) => void; contents: Map<string, JunctionContents>; junctionSel: (ids: string[]) => Sel;
   selPt: { lane: string; i: number } | null; onCurvePoint: (lane: string, i: number) => void; onDeletePoint: (lane: string, i: number) => void;
@@ -1748,6 +2310,8 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
   let body: React.ReactNode;
   // (roads the selected lanes are in: two of them can be linked)
   const selRoads = [...new Set(sel.lanes.map(id => roadOf(sketch, id)?.id).filter((x): x is string => !!x))];
+  // (and two lanes, or two whole roads, merged)
+  const merging = mergeTarget(sketch, sel);
   const linkSel = () => {
     const next = linkRoads(sketch, selRoads[0], selRoads[1], nextId("k", (sketch.links ?? []).map(k => k.id)));
     if (!next) { toast.error("Can't link them", { description: "Their nearest ends are already linked." }); return; }
@@ -1769,6 +2333,17 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
     body = (
       <>
         <Input aria-label="Road name" value={road.name} className="h-8" onChange={e => rename("roads", road.id, e.target.value)} />
+        <ul className="grid gap-0.5 text-xs" aria-label={`${road.name}'s lanes`}>
+          {road.lanes.map(id => (
+            <li key={id} className="flex items-center gap-1 rounded px-1 hover:bg-muted" onMouseEnter={() => onHover({ lanes: [id] })} onMouseLeave={() => onHover(null)}>
+              <button type="button" className="flex-1 truncate text-left font-mono" title="Select this lane" onClick={() => setSel({ ...NO_SEL, lanes: [id] })}>
+                {id}{road.align?.ref === id ? <span className="ml-1 font-sans text-muted-foreground">lead</span> : null}
+              </button>
+              <button type="button" className="rounded px-1 text-[11px] text-muted-foreground hover:bg-background hover:text-foreground" aria-label={`Take ${id} out of the road`} title="Take out of the road: keep the lane, in no road" onClick={() => takeLanesOut(sketch, [id], editSketch, setSel)}>out</button>
+              <button type="button" className="rounded p-0.5 text-muted-foreground hover:bg-background hover:text-destructive" aria-label={`Delete lane ${id}`} title={`Delete this lane: the road keeps the rest${road.align ? ", laid out side by side again" : ""}`} onClick={() => deleteRoadLanes(sketch, [id], editSketch, setSel)}><Trash2 className="size-3.5" /></button>
+            </li>
+          ))}
+        </ul>
         <p className="text-xs text-muted-foreground">{plural(road.lanes.length, "lane")} ({road.lanes.join(", ")}) · joined at {sketch.junctions.filter(j => contents.get(j.id)?.roads.includes(road.id)).map(j => j.name).join(", ") || "no junction"}</p>
         {road.lanes.length > 1 && (
           <div className="grid gap-1.5">
@@ -1791,6 +2366,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
         <LevelRow sketch={sketch} lanes={road.lanes} />
         <SpeedRow sketch={sketch} id={`road-${road.id}`} own={road.speed} of="road" onSet={v => editSketch(sk => setRoadSpeed(sk, road.id, v))} />
         <div className="flex gap-1.5">
+          <SmoothButton sketch={sketch} ids={road.lanes} className="flex-1" />
           <Button size="sm" variant="outline" className="flex-1" onClick={() => editSketch(sk => ({ ...sk, roads: sk.roads.filter(r => r.id !== road.id) }))}>Ungroup</Button>
           <Button size="sm" variant="ghost" onClick={onDelete} aria-label="Delete the road's lanes" title="Delete the road and its lanes"><Trash2 /></Button>
         </div>
@@ -1810,7 +2386,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           })()}
         </p>
         {results && <JunctionLine st={results.junctions?.find(x => x.id === junction.id)} t={results.t} />}
-        <p className="text-[11px] text-muted-foreground">Drag its corners to reshape it; double-click its edge to add a corner, a corner to take it out; Alt-click a corner to round it off (again to make it sharp). Moving or turning it takes what is on it along.</p>
+        <p className="text-[11px] text-muted-foreground">Its shape, on the map: {JUNCTION_HINT}.{junction.shape === "auto" ? " Its surface is Automatic: editing a corner makes it Drawn (the surface then follows the border)." : ""} Moving or turning it takes what is on it along.</p>
         <div className="grid gap-1">
           <span className="text-xs text-muted-foreground">Surface</span>
           <ToggleGroup type="single" value={junction.shape ?? "drawn"} aria-label="Junction surface" className="w-full"
@@ -1825,6 +2401,10 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             </div>
             {!!junction.smooth && <NumberField id="sk-smooth-r" label="Kerb radius" unit="m" value={junction.smooth} min={0.5} max={50} step={0.5}
               onCommit={r => editSketch(sk => ({ ...sk, junctions: sk.junctions.map(x => (x.id === junction.id ? { ...x, smooth: r } : x)) }))} />}
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <label htmlFor="sk-fill" title={`Pave its whole inside: the slivers and holes left between its connectors filled (gaps under ${FILL_GAP} m). It only adds surface: what is paved stays, a ring lane's island stays ground. The lanes, connectors and cars don't change`}>Fill holes</label>
+              <Switch id="sk-fill" checked={!!junction.fill} onCheckedChange={on => editSketch(sk => ({ ...sk, junctions: sk.junctions.map(x => { if (x.id !== junction.id) return x; const n = { ...x }; if (on) n.fill = true; else delete n.fill; return n; }) }))} />
+            </div>
             <p className="text-[11px] text-muted-foreground">Its border (dashed while selected) still decides which lanes and connectors are on it.</p>
           </>}
         </div>
@@ -1873,6 +2453,12 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             : j ? <>on <button className="underline" onClick={() => setSel(junctionSel([j.id]))}>{j.name}</button></> : "in no road or junction"}
         </p>
         {lead && <p className="text-[11px] text-muted-foreground">Side by side with lead lane {lead}: it follows it (move or reshape the lead).</p>}
+        {inRoad && (
+          <div className="grid grid-cols-2 gap-1.5">
+            <Button size="sm" variant="outline" title={`Delete the lane: ${inRoad.name} keeps the rest${inRoad.align ? ", laid out side by side again" : ""} (Del)`} onClick={() => deleteRoadLanes(sketch, [lane.id], editSketch, setSel)}><Trash2 /> Delete this lane</Button>
+            <Button size="sm" variant="outline" title={`Keep the lane, but in no road: ${inRoad.name} keeps the rest`} onClick={() => takeLanesOut(sketch, [lane.id], editSketch, setSel)}>Take out of the road</Button>
+          </div>
+        )}
         {sh.kind === "line" && !lead && (
           pt !== null ? (
             <div className="flex items-center gap-1.5 text-xs">
@@ -1882,6 +2468,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             </div>
           ) : <p className="text-[11px] text-muted-foreground">Double-click the lane to add a point; click a point to pick it, Alt-click to curve it, double-click to take it out.</p>
         )}
+        {sh.kind === "line" && <SmoothButton sketch={sketch} ids={[lane.id]} />}
         {sh.kind === "line" && !lead && sh.closed && (
           <Button size="sm" variant="outline" title="The ring as a true circle, the one that fits it best, running the same way (its connectors stay where they are)" onClick={() => editSketch(s => circleLanes(s, [lane.id]))}><Circle /> Make a circle</Button>
         )}
@@ -1957,12 +2544,20 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             <Button size="sm" variant="outline" title="The selected lanes with only their two ends: straight (rings, arcs and lanes following a lead are left; connectors stay where they are)" onClick={() => editSketch(s => straightenLanes(s, sel.lanes))}>Straighten</Button>
             <Button size="sm" variant="outline" title="The selected lanes without the points they don't need, each kept within half a metre of where it runs" onClick={() => editSketch(s => straightenLanes(s, sel.lanes, 0.5))}>Fewer points</Button>
             <Button size="sm" variant="outline" title="Each selected lane as its two ends and one curved point, the curve kept closest to where it runs (rings, arcs and lanes following a lead are left)" onClick={() => makeCurve(editSketch, sel.lanes)}><Spline /> Make a curve</Button>
+            <SmoothButton sketch={sketch} ids={sel.lanes} />
             <Button size="sm" variant="outline" title="Each selected ring of points as a true circle, the one that fits it best, running the same way (its connectors stay where they are)" onClick={() => editSketch(s => circleLanes(s, sel.lanes))}><Circle /> Make a circle</Button>
           </>}
         </div>
+        {sel.lanes.length >= 2 && <AlignLanes sketch={sketch} lanes={sel.lanes} readOnly={false} onAlign={how => editSketch(s => alignLanes(s, sel.lanes, how))} />}
         {selRoads.length === 2 && (
           <Button size="sm" variant="outline" onClick={linkSel} title="Join the two roads at their nearest ends so the road carries on: a surface between them, its lines, and a connector for each lane">
             Link {roadName(selRoads[0])} and {roadName(selRoads[1])}
+          </Button>
+        )}
+        {merging && (
+          <Button size="sm" variant="outline" onClick={() => mergeSelection(sketch, sel, editSketch, setSel)}
+            title={merging.kind === "roads" ? "Make the two roads one, where one carries on the other: each lane merged with the one it carries on, the first road's name kept (M)" : "Make the two lanes one, where one carries on the other (end to start, or through one connector between just them): the first's width and speed kept (M)"}>
+            Merge {merging.kind === "roads" ? `${roadName(merging.a)} and ${roadName(merging.b)}` : `lanes ${merging.a} and ${merging.b}`}
           </Button>
         )}
         <Button size="sm" variant="ghost" className="justify-start" onClick={onDelete}><Trash2 /> Delete</Button>
@@ -2018,8 +2613,8 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
 }) {
   // where cars come in
   const entries = entryLanes(sketch).length;
-  const row = (label: string, value: React.ReactNode, cls?: string) => (
-    <div className={cn("flex justify-between gap-2 text-xs", cls)}><span className="text-muted-foreground">{label}</span><span className="font-mono tabular">{value}</span></div>
+  const row = (label: string, value: React.ReactNode, cls?: string, title?: string) => (
+    <div className={cn("flex justify-between gap-2 text-xs", cls)} title={title}><span className="text-muted-foreground">{label}</span><span className="font-mono tabular">{value}</span></div>
   );
   return (
     <InspectorPanel id="traffic" title="Traffic">
@@ -2036,11 +2631,14 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
       <ToggleGroup type="single" value={String(simSpeed)} onValueChange={v => v && setSimSpeed(Number(v))} aria-label="Simulation speed" className="w-full">
         {[1, 3, 10, 30].map(n => <ToggleGroupItem key={n} value={String(n)} className="h-7 flex-1 text-xs">{n}×</ToggleGroupItem>)}
       </ToggleGroup>
+      <BySpeedSwitch />
       {stats && (
         <div className="grid gap-0.5">
           {row("Time", clock(stats.t))}
           {row("Cars on the sketch", stats.vehicles)}
           {row("Came in / drove off", `${stats.spawned} / ${stats.finished}`)}
+          {(stats.heldBack ?? 0) > 0 && row("Couldn't come in", stats.heldBack, "text-amber-700 dark:text-amber-400",
+            "Arrivals due while there was no room where their lane starts (a queue back to it, or a crossing there kept clear): lost, so less traffic came in than asked")}
           {row("Through", stats.t > 60 ? `${Math.round((stats.finished / stats.t) * 3600)} veh/h` : "…")}
           {row("Mean speed", `${stats.meanSpeed.toFixed(0)} km/h`)}
           {row("Waiting 20 s+", stats.waiting, stats.waiting ? "text-amber-700 dark:text-amber-400" : undefined)}
@@ -2243,6 +2841,16 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
           })()}
         </>}
       </>}
+      {/* zones (T129): all of them, whatever is selected (areas to find the way by) */}
+      {!!sketch.zones?.length && <>
+        <div className="mt-2 border-t pt-1" />
+        {heading("h:zones", "Zones", sketch.zones.length)}
+        {open("h:zones") && sketch.zones.map(z => row({
+          key: `zone:${z.id}`, depth: 0, on: !!sel.zones?.includes(z.id), hit: { zone: z.id }, sel: { ...NO_SEL, zones: [z.id] }, zoom: { ...piece({}), zones: [z.id] },
+          label: <><span className="mr-1 inline-block size-2 rounded-full align-middle" style={{ background: z.color }} />{z.name}</>,
+          note: formatArea(zoneArea(z.outline)), title: z.note,
+        }))}
+      </>}
     </div>
   );
 }
@@ -2254,8 +2862,14 @@ interface PaintState {
   cursor: { p: Pt; snapped: boolean; alt: boolean } | null; hover: Hover | null;
   placeOn: (p: Pt) => LaneAt | null;
   selPt: { lane: string; i: number } | null;
+  /** a selected junction's corner picked */
+  selCorner?: { junction: string; i: number } | null;
+  /** the cars coloured by their speed (else all one colour, a truck's cab its own) */
+  bySpeed: boolean;
+  /** the route traced (its lanes and connectors), drawn over the map; and where a test car drove another way */
+  route: { lanes: Set<string>; conns: Set<string>; driven: { lanes: Set<string>; conns: Set<string> } } | null;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
-  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean }[] | null;
+  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1 }[] | null;
   /** the time of the cars shown (live or replayed), for the traffic lights; null with no cars */
   simT: number | null;
   /** the traffic lights as they run with the cars (null: worked out from the fixed cycle) */
@@ -2264,22 +2878,31 @@ interface PaintState {
   bg: Background | null;
   /** the car picked to inspect, with the way it will go */
   car: ReturnType<SketchSim["inspect"]>;
+  /** what holds the car picked (T157): where its leader and blocker are drawn, the conflict zone on both paths */
+  why: ReturnType<typeof explainMarks>;
+  /** the moment replayed (null: live) */
+  replayT?: number | null;
   /** the zebras' pedestrians, if running (live or replayed) */
   peds: PedView[] | null;
   /** the layers shown */
   layers: Layers;
   /** what each junction takes in */
   contents: Map<string, JunctionContents>;
+  /** filled with the names drawn and where (the kept image's), for clicks and the pointer on them */
+  labels?: NameLabel[];
 }
 
+/** a junction being drawn or edited: shaded in the selection's colour, the lanes under it showing through */
+const EDITED_AREA = { fill: 0.22 };
+/** a car's turn signal: its colour and how long it is lit, then dark (ms; V1's) */
+export const BLINK = "#ffab1a", BLINK_MS = 380;
+/** a connector being drawn: yellow, over a dark edge (only while it is drawn: placed, it looks as the others) */
+const DRAWING = "#facc15", DRAWING_EDGE = "rgba(24, 24, 27, 0.75)";
 /** a marking's box (kept: markings are kept per sketch) */
 /** a run at least this long (s) before its flows are taken for a tested piece's ways in */
 const MEASURE_AFTER = 180;
-/** metres east and south from origin `to` to origin `from` (both latitude / longitude; nothing if either is missing) */
-function geoShift(from?: { lat: number; lon: number }, to?: { lat: number; lon: number }): Pt {
-  if (!from || !to) return { x: 0, y: 0 };
-  return { x: (from.lon - to.lon) * 111320 * Math.cos((to.lat * Math.PI) / 180), y: (to.lat - from.lat) * 110540 };
-}
+/** px kept clear beside the replay bar at the map's foot: the Console button's (while it is closed) on the left, the zoom buttons' on the right */
+const CONSOLE_BUTTON_ROOM = 120, ZOOM_ROOM = 44;
 const hasSel = (s: Sel) => s.lanes.length > 0 || s.junctions.length > 0 || s.connectors.length > 0;
 
 /** "Test in Sketch": the selection taken into the Sketch window to run on its own, and how */
@@ -2292,6 +2915,7 @@ function TestInSketchPanel({ options: o, setOptions, onTest }: { options: TestOp
         <ToggleGroup type="single" className="w-full" value={o.mode} onValueChange={v => { if (v) setOptions({ ...o, mode: v as TestOptions["mode"] }); }} aria-label="What is in the Sketch">
           <ToggleGroupItem value="replace" className="h-7 flex-1 text-xs" title="Instead of what is in the Sketch (⌘Z there brings it back)">Replace</ToggleGroupItem>
           <ToggleGroupItem value="add" className="h-7 flex-1 text-xs" title="Beside what is in the Sketch">Add</ToggleGroupItem>
+          <ToggleGroupItem value="new" className="h-7 flex-1 text-xs" title="Into a new sketch of its own (the plan&apos;s other sketches kept as they are)">New</ToggleGroupItem>
         </ToggleGroup>
       </div>
       <label className="flex items-center gap-2 text-xs"><Switch checked={o.run} onCheckedChange={v => setOptions({ ...o, run: v })} aria-label="Run the cars at once" /> Run the cars at once</label>
@@ -2309,6 +2933,28 @@ function SpeedRow({ sketch, id, own, of, onSet }: { sketch: Sketch; id: string; 
       {own !== undefined
         ? <Button size="sm" variant="ghost" className="h-8 text-xs" title={`Back to the sketch's speed (${all} km/h, set in Traffic)`} onClick={() => onSet(null)}>The sketch&apos;s</Button>
         : <span className="pb-2 text-[11px] text-muted-foreground" title={`Until one is set here, the ${of} has the sketch's speed (Traffic)`}>the sketch&apos;s</span>}
+    </div>
+  );
+}
+
+/** the cars coloured by their speed, or all one colour */
+function BySpeedSwitch() {
+  const [on, set] = useUiPath<boolean>("display/carsBySpeed");
+  return (
+    <label className="flex items-center justify-between gap-2 text-xs" title="Each car coloured from red (stopped) through amber to green (at the speed it wants); off, all one colour">
+      Colour cars by speed <Switch checked={on} onCheckedChange={set} aria-label="Colour cars by speed" />
+    </label>
+  );
+}
+
+/** what the cars' colours mean while they show their speed (as V1's) */
+function SpeedLegend({ above }: { above: number }) {
+  return (
+    <div className="pointer-events-none absolute left-2 z-10 flex items-center gap-2.5 rounded-md bg-background/90 px-2 py-1 text-[11px] shadow-sm" style={{ bottom: above + 60 }} aria-label="Speed colours">
+      <span className="text-muted-foreground">Speed</span>
+      {([["var(--sig-stop)", "stopped"], ["var(--sig-slow)", "slow"], ["var(--sig-go)", "free flow"]] as const).map(([c, l]) => (
+        <span key={l} className="flex items-center gap-1"><span className="size-2.5 rounded-sm" style={{ background: c }} />{l}</span>
+      ))}
     </div>
   );
 }
@@ -2376,6 +3022,9 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     ctx.globalAlpha = 1;
   }
 
+  // zones (T129): under everything else, a light fill and a dashed border in each one's colour (the selected one stronger)
+  if (S && st.layers.zones && sk.zones?.length) paintZones(ctx, sk.zones, px, s.zones?.length === 1 ? s.zones[0] : null, st.hover && "zone" in st.hover ? st.hover.zone : null);
+
   const path = (pts: Pt[]) => { ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); };
   const label = (text: string, p: Pt, color: string) => {
     ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -2385,6 +3034,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     ctx.fillStyle = col.pill; ctx.beginPath(); ctx.roundRect(sx - tw / 2 - 5, sy - 9, tw + 10, 18, 4); ctx.fill();
     ctx.fillStyle = color; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(text, sx, sy + 0.5);
     ctx.restore();
+    return { x0: sx - tw / 2 - 5, y0: sy - 9, x1: sx + tw / 2 + 5, y1: sy + 9 };
   };
   const square = (p: Pt) => { ctx.fillStyle = col.bg; ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.fillRect(p.x - 3.5 * px, p.y - 3.5 * px, 7 * px, 7 * px); ctx.strokeRect(p.x - 3.5 * px, p.y - 3.5 * px, 7 * px, 7 * px); };
   const dot = (p: Pt, r: number, fill: string) => { ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill(); };
@@ -2403,7 +3053,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   const loopsOf = new Map(autos.filter(j => j.smooth).map(j => [j.id, smoothJunction(sk, j, contentsOf(j))]));
   const bandsOf = new Map(autos.filter(j => !j.smooth).map(j => [j.id, junctionBands(sk, contentsOf(j))]));
   // (the ground they shut in: paved too; far out, a pixel or two, left out)
-  const holesOf = new Map(autos.map(j => [j.id, far ? [] : junctionHoles(sk, contentsOf(j))]));
+  const holesOf = new Map(autos.map(j => [j.id, far ? [] : junctionSurfaceHoles(sk, j, contentsOf(j))]));
   const loopsPath = (loops: Pt[][]) => { ctx.beginPath(); for (const l of loops) { l.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); } };
   const strokeBands = (g: CanvasRenderingContext2D, bands: Band[], extra: number) => {
     for (const b of bands) {
@@ -2437,6 +3087,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     const kLevel = (k: SketchLink) => (leveled ? Math.min(...[k.a.road, k.b.road].flatMap(id => sk.roads.find(r => r.id === id)?.lanes ?? []).map(id => laneLevel(laneById(sk, id)))) : 0);
     const levels = leveled ? [...new Set([0, ...roadLanes.map(laneLevel), ...drawn.map(jLevel), ...autos.map(jLevel)])].sort((x, y) => x - y) : [0];
     const marks = st.layers.markings && v.scale >= 1.5 ? roadMarkings(sk) : [];
+    // (a dead end with a turnaround: a turning circle of road under its U-turn, drawn only)
+    const ends = deadEndTurnarounds(sk);
     for (const lv of levels) {
       const at = <T,>(xs: T[], f: (x: T) => number) => (leveled ? xs.filter(x => f(x) === lv) : xs);
       const js = at(drawn, jLevel), as = at(autos, jLevel), ks = at(linkGeo, x => kLevel(x.k)), ls = at(roadLanes, laneLevel);
@@ -2458,6 +3110,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         if (pass && holes.length) { loopsPath(holes); ctx.fill("nonzero"); }
         // (a link: its sides kerbed, not its ends, where it meets its roads)
         for (const { g } of ks) { if (pass) { path(g.outline); ctx.closePath(); ctx.fill(); } else { ctx.lineWidth = kerbW; for (const side of g.sides) { path(side); ctx.stroke(); } } }
+        for (const d of at(ends, x => x.level)) { ctx.beginPath(); ctx.arc(d.c.x, d.c.y, d.r + (pass ? 0 : kerbW / 2), 0, Math.PI * 2); ctx.fill(); }
         // (the lanes of one width in one go)
         const byWidth = new Map<number, typeof roadLanes>();
         for (const l of ls) byWidth.set(l.width, [...(byWidth.get(l.width) ?? []), l]);
@@ -2526,6 +3179,17 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     if (!on && !over) continue;
     path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath();
     ctx.strokeStyle = col.sel; ctx.globalAlpha = on ? 0.9 : 0.35; ctx.lineWidth = l.width + 5 * px; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  // the route traced: an orange band under its lanes and along its connectors
+  if (S && st.route) {
+    ctx.strokeStyle = "#f97316"; ctx.globalAlpha = 0.55; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    for (const l of sk.lanes) { if (!st.route.lanes.has(l.id) || !vis.lanes.has(l.id)) continue; path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath(); ctx.lineWidth = l.width + 3 * px; ctx.stroke(); }
+    for (const c of sk.connectors) { if (!st.route.conns.has(c.id)) continue; const pts = connectorPts(sk, c); if (!pts) continue; path(pts); ctx.lineWidth = Math.max(1.6, 6 * px); ctx.stroke(); }
+    // (a test car's other way, in blue)
+    ctx.strokeStyle = "#2563eb";
+    for (const l of sk.lanes) { if (!st.route.driven.lanes.has(l.id) || !vis.lanes.has(l.id)) continue; path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath(); ctx.lineWidth = l.width + 3 * px; ctx.stroke(); }
+    for (const c of sk.connectors) { if (!st.route.driven.conns.has(c.id)) continue; const pts = connectorPts(sk, c); if (!pts) continue; path(pts); ctx.lineWidth = Math.max(1.6, 6 * px); ctx.stroke(); }
     ctx.globalAlpha = 1;
   }
   // lanes: a green line down the middle (on a faint band as wide as the lane), with chevrons along their direction of travel
@@ -2739,7 +3403,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     if (raised.length && k === carsNow.length - overBridges.length) drawRaised();
     const t = car.trailer;
     if (t) vehicleBody(t.p, t.d, t.len, "#e9e6dd", false, "rgba(20,28,34,0.7)");
-    vehicleBody(car.p, car.d, car.len, speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15), true, "rgba(20,28,34,0.45)");
+    vehicleBody(car.p, car.d, car.len, st.bySpeed ? speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15) : t ? pal.truck : pal.car, true, "rgba(20,28,34,0.45)");
     // (broken down: hazard lights flashing at its four corners, dim between flashes so they show when paused)
     if (car.broken) {
       const { p, d } = car, back = t ?? car, bl = t ? t.len : car.len, r = Math.max(0.35, 2.5 * px);
@@ -2750,16 +3414,46 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       ctx.fillStyle = Math.floor(performance.now() / 400) % 2 ? "#a86f00" : "#ffb000";
       for (const c of corners) { ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.fill(); }
     }
+    // (turning, or changing lane: its signal on that side, at its front and back corners, blinking as V1's; nothing between flashes)
+    else if (car.blink && Math.floor(performance.now() / BLINK_MS) % 2 === 0) {
+      const back = t ?? car, bl = t ? t.len : car.len, r = Math.max(0.3, 2.2 * px), side = car.blink;
+      ctx.fillStyle = BLINK;
+      for (const [q, dd, k] of [[car.p, car.d, car.len / 2], [back.p, back.d, -bl / 2]] as const) {
+        ctx.beginPath(); ctx.arc(q.x + dd.x * k - dd.y * side * 0.8, q.y + dd.y * k + dd.x * side * 0.8, r, 0, Math.PI * 2); ctx.fill();
+      }
+    }
   }
   // the car picked: the way it will go, and a ring round it
   if (D && st.car) {
-    const { route, p } = st.car;
+    // (its way on to the end of its trip, as V1 shows it but all of it; going nowhere in particular, or replayed: the way just ahead)
+    const { p } = st.car, way = st.replayT === null ? carWay(sk, st.car) : null, route = way?.pts ?? st.car.route;
     if (route.length > 1) {
       path(route); ctx.strokeStyle = col.sel; ctx.lineWidth = 2.5 * px; ctx.setLineDash([6 * px, 4 * px]); ctx.lineCap = "round"; ctx.stroke(); ctx.setLineDash([]);
       const a = route[route.length - 2], b = route[route.length - 1], l = dist(a, b) || 1;
       ctx.fillStyle = col.sel; arrowHead(b, { x: (b.x - a.x) / l, y: (b.y - a.y) / l }, 9 * px);
     }
     ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(3.2, 14 * px), 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.lineWidth = 2 * px; ctx.stroke();
+    // (why it does what it does, T157: the conflict zone on its path (amber) and the other's (red), a thin sky-blue line to
+    // the car ahead, a red arrowed one to the car holding it; for the car picked only)
+    const w = st.why;
+    if (w) {
+      ctx.lineCap = "round";
+      // (a zone shorter than the 1 m its points are apart: a disc where it is)
+      if (w.zone) for (const [pts, c] of [[w.zone.mine, "rgba(245,158,11,0.75)"], [w.zone.theirs, "rgba(239,68,68,0.75)"]] as const) {
+        if (pts.length > 1) { path(pts); ctx.strokeStyle = c; ctx.lineWidth = Math.max(0.8, 9 * px); ctx.stroke(); }
+        else if (pts.length) { ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, Math.max(1.2, 6 * px), 0, Math.PI * 2); ctx.fillStyle = c; ctx.fill(); }
+      }
+      if (w.leader) {
+        path([p, w.leader]); ctx.strokeStyle = "#0ea5e9"; ctx.lineWidth = 2 * px; ctx.stroke();
+        ctx.beginPath(); ctx.arc(w.leader.x, w.leader.y, Math.max(2.4, 10 * px), 0, Math.PI * 2); ctx.lineWidth = 1.5 * px; ctx.stroke();
+      }
+      if (w.blocker) {
+        const b = w.blocker, l = dist(p, b) || 1;
+        path([p, b]); ctx.strokeStyle = "#ef4444"; ctx.lineWidth = 2.5 * px; ctx.stroke();
+        ctx.fillStyle = "#ef4444"; arrowHead(b, { x: (b.x - p.x) / l, y: (b.y - p.y) / l }, 9 * px);
+        ctx.beginPath(); ctx.arc(b.x, b.y, Math.max(3.2, 12 * px), 0, Math.PI * 2); ctx.lineWidth = 2 * px; ctx.stroke();
+      }
+    }
   }
   // (what moves is drawn: the rest is in the image kept)
   if (D) return;
@@ -2802,16 +3496,26 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       else { square(p); if (picked) { ctx.fillStyle = col.sel; ctx.fillRect(p.x - 3.5 * px, p.y - 3.5 * px, 7 * px, 7 * px); } }
     });
   }
-  // a junction's corners: squares, rounded ones as circles (with the corners it rounds off dotted)
+  // a junction's corners: squares, rounded ones as circles (with the corners it rounds off dotted); while it is edited, what it
+  // takes in shaded over the imagery and lanes (they still show through)
   for (const id of s.junctions) {
     const j = sk.junctions.find(x => x.id === id);
     if (!j) continue;
+    translucentArea(ctx, outlinePath(j), col.sel, px, { ...EDITED_AREA, border: 1.5 });
     if (j.curved?.some(Boolean)) curveGuide(j.outline, true);
+    const picked = (i: number) => st.selCorner?.junction === id && st.selCorner.i === i;
     j.outline.forEach((p, i) => {
-      if (!j.curved?.[i]) { square(p); return; }
-      curveHandle(p, false);
+      if (!j.curved?.[i]) { square(p); if (picked(i)) { ctx.fillStyle = col.sel; ctx.fillRect(p.x - 3.5 * px, p.y - 3.5 * px, 7 * px, 7 * px); } return; }
+      curveHandle(p, picked(i));
     });
+    // (one junction selected: a "+" in each edge's middle, to drag a corner out of)
+    if (s.junctions.length === 1) for (const m of edgeMiddles(j.outline)) {
+      ctx.beginPath(); ctx.arc(m.x, m.y, 4.5 * px, 0, Math.PI * 2); ctx.fillStyle = col.bg; ctx.fill(); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.25 * px; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(m.x - 2.5 * px, m.y); ctx.lineTo(m.x + 2.5 * px, m.y); ctx.moveTo(m.x, m.y - 2.5 * px); ctx.lineTo(m.x, m.y + 2.5 * px); ctx.stroke();
+    }
   }
+  // a selected zone's corners
+  for (const id of s.zones ?? []) sk.zones?.find(z => z.id === id)?.outline.forEach(p => square(p));
   for (const id of s.connectors) {
     const cn = sk.connectors.find(c => c.id === id);
     for (const p of cn?.via ?? []) {
@@ -2846,10 +3550,15 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     path(cur ? [...d.pts, cur.p] : d.pts);
     ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.lineJoin = "round"; ctx.stroke(); ctx.globalAlpha = 1;
   } else if (d?.kind === "junction") {
-    path(cur ? [...d.pts, cur.p] : d.pts); ctx.closePath();
-    ctx.fillStyle = col.jFill; ctx.fill(); ctx.setLineDash([]); ctx.stroke();
+    const pts = cur ? [...d.pts, cur.p] : d.pts;
+    translucentArea(ctx, pts, col.sel, px, EDITED_AREA);
+    path(pts); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.setLineDash([]); ctx.stroke();
     d.pts.forEach(square);
     if (cur && d.pts.length >= 3 && dist(cur.p, d.pts[0]) <= 10 * px) { ctx.beginPath(); ctx.arc(d.pts[0].x, d.pts[0].y, 7 * px, 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.stroke(); }
+  } else if (d?.kind === "zone") {
+    paintZoneDraft(ctx, d.pts, cur?.p ?? null, nextZoneColor(sk), px);
+    d.pts.forEach(square);
+    if (cur && d.pts.length >= 3 && dist(cur.p, d.pts[0]) <= 10 * px) { ctx.beginPath(); ctx.arc(d.pts[0].x, d.pts[0].y, 7 * px, 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.setLineDash([]); ctx.stroke(); }
   } else if (d?.kind === "crossing") {
     const b = cur?.p ?? d.a;
     if (dist(d.a, b) > 0.1) {
@@ -2870,24 +3579,30 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.stroke(); ctx.globalAlpha = 1;
     } else if (cur) { ctx.beginPath(); ctx.arc(d.c.x, d.c.y, dist(d.c, cur.p), 0, Math.PI * 2); ctx.stroke(); }
   } else if (d?.kind === "connector") {
+    // (in yellow over a dark edge, to be seen over the imagery and the lanes, its start and bends marked so: until placed)
     const a = at(sk, d.from), to = cur && !cur.alt ? placeOn(cur.p) : null, b = to ? at(sk, to) : null;
     if (a) {
       const last = d.via[d.via.length - 1] ?? a.p;
       const end = b ?? (cur ? { p: cur.p, d: (() => { const l = dist(last, cur.p) || 1; return { x: (cur.p.x - last.x) / l, y: (cur.p.y - last.y) / l }; })() } : null);
-      if (end) { path(curveThrough(a, d.via, end)); ctx.stroke(); }
-      ctx.setLineDash([]);
-      for (const p of d.via) dot(p, 3 * px, col.sel);
+      ctx.save(); ctx.setLineDash([]); ctx.lineCap = "round"; ctx.lineJoin = "round";
+      if (end) {
+        path(curveThrough(a, d.via, end));
+        ctx.strokeStyle = DRAWING_EDGE; ctx.lineWidth = 6 * px; ctx.stroke();
+        ctx.strokeStyle = DRAWING; ctx.lineWidth = 3.5 * px; ctx.stroke();
+      }
+      for (const p of [a.p, ...d.via]) { dot(p, 5 * px, DRAWING_EDGE); dot(p, 3.5 * px, DRAWING); }
+      ctx.restore();
     }
   }
   ctx.setLineDash([]);
   if (d && "c" in d) dot(d.c, 3 * px, col.sel);
-  if (cur && (tool === "lane" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "crossing")) {
+  if (cur && (tool === "lane" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "zone" || tool === "crossing")) {
     ctx.beginPath(); ctx.arc(cur.p.x, cur.p.y, (cur.snapped ? 5 : 3) * px, 0, Math.PI * 2);
     ctx.strokeStyle = col.sel; ctx.fillStyle = col.sel; ctx.lineWidth = 1.5 * px; if (cur.snapped) ctx.stroke(); else ctx.fill();
   }
   if (tool === "connector" && cur && !cur.alt) {
     const pl = placeOn(cur.p), a = pl ? at(sk, pl) : null;
-    if (a) dot(a.p, 4 * px, col.sel);
+    if (a && d?.kind === "connector") { dot(a.p, 5.5 * px, DRAWING_EDGE); dot(a.p, 4 * px, DRAWING); } else if (a) dot(a.p, 4 * px, col.sel);
   }
   const g = st.drag;
   if (g?.kind === "handle" && g.h.kind === "end" && cur) {
@@ -2903,6 +3618,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   // names: roads at the middle of their first lane, junctions at their top
   // the ways in and out: the traffic coming in, the share of trips leaving
   // (labels only once close enough to read them: ways in and out and road names from 1.5 px/m, junction names from 3)
+  // (each name and way's label drawn kept with where it is: a click or the pointer on one is on what it is of)
+  if (st.labels) st.labels.length = 0;
   if (st.layers.demand && v.scale >= 1.5) {
     const { entries, exits } = demandWays(sk), lane = (id: string) => laneById(sk, id)!;
     const sumW = exits.reduce((a, w) => a + w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0), 0);
@@ -2920,10 +3637,16 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         k += 4 * px;
       }
       tags.push({ ...c, hw, hh });
-      label(text, c, color);
+      st.labels?.push({ kind: atEnd ? "out" : "in", id: ids[0], lanes: ids, ...label(text, c, color) });
     };
     for (const w of entries) tag(w.lanes, false, `→ ${Math.round(w.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0))}/h`, dark ? "#4ade80" : "#15803d");
     for (const w of exits) { const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0); tag(w.lanes, true, ws === 0 ? "closed" : `${sumW ? Math.round((ws / sumW) * 100) : 0}% →`, dark ? "#93c5fd" : "#1d4ed8"); }
+  }
+  // zones' names (T129) at their middles, in their colours (before the roads': a road's name over a zone's wins the click)
+  for (const z of st.layers.zones ? sk.zones ?? [] : []) {
+    const p = zoneLabelPoint(z.outline);
+    if (p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
+    st.labels?.push({ kind: "zone", id: z.id, ...label(z.name, p, z.color) });
   }
   // (a road's name once on the screen, a street cut into several roads named once)
   const named = new Set<string>();
@@ -2931,15 +3654,21 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     const l = laneById(sk, r.lanes[0]), p = l && pointAt(l.shape, laneLength(l.shape) / 2).p;
     if (!p || named.has(r.name) || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
     named.add(r.name);
-    label(r.name, p, col.text);
+    st.labels?.push({ kind: "road", id: r.id, ...label(r.name, p, col.text) });
   }
   for (const j of st.layers.names && v.scale >= 3 ? sk.junctions : []) {
     const top = j.outline.reduce((a, p) => (p.y < a.y ? p : a), j.outline[0]);
-    if (top) label(j.name, { x: top.x, y: top.y - 14 * px }, col.jText);
+    if (top) st.labels?.push({ kind: "junction", id: j.id, ...label(j.name, { x: top.x, y: top.y - 14 * px }, col.jText) });
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.font = "10px ui-monospace, monospace"; ctx.fillStyle = dark ? "#a1a1aa" : "#78716c"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
   // (where the pointer is: metres, and on Earth where the sketch has a place there)
   const ll = cur && sk.geo ? unproject(sk.geo, cur.p) : null;
-  ctx.fillText(`${cur ? `${cur.p.x.toFixed(1)}, ${cur.p.y.toFixed(1)} m · ` : ""}${ll ? `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)} · ` : ""}${v.scale.toFixed(1)} px/m`, 8, h - 6);
+  const text = `${cur ? `${cur.p.x.toFixed(1)}, ${cur.p.y.toFixed(1)} m · ` : ""}${ll ? `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)} · ` : ""}${v.scale.toFixed(1)} px/m`;
+  // (on a pill, as the hint bar, so it reads over the imagery; drawn last, over the labels)
+  const tw = ctx.measureText(text).width;
+  ctx.fillStyle = dark ? "rgba(24,24,27,0.85)" : "rgba(255,255,255,0.85)";
+  ctx.beginPath(); ctx.roundRect(4, h - 19, tw + 10, 16, 4); ctx.fill();
+  ctx.fillStyle = dark ? "#d4d4d8" : "#44403c";
+  ctx.fillText(text, 9, h - 6);
 }

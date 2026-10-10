@@ -19,9 +19,12 @@ export type ToSimWorker =
   | { type: "report"; req: number }
   | { type: "problems"; req: number }
   | { type: "moment"; t: number; box: Parameters<SketchSim["moment"]>[1]; req: number }
+  | { type: "explain"; id: number; t: number; req: number }
   | { type: "car"; id: number; req: number }
   | { type: "breakDown"; id: number }
-  | { type: "tow"; id: number };
+  | { type: "tow"; id: number }
+  /** a test car sent now from the start of lane `from` to the end of exit lane `to` (its id and the time answered, id null if it couldn't come in) */
+  | { type: "sendTest"; from: string; to: string; req: number };
 
 export interface SimFrame {
   type: "frame";
@@ -44,7 +47,9 @@ export type FromSimWorker =
   | { type: "report"; req: number; report: ReturnType<SketchSim["report"]> }
   | ({ type: "problems"; req: number } & ReturnType<SketchSim["problems"]>)
   | { type: "moment"; req: number; moment: ReturnType<SketchSim["moment"]> | null }
-  | { type: "car"; req: number; frames: ReturnType<SketchSim["carFrames"]>; events: SketchSim["log"] };
+  | { type: "explain"; req: number; explain: ReturnType<SketchSim["explain"]> }
+  | { type: "car"; req: number; frames: ReturnType<SketchSim["carFrames"]>; events: SketchSim["log"] }
+  | { type: "sendTest"; req: number; id: number | null; t: number };
 
 let sim: SketchSim | null = null, running = false, speed = 1, watch: number | null = null;
 let last = performance.now(), lastStats = 0, timer: ReturnType<typeof setTimeout> | null = null;
@@ -68,8 +73,10 @@ function frame(withStats: boolean) {
  * One go: the simulated time owed since the last (the real time passed, times the speed asked for) stepped
  * in tenths, for at most `BUDGET` ms, then a frame posted, so frames keep coming however slow a step is.
  * What a go can't step stays owed (up to a second of it: a sim slower than asked falls behind, the page doesn't).
+ * Only whole steps of `STEP`, the rest left owed: steps of whatever the page's timing left over would make the same
+ * seed run differently each time (cars meeting a step earlier or later go on differently).
  */
-const BUDGET = 25;
+const BUDGET = 25, STEP = 0.1;
 let owed = 0;
 function tick() {
   timer = null;
@@ -78,17 +85,18 @@ function tick() {
   owed = Math.min(Math.max(1, speed), owed + ((now - last) / 1000) * speed);
   last = now;
   const t0 = sim.t;
-  while (owed > 1e-6 && performance.now() - now < BUDGET) { const h = Math.min(0.1, owed); sim.step(h); owed -= h; }
+  while (owed >= STEP - 1e-9 && performance.now() - now < BUDGET) { sim.step(STEP); owed -= STEP; }
   rateSim += sim.t - t0;
   if (now - rateSince > 1000) { rate = rateSim / ((now - rateSince) / 1000); rateSim = 0; rateSince = now; }
-  frame(false);
-  timer = setTimeout(tick, owed > 0.1 ? 0 : 16);
+  // (a frame only when the cars have moved: the page draws them on their way between the last two it had)
+  if (sim.t !== t0) frame(false);
+  timer = setTimeout(tick, owed >= STEP ? 0 : 16);
 }
 
 self.onmessage = (e: MessageEvent<ToSimWorker>) => {
   const m = e.data;
   switch (m.type) {
-    case "init": sim = new SketchSim(m.sketch, m.params); frame(true); break;
+    case "init": sim = new SketchSim(m.sketch, m.params); sim.watch(watch); frame(true); break;
     case "sketch": sim?.setSketch(m.sketch); frame(true); break;
     case "params": sim?.setParams(m.params); frame(true); break;
     case "reset": sim?.reset(); frame(true); break;
@@ -97,13 +105,16 @@ self.onmessage = (e: MessageEvent<ToSimWorker>) => {
       if (m.running && !running) { running = true; last = performance.now(); owed = 0; rateSince = last; rateSim = 0; if (!timer) timer = setTimeout(tick, 0); }
       if (!m.running) { running = false; rate = 0; frame(true); }
       break;
-    case "watch": watch = m.id; frame(false); break;
+    case "watch": watch = m.id; sim?.watch(m.id); frame(false); break;
     case "breakDown": sim?.breakDown(m.id); frame(true); break;
     case "tow": sim?.tow(m.id); frame(true); break;
+    case "sendTest": { const id = sim?.sendTest(m.from, m.to) ?? null; post({ type: "sendTest", req: m.req, id, t: sim?.t ?? 0 }); frame(true); break; }
     case "replay": post({ type: "replay", req: m.req, frame: sim?.replayAt(m.t) ?? null }); break;
     case "report": if (sim) post({ type: "report", req: m.req, report: sim.report() }); break;
     case "problems": post({ type: "problems", req: m.req, ...(sim?.problems() ?? { problems: [], stuck: [] }) }); break;
     case "moment": post({ type: "moment", req: m.req, moment: sim?.moment(m.t, m.box) ?? null }); break;
+    // (why a car does what it does: the car watched as traced; another, or a moment past, from the recording)
+    case "explain": post({ type: "explain", req: m.req, explain: sim?.explain(m.id, m.t) ?? null }); break;
     case "car": if (sim) post({ type: "car", req: m.req, frames: sim.carFrames(m.id), events: sim.log.filter(x => x.car === m.id || x.with === m.id).slice(-60) }); break;
   }
 };

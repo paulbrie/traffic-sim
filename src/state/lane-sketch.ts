@@ -1,6 +1,9 @@
 import { createContext, useContext } from "react";
 import { Subject } from "subjecto";
 import { emptySketch, settle, type Piece, type Pt, type Sketch } from "@/lib/lane-sketch";
+import { sanitizeZones } from "@/lib/sketch-zones";
+import { sketchList, touchOpen } from "@/lib/sketch-list";
+import { mapChanged, stepBack } from "@/lib/sketch-edit";
 import type { SketchSimClient } from "./sketch-sim-client";
 import { laneSketch$, sketchReplaced } from "./store";
 
@@ -26,46 +29,78 @@ export interface SketchStore {
   record(before: Sketch): void;
   /** its cars and what they did (kept while the page is open, the editor closed or not) */
   sim(): SketchSimClient | null;
-  setSim(s: SketchSimClient): void;
+  setSim(s: SketchSimClient | null): void;
   /** its undo history forgotten (another plan loaded, or one saved elsewhere merged in) */
   forget(): void;
+  /**
+   * An edit of the map begins (T158: the cars pause): told by every change made through this store that
+   * changes the map (edit, show, undo, redo; see mapChanged: not the run's settings; not a plan loaded or
+   * merged in), and by the editor where an edit starts before the sketch changes (a drag's first move, a
+   * drawing tool's first click).
+   */
+  beginEdit(): void;
+  /** `f` told at each beginEdit; answers the way to stop telling it */
+  onEdit(f: () => void): () => void;
 }
 
+interface Step { back: Sketch; left: Sketch }
+
 function makeStore(kind: SketchStore["kind"], sketch$: Subject<Sketch>, write: (sk: Sketch) => void): SketchStore {
-  const past: Sketch[] = [], future: Sketch[] = [];
+  // (each step: the sketch to go back to, and the sketch the step left; see stepBack)
+  const past: Step[] = [], future: Step[] = [];
   let sim: SketchSimClient | null = null;
+  const editing = new Set<() => void>();
+  const begin = () => editing.forEach(f => f());
+  // (a change that edits the map, not only the run's settings)
+  const beginIf = (from: Sketch, to: Sketch) => { if (mapChanged(from, to)) begin(); };
+  // (a step undone or redone: answers the step that takes it back)
+  const step = (s: Step): Step => {
+    const cur = sketch$.getValue(), next = stepBack(s.back, s.left, cur);
+    beginIf(cur, next);
+    write(next);
+    return { back: cur, left: next };
+  };
   const store: SketchStore = {
-    kind, sketch$, show: write,
+    kind, sketch$, beginEdit: begin,
+    show(sk) { beginIf(sketch$.getValue(), sk); write(sk); },
     edit(f) {
       const cur = sketch$.getValue(), changed = f(cur);
       if (changed === cur) return;
-      past.push(cur);
+      beginIf(cur, changed);
+      const next = settle(changed);
+      past.push({ back: cur, left: next });
       if (past.length > MAX) past.shift();
       future.length = 0;
-      write(settle(changed));
+      write(next);
     },
-    undo() { const prev = past.pop(); if (!prev) return; future.push(sketch$.getValue()); write(prev); },
-    redo() { const next = future.pop(); if (!next) return; past.push(sketch$.getValue()); write(next); },
+    // (the map as it was; the run's settings changed since kept as they are, T160)
+    undo() { const s = past.pop(); if (s) future.push(step(s)); },
+    redo() { const s = future.pop(); if (s) past.push(step(s)); },
     record(before) {
       if (sketch$.getValue() === before) return;
-      past.push(before);
+      past.push({ back: before, left: sketch$.getValue() });
       if (past.length > MAX) past.shift();
       future.length = 0;
     },
     sim: () => sim,
     setSim(s) { sim = s; },
     forget() { past.length = 0; future.length = 0; },
+    onEdit(f) { editing.add(f); return () => { editing.delete(f); }; },
   };
   // (another plan loaded: its cars go, their worker stopped)
   sketchReplaced.add(why => { store.forget(); if (why === "load") { sim?.terminate(); sim = null; } });
   return store;
 }
 
+/** what is the Sketch window's, not the plan's: the sketch open, the saved sketches, which is open */
+const WINDOW_KEYS = ["scratch", "sketches", "sketchOpen"];
 /** a sketch without its ideas sketched apart */
-const planPart = (k: Sketch): Sketch => { if (!k.scratch) return k; const { scratch: _, ...rest } = k; return rest; };
+const planPart = (k: Sketch): Sketch => { if (!k.scratch && !k.sketches && !k.sketchOpen) return k; const { scratch: _, sketches: _l, sketchOpen: _o, ...rest } = k; return rest; };
+/** the saved sketches and which is open, as the plan has them */
+const listPart = (k: Sketch): Pick<Sketch, "sketches" | "sketchOpen"> => (k.sketches ? { sketches: k.sketches, sketchOpen: k.sketchOpen } : {});
 /** the same sketch but for the ideas sketched apart (each part the very same) */
 function samePlan(a: Sketch, b: Sketch) {
-  const ka = Object.keys(a).filter(k => k !== "scratch"), kb = Object.keys(b).filter(k => k !== "scratch");
+  const ka = Object.keys(a).filter(k => !WINDOW_KEYS.includes(k)), kb = Object.keys(b).filter(k => !WINDOW_KEYS.includes(k));
   return ka.length === kb.length && ka.every(k => (a as unknown as Record<string, unknown>)[k] === (b as unknown as Record<string, unknown>)[k]);
 }
 
@@ -77,18 +112,36 @@ const scratchView$ = new Subject<Sketch>(laneSketch$.getValue().scratch ?? empty
 laneSketch$.subscribe(k => {
   if (!samePlan(k, planView$.getValue())) planView$.next(planPart(k));
   const sc = k.scratch ?? null, cur = scratchView$.getValue();
-  if (sc ? sc !== cur : cur.lanes.length || cur.junctions.length || cur.connectors.length || cur.crossings?.length) scratchView$.next(sc ?? emptySketch());
+  if (sc ? sc !== cur : cur.lanes.length || cur.junctions.length || cur.connectors.length || cur.crossings?.length || cur.zones?.length) scratchView$.next(sc ?? emptySketch());
 });
 export const planSketch = makeStore("plan", planView$, sk => {
   planView$.next(sk);
-  const sc = laneSketch$.getValue().scratch;
-  laneSketch$.next(sc ? { ...sk, scratch: sc } : sk);
+  const cur = laneSketch$.getValue(), sc = cur.scratch;
+  laneSketch$.next({ ...planPart(sk), ...(sc ? { scratch: sc } : {}), ...listPart(cur) });
 });
 export const scratchSketch = makeStore("scratch", scratchView$, sk => {
   scratchView$.next(sk);
-  const plan = planPart(laneSketch$.getValue()), empty = !sk.lanes.length && !sk.junctions.length && !sk.connectors.length && !sk.crossings?.length && !sk.traffic;
-  laneSketch$.next(empty ? plan : { ...plan, scratch: planPart(sk) });
+  const cur = laneSketch$.getValue(), plan = planPart(cur), empty = !sk.lanes.length && !sk.junctions.length && !sk.connectors.length && !sk.crossings?.length && !sk.zones?.length && !sk.traffic;
+  // (the sketch open changed now)
+  const list = listPart(touchOpen(cur, Date.now()));
+  laneSketch$.next(empty ? { ...plan, ...list } : { ...plan, scratch: planPart(sk), ...list });
 });
+
+/**
+ * The saved sketches changed (one opened, made, copied, renamed, deleted: sketch-list.ts): the plan's sketch made so;
+ * another one open: the window's undo history and cars let go, and its view put back where that sketch was left
+ */
+export function changeSketches(f: (k: Sketch) => Sketch) {
+  const cur = laneSketch$.getValue(), next = f(cur);
+  if (next === cur) return;
+  const was = sketchList(cur).open;
+  laneSketch$.next(next);
+  if (sketchList(next).open !== was) {
+    scratchSketch.forget();
+    const view = sketchList(next).list.find(x => x.id === sketchList(next).open)?.view;
+    requestScratchFocus({ run: false, fresh: true, ...(view ? { view } : {}) });
+  }
+}
 
 /** the sketch the editor around works on (a V1 plan's window: the whole sketch) */
 export const SketchStoreContext = createContext<SketchStore>(wholeSketch);
@@ -116,12 +169,16 @@ export function readClipText(text: string): SketchClip | null {
     const o = JSON.parse(text) as { stamp?: string; centre?: Pt; part?: Sketch };
     const p = o.part;
     if (!p || !Array.isArray(p.lanes) || !Array.isArray(p.connectors) || !Array.isArray(p.junctions) || !o.centre) return null;
-    return { part: { ...p, roads: p.roads ?? [] }, centre: o.centre, pastes: 0, stamp: o.stamp };
+    // (zones checked as a saved sketch's are: the text may come from anywhere)
+    const zones = sanitizeZones(p.zones);
+    const { zones: _, ...rest } = p;
+    return { part: { ...rest, roads: p.roads ?? [], ...(zones.length ? { zones } : {}) }, centre: o.centre, pastes: 0, stamp: o.stamp };
   } catch { return null; }
 }
 
 /** what the Sketch window does when it next shows a piece put in it ("Test in Sketch"): the view fitted to it, nothing selected, the cars run if `run` */
-export interface ScratchFocus { run: boolean; /** added beside what was there: the view fitted to this only */ piece?: Piece }
+export interface ScratchFocus { run: boolean; /** added beside what was there: the view fitted to this only */ piece?: Piece;
+  /** another saved sketch opened: its cars made afresh, the view put where it was left (none: fitted) */ fresh?: boolean; view?: { cx: number; cy: number; scale: number } }
 let scratchFocus: ScratchFocus | null = null;
 const scratchFocusWaiting = new Set<() => void>();
 export function requestScratchFocus(f: ScratchFocus) { scratchFocus = f; scratchFocusWaiting.forEach(g => g()); }

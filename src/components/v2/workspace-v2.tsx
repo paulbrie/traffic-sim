@@ -9,11 +9,14 @@ import { Separator } from "@/components/ui/separator";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UserMenu, type MenuUser } from "@/components/auth/user-menu";
 import { HistoryButton } from "@/components/workspace/history-dialog";
+import { AgentPatchesButton } from "@/components/workspace/agent-patches";
 import { LaneSketch } from "@/components/workspace/lane-sketch";
-import { FrameRate, SketchLayerPicker } from "./top-bar-tools";
+import { FrameRate, MemoryGauge, SketchLayerPicker } from "./top-bar-tools";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
 import { loadPlan, ui } from "@/state/store";
 import { planSketch, scratchSketch, SketchStoreContext } from "@/state/lane-sketch";
+import { useUiPath } from "@/state/sketch-ui";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { startUnderlayImage } from "@/state/underlay-image";
 
 /**
@@ -52,11 +55,14 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
             ? <span className="flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground" title="You can simulate and try things, but nothing is saved"><Eye className="size-3.5" /> View only</span>
             : <SaveIndicator planId={plan.id} />}
           <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} />
+          <AgentPatchesButton planId={plan.id} canApply={plan.access !== "read"} />
           <Separator orientation="vertical" className="!h-5" />
+          <ModeToggle />
           <SketchButton />
           <SketchLayerPicker />
           <div className="ml-auto flex items-center gap-3">
             <FrameRate />
+            <MemoryGauge />
             <UserMenu user={user} />
           </div>
         </header>
@@ -72,6 +78,17 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
 }
 
 /** opens the sketch window, as V1's: lanes, rings and connectors drawn freely, apart from the plan */
+/** the plan's map from above or in 3D (the plan's editor's mode, in the V2 UI store) */
+function ModeToggle() {
+  const [mode, setMode] = useUiPath<"plan" | "3d">("editors/plan/mode");
+  return (
+    <ToggleGroup type="single" value={mode} onValueChange={v => v && setMode(v as "plan" | "3d")} aria-label="View" className="h-8">
+      <ToggleGroupItem value="plan" className="h-8 px-2.5 text-xs" title="The plan from above">Plan</ToggleGroupItem>
+      <ToggleGroupItem value="3d" className="h-8 px-2.5 text-xs" title="The plan in 3D, its cars driving (drag to turn, right-drag to pan, wheel to zoom)">3D</ToggleGroupItem>
+    </ToggleGroup>
+  );
+}
+
 function SketchButton() {
   const [open] = useDeepSubject(ui, "sketch");
   return (

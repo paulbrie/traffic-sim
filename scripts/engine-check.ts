@@ -21,6 +21,12 @@ import { junctionRefs } from "../src/engine/refs";
 import { bayOutline, rowEnds } from "../src/engine/parking";
 import { mergeNetworks, mergeSettings } from "../src/state/merge";
 import { addNode, deleteLink, updateLink } from "../src/state/ops";
+import { mergeLanes as mergeSketchLanes, mergeRoads as mergeSketchRoads } from "../src/lib/sketch-merge";
+import { CONNECTOR_KINK_LIMIT, connectorKinks, turnsAt, unkinkPts } from "../src/lib/connector-kinks";
+import { tidySketch } from "../src/lib/sketch-tidy";
+import { deadEndTurnarounds } from "../src/lib/dead-ends";
+import { deleteLanes, takeOutOfRoad } from "../src/lib/road-lanes";
+import { alignmentOf, laneLength, pointAt, settle as settleSketch, sliceRoad, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
 const net = sampleTown();
 const c = compile(net);
 console.log("edges", c.edges.length, "nodes", c.nodes.length, "warnings", c.warnings);
@@ -1402,5 +1408,107 @@ function alongKerb(input: any): any {
   const kerb = e.lanes[e.kerb].poly.at(e.lanes[e.kerb].len / 2), bay = bayOutline(row, 0)[0];
   const st = sim.parkingStats(0)!, ok = e.bus && row.lane === e.kerb - 1 && inBusLane === 0 && intoBus === 0 && st.parked > 10 && st.left > 10 && bay.y > kerb.y + e.lw / 2 - 0.05;
   console.log(`parking beside a bus lane: reached from lane ${row.lane + 1} (bus lane ${e.kerb + 1}), cars driving in the bus lane ${inBusLane}, cars turning into a bus ${intoBus}, ${st.parked} parked, ${st.left} left | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// V2 sketch: merging two lanes that carry on one another, and two roads (sketch-merge.ts; the other way from slicing)
+{
+  const line = (id: string, pts: [number, number][], more: Partial<SketchLane> = {}): SketchLane => ({ id, width: 3.5, shape: { kind: "line", pts: pts.map(([x, y]) => ({ x, y })) }, ...more });
+  const conn = (id: string, f: string, fs: number, t: string, ts: number): SketchConnector => ({ id, from: { lane: f, s: fs }, to: { lane: t, s: ts } });
+  const base = (lanes: SketchLane[], connectors: SketchConnector[] = [], extra: Partial<Sketch> = {}): Sketch => ({ lanes, connectors, roads: [], junctions: [], ...extra });
+  const len = (sk: Sketch, id: string) => laneLength(sk.lanes.find(l => l.id === id)!.shape);
+  // lanes meeting right there, picked second first: one lane l1 of 100 m, the connectors on either end kept along it, the second's stop line at its end
+  const a = mergeSketchLanes(base([line("l0", [[-60, 0], [-10, 0]]), line("l1", [[0, 0], [50, 0]]), line("l2", [[50, 0], [100, 0]], { width: 3, control: "stop" }), line("l3", [[110, 0], [160, 0]])],
+    [conn("c0", "l0", 50, "l1", 0), conn("c3", "l2", 50, "l3", 0)]), "l2", "l1");
+  const aOk = a.ok && a.sketch.lanes.length === 3 && Math.abs(len(a.sketch, "l1") - 100) < 0.01 && a.sketch.lanes.find(l => l.id === "l1")!.control === "stop"
+    && a.sketch.connectors.find(c => c.id === "c3")!.from.lane === "l1" && Math.abs(a.sketch.connectors.find(c => c.id === "c3")!.from.s - 100) < 0.01
+    && a.sketch.connectors.find(c => c.id === "c0")!.to.s === 0 && a.dropped.some(d => /width/.test(d));
+  // through one connector between just them: it goes, the lane runs through where it was
+  const b = mergeSketchLanes(base([line("l1", [[0, 0], [40, 0]]), line("l2", [[50, 0], [100, 0]])], [conn("c1", "l1", 40, "l2", 0)]), "l1", "l2");
+  const bOk = b.ok && !b.sketch.connectors.length && Math.abs(len(b.sketch, "l1") - 100) < 1;
+  // refused: not meeting; another way off where they meet; a loop; on a junction
+  const far = mergeSketchLanes(base([line("l1", [[0, 0], [40, 0]]), line("l3", [[100, 0], [140, 0]])]), "l1", "l3");
+  const fork = mergeSketchLanes(base([line("l1", [[0, 0], [40, 0]]), line("l2", [[50, 0], [100, 0]]), line("l3", [[50, 10], [100, 10]])], [conn("c1", "l1", 40, "l2", 0), conn("c2", "l1", 40, "l3", 0)]), "l1", "l2");
+  const loop = mergeSketchLanes(base([line("l1", [[0, 0], [50, 0]]), line("l2", [[50, 0], [25, 30], [0, 0]])]), "l1", "l2");
+  const onJ = mergeSketchLanes(base([line("l1", [[0, 0], [40, 0]]), line("l2", [[50, 0], [100, 0]])], [conn("c1", "l1", 40, "l2", 0)],
+    { junctions: [{ id: "j1", name: "Junction 1", outline: [{ x: 38, y: -8 }, { x: 52, y: -8 }, { x: 52, y: 8 }, { x: 38, y: 8 }] }] }), "l1", "l2");
+  const refused = !far.ok && !fork.ok && /c2/.test(fork.reason) && !loop.ok && /itself/.test(loop.reason) && !onJ.ok && /Junction 1/.test(onJ.reason);
+  // a two-way road side by side, cut in two (sliceRoad) and merged again: one road of 100 m each way, the connector at its far end back at 100 m
+  const r0 = { id: "r1", name: "Main", lanes: ["l1", "l2"] };
+  let sk = base([line("l1", [[0, 0], [100, 0]]), line("l2", [[100, -3.5], [0, -3.5]]), line("l9", [[110, 0], [150, 0]])], [conn("c9", "l1", 100, "l9", 0)]);
+  sk = settleSketch({ ...sk, roads: [{ ...r0, align: alignmentOf({ ...sk, roads: [r0] }, r0) }] });
+  const cut = sliceRoad(sk, "r1", "l1", { x: 50, y: 0 }, "r2", "Main (2)")!;
+  const m = mergeSketchRoads(cut, "r1", "r2"), c9 = m.ok ? m.sketch.connectors.find(c => c.id === "c9") : null;
+  const rOk = !!cut && cut.roads.length === 2 && m.ok && m.sketch.roads.length === 1 && m.sketch.roads[0].lanes.length === 2 && m.sketch.lanes.length === 3
+    && m.sketch.roads[0].lanes.every(id => Math.abs(len(m.sketch, id) - 100) < 0.05) && c9?.from.lane === "l1" && Math.abs(c9.from.s - 100) < 0.05 && m.dropped.some(d => /name/.test(d));
+  const ok = aOk && bOk && refused && rOk;
+  console.log(`sketch merge: lanes right there ${aOk}, through a connector ${bOk}, refused (apart, a way off, a loop, a junction) ${refused} [${[far, fork, loop, onJ].map(x => (x.ok ? "merged!" : x.reason.slice(0, 40))).join(" | ")}], a road cut and merged again ${rOk} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// V2 sketch: connectors turning back on themselves at a bend (connector-kinks.ts, from Bob's finder, T56): Bistrița's real shapes
+{
+  const P = (a: [number, number][]) => a.map(([x, y]) => ({ x, y }));
+  // (each from its start on its lane, through its bends, to its end: c5048 at j578, c5150 at j534, and c221, an ordinary U-turn)
+  const c5048 = P([[838.7, -606.78], [837.9, -610.82], [838.4, -609.15], [839.2, -612.69], [839.74, -619.26], [841.35, -625.61]]);
+  const c5150 = P([[501.84, -947.47], [503.14, -943.78], [501.81, -940.41], [500.01, -939.34], [501.67, -936.61], [503.31, -937.58], [501.14, -935.47], [497.39, -933.2]]);
+  const uTurn = P([[-504.76, 1119.61], [-502.18, 1121.24], [-501.89, 1118.2]]);
+  const worst = (pts: { x: number; y: number }[]) => Math.max(...turnsAt(pts));
+  const flagged = Math.round(worst(c5048)) === 175 && Math.round(worst(c5150)) === 166 && Math.round(worst(uTurn)) === 117
+    && worst(c5048) > CONNECTOR_KINK_LIMIT && worst(c5150) > CONNECTOR_KINK_LIMIT && worst(uTurn) < CONNECTOR_KINK_LIMIT;
+  const ends = (a: { x: number; y: number }[], b: { x: number; y: number }[]) => a[0] === b[0] && a[a.length - 1] === b[b.length - 1];
+  const fa = unkinkPts(c5048), fb = unkinkPts(c5150), fu = unkinkPts(uTurn);
+  const fixed = fa.dropped >= 1 && fb.dropped >= 1 && worst(fa.pts) <= CONNECTOR_KINK_LIMIT && worst(fb.pts) <= CONNECTOR_KINK_LIMIT && ends(fa.pts, c5048) && ends(fb.pts, c5150) && fu.dropped === 0;
+  // (in a sketch: the console's finder lists it, Tidy straightens it out, then nothing is listed)
+  const lane = (id: string, a: [number, number], b: [number, number]): SketchLane => ({ id, width: 3.5, shape: { kind: "line", pts: P([a, b]) } });
+  const sk: Sketch = { lanes: [lane("a", [501.84, -987.47], [501.84, -947.47]), lane("b", [497.39, -933.2], [457.39, -933.2])], roads: [], junctions: [],
+    connectors: [{ id: "c5150", from: { lane: "a", s: 40 }, to: { lane: "b", s: 0 }, via: c5150.slice(1, -1) }] };
+  const before = connectorKinks(sk), tidied = tidySketch(sk), after = connectorKinks(tidied.sketch);
+  const inSketch = before.length === 1 && before[0].connector === "c5150" && before[0].angle === 166 && tidied.report.connectorKinks === 1 && after.length === 0;
+  const ok = flagged && fixed && inSketch;
+  console.log(`connectors turning back (over ${CONNECTOR_KINK_LIMIT}°): c5048 ${worst(c5048).toFixed(0)}°, c5150 ${worst(c5150).toFixed(0)}°, a U-turn ${worst(uTurn).toFixed(0)}° | flagged right ${flagged}, fixed (${fa.dropped} + ${fb.dropped} bends out, ends kept, the U-turn left) ${fixed}, in a sketch through Tidy ${inSketch} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// V2 sketch: dead ends with a turnaround (dead-ends.ts, Bob's test, T134, corrected): back along the same street only
+{
+  const P = (a: [number, number][]) => a.map(([x, y]) => ({ x, y }));
+  const lane = (id: string, pts: [number, number][]): SketchLane => ({ id, width: 3.2, shape: { kind: "line", pts: P(pts) } });
+  // (Bistrița's j206: Strada Ecaterina Teodoroiu's l391 turns sharply onto Strada Liviu Rebreanu's l2858, heading back: not a dead end)
+  const l391 = lane("l391", [[357.4, 64.2], [353.6, 59.4], [351.4, 56.4], [349, 52.8], [346.2, 48.3], [345.2, 46.8], [344.3, 46], [343.8, 45.6], [342.7, 45.1], [341.4, 44.6], [338.6, 44]]);
+  const l2858 = lane("l2858", [[337.7, 38.9], [368.6, 18.9]]);
+  const turn: SketchConnector = { id: "c1327", from: { lane: "l391", s: 28.57 }, to: { lane: "l2858", s: 0 }, via: P([[336.77, 41.71]]) };
+  const two = (b: string): Sketch => ({ lanes: [l391, l2858], connectors: [turn], junctions: [], roads: [{ id: "r1", name: "Strada Ecaterina Teodoroiu", lanes: ["l391"] }, { id: "r2", name: b, lanes: ["l2858"] }] });
+  const other = deadEndTurnarounds(two("Strada Liviu Rebreanu")), sameName = deadEndTurnarounds(two("Strada Ecaterina Teodoroiu"));
+  const ok = other.length === 0 && sameName.length === 1 && sameName[0].lane === "l391" && sameName[0].r > 3.2;
+  console.log(`dead ends with a turnaround: j206's sharp turn onto another street ${other.length} (none), the same turn back along a street of the same name ${sameName.length} (r ${sameName[0]?.r.toFixed(1)} m) | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// V2 sketch: a road's lanes one by one (road-lanes.ts): deleted (the rest laid out again side by side, the lead passed on,
+// the road going with its last lane, what named it let go) or taken out of the road
+{
+  const line = (id: string, y: number): SketchLane => ({ id, width: 3.5, shape: { kind: "line", pts: [{ x: 0, y }, { x: 100, y }] } });
+  const r0 = { id: "r1", name: "Main", lanes: ["a", "b", "c"], speed: 70 };
+  let sk: Sketch = { lanes: [line("a", 0), line("b", -3.5), line("c", -7), line("x", 20)], connectors: [{ id: "cb", from: { lane: "b", s: 100 }, to: { lane: "x", s: 0 } }], roads: [r0],
+    junctions: [{ id: "j1", name: "J", outline: [{ x: 90, y: -10 }, { x: 110, y: -10 }, { x: 110, y: 25 }], splits: [{ from: "lane:x", shares: { r1: 1, "lane:b": 2 } }] }],
+    journeys: [{ id: "j1", from: "b", to: "x", rate: 100 }, { id: "j2", from: "a", to: "x", rate: 50 }] };
+  sk = settleSketch({ ...sk, roads: [{ ...r0, align: alignmentOf({ ...sk, roads: [r0] }, r0) }] });
+  const midY = (s: Sketch, id: string) => { const l = s.lanes.find(x => x.id === id)!; return Math.round(pointAt(l.shape, 50).p.y * 10) / 10; };
+  // (the middle lane deleted: c moves in beside a, no gap; its connector, the journey from it and the share to it gone)
+  const m = settleSketch(deleteLanes(sk, ["b"]).sketch), mr = m.roads[0];
+  const middle = mr.lanes.join() === "a,c" && mr.align?.ref === "a" && midY(m, "c") === -3.5 && !m.connectors.length && m.journeys?.map(j => j.id).join() === "j2" && JSON.stringify(m.junctions[0].splits) === JSON.stringify([{ from: "lane:x", shares: { r1: 1 } }]);
+  // (the lead deleted: b leads, c beside it)
+  const l = settleSketch(deleteLanes(sk, ["a"]).sketch), lr = l.roads[0];
+  const lead = lr.align?.ref === "b" && lr.lanes.join() === "b,c" && midY(l, "b") === -3.5 && midY(l, "c") === -7;
+  // (all of them: the road goes, said; the share by its id let go)
+  const all = deleteLanes(sk, ["a", "b", "c"]), last = !all.sketch.roads.length && all.roadsGone.join() === "Main" && !all.sketch.junctions[0].splits?.some(x => "r1" in x.shares);
+  // (taken out, the middle one: kept where it is, in no road, with the road's speed; the road keeps the rest where they were, not drawn over it;
+  // and the lead taken out: b leads, c where it was)
+  const o = settleSketch(takeOutOfRoad(sk, ["b"]).sketch), ol = settleSketch(takeOutOfRoad(sk, ["a"]).sketch);
+  const out = o.lanes.some(x => x.id === "b" && x.speed === 70) && o.roads[0].lanes.join() === "a,c" && midY(o, "b") === -3.5 && midY(o, "c") === -7
+    && ol.roads[0].align?.ref === "b" && midY(ol, "b") === -3.5 && midY(ol, "c") === -7 && midY(ol, "a") === 0;
+  const ok = middle && lead && last && out;
+  console.log(`road lanes: the middle one deleted, the rest packed ${middle}, the lead deleted ${lead}, the last one (the road goes) ${last}, the middle one and the lead taken out, the rest where they were ${out} | ok ${ok}`);
   if (!ok) process.exit(1);
 }
