@@ -15,6 +15,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T87 | Agents City Table: server CPU, memory and disk gauges (dials on the whiteboard; green, amber, red) | Tom (Alex for the data) | 2026-10-10 | after T83 |
+| T86 | Agents City Table: an agent waiting on a permission prompt stays awake, shows a "?" bubble and looks at the camera (the user) or Alice | Tom | 2026-10-10 | after T83 |
 | T85 | Agents City: about 60% CPU and the fan running while the page is open; measure, then render on demand, pause when hidden, cap DPR | Alex (Tom for desk/) | 2026-10-10 | |
 | T83 | Agents City Table: bigger cities on the table, a file's name on hover, neighbourhood (folder) names when zoomed in | Tom | 2026-10-10 | after T82 |
 | T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | |
