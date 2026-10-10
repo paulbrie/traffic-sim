@@ -12,11 +12,8 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { resolveTuning, sanitizeTuning, TUNE_GROUPS, TUNING, type TuneInfo, type Tuning } from "@/lib/sketch-tuning";
 import type { SimParams } from "@/lib/lane-sketch-sim";
 
-/**
- * Junction rules (T165): first come, first served (0, the default), or priority (1): the simulation's tuning field for it
- * (Bob's, T161), shown as a switch, not a slider. Null until the simulation has it: the switch shown, not yet usable.
- */
-const JUNCTION_RULES_KEY: TuneInfo["key"] | null = null;
+/** Junction rules (T165): first come, first served (0, the default), or priority (1): Bob's tuning field, shown as a switch, not a slider */
+const JUNCTION_RULES_KEY: TuneInfo["key"] | null = "junctionRules";
 
 const digits = (step: number) => (step >= 1 ? 0 : step >= 0.1 ? 1 : 2);
 const fmt = (t: TuneInfo, v: number) => `${v.toFixed(digits(t.step))}${t.unit ? ` ${t.unit}` : ""}`;
@@ -83,8 +80,7 @@ function SimSettings({ params, setParams, readOnly }: { params: SimParams; setPa
                   </ToggleGroup>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  First come: where paths cross, the car that gets there first goes first. Priority: who goes first follows the junction&apos;s rules instead.
-                  {!JUNCTION_RULES_KEY && " (Comes with the next simulation update.)"}
+                  First come: where paths cross, whoever gets there first goes; a car kept waiting long is let go. Priority: by the rules of the road: a roundabout&apos;s ring goes first, then give-way lines, the main road going straight, left turns give way, then the car from the right; first come only where nothing else decides. Try it with the car&apos;s panel, which says which rule holds each car.
                 </p>
               </div>
             )}
