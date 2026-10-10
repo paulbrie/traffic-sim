@@ -1,6 +1,6 @@
 // The per-car explanation's words (T157): the headline for the kinds of hold the user named, the text copied.
 import { strict as assert } from "node:assert";
-import { explainText, headline, patienceNote, type CarExplain } from "../src/lib/car-explain";
+import { explainText, headline, noRouteText, patienceNote, type CarExplain } from "../src/lib/car-explain";
 
 const base: CarExplain = { car: 200, t: 125, traced: true, why: null, rule: null, speed: { kmh: 22, desiredKmh: 50, targetKmh: 24, accel: 0.4 }, leader: null, blocker: null, stopAt: null, since: 0, chain: [], deadlock: null, plan: null, log: [] };
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
@@ -46,6 +46,23 @@ t("crossing waits with the junction rules' reasons (T161): in words, unknown one
   assert.equal(patienceNote(x("priority", "from the right")), null);
   assert.equal(patienceNote(x("zone", "already in the zone")), null);
   assert.match(explainText(x("give-way", "give-way line"), clock), /\nPatience: 3\.2 of 10 s at the give-way/);
+});
+
+t("no route (T166): leads the headline when nothing else holds the car (or it only follows one), else said under it; a loop at speed isn't a deadlock", () => {
+  const nr = { dest: "lane:l3198", at: "lane:l3251", why: "it is on a loop that no way leaves" };
+  const lost = "No way to its destination (lane l3198) from lane l3251: it is on a loop that no way leaves";
+  assert.equal(headline({ ...base, noRoute: nr }).text, lost);
+  assert.equal(headline({ ...base, noRoute: nr, rule: { kind: "follow" }, leader: { car: 33, gap: 9, kmh: 15 }, chain: [33, 26] }).text, lost);
+  const held: CarExplain = { ...base, noRoute: nr, rule: { kind: "zone" }, blocker: { car: 33, edge: "lane:l3251" }, since: 2 };
+  assert.match(headline(held).text, /^Waiting for car 33/);
+  assert.equal(noRouteText(held), lost);
+  assert.ok(explainText(held, clock).includes(`\n${lost}`));
+  assert.ok(!explainText({ ...base, noRoute: nr }, clock).includes(`\n${lost}`), "said once, as the headline");
+  // (two cars round a ring at 15 km/h: chain [33, 26], no deadlock from the sim: no "Deadlock" in the words)
+  const loop: CarExplain = { ...base, car: 26, speed: { kmh: 15, desiredKmh: 30, targetKmh: 15, accel: 0 }, rule: { kind: "follow" }, leader: { car: 33, gap: 12, kmh: 15 }, chain: [33, 26], deadlock: null, noRoute: nr };
+  assert.ok(!/deadlock/i.test(headline(loop).text) && !/DEADLOCK/.test(explainText(loop, clock)));
+  assert.ok(explainText(loop, clock).includes("Blocking chain: 26 → 33 → 26  (a loop, still moving: not a deadlock)"));
+  assert.equal(noRouteText({ ...base, noRoute: null }), null);
 });
 
 console.log(`car-explain: ${ok} checks passed`);

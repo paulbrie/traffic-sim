@@ -86,11 +86,22 @@ export function patienceNote(x: CarExplain, firstCome = PATIENCE.firstCome): str
   return null;
 }
 
-/** the explanation's headline in plain words, with the car it is about (to link) */
+/** the chain comes back round (its last car is one before it, or this car) though the sim calls no deadlock: cars following each other round a loop, still moving */
+export const movingLoop = (x: CarExplain) => {
+  const c = x.chain, last = c[c.length - 1];
+  return !x.deadlock && c.length > 1 && (last === x.car || c.indexOf(last) < c.length - 1);
+};
+
+/** a car with no way to where it is going (T166), in words; null when it has one */
+export const noRouteText = (x: CarExplain) => (x.noRoute ? `No way to its destination (${edgeName(x.noRoute.dest)}) from ${edgeName(x.noRoute.at)}: ${x.noRoute.why}` : null);
+
+/** the explanation's headline in plain words, with the car it is about (to link); no route leads it unless something else holds the car */
 export function headline(x: CarExplain): { text: string; car?: number } {
   const r = x.rule?.kind, b = x.blocker, on = (e?: string) => (e ? ` on ${edgeName(e)}` : "");
   const speedNow = x.speed ? `${kmh(x.speed.kmh)} of ${kmh(x.speed.desiredKmh)} km/h` : null;
   if (x.deadlock) return { text: `${x.deadlock.includes(x.car) ? "Deadlock" : "Waiting on a deadlock"}: ${x.deadlock.join(" → ")} → ${x.deadlock[0]} all wait on each other`, car: x.deadlock[0] };
+  const lost = noRouteText(x);
+  if (lost && (!r || r === "follow")) return { text: lost };
   if (!r) return { text: speedNow ? `Free road, ${speedNow}` : "Free road" };
   if (r === "follow" && x.leader) return { text: `Following car ${x.leader.car}, ${x.leader.gap.toFixed(0)} m gap${speedNow ? `, ${speedNow}` : ""}`, car: x.leader.car };
   if ((r === "merge" || r === "lane-change") && b?.gap !== undefined && b.needGap !== undefined)
@@ -119,6 +130,9 @@ export function headline(x: CarExplain): { text: string; car?: number } {
 /** the explanation as plain text, to copy (for pasting into a conversation, and the bridge) */
 export function explainText(x: CarExplain, clock: (t: number) => string, firstCome = PATIENCE.firstCome): string {
   const out = [`Car ${x.car} at ${clock(x.t)}${x.traced ? "" : " (from the recording: a car not watched then)"}: ${headline(x).text}`];
+  // (no route under a hold that leads the headline: said too)
+  const lost = noRouteText(x);
+  if (lost && headline(x).text !== lost) out.push(lost);
   const pn = patienceNote(x, firstCome);
   if (pn) out.push(pn);
   if (x.rule) out.push(`Rule: ${RULE_WORDS[x.rule.kind]}${x.rule.edge ? ` on ${edgeName(x.rule.edge)}` : ""}${x.rule.detail ? ` (${x.rule.detail})` : ""}, for ${s1(x.since)}`);
@@ -129,7 +143,7 @@ export function explainText(x: CarExplain, clock: (t: number) => string, firstCo
     out.push(`Held by: car ${b.car} on ${edgeName(b.edge)}${extra.length ? ` (${extra.join(", ")})` : ""}`);
   }
   if (x.stopAt) out.push(`Holding for: ${tagWords(x.stopAt.why)}, ${m1(x.stopAt.dist)} ahead (${edgeName(x.stopAt.edge)} at ${m1(x.stopAt.s)})`);
-  if (x.chain.length) out.push(`Blocking chain: ${[x.car, ...x.chain].join(" → ")}${x.deadlock ? `  DEADLOCK ring: ${x.deadlock.join(", ")}` : ""}`);
+  if (x.chain.length) out.push(`Blocking chain: ${[x.car, ...x.chain].join(" → ")}${x.deadlock ? `  DEADLOCK ring: ${x.deadlock.join(", ")}` : movingLoop(x) ? "  (a loop, still moving: not a deadlock)" : ""}`);
   if (x.plan) {
     const p = x.plan;
     out.push(`Plan: next ${p.next ? edgeName(p.next) : "—"}${p.goal ? `, goal ${edgeName(p.goal)}` : ""}${p.dest ? `, to the exit at ${edgeName(p.dest)}` : ""}${p.laneChange ? `; changing to ${edgeName(p.laneChange.to)} (${p.laneChange.why})` : ""}`);
