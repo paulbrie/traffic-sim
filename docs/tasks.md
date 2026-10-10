@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T157 | Per-car explainer: state, speeds, leader, the rule and car holding it, blocking chain (deadlock flagged), plan and rejected gaps, recent decisions; map lines to leader/blocker and the conflict zone; copy as text and in the bridge snapshot | Bob (sim `explain`), Alex (UI) | 2026-10-10 | selected car only |
 | T156 | Several named sketches per plan (new, duplicate, rename, delete; old scratch becomes 'Sketch 1'); agent-patch pieces go into a new sketch | Tatiana (Alex for agent patches) | 2026-10-10 | |
 | T155 | Check agent patch #5's review on Bistrița (read-only): list, detail, Sketch-window section and thumbnail | Ramona | 2026-10-10 | |
 | T149 | V2: align selected lanes as in a design tool (left, centre, right, top, middle, bottom) against the first-selected lane; roads move as a unit | Tom | 2026-10-10 | after T147 |
