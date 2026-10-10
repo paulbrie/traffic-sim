@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T158 | V2: pause a running simulation the moment an edit starts (drags, tools, deletes, panel fields, undo/redo, patch apply; not select/pan/zoom), toast with Resume; Sketch window too | Tom | 2026-10-10 | |
 | T157 | Per-car explainer: state, speeds, leader, the rule and car holding it, blocking chain (deadlock flagged), plan and rejected gaps, recent decisions; map lines to leader/blocker and the conflict zone; copy as text and in the bridge snapshot | Bob (sim `explain`), Alex (UI) | 2026-10-10 | selected car only |
 | T156 | Several named sketches per plan (new, duplicate, rename, delete; old scratch becomes 'Sketch 1'); agent-patch pieces go into a new sketch | Tatiana (Alex for agent patches) | 2026-10-10 | |
 | T155 | Check agent patch #5's review on Bistrița (read-only): list, detail, Sketch-window section and thumbnail | Ramona | 2026-10-10 | |
