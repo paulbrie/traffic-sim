@@ -15,7 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T158 | V2: pause a running simulation the moment an edit starts (drags, tools, deletes, panel fields, undo/redo, patch apply; not select/pan/zoom), toast with Resume; Sketch window too | Tom | 2026-10-10 | |
+| T160 | V2: undo/redo of a map edit must not bring back old Traffic/Demand numbers (they aren't on the undo stack) | Tom | 2026-10-10 | found in T158 |
 | T157 | Per-car explainer: state, speeds, leader, the rule and car holding it, blocking chain (deadlock flagged), plan and rejected gaps, recent decisions; map lines to leader/blocker and the conflict zone; copy as text and in the bridge snapshot | Bob (sim `explain`), Alex (UI) | 2026-10-10 | selected car only |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | causes in the drawing (cross lanes, one-lane bottleneck, slips); version 1 submitted as agent patch #5, a Sketch-window try-out (the user's choice); the main-plan patch kept ready |
 | T143 | Research: the best ways to show an agent swarm at work in 2D or very light graphics (prior art, low-power techniques, 3 concepts with mocks and CPU estimates, a recommendation, a quick win) | Alex | 2026-10-10 | the 3D view spins up the user's M5 fan |
@@ -37,6 +37,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T158 | V2: a running simulation pauses when a map edit begins (drags, tools, panel fields, undo/redo of map edits; not select/pan/zoom or traffic/demand numbers), toast with Resume | Tom | 2026-10-10 | 4d44bff |
 | T149 | V2: align selected lanes like a design tool (left, centre, right, top, middle, bottom) | Tom | 2026-10-10 | bc2709a; checked by Ramona |
 | T155 | Check agent patch #5 on Bistrița: already applied by the user at rev 244; History entry and Sketch-window piece correct, main plan unchanged | Ramona | 2026-10-10 | ramona-scratch/t155/report.md |
 | T156 | Several named sketches per plan (picker; new, duplicate, rename, delete with undo; old scratch = 'Sketch 1'); Test in Sketch → New; agent-patch pieces go into a new sketch named after the patch | Tatiana | 2026-10-10 | 58022c1 |
