@@ -993,7 +993,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           const lane = (id: string) => laneById(sk, id)!, ws = (ids: string[]) => ids.reduce((b, id) => b + laneOutWeight(lane(id)), 0);
           const all = ws(demandWays(sk).exits.flatMap(w => w.lanes));
           const value = lab.kind === "in" ? Math.round(lab.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0)) : all > 0 ? Math.round((ws(lab.lanes) / all) * 100) : 0;
-          setWayEdit({ kind: lab.kind, lanes: lab.lanes, x: lab.x0, y: lab.y0, value });
+          // (opened once the press has put the focus on the editor, not before: else the field would lose it at once)
+          const edit = { kind: lab.kind, lanes: lab.lanes, x: lab.x0, y: lab.y0, value };
+          setTimeout(() => setWayEdit(edit), 0);
           return;
         }
         if (road) { setSelCar(null); setSel(e.shiftKey ? { ...s, road: null, lanes: [...new Set([...s.lanes, ...road.lanes])] } : { ...NO_SEL, lanes: road.lanes, road: road.id }); redraw(); return; }
