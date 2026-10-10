@@ -16,7 +16,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
 | T141 | V2 Lane panel: a "Smooth" button that curves every interior point of the lane (or of each selected lane / road) | Tatiana | 2026-10-10 | before T139 |
-| T139 | V2: dead ends with a U-turn drawn as turning circles (2D and 3D, display only); an info line in the console | Tatiana | 2026-10-10 | after T124 |
 | T134 | Bistrița: 172 dead-end U-turn stubs on rev 92: A 71 → after following OSM: 7 missing links (6 + j341) connected in one patch A1, the rest real dead ends (D), tracks not modelled (the user's choices), B 4 at the edge (ways in/out, one patch), C 15 unused (delete, one patch), D 82 real dead ends (keep; drawn as turning circles, T139): the user's choices | Bob | 2026-10-10 | list: /home/genie/bob-scratch/trafficsim/t134/T134-list.md |
 | T129 | V2 editor: draw zones (neighbourhoods): labelled, coloured polygons stored in the plan, a Zone tool, panel, layer, label click | Tom (Tatiana for the editor files), Ramona checks | 2026-10-10 | part 1 (data, history, layer, panel, shared fill): 8df5c21; part 2 (the editor) after Tatiana's T128 |
 | T127 | V2: cars' blinkers when turning, as in V1 (2D and 3D) | Alex (Tatiana for the views, Bob for the sim), Ramona checks | 2026-10-10 | data: 913e1ca; drawing: 71ff865 (amber, 380 ms on/off); browser check pending |
@@ -37,6 +36,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T139 | V2: dead ends with only a U-turn drawn on a turning circle (2D and 3D, display only; 172 on Bistrița); an info line in the console | Tatiana | 2026-10-10 | 0c9e20d |
 | T140 | Agent patches can remove (lanes, connectors, junctions, roads, links, crossings, zones), with checks so nothing goes unlisted; shown struck through in the review; plain History files still can't remove | Alex | 2026-10-10 | f6b79b1 |
 | T124 | V2: connectors that turn back over 150° flagged in the Problems console ("Turns back", click to select) and straightened by a Tidy step (bends dropped, ends kept); 5 on Bistrița | Tatiana, Bob | 2026-10-10 | 223bad2 |
 | T138 | Agents sign in without passwords: npm run agent:login --as/--list/--revoke/--scramble (8 h token sessions into the agent's own agent-browser state file; dev DB, listed test accounts only); tatiana@ and ramona@test.com scrambled (the user's approval), their lines removed from credentials.md | Alex | 2026-10-10 | 142d540 |
