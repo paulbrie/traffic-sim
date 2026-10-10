@@ -20,7 +20,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T105 | Agents City Table: an agent asking the user a question looks at the camera and waves (about 1.5 s, every 6–8 s while waiting) | Tom | 2026-10-10 | after T102 |
 | T103 | Agents City (City and Table): Escape resets the camera to its default (after closing whatever is open) | Alex (Tom for the Table's default) | 2026-10-10 | after T102 |
 | T102 | Agents City Table: who is using a browser (each open agent-browser session at its owner's seat, with its CPU; unowned ones marked) | Alex (data), Tom (display) | 2026-10-10 | data: admin 91fc749 (/api/agents3d/browsers); display after T92 |
-| T101 | Agents City Table: the gauges ease to each new value instead of jumping (about 0.8 s) | Tom | 2026-10-10 | with T92 |
 | T100 | Re-test of T88 (Apply merges field by field) in the browser | Ramona | 2026-10-10 | after T97, T98 |
 | T98 | The gaps left in T73: a real bridge (Level 1 over other lanes) and the 3D screenshot | Ramona | 2026-10-10 | |
 | T97 | Test of the V2 route tracer (T74) in the browser, with screenshots of a traced route and its test car | Ramona | 2026-10-10 | |
@@ -28,7 +27,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T95 | Agents City Table: commits as books on a bookshelf left of the whiteboard; Alice's avatar walks over and shelves each; the coffee mug removed if it costs frames | Tom | 2026-10-10 | after T92–T94, T96 |
 | T94 | Agents City Table: the City's lightning between the laptops and the files' buildings (shared with the City's lightning.tsx) | Tom (Alex for lightning.tsx) | 2026-10-10 | after T85 |
 | T93 | Agents City Table: while thinking, an avatar's eyes glance around like a person's (quick glances, holds, now and then the head follows) | Tom | 2026-10-10 | after T85, T92 |
-| T92 | Agents City Table: CPU dial shows the total plus one bar per core (from /proc/stat, read by the admin) | Alex (data), Tom (display) | 2026-10-10 | data: admin 3d03d75 (cpuPerCore in /api/stats); display in progress |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Patches measured worse, not committed; notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
@@ -46,6 +44,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T101 | Agents City Table: gauge needles, numbers and core bars ease to each reading over 0.8 s (needle as a rotated mesh, frames only while easing) | Tom | 2026-10-10 | admin: 0781804 |
+| T92 | Agents City Table: a per-core CPU strip under the CPU dial (wraps into rows past 16), from cpuPerCore in /api/stats | Alex, Tom | 2026-10-10 | admin: 3d03d75, 0781804 |
 | T104 | V2 3D view: Escape, after its other jobs, eases the camera back to the framing on entering 3D (0.7 s); editors.<kind>.camera in the UI store | Tatiana | 2026-10-10 | 73a5b56 |
 | T74 | V2 route tracer: way in, way out, lane, route drawn, a test car from the panel, "other way" only for a longer way. With the plan's traffic (3 seeds × 60 cars): 113 of 180 arrived, never faster than the limits, 24 flagged blue, all on real reroutes. Screenshots via Ramona's T97 | Tatiana | 2026-10-10 | 6994d9a, 46a9565, 14a24fe, fde6bbb |
 | T99 | Agents City: folders starting with "." left out of the cities (server-side, before the file cap) unless "Show hidden folders" (?dot=1); dot-files in shown folders stay; touches inside hidden folders draw no bolt | Alex | 2026-10-10 | admin: 941d8aa (pushed, not deployed) |
