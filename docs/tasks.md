@@ -16,7 +16,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
 | T87 | Agents City Table: server CPU, memory and disk gauges (dials on the whiteboard; green, amber, red) | Tom (Alex for the data) | 2026-10-10 | after T83 |
-| T85 | Agents City: about 60% CPU and the fan running while the page is open; measure, then render on demand, pause when hidden, cap DPR | Alex (Tom for desk/) | 2026-10-10 | |
+| T85 | Agents City: about 60% CPU and the fan running while the page is open; measure, then render on demand, pause when hidden, cap DPR | Alex (Tom for desk/) | 2026-10-10 | paused for the reboot: causes found (always-on frameloop at dpr 2, 8× MSAA + bloom, the Clock re-rendering the view 4×/s, per-frame allocations, polling while hidden); before numbers and harness in /home/genie/alex-scratch/t85; fixes not started |
 | T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | |
 | T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | after T68, T72 |
 | T72 | Re-test of T69 | Ramona | 2026-10-09 | alongside T68 |
