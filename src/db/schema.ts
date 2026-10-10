@@ -1,4 +1,4 @@
-import { boolean, customType, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { boolean, customType, index, integer, jsonb, pgEnum, pgTable, primaryKey, serial, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 import type { Network, PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 import type { Sketch } from "@/lib/lane-sketch";
@@ -86,6 +86,40 @@ export const planVersions = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("plan_versions_plan_idx").on(t.planId, t.createdAt)],
+);
+
+/**
+ * Changes agents propose to a plan instead of editing it (team rule: agents don't edit the user's plans): a
+ * patch, as "Apply changes from file" takes it, with what and why. The plan's editors apply or reject it on the
+ * plan page; applying saves one new version through the same path as applying a file.
+ */
+export const agentPatches = pgTable(
+  "agent_patches",
+  {
+    /** "#n" on the page and in messages */
+    id: serial("id").primaryKey(),
+    planId: uuid("plan_id").notNull().references(() => plans.id, { onDelete: "cascade" }),
+    /** the agent's name ("Bob") */
+    author: text("author").notNull(),
+    /** the team's task id ("T56"), "" if none */
+    task: text("task").notNull().default(""),
+    title: text("title").notNull(),
+    /** markdown: what it changes and why, with the numbers */
+    description: text("description").notNull().default(""),
+    /** the items to apply (lanes, connectors, …, each with an id), as a file for "Apply changes from file" */
+    patch: jsonb("patch").notNull(),
+    /** the plan's revision it was checked against when submitted */
+    baseRevision: integer("base_revision").notNull(),
+    /** pending | applied | rejected | superseded */
+    status: text("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decidedBy: uuid("decided_by").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
+    /** the plan's revision the apply saved */
+    appliedRevision: integer("applied_revision"),
+    rejectNote: text("reject_note"),
+  },
+  (t) => [index("agent_patches_plan_idx").on(t.planId, t.status)],
 );
 
 /** Reference image bytes, one per plan (kept apart so plan saves stay small). */

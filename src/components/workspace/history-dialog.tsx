@@ -15,7 +15,7 @@ import { leftOutCount, nothingToSave, readSketchFile, SKETCH_FILE_MAX_BYTES, SKE
 import { ui } from "@/state/store";
 import { timeAgo } from "@/lib/time";
 
-const KIND: Record<string, string> = { create: "Created", baseline: "Start of history", save: "Edited", restore: "Restored", apply: "Applied from file" };
+const KIND: Record<string, string> = { create: "Created", baseline: "Start of history", save: "Edited", restore: "Restored", apply: "Applied from file", patch: "Agent patch" };
 const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
 type FromFile = { mode: FileMode; fileName: string; text: string; summary: FileSummary; payload: unknown; revision: number };
@@ -202,7 +202,7 @@ const ids = (xs: string[]) => xs.slice(0, FIRST).join(", ") + (xs.length > FIRST
  * for both, per kind added / removed / changed against the current version (counts and the first ids), geo,
  * traffic, every other top-level field not kept as it is, and what the checks left out.
  */
-function FileSummaryView({ s }: { s: FileSummary }) {
+export function FileSummaryView({ s }: { s: FileSummary }) {
   const none = nothingToSave(s);
   // (when items were left out, they are listed with the reasons even though nothing would change)
   if (none && !leftOutCount(s)) return <p className="text-sm text-muted-foreground">{none}</p>;

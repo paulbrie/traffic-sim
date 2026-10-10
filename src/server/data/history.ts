@@ -15,7 +15,7 @@ export const KEEP_VERSIONS = 300;
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 export interface Snapshot { revision: number; network: Network; settings: PlanSettings; underlay: Underlay | null; sketch: Sketch | null }
 
-export async function recordVersion(tx: Tx, planId: string, userId: string, snap: Snapshot, kind: "create" | "save" | "restore" | "apply", note = "") {
+export async function recordVersion(tx: Tx, planId: string, userId: string, snap: Snapshot, kind: "create" | "save" | "restore" | "apply" | "patch", note = "") {
   const now = new Date();
   if (kind === "save") {
     const [last] = await tx

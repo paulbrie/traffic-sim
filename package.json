@@ -18,6 +18,8 @@
     "engine:check": "tsx scripts/engine-check.ts",
     "osm:check": "tsx scripts/osm-check.ts",
     "restore:check": "tsx scripts/restore-file-check.ts",
+    "patch:submit": "tsx scripts/patch-submit.ts",
+    "patch:check": "tsx scripts/agent-patch-check.ts",
     "zones:check": "tsx scripts/zones-check.ts",
     "engine:baseline": "tsx scripts/engine-baseline.ts",
     "audit": "tsx scripts/junction-audit.ts"

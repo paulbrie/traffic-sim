@@ -150,7 +150,7 @@ export type SaveResult = { ok: true; revision: number; savedAt: string } | { ok:
  */
 export async function savePlan<U, P>(
   plan: Named<P, PlanId>, author: Named<U, ViewerId>,
-  input: { network: unknown; keepBuildings?: boolean; settings: unknown; underlay?: unknown; sketch?: unknown; revision: number; force?: boolean; restore?: { note: string; kind?: "restore" | "apply" } },
+  input: { network: unknown; keepBuildings?: boolean; settings: unknown; underlay?: unknown; sketch?: unknown; revision: number; force?: boolean; restore?: { note: string; kind?: "restore" | "apply" | "patch" } },
   _proof: CanEditPlan<U, P>,
 ): Promise<SaveResult> {
   const id = plan.value;

@@ -8,7 +8,11 @@ import type { SaveResult } from "./data/plans";
 export const RESTORE_NOTE_MAX = 500;
 
 /** `file`: what the client read from the file for `mode` (`payloadOf`) */
-export type RestoreFileInput = { mode: FileMode; file: unknown; revision: number; note?: unknown; fileName?: unknown };
+export type RestoreFileInput = {
+  mode: FileMode; file: unknown; revision: number; note?: unknown; fileName?: unknown;
+  /** an agent patch (T132): the version's note, and recorded as its own kind ("Agent patch") */
+  patch?: { note: string };
+};
 export type RestoreFileResult = { ok: true; revision: number } | { ok: false; error: string; revision?: number };
 
 export interface RestoreFileDeps {
@@ -17,7 +21,7 @@ export interface RestoreFileDeps {
   /** the plan's current state, or null if it is gone */
   current: () => Promise<{ engine: string; network: unknown; settings: unknown; underlay: unknown; sketch: unknown } | null>;
   /** the normal save path, recorded as its own "restore" or "apply" version with `note` */
-  save: (input: { network: unknown; settings: unknown; underlay: unknown; sketch: Sketch; revision: number; restore: { note: string; kind: FileMode } }) => Promise<SaveResult>;
+  save: (input: { network: unknown; settings: unknown; underlay: unknown; sketch: Sketch; revision: number; restore: { note: string; kind: FileMode | "patch" } }) => Promise<SaveResult>;
 }
 
 const text = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "");
@@ -39,7 +43,7 @@ export async function restoreFromFile(input: RestoreFileInput, deps: RestoreFile
   if (cur.engine !== "v2") return { ok: false, error: "Only V2 plans can take a sketch file." };
   const r = fileResult(input.file, input.mode, sanitizeSketch(cur.sketch));
   if (!r.ok) return { ok: false, error: r.error };
-  const s = await deps.save({ network: cur.network, settings: cur.settings, underlay: cur.underlay, sketch: r.sketch, revision: input.revision, restore: { note: restoreNote(input.mode, input.fileName, input.note), kind: input.mode } });
+  const s = await deps.save({ network: cur.network, settings: cur.settings, underlay: cur.underlay, sketch: r.sketch, revision: input.revision, restore: input.patch && input.mode === "apply" ? { note: input.patch.note, kind: "patch" } : { note: restoreNote(input.mode, input.fileName, input.note), kind: input.mode } });
   if (s.ok) return { ok: true, revision: s.revision };
   if (s.reason === "conflict") return { ok: false, error: "The plan was saved by someone else in the meantime. Look at the summary again and retry.", revision: s.revision };
   return { ok: false, error: s.reason === "forbidden" ? "You can't change this plan." : "Plan not found." };
