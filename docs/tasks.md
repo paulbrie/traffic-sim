@@ -17,7 +17,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T128 | V2 editor: merge two lanes (one continuing the other) or two roads into one, refusing clearly when they don't line up | Tatiana | 2026-10-10 | after T126 |
 | T127 | V2: cars' blinkers when turning, as in V1 (2D and 3D) | Alex (Tatiana for the views, Bob for the sim), Ramona checks | 2026-10-10 | |
-| T126 | V2: the connector being drawn shows in yellow until it's placed | Tatiana | 2026-10-10 | after T125 |
 | T124 | V2: a Problems-console warning and a Tidy step for connectors that turn back sharply (over 150° per segment pair; 5 on Bistrița rev 92) | Tatiana (Bob for sketch-tidy.ts) | 2026-10-10 | from T56 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Plan fix applied: Bistrița rev 92 (2026-10-10 13:27, by Bob on the user's go, through the app's restoreFromFile): five drawn-over places (r1560, J574, J577, Strada Tărpiului, l879/l2954, l2476/l2513); seeds 1–8 deadlocks 71 → 102 (76 of them one j671 ping-pong), collisions 17 → 34, out +1%; rev 91 backed up. Step 3 on rev 92: j671 was a sim rule (f270dab: a car stopped up to 0.5 m into a zone counts as short): seeds 1–8 deadlocks 102 → 31, collisions 34 → 27; next j21 (l40 drawn 2.4 m into the ring), j746, l3241/j169. Notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
@@ -36,6 +35,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T126 | V2: the connector being drawn shows in yellow (#facc15 over a dark edge, yellow start, bend and end dots) until placed | Tatiana | 2026-10-10 | d43863c |
 | T125 | V2 map: clicking a junction's name selects the junction (shape highlighted, panel open), a road's name selects the road; hover highlights, pointer cursor (3D has no labels) | Tatiana | 2026-10-10 | 99dd87d |
 | T121 | Agents City: no more nameless "pid NNNNN" agents in short windows (a day of transcripts read for pairing and names; names from /rename or "You are <Name>"; only agents active in the window listed) | Alex | 2026-10-10 | admin: 563903d |
 | T123 | Agents City Table: bubbles and paper planes start when the page first sees a message (message ids marked with the beats) | Tom | 2026-10-10 | admin: 0f87d23 |
