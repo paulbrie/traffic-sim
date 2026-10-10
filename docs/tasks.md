@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T92 | Agents City Table: CPU dial shows the total plus one bar per core (from /proc/stat, read by the admin) | Alex (data), Tom (display) | 2026-10-10 | after T85 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T89 | Re-test of T69's conflict dialog (not reached in T72) | Ramona | 2026-10-10 | |
 | T88 | History from file: a minimal partial patch (e.g. a lane's {id, width} only) is taken as "nothing to save" and Apply stays disabled | Alex | 2026-10-10 | from T72; files in /home/genie/ramona-scratch/t72 |
