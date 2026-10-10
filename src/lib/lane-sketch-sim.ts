@@ -2090,7 +2090,8 @@ export class SketchSim {
   }
   /** what holds a car back: as its last step decided it (the car watched), else as its `why` says */
   private ruleOf(v: SimVehicle): Won | null {
-    if (v.id === this.watchId && this.watchTrace?.won && Math.abs(this.watchTrace.t - this.t) < 0.2) return this.watchTrace.won;
+    // (a car ahead as far off as its why leaves out, 30 m or more, isn't holding it: a free road, as the why says)
+    if (v.id === this.watchId && this.watchTrace?.won && Math.abs(this.watchTrace.t - this.t) < 0.2) return this.watchTrace.won.kind === "follow" && this.watchTrace.gap >= 30 ? null : this.watchTrace.won;
     const r = readWhy(v.why);
     if (!r && v.forceUntil > this.t) return { kind: "forced" };
     return r;
@@ -2403,7 +2404,14 @@ export class SketchSim {
       if (best) { leader = { car: best.id, gap: r2(Math.max(0, e.off + bx - best.len)), kmh: r2(best.v * 3.6) }; break; }
       if (e.off > 100) break;
     }
-    const pts = (e: Edge, a: number, b: number) => { const out: Pt[] = []; for (let s = a; s <= b + 1e-6; s += 1) out.push(e.locate(e.ring ? ((s % e.len) + e.len) % e.len : Math.max(0, Math.min(e.len, s))).p); return out; };
+    // (a stretch every metre, and its end: one under a metre still two points)
+    const pts = (e: Edge, a: number, b: number) => {
+      const at = (s: number) => e.locate(e.ring ? ((s % e.len) + e.len) % e.len : Math.max(0, Math.min(e.len, s))).p, out: Pt[] = [];
+      let s = a;
+      for (; s <= b + 1e-6; s += 1) out.push(at(s));
+      if (b > a && s - 1 < b - 0.05) out.push(at(b));
+      return out;
+    };
     let blocker: CarExplain["blocker"] = null;
     if (r && r.car !== undefined && r.kind !== "follow") {
       const w = byId.get(r.car), last = this.watchRejected[this.watchRejected.length - 1];
