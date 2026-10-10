@@ -178,7 +178,7 @@ interface ReplayFrame { t: number; nums: Float32Array; tags: Uint32Array; peds?:
 /** a frame's size in memory, about (its arrays, and a little for each object) */
 const frameBytes = (f: ReplayFrame) => f.nums.byteLength + f.tags.byteLength + 16 + (f.peds ? f.peds.ids.byteLength + f.peds.nums.byteLength : 0) + (f.trailers?.byteLength ?? 0);
 /** a recorded car, as replayed */
-export interface ReplayCar { id: number; p: Pt; d: Pt; len: number; trailer?: Body; share: number; broken?: boolean; kmh: number; edge: string; exit: string | null; why: string | null }
+export interface ReplayCar { id: number; p: Pt; d: Pt; len: number; trailer?: Body; share: number; broken?: boolean; /** turn signal: -1 left, 1 right (`blinker`) */ blink?: -1 | 1; kmh: number; edge: string; exit: string | null; why: string | null }
 const r2 = (x: number) => Math.round(x * 100) / 100;
 /** seconds for a vehicle going `v` to cover `d` metres, speeding up as it can (`acc`, up to `vmax`) */
 function timeTo(d: number, v: number, vmax: number, acc = A_MAX) {
@@ -2018,7 +2018,9 @@ export class SketchSim {
     const f = fr[lo], n = f.tags.length / 3, cars: ReplayCar[] = [];
     for (let i = 0; i < n; i++) {
       const a = f.nums.subarray(i * 8, i * 8 + 8), g = f.tags.subarray(i * 3, i * 3 + 3);
-      cars.push({ id: a[0], p: { x: a[1], y: a[2] }, d: { x: a[3], y: a[4] }, len: a[7], kmh: a[5] * 3.6, share: Math.max(0, a[6]), ...(a[6] < 0 ? { broken: true } : {}), edge: this.tags[g[0]], exit: this.tags[g[1]] || null, why: this.tags[g[2]] || null });
+      // (the share slot also holds the turn signal: +10 left, +20 right; -1 broken down)
+      const sig = a[6] >= 10 ? Math.floor(a[6] / 10) : 0, share = a[6] - sig * 10;
+      cars.push({ id: a[0], p: { x: a[1], y: a[2] }, d: { x: a[3], y: a[4] }, len: a[7], kmh: a[5] * 3.6, share: Math.max(0, share), ...(share < 0 ? { broken: true } : {}), ...(sig ? { blink: sig === 1 ? (-1 as const) : (1 as const) } : {}), edge: this.tags[g[0]], exit: this.tags[g[1]] || null, why: this.tags[g[2]] || null });
     }
     const tr = f.trailers;
     if (tr) for (let i = 0; i < tr.length; i += 6) cars[tr[i]].trailer = { p: { x: tr[i + 1], y: tr[i + 2] }, d: { x: tr[i + 3], y: tr[i + 4] }, len: tr[i + 5] };
@@ -2070,8 +2072,9 @@ export class SketchSim {
       const trailers: number[] = [];
       this.vehicles.forEach((v, i) => {
         const { p, d, len, trailer: t } = posed.get(v)!;
-        // (broken down: its share kept as -1)
-        nums.set([v.id, p.x, p.y, d.x, d.y, v.v, v.broken !== null ? -1 : v.v / Math.max(1, v.edge.vmax), len], i * 8);
+        // (broken down: its share kept as -1; else the turn signal added to it, +10 left, +20 right: no more bytes)
+        const sig = this.blinker(v);
+        nums.set([v.id, p.x, p.y, d.x, d.y, v.v, v.broken !== null ? -1 : Math.min(9, v.v / Math.max(1, v.edge.vmax)) + (sig === -1 ? 10 : sig === 1 ? 20 : 0), len], i * 8);
         if (t) trailers.push(i, t.p.x, t.p.y, t.d.x, t.d.y, t.len);
         tags.set([this.tag(v.edge.key), this.tag(v.exit?.key ?? null), this.tag(v.why)], i * 3);
       });
@@ -2176,7 +2179,41 @@ export class SketchSim {
    * from while it isn't all on this one), and its speed as a share of its desired speed.
    */
   poses() {
-    return this.vehicles.map(v => ({ id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax), ...(v.broken !== null ? { broken: true } : {}), ...(v.edge.z ? { z: v.edge.z(v.pos) } : {}) }));
+    return this.vehicles.map(v => {
+      const blink = this.blinker(v);
+      return { id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax), ...(v.broken !== null ? { broken: true } : {}), ...(blink ? { blink } : {}), ...(v.edge.z ? { z: v.edge.z(v.pos) } : {}) };
+    });
+  }
+
+  /**
+   * A car's turn signal, as V1's (src/engine/sim, `blinker`): -1 left, 1 right, 0 off. Lit while it changes lane
+   * (toward the lane it slides to, until it is within half a metre of it), within 45 m before the connector it
+   * turns onto, and while it turns along it; never round a roundabout (a ring, or a connector onto or off one).
+   * Broken down: off here (its hazard lights are `broken`). Reads the car only, so it can't change a run.
+   */
+  blinker(v: SimVehicle): -1 | 0 | 1 {
+    if (v.broken !== null) return 0;
+    if (v.shift) {
+      const u = (this.t - v.changedAt) / SHIFT_T, k = u >= 1 ? 0 : 1 - u * u * (3 - 2 * u);
+      // (it slides from where it was, `shift` from where it is, toward the lane changed to: right of its way, (-d.y, d.x), is +)
+      if (k * Math.hypot(v.shift.x, v.shift.y) > 0.5) {
+        const { d } = this.poseOf(v), r = -v.shift.x * -d.y + -v.shift.y * d.x;
+        return r > 0 ? 1 : -1;
+      }
+    }
+    const c = v.edge.kind === "conn" ? v.edge : v.exit && v.exit.from && v.exit.from.s - v.pos < 45 ? v.exit : null;
+    return c ? this.turnSide(c) : 0;
+  }
+  private turnSides = new WeakMap<Edge, -1 | 0 | 1>();
+  /** a connector's turn, as V1 tells its movements apart: its way turns more than 0.52 rad (right +, left -); a U-turn (more than 2.7) signals left; none onto or off a ring */
+  private turnSide(c: Edge): -1 | 0 | 1 {
+    let side = this.turnSides.get(c);
+    if (side === undefined) {
+      const a = c.locate(0).d, b = c.locate(c.len).d, delta = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
+      side = c.from?.lane.ring || c.to?.lane.ring ? 0 : Math.abs(delta) > 2.7 ? -1 : delta > 0.52 ? 1 : delta < -0.52 ? -1 : 0;
+      this.turnSides.set(c, side);
+    }
+    return side;
   }
 
   /** the car under `p` (on its body, or within `tol` metres of it): the nearest; null if none */
