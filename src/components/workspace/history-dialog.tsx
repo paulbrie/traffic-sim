@@ -207,7 +207,10 @@ export function FileSummaryView({ s }: { s: FileSummary }) {
   // (when items were left out, they are listed with the reasons even though nothing would change)
   if (none && !leftOutCount(s)) return <p className="text-sm text-muted-foreground">{none}</p>;
   const skipped = SKETCH_KINDS.filter(k => s.dropped[k]).map(k => `${s.dropped[k]} ${KIND_LABEL[k].toLowerCase()}`);
-  const removed = s.mode === "apply" ? SKETCH_KINDS.filter(k => s.kinds[k].removed.length) : [];
+  // (apply: what goes without being listed for removal; an agent patch's own removals are listed in the table above)
+  const listed = new Set(s.items.filter(x => x.change === "removed").map(x => `${x.kind}:${x.id}`));
+  const unlisted = (k: SketchKind) => s.kinds[k].removed.filter(id => !listed.has(`${k}:${id}`));
+  const removed = s.mode === "apply" ? SKETCH_KINDS.filter(k => unlisted(k).length) : [];
   const kinds = SKETCH_KINDS.filter(k => s.kinds[k].added.length || s.kinds[k].removed.length || s.kinds[k].changed.length);
   const goes = s.mode === "restore" ? SKETCH_KINDS.reduce((n, k) => n + s.kinds[k].removed.length, 0) : 0;
   const cleared = s.fields.filter(f => f.change === "cleared by the file").map(f => f.field);
@@ -226,7 +229,7 @@ export function FileSummaryView({ s }: { s: FileSummary }) {
           </thead>
           <tbody className="divide-y">
             {s.items.map(x => (
-              <tr key={`${x.kind}:${x.id}`} className={x.change === "unchanged" ? "text-muted-foreground" : x.change.startsWith("left out") ? "text-destructive" : ""}>
+              <tr key={`${x.kind}:${x.id}`} className={x.change === "unchanged" ? "text-muted-foreground" : x.change.startsWith("left out") ? "text-destructive" : x.change === "removed" ? "text-destructive line-through" : ""}>
                 <td className="py-1 pr-2"><span className="text-muted-foreground">{KIND_LABEL[x.kind].replace(/s$/, "").toLowerCase()} </span><span className="font-mono">{x.id}</span></td>
                 <td className="py-1 pr-2">{x.change}{x.fields ? `: ${x.fields.join(", ")}` : ""}{x.why ? ` (${x.why})` : ""}</td>
                 <td className="py-1 tabular">{x.before ?? "—"} → {x.after ?? "—"}</td>
@@ -277,7 +280,7 @@ export function FileSummaryView({ s }: { s: FileSummary }) {
         </p>
       )}
       {removed.length > 0 && (
-        <p className="text-xs text-destructive">Once checked, these current items would go (they depend on what the file changes): {removed.map(k => `${KIND_LABEL[k].toLowerCase()} ${ids(s.kinds[k].removed)}`).join("; ")}.</p>
+        <p className="text-xs text-destructive">Once checked, these current items would go (they depend on what the file changes): {removed.map(k => `${KIND_LABEL[k].toLowerCase()} ${ids(unlisted(k))}`).join("; ")}.</p>
       )}
       {skipped.length > 0 && (
         <p className="text-xs text-amber-600 dark:text-amber-400">Items in the file that aren&apos;t valid, left out as the server would: {skipped.join(", ")}.</p>

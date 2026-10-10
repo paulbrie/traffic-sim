@@ -106,7 +106,8 @@ function PatchDetail({ planId, p, canApply, onBack, onDecided }: { planId: strin
   const summarise = useCallback(async () => {
     const cur = await fetchPlanState(planId);
     if (!cur) { setPreview({ revision: 0, error: "Couldn't load the plan" }); return null; }
-    const r = readSketchFile(JSON.stringify(p.patch), "apply", cur.sketch);
+    // (an agent patch may remove items, T140)
+    const r = readSketchFile(JSON.stringify(p.patch), "apply", cur.sketch, { allowRemove: true });
     const next: Preview = r.ok ? { revision: cur.revision, summary: r.summary } : { revision: cur.revision, error: r.error };
     setPreview(next);
     return next;

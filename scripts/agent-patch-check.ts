@@ -3,6 +3,7 @@
 // refuses with the new revision; the page's own file action can't pass itself off as a patch.
 import { strict as assert } from "node:assert";
 import { checkPatch, patchNote, authorColor } from "../src/lib/agent-patch";
+import { readSketchFile } from "../src/lib/sketch-diff";
 import { restoreFromFile, type RestoreFileDeps } from "../src/server/restore-file";
 import { sanitizeSketch } from "../src/lib/lane-sketch";
 import type { SaveResult } from "../src/server/data/plans";
@@ -74,6 +75,91 @@ async function main() {
     await restoreFromFile({ mode: "restore", file: base, revision: 7, patch: { note: "Agent patch #1 (x): y" }, fileName: "f.json" }, m.d);
     assert.equal(m.saves[0].restore.kind, "restore");
     assert.match(m.saves[0].restore.note, /^Restored from the file f\.json/);
+  });
+
+  // ---- removals (T140)
+  const rich = {
+    lanes: [line("a", 0, 50), line("b", 60, 120), line("c", 130, 190), line("u", 120, 60, 5)],
+    connectors: [
+      { id: "k1", from: { lane: "a", s: 50 }, to: { lane: "b", s: 0 } },
+      { id: "k2", from: { lane: "b", s: 60 }, to: { lane: "c", s: 0 } },
+      { id: "kU", from: { lane: "b", s: 60 }, to: { lane: "u", s: 0 } },
+    ],
+    roads: [{ id: "r1", name: "Main", lanes: ["a", "b"] }, { id: "r2", name: "Side", lanes: ["c"] }],
+    junctions: [{ id: "j1", name: "J", outline: [{ x: 118, y: -6 }, { x: 132, y: -6 }, { x: 132, y: 6 }], lights: { green: 18, amber: 3, allRed: 2, mode: "each", minGreen: 6, actuated: false, phases: [{ green: 20, conns: ["k2"] }] } }],
+  };
+  const rc = sanitizeSketch(rich)!;
+  assert.ok(rc.connectors.length === 3 && rc.junctions[0].lights?.phases?.[0].conns[0] === "k2", "fixture");
+  const check = (patch: object) => checkPatch(JSON.stringify(patch), rc);
+
+  await t("remove: a removal-only patch (B's U-turn connector) is accepted and listed as removed", () => {
+    const r = check({ remove: { connectors: ["kU"] } });
+    assert.ok(r.ok, r.ok ? "" : r.errors.join("; "));
+    assert.deepEqual(r.ok && r.summary.items, [{ kind: "connectors", id: "kU", change: "removed", before: "0 bend points" }]);
+    assert.deepEqual(r.ok && r.summary.kinds.connectors, { added: [], removed: ["kU"], changed: [] });
+    assert.equal(r.ok && r.summary.same, false);
+    assert.deepEqual(r.ok && r.summary.sketch.connectors.map(c => c.id), ["k1", "k2"]);
+  });
+
+  await t("remove: a mixed patch changes and removes; a removed lane leaves its road; its connectors listed too", () => {
+    const r = check({ lanes: [{ id: "a", width: 5 }], remove: { lanes: ["u"], connectors: ["kU"] } });
+    assert.ok(r.ok, r.ok ? "" : r.errors.join("; "));
+    const s = r.ok ? r.summary : null!;
+    assert.deepEqual(s.items.map(x => [x.id, x.change]), [["a", "changed"], ["u", "removed"], ["kU", "removed"]]);
+    assert.deepEqual(s.sketch.lanes.map(l => [l.id, l.width]), [["a", 5], ["b", 3.5], ["c", 3.5]]);
+  });
+
+  await t("remove: a lane removed without its connectors is refused, naming them", () => {
+    const r = check({ remove: { lanes: ["c"], roads: ["r2"] } });
+    assert.equal(r.ok, false);
+    assert.match(r.ok ? "" : r.errors.join("; "), /also removes connector k2: list it in remove\.connectors/);
+  });
+
+  await t("remove: an id not in the plan, or both changed and removed, is refused", () => {
+    const r = check({ remove: { connectors: ["nope"] } });
+    assert.deepEqual(r.ok ? [] : r.errors, ["no connector nope in the plan to remove"]);
+    const both = check({ connectors: [{ id: "kU", via: [{ x: 1, y: 1 }] }], remove: { connectors: ["kU"] } });
+    assert.match(both.ok ? "" : both.errors.join("; "), /connector kU both changed and removed/);
+  });
+
+  await t("remove: a junction left naming a removed connector is refused; changing it in the same patch passes", () => {
+    const r = check({ remove: { connectors: ["k2"] } });
+    assert.match(r.ok ? "" : r.errors.join("; "), /junction j1 still names connector k2 \(its lights\)/);
+    const fixed = check({ junctions: [{ id: "j1", lights: null }], remove: { connectors: ["k2"] } });
+    assert.ok(fixed.ok, fixed.ok ? "" : fixed.errors.join("; "));
+    assert.equal(fixed.ok && fixed.summary.sketch.junctions[0].lights, undefined);
+    // or the junction goes with it
+    assert.ok(check({ remove: { connectors: ["k2"], junctions: ["j1"] } }).ok);
+  });
+
+  await t("remove: a road left with no lane must be listed; then it goes", () => {
+    const r = check({ remove: { lanes: ["c"], connectors: ["k2"], junctions: ["j1"] } });
+    assert.match(r.ok ? "" : r.errors.join("; "), /road r2 would be left with no lane: list it in remove\.roads/);
+    const ok2 = check({ remove: { lanes: ["c"], connectors: ["k2"], junctions: ["j1"], roads: ["r2"] } });
+    assert.ok(ok2.ok, ok2.ok ? "" : ok2.errors.join("; "));
+    assert.deepEqual(ok2.ok && ok2.summary.sketch.roads.map(x => x.id), ["r1"]);
+  });
+
+  await t("remove: a plain file (History's Apply changes from file) can't remove", () => {
+    const r = readSketchFile(JSON.stringify({ remove: { connectors: ["kU"] } }), "apply", rc);
+    assert.equal(r.ok, false);
+    assert.match(r.ok ? "" : r.error, /only agent patches may remove/);
+  });
+
+  await t("remove: applied on the server path, one save without the removed items; the page's own action can't remove", async () => {
+    const m = { saves: [] as Saved[] };
+    const d: RestoreFileDeps = {
+      canEdit: true,
+      current: async () => ({ engine: "v2", network: { nodes: [] }, settings: {}, underlay: null, sketch: rich }),
+      save: async s => { m.saves.push(s); return { ok: true, revision: 8, savedAt: "" } as SaveResult; },
+    };
+    const r = await restoreFromFile({ mode: "apply", file: { remove: { connectors: ["kU"] } }, revision: 7, patch: { note: "Agent patch #5 (T134, Bob): no U-turn at B" } }, d);
+    assert.deepEqual(r, { ok: true, revision: 8 });
+    assert.deepEqual(m.saves[0].sketch.connectors.map(c => c.id), ["k1", "k2"]);
+    assert.deepEqual(m.saves[0].restore, { note: "Agent patch #5 (T134, Bob): no U-turn at B", kind: "patch" });
+    const plain = await restoreFromFile({ mode: "apply", file: { remove: { connectors: ["kU"] } }, revision: 7 }, d);
+    assert.equal(plain.ok, false);
+    assert.equal(m.saves.length, 1);
   });
 
   console.log(`agent-patch: ${ok} checks passed`);

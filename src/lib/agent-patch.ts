@@ -4,7 +4,8 @@ import { leftOutCount, readSketchFile, type FileSummary } from "./sketch-diff";
 /**
  * Agent patches (T132): changes an agent proposes to a plan instead of editing it, applied or rejected by the
  * plan's editors on its page. A patch is what "Apply changes from file" takes (lanes, connectors, roads,
- * junctions, links, crossings, each with an id; an item's own fields over the current one's).
+ * junctions, links, crossings, zones, each with an id; an item's own fields over the current one's), and may also
+ * remove items: `remove: { lanes: ["l5"], connectors: ["c7"], … }`, ids only, checked so nothing goes unlisted.
  */
 
 export type AgentPatchStatus = "pending" | "applied" | "rejected" | "superseded";
@@ -23,8 +24,8 @@ export const PATCH_TITLE_MAX = 160, PATCH_DESC_MAX = 20_000;
  * plan; this only keeps unusable patches out of the editors' list.
  */
 export function checkPatch(patchText: string, current: Sketch | null): { ok: true; summary: FileSummary; payload: unknown } | { ok: false; errors: string[] } {
-  const r = readSketchFile(patchText, "apply", current);
-  if (!r.ok) return { ok: false, errors: [r.error] };
+  const r = readSketchFile(patchText, "apply", current, { allowRemove: true });
+  if (!r.ok) return { ok: false, errors: r.problems ?? [r.error] };
   const s = r.summary, errors: string[] = [];
   if (leftOutCount(s))
     for (const x of s.items) if (x.change.startsWith("left out")) errors.push(`${x.kind.replace(/s$/, "")} ${x.id}: ${x.change}${x.why ? ` (${x.why})` : ""}`);
