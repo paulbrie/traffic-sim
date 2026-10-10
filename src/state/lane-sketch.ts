@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import { Subject } from "subjecto";
 import { emptySketch, settle, type Piece, type Pt, type Sketch } from "@/lib/lane-sketch";
+import { sanitizeZones } from "@/lib/sketch-zones";
 import type { SketchSimClient } from "./sketch-sim-client";
 import { laneSketch$, sketchReplaced } from "./store";
 
@@ -77,7 +78,7 @@ const scratchView$ = new Subject<Sketch>(laneSketch$.getValue().scratch ?? empty
 laneSketch$.subscribe(k => {
   if (!samePlan(k, planView$.getValue())) planView$.next(planPart(k));
   const sc = k.scratch ?? null, cur = scratchView$.getValue();
-  if (sc ? sc !== cur : cur.lanes.length || cur.junctions.length || cur.connectors.length || cur.crossings?.length) scratchView$.next(sc ?? emptySketch());
+  if (sc ? sc !== cur : cur.lanes.length || cur.junctions.length || cur.connectors.length || cur.crossings?.length || cur.zones?.length) scratchView$.next(sc ?? emptySketch());
 });
 export const planSketch = makeStore("plan", planView$, sk => {
   planView$.next(sk);
@@ -86,7 +87,7 @@ export const planSketch = makeStore("plan", planView$, sk => {
 });
 export const scratchSketch = makeStore("scratch", scratchView$, sk => {
   scratchView$.next(sk);
-  const plan = planPart(laneSketch$.getValue()), empty = !sk.lanes.length && !sk.junctions.length && !sk.connectors.length && !sk.crossings?.length && !sk.traffic;
+  const plan = planPart(laneSketch$.getValue()), empty = !sk.lanes.length && !sk.junctions.length && !sk.connectors.length && !sk.crossings?.length && !sk.zones?.length && !sk.traffic;
   laneSketch$.next(empty ? plan : { ...plan, scratch: planPart(sk) });
 });
 
@@ -116,7 +117,10 @@ export function readClipText(text: string): SketchClip | null {
     const o = JSON.parse(text) as { stamp?: string; centre?: Pt; part?: Sketch };
     const p = o.part;
     if (!p || !Array.isArray(p.lanes) || !Array.isArray(p.connectors) || !Array.isArray(p.junctions) || !o.centre) return null;
-    return { part: { ...p, roads: p.roads ?? [] }, centre: o.centre, pastes: 0, stamp: o.stamp };
+    // (zones checked as a saved sketch's are: the text may come from anywhere)
+    const zones = sanitizeZones(p.zones);
+    const { zones: _, ...rest } = p;
+    return { part: { ...rest, roads: p.roads ?? [], ...(zones.length ? { zones } : {}) }, centre: o.centre, pastes: 0, stamp: o.stamp };
   } catch { return null; }
 }
 

@@ -193,7 +193,7 @@ export function HistoryButton({ planId, canRestore, fromFile = true }: { planId:
   );
 }
 
-const KIND_LABEL: Record<SketchKind, string> = { lanes: "Lanes", connectors: "Connectors", junctions: "Junctions", roads: "Roads", links: "Links", crossings: "Crossings" };
+const KIND_LABEL: Record<SketchKind, string> = { lanes: "Lanes", connectors: "Connectors", junctions: "Junctions", roads: "Roads", links: "Links", crossings: "Crossings", zones: "Zones" };
 const FIRST = 4;
 const ids = (xs: string[]) => xs.slice(0, FIRST).join(", ") + (xs.length > FIRST ? ` +${xs.length - FIRST}` : "");
 

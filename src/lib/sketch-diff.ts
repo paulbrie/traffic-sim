@@ -5,7 +5,7 @@ import { sanitizeSketch, type Sketch } from "./lane-sketch";
  * current revision:
  * - "Restore from file": the file is a whole sketch and replaces the plan's;
  * - "Apply changes from file": the file holds only some items (lanes, connectors, roads, junctions, links,
- *   crossings); each changes the current item with its id, field by field (only the fields it has: `{id, width}`
+ *   crossings, zones); each changes the current item with its id, field by field (only the fields it has: `{id, width}`
  *   changes a lane's width; null clears an optional field), or is added (then it must be whole); nothing is
  *   removed, and everything else is kept (`applyPatch`).
  * Both results go through `sanitizeSketch`, the same checks the server applies to every saved sketch, and
@@ -17,7 +17,7 @@ import { sanitizeSketch, type Sketch } from "./lane-sketch";
 export const SKETCH_FILE_MAX_BYTES = 40 * 1024 * 1024;
 
 /** the lists compared item by item (by id) */
-export const SKETCH_KINDS = ["lanes", "connectors", "junctions", "roads", "links", "crossings"] as const;
+export const SKETCH_KINDS = ["lanes", "connectors", "junctions", "roads", "links", "crossings", "zones"] as const;
 export type SketchKind = (typeof SKETCH_KINDS)[number];
 type Item = { id: string };
 
@@ -147,6 +147,7 @@ export function shapeOf(kind: SketchKind, x: unknown): string {
     case "roads": return `${n(o.lanes)} lanes`;
     case "links": return `${n(o.conns)} connectors`;
     case "crossings": return "2 points";
+    case "zones": return `${n(o.outline)} corners`;
   }
 }
 
@@ -221,7 +222,7 @@ export type FileResult = { ok: true; sketch: Sketch; kept: string[]; file: Sketc
  */
 export function fileResult(raw: unknown, mode: FileMode, cur: Sketch | null): FileResult {
   const patch = pickPatch(raw);
-  if (!patch) return { ok: false, error: "The file has no sketch items (lanes, connectors, roads, junctions, links or crossings, each with an id)." };
+  if (!patch) return { ok: false, error: "The file has no sketch items (lanes, connectors, roads, junctions, links, crossings or zones, each with an id)." };
   if (mode === "apply") {
     const { sketch, leftOut } = applyPatchDetail(cur, patch);
     return sketch ? { ok: true, sketch, kept: [], file: null, patch, leftOut } : { ok: false, error: "Nothing usable is left once the file's items are checked." };

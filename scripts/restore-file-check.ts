@@ -14,6 +14,7 @@ const base = {
   roads: [{ id: "r1", name: "Main", lanes: ["a", "b"] }],
   junctions: [{ id: "j1", name: "J", outline: [{ x: 50, y: -5 }, { x: 60, y: -5 }, { x: 60, y: 5 }] }],
   crossings: [{ id: "x1", a: { x: 20, y: -4 }, b: { x: 20, y: 4 }, width: 4, peds: 300 }],
+  zones: [{ id: "z1", name: "Centre", outline: [{ x: -10, y: -20 }, { x: 70, y: -20 }, { x: 70, y: 20 }, { x: -10, y: 20 }], color: "#3b82f6" }],
   journeys: [{ id: "t1", from: "a", to: "b", rate: 100 }],
   geo: { lat: 47.13, lon: 24.49 },
   traffic: { rate: 600, speed: 50 },
@@ -298,6 +299,25 @@ async function main() {
       assert.equal(x.lanes.find(l => l.id === "c")!.speed, 130);
       assert.equal("speed" in x.lanes.find(l => l.id === "a")!, false);
     }
+  });
+
+  await t("zones (T129): kept through sanitizing; changed, added and kept by apply; replaced by restore", () => {
+    assert.equal(cur.zones?.[0].name, "Centre");
+    // a sketch with only zones is a sketch still
+    assert.ok(sanitizeSketch({ lanes: [], connectors: [], roads: [], junctions: [], zones: base.zones }));
+    const zone2 = { id: "z2", name: "Park", outline: [{ x: 0, y: 30 }, { x: 20, y: 30 }, { x: 20, y: 50 }], color: "#22c55e", note: "the green" };
+    const s = summary(JSON.stringify({ zones: [{ id: "z1", name: "Old town" }, zone2] }), "apply");
+    assert.deepEqual(s.items, [
+      { kind: "zones", id: "z1", change: "changed", before: "4 corners", after: "4 corners", fields: ["name"] },
+      { kind: "zones", id: "z2", change: "added", after: "3 corners" },
+    ]);
+    assert.deepEqual(s.kinds.zones, { added: ["z2"], removed: [], changed: ["z1"] });
+    assert.deepEqual(s.sketch.zones!.map(z => [z.id, z.name]), [["z1", "Old town"], ["z2", "Park"]]);
+    assert.equal(s.sketch.zones![0].color, "#3b82f6");
+    assert.deepEqual(applyPatch(cur, { lanes: [line("a", 0, 50)] })!.zones, cur.zones);
+    // restore: a file with other zones replaces them (z1 removed, z2 added)
+    const r = summary(JSON.stringify({ ...base, zones: [zone2] }), "restore");
+    assert.deepEqual(r.kinds.zones, { added: ["z2"], removed: ["z1"], changed: [] });
   });
 
   console.log(`restore-file: ${ok} checks passed`);
