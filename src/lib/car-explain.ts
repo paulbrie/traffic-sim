@@ -36,6 +36,8 @@ export interface CarExplain {
     /** the gaps it turned down lately */
     rejected: { t: number; edge: string; gap: number; need: number; car?: number }[];
   };
+  /** no way from where it is to where it is going (T166): its destination lane, the edge it is on, why (e.g. a loop with no way off) */
+  noRoute?: null | { dest: string; at: string; why: string };
   /** its last decisions and changes of state, oldest first (about 30) */
   log: { t: number; what: string; text: string; car?: number }[];
 }

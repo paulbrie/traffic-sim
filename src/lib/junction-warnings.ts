@@ -6,7 +6,7 @@
  */
 import { connectorPts, contentsOf, laneLength, samples, type Pt, type Sketch, type SketchLane } from "./lane-sketch";
 
-export type JunctionWarningKind = "across-ring" | "entry-no-give-way" | "entry-two-places" | "crosses-many" | "no-way-in" | "no-way-out";
+export type JunctionWarningKind = "loop-no-way-out" | "across-ring" | "entry-no-give-way" | "entry-two-places" | "crosses-many" | "no-way-in" | "no-way-out";
 /** one warning: what kind, on which junction (null: on none), the lanes and connectors it is about (ids), the words */
 export interface JunctionWarning { kind: JunctionWarningKind; junction: string | null; items: string[]; text: string }
 
@@ -40,6 +40,22 @@ export function junctionWarnings(sk: Sketch): JunctionWarning[] {
   const ringIds = new Set(rings.map(r => r.id));
   const name = (id: string) => (lanes.has(id) ? `lane ${id}` : `connector ${id}`);
 
+  // a loop no way leaves (a ring with no way off): what can't get back to any lane that leaves the sketch, back from those lanes
+  {
+    const ins = new Map<string, string[]>();
+    for (const c of sk.connectors) (ins.get(c.to.lane) ?? ins.set(c.to.lane, []).get(c.to.lane)!).push(c.from.lane);
+    const leaves = new Set(sk.connectors.map(c => c.from.lane)), reach = new Set(sk.lanes.filter(l => !leaves.has(l.id) && !ringIds.has(l.id)).map(l => l.id)), todo = [...reach];
+    while (todo.length) for (const p of ins.get(todo.pop()!) ?? []) if (!reach.has(p)) { reach.add(p); todo.push(p); }
+    const caught = sk.lanes.filter(l => !reach.has(l.id) && (ins.get(l.id)?.length ?? 0) > 0).map(l => l.id);
+    const byJ = new Map<string | null, string[]>();
+    for (const id of caught) { const j = onJ.get(id) ?? null; (byJ.get(j) ?? byJ.set(j, []).get(j)!).push(id); }
+    for (const [j, ids] of byJ) {
+      const rs = ids.filter(id => ringIds.has(id)), one = rs.length === 1;
+      const text = rs.length === ids.length ? `${one ? "the roundabout ring" : "the roundabout rings"} ${rs.join(", ")} ${one ? "has" : "have"} no way off: cars that drive onto ${one ? "it" : "them"} circle for ever`
+        : `lanes ${ids.join(", ")} form a loop that no way leaves: cars that drive onto it circle for ever`;
+      out.push({ kind: "loop-no-way-out", junction: j, items: ids, text });
+    }
+  }
   // across a roundabout's middle: in among a ring (inside its outer edge by a metre), joined by neither end to it or to a ring
   // round the same middle (a two-lane roundabout's other ring); nor a lane leading onto or off it (a way in drawn into the ring)
   const connById = new Map(sk.connectors.map(c => [c.id, c]));
@@ -98,6 +114,6 @@ export function junctionWarnings(sk: Sketch): JunctionWarning[] {
     if (!ins.has(l.id)) out.push({ kind: "no-way-in", junction: j, items: [l.id], text: `lane ${l.id} on the junction has no way in: cars appear on it out of nowhere` });
     if (!outs.has(l.id)) out.push({ kind: "no-way-out", junction: j, items: [l.id], text: `lane ${l.id} on the junction has no way out: cars on it vanish at its end` });
   }
-  const rank: Record<JunctionWarningKind, number> = { "across-ring": 0, "no-way-in": 1, "no-way-out": 1, "crosses-many": 2, "entry-two-places": 3, "entry-no-give-way": 4 };
+  const rank: Record<JunctionWarningKind, number> = { "loop-no-way-out": -1, "across-ring": 0, "no-way-in": 1, "no-way-out": 1, "crosses-many": 2, "entry-two-places": 3, "entry-no-give-way": 4 };
   return out.sort((a, b) => rank[a.kind] - rank[b.kind] || (a.junction ?? "").localeCompare(b.junction ?? ""));
 }

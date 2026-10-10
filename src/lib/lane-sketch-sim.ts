@@ -534,6 +534,8 @@ export class SketchSim {
   private bRnd: () => number;
   /** the shortest ways to the exits, and the exits' shares of the trips */
   private routes: RouteTable | null = null;
+  /** lanes and connectors from which no way leads out of the sketch (a ring with no way off, a loop): driven onto, a car circles for ever (T166) */
+  private trap = new Set<Edge>();
   private exitWeights = new Map<string, number>();
   private nextId = 1;
   /** test cars (`sendTest`): numbered -1, -2… (the others' numbers, which settle who goes first, as without them), their own
@@ -773,6 +775,13 @@ export class SketchSim {
       for (const o of F.outs) o.conn.joinBack = { len: F.len - (k.at - k.before), at: T.ring ? ((at % T.len) + T.len) % T.len : Math.max(0, at) };
     }
     this.junctionPriority(sk, all, paths);
+    // (what leads out of the sketch, back from the lanes nothing leaves: the rest is a trap)
+    const out = new Set<Edge>(all.filter(e => e.kind === "lane" && !e.ring && !e.outs.length)), todo = [...out];
+    while (todo.length) {
+      const e = todo.pop()!;
+      for (const p of e.kind === "lane" ? e.ins.map(o => o.conn) : [e.from!.lane]) if (!out.has(p)) { out.add(p); todo.push(p); }
+    }
+    this.trap = new Set(all.filter(e => !out.has(e)));
     for (const e of all) {
       const zs = e.conflicts.filter(k => !k.join).map(k => ({ s: k.at - k.before, e: k.at + k.after })).sort((p, q) => p.s - q.s);
       for (const z of zs) { const last = e.runs[e.runs.length - 1]; if (last && z.s <= last.e) last.e = Math.max(last.e, z.e); else e.runs.push({ ...z }); }
@@ -1149,10 +1158,13 @@ export class SketchSim {
         return;
       }
     }
-    // (one place to go reached from several lanes: from the nearest, its own if it can; no changing lane for nothing)
+    // (giving up a lane change: only for a way that still leads where it is going; none, it keeps to the change it waits for)
+    if (ownLane && rt && dest) { v.goal = null; v.exit = null; return; }
+    // (one place to go reached from several lanes: from the nearest, its own if it can; no changing lane for nothing; never into a
+    // trap, a loop nothing leaves, while there is another way)
     const where = new Map<string, { lane: Edge; conn: Edge | null }>();
     for (const g of goals) { const k = g.conn ? g.conn.to!.lane.key : `end:${g.lane.key}`; if (!where.has(k)) where.set(k, { lane: g.lane, conn: g.conn }); }
-    const options = [...where.values()];
+    const all = [...where.values()], safe = all.filter(o => !o.conn || !this.trap.has(o.conn)), options = safe.length ? safe : all;
     v.goal = options.length ? options[Math.floor(rnd() * options.length)] : null;
     v.exit = v.goal?.lane === v.edge ? v.goal.conn : null;
   }
@@ -2524,7 +2536,7 @@ export class SketchSim {
       const dist = Math.max(0, tr!.gap - S0);
       for (const e of this.route(v)) if (dist <= e.off + (e.b - e.a) + 1e-6) { const s = e.a + (dist - e.off); stopAt = { edge: e.edge.key, s: r2(e.edge.ring ? ((s % e.edge.len) + e.edge.len) % e.edge.len : s), dist: r2(dist), why: v.why ?? "" }; break; }
     }
-    const { chain, deadlock } = this.chainOf(id, (c: number) => { const w = byId.get(c); return w ? this.ruleOf(w)?.car ?? null : null; }, blocker?.car ?? (r?.kind === "follow" ? r.car ?? null : null));
+    const { chain, deadlock } = this.chainOf(id, (c: number) => { const w = byId.get(c); return w ? this.ruleOf(w)?.car ?? null : null; }, blocker?.car ?? (r?.kind === "follow" ? r.car ?? null : null), (c: number) => (byId.get(c)?.v ?? 0) < 1);
     const h = this.hop(v);
     return {
       car: id, t: r2(this.t), traced, why: v.why,
@@ -2535,18 +2547,33 @@ export class SketchSim {
       chain, deadlock,
       plan: { next: v.exit?.key ?? (v.edge.kind === "conn" ? v.edge.to!.lane.key : null), goal: v.goal ? v.goal.conn?.key ?? `end:${v.goal.lane.key}` : null, dest: v.dest ?? null,
         laneChange: h ? { to: h.n.lane.key, why: "route" } : null, rejected: id === this.watchId ? [...this.watchRejected] : [] },
+      noRoute: this.noRouteOf(v),
       log: id === this.watchId ? [...this.watchLog] : [],
     };
   }
   /** a car's blockers in turn (not the car itself), at most 12; when they come round again, the last is the first repeated, and the ring */
-  private chainOf(id: number, next: (car: number) => number | null, first: number | null): { chain: number[]; deadlock: number[] | null } {
+  private chainOf(id: number, next: (car: number) => number | null, first: number | null, held: (car: number) => boolean = () => true): { chain: number[]; deadlock: number[] | null } {
     const chain: number[] = [], seen = new Set([id]);
     for (let c = first; c !== null && chain.length < 12; c = next(c)) {
       chain.push(c);
-      if (seen.has(c)) { const i = c === id ? -1 : chain.indexOf(c); return { chain, deadlock: i < 0 ? [id, ...chain.slice(0, -1)] : chain.slice(i, -1) }; }
+      if (seen.has(c)) {
+        const i = c === id ? -1 : chain.indexOf(c), ring = i < 0 ? [id, ...chain.slice(0, -1)] : chain.slice(i, -1);
+        // (a deadlock only when every one in the ring is held: cars following one another round a loop on the move aren't)
+        return { chain, deadlock: ring.every(held) ? ring : null };
+      }
       seen.add(c);
     }
     return { chain, deadlock: null };
+  }
+  /** car `v` has no way from where it is to where it is going: why, or null (it has one, or goes nowhere in particular) */
+  private noRouteOf(v: SimVehicle): CarExplain["noRoute"] {
+    const rt = this.routes, dest = v.dest;
+    if (!rt || !dest) return null;
+    const via = (c: Edge) => rt.viaConnector(c.id, dest) < Infinity;
+    const ok = v.edge.kind === "conn" ? via(v.edge) || v.edge.to!.lane.id === dest
+      : v.edge.id === dest || v.edge.outs.some(o => via(o.conn)) || v.edge.neighbors.some(n => n.lane.id === dest || n.lane.outs.some(o => via(o.conn)));
+    if (ok) return null;
+    return { dest: `lane:${dest}`, at: v.edge.key, why: this.trap.has(v.edge) ? "it is on a loop that no way leaves" : "no way from here leads there" };
   }
   /** car `id` at a moment past, from the recording: its why, gap, time standing, the others' whys then, its whys before */
   private explainReplayed(id: number, at: number): CarExplain | null {
@@ -2573,14 +2600,15 @@ export class SketchSim {
       if (tag !== last) { const w = this.tags[last] || null, rr = readWhy(w); log.unshift({ t: fr[j + 1].t, what: "state", text: w ? `${rr?.kind ?? "held"}: ${w}` : "free road", ...(rr?.car !== undefined ? { car: rr.car } : {}) }); last = tag; }
     }
     const gap = f.aux[me * 2] !== 65535 ? f.aux[me * 2] / 10 : null;
-    const { chain, deadlock } = this.chainOf(id, (c: number) => readWhy(whyOf.get(c) ?? null)?.car ?? null, r?.car ?? null);
+    const speedOf = new Map<number, number>(); for (let i = 0; i < n; i++) speedOf.set(f.nums[i * 8], f.nums[i * 8 + 5]);
+    const { chain, deadlock } = this.chainOf(id, (c: number) => readWhy(whyOf.get(c) ?? null)?.car ?? null, r?.car ?? null, (c: number) => (speedOf.get(c) ?? 0) < 1);
     return {
       car: id, t: f.t, traced: false, why,
       rule: r ? { kind: r.kind, ...(r.edge ? { edge: r.edge } : {}), ...(r.detail ? { detail: r.detail } : {}) } : null,
       speed: null,
       leader: r?.kind === "follow" && r.car !== undefined && gap !== null ? { car: r.car, gap, kmh: r2((f.nums[[...Array(n).keys()].find(i => f.nums[i * 8] === r.car)! * 8 + 5] ?? 0) * 3.6) } : null,
       blocker: r && r.car !== undefined && r.kind !== "follow" ? { car: r.car, edge: r.edge ?? (() => { for (let i = 0; i < n; i++) if (f.nums[i * 8] === r.car) return this.tags[f.tags[i * 3]]; return ""; })() } : null,
-      stopAt: null, since: r2(since), chain, deadlock, plan: null, log: log.slice(-30),
+      stopAt: null, since: r2(since), chain, deadlock, plan: null, noRoute: null, log: log.slice(-30),
     };
   }
 

@@ -94,6 +94,8 @@ const report = (name: string, ok: boolean, text: string) => { results.push(`${na
   sim.step(0.1);
   const car = (id: number) => sim.vehicles.find(v => v.id === id)!;
   car(a).why = `zone lane:V for car ${b}`; car(b).why = `zone lane:H for car ${a}`; car(c).why = `car ${a}`;
+  // (standing, as cars in a deadlock are: on the move it wouldn't be one)
+  for (const id of [a, b]) (car(id) as unknown as { v: number }).v = 0;
   const xa = sim.explain(a)!, xc = sim.explain(c)!;
   const ok = JSON.stringify(xa.chain) === JSON.stringify([b, a]) && JSON.stringify(xa.deadlock) === JSON.stringify([a, b])
     && JSON.stringify(xc.chain) === JSON.stringify([a, b, a]) && JSON.stringify(xc.deadlock) === JSON.stringify([a, b]) && /Deadlock/.test(headline(xa).text);
@@ -159,6 +161,34 @@ const RULES: Partial<Sketch> = { traffic: { rate: 0, speed: 50, seed: 1, tune: {
   }
   const ok = through && maxStill < 30 && flips === 0;
   report("patience, no flip-flop", ok, `through ${through}, longest standing ${maxStill.toFixed(1)} s, flip-flops ${flips}`);
+}
+
+// T166: giving up a lane change never drives into a loop no way leaves; cars following one another on the move aren't a deadlock
+{
+  // (A leads only onto a ring with no way off; B, beside it in one road, leads to X: a car for X on A, kept waiting to change, gives up)
+  const ring: SketchLane = { id: "R", width: 4, inRate: 0, shape: { kind: "arc", c: { x: 115, y: -20 }, r: 10, a0: 0, sweep: -2 * Math.PI } as SketchLane["shape"] };
+  const sim = make(sketch([line("A", [[0, 0], [100, 0]]), line("B", [[0, 3.5], [100, 3.5]]), line("X", [[110, 3.5], [200, 3.5]]), ring],
+    [conn("cAR", "A", 100, "R", 0), conn("cBX", "B", 100, "X", 0)], { roads: [{ id: "r1", name: "Two lanes", lanes: ["A", "B"] }] }));
+  const a = sim.sendTest("A", "X")!;
+  sim.step(0.1);
+  const car = sim.vehicles.find(v => v.id === a) as unknown as { goal: { conn: { key: string } | null } | null; exit: unknown };
+  const before = car.goal?.conn?.key ?? null;
+  (sim as unknown as { plan: (v: unknown, own: boolean) => void }).plan(car, true);
+  const gaveUpTo = car.goal?.conn?.key ?? null;
+  const ok = before === "conn:cBX" && gaveUpTo === null;
+  report("no give-up into a dead loop", ok, `its way there ${before}; giving up, from its own lane it would take ${gaveUpTo ?? "nothing (it keeps waiting to change)"}`);
+}
+{
+  const sim = make(sketch([line("H", [[0, 0], [200, 0]]), line("V", [[100, -100], [100, 100]])]));
+  const a = sim.sendTest("H", "H")!, b = sim.sendTest("V", "V")!;
+  sim.step(0.1);
+  const car = (id: number) => sim.vehicles.find(v => v.id === id)! as unknown as { why: string | null; v: number };
+  car(a).why = `car ${b}`; car(b).why = `car ${a}`; car(a).v = 8; car(b).v = 8;
+  const moving = sim.explain(a)!;
+  car(a).v = 0; car(b).v = 0;
+  const standing = sim.explain(a)!;
+  const ok = JSON.stringify(moving.chain) === JSON.stringify([b, a]) && moving.deadlock === null && JSON.stringify(standing.deadlock) === JSON.stringify([a, b]);
+  report("moving followers", ok, `on the move: chain ${JSON.stringify(moving.chain)}, deadlock ${JSON.stringify(moving.deadlock)}; standing: deadlock ${JSON.stringify(standing.deadlock)}`);
 }
 
 for (const r of results) console.log(r);
