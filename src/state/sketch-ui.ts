@@ -164,11 +164,15 @@ export function useUiPath(path: string): [unknown, (v: unknown) => void] {
     const parts = path.split("/"), last = parts.pop()!;
     let o = sketchUi.getValue() as unknown as Record<string, unknown>;
     for (const p of parts) o = o[p] as Record<string, unknown>;
-    const next = typeof v === "function" ? (v as (p: unknown) => unknown)(o[last]) : v;
-    if (next !== o[last]) o[last] = next;
+    // (the last given as a plain copy, and the next kept as one: a part read out of the store is its proxy, and one put
+    // back into it in a new object (a spread of the last) is wrapped once more each time, every read slower than the last)
+    const was = o[last], next = plain(typeof v === "function" ? (v as (p: unknown) => unknown)(plain(was)) : v);
+    if (next !== null && typeof next === "object" ? JSON.stringify(next) !== JSON.stringify(was) : next !== was) o[last] = next;
   }, [path]);
   return [value, set];
 }
+/** a part of the store as plain data (no proxies in it) */
+const plain = (v: unknown): unknown => (v !== null && typeof v === "object" ? JSON.parse(JSON.stringify(v)) : v);
 /** (marks an object's text in a snapshot: no string kept in the store starts so) */
 const OBJ = "\u0000obj:";
 /** what is at a path of the store now (slashes) */
