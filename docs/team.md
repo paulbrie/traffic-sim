@@ -42,11 +42,22 @@ between them who goes first and tell Alice.
 
 ## 3. Rules
 
-- **Credentials.** Never read `.env` files or anyone's credentials (one exception: trafficsim's `DATABASE_URL`, see
-  Database). Use only a login the user typed into your own
-  session (testers have their own test accounts). Test logins for the dev apps are kept together in `/home/genie/team/credentials.md`
-  (outside git; the user's decision: dev server, dev database). Add or update your own line when you set a password;
-  use another account only when Alice or the user asks. Never put these in a repo, a message or a log.
+- **Credentials.** Agents don't handle passwords (the user's decision, 2026-10-10). The pattern:
+  1. *Sign in with a token, not a password.* `npm run agent:login -- --as <name>` (trafficsim, T138) creates an 8-hour
+     session for that agent's own test account straight in the dev database and writes the cookie into
+     `/home/genie/<name>-scratch/agent-browser-state.json` (mode 600). It prints no token. agent-browser loads that
+     file. It only works on the dev database (`railway`), only for the agents' own test accounts (an allow-list and
+     test email domains), never for the user's or other real accounts. `--revoke` ends them.
+  2. *No stored agent passwords.* The agents' test accounts have long random passwords nobody keeps
+     (`agent:login --scramble`). `/home/genie/team/credentials.md` (outside git, mode 600) holds only logins a human
+     needs.
+  3. *A guard on messages.* A Claude Code hook (`/home/genie/team/hooks/no-secrets-in-messages.py`, PreToolUse on
+     SendMessage) blocks any message carrying a value from `credentials.md`, a database URL with a password, a token
+     or a `…PASSWORD=`/`…SECRET=` line. If it blocks you, rewrite without the value ("my login fails"), never try to
+     slip it past.
+  Never read `.env` files or anyone's credentials (one exception: trafficsim's `DATABASE_URL`, passed to scripts
+  without printing it, see Database). Never put a credential in a repo, a message, a log, a report or a screenshot.
+  A login the user types into your own session is theirs to give; don't store it.
 - **The user's plans.** Agents never edit the Bistrița plan (`04604363-4bf8-464e-9e1b-ed2b36618987`), with or without
   approval (the user's decision, 2026-10-10): no saves, no applies, no scripts writing to it. Changes for it are
   proposed as **agent patches** (T132), which the user reviews and applies in the UI. Reading it is fine. Each developer and tester has a test plan of their
