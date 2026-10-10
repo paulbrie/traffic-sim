@@ -32,8 +32,10 @@ export function contentOf(sk: Sketch, id: string): Sketch | undefined {
 }
 /** a name not taken yet: as asked, else with " (2)", " (3)"… */
 export function freeName(sk: Sketch, want: string): string {
-  const base = (want.trim() || "Sketch").slice(0, SKETCH_NAME_MAX - 5), taken = new Set(sketchList(sk).list.map(x => x.name));
-  if (!taken.has(base)) return base;
+  // (the whole name where it is free; cut to leave room for " (n)" only where it isn't)
+  const name = (want.trim() || "Sketch").slice(0, SKETCH_NAME_MAX), taken = new Set(sketchList(sk).list.map(x => x.name));
+  if (!taken.has(name)) return name;
+  const base = name.slice(0, SKETCH_NAME_MAX - 5);
   for (let n = 2; ; n++) if (!taken.has(`${base} (${n})`)) return `${base} (${n})`;
 }
 /** the next sketch's id (as the plan's other ids: s1, s2…) */

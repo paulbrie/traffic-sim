@@ -5,7 +5,7 @@ import { strict as assert } from "node:assert";
 import { applyPatch, leftOutCount, nothingToSave, readSketchFile, type FileSummary } from "../src/lib/sketch-diff";
 import { restoreFromFile, restoreNote, type RestoreFileDeps } from "../src/server/restore-file";
 import { sanitizeSketch, type Sketch } from "../src/lib/lane-sketch";
-import { contentOf, deleteSketch, duplicateSketch, newSketch, openSketch, renameSketch, sketchList } from "../src/lib/sketch-list";
+import { contentOf, deleteSketch, duplicateSketch, freeName, newSketch, openSketch, renameSketch, sketchList } from "../src/lib/sketch-list";
 import type { SaveResult } from "../src/server/data/plans";
 
 const line = (id: string, x0: number, x1: number, y = 0) => ({ id, shape: { kind: "line", pts: [{ x: x0, y }, { x: x1, y }] }, width: 3.5 });
@@ -350,6 +350,10 @@ async function main() {
     sk = renameSketch(sk, "s3", "Sketch 1");
     assert.equal(sketchList(sk).list[2].name, "Sketch 1 (2)");
     assert.equal(renameSketch(sk, "s3", "   "), sk);
+    // (a new one's name whole up to 80 where free; cut for " (n)" only where taken)
+    const long = "x".repeat(78);
+    assert.equal(freeName(sk, long), long);
+    assert.equal(freeName(renameSketch(sk, "s3", long), long), `${"x".repeat(75)} (2)`);
     // (opening the first again: its own content and traffic back in the window, its view kept)
     sk = openSketch(sk, "s1", v2);
     assert.equal(sketchList(sk).open, "s1");
