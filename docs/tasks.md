@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T130 | V2: a semi-transparent fill over a junction while it's drawn or selected for editing | Tatiana | 2026-10-10 | after T128 |
 | T129 | V2 editor: draw zones (neighbourhoods): labelled, coloured polygons stored in the plan, a Zone tool, panel, layer, label click | Tom (Tatiana for the editor files), Ramona checks | 2026-10-10 | |
 | T128 | V2 editor: merge two lanes (one continuing the other) or two roads into one, refusing clearly when they don't line up | Tatiana | 2026-10-10 | after T126 |
 | T127 | V2: cars' blinkers when turning, as in V1 (2D and 3D) | Alex (Tatiana for the views, Bob for the sim), Ramona checks | 2026-10-10 | |
