@@ -11,7 +11,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Textarea } from "@/components/ui/textarea";
 import { fetchPlanState, listPlanVersions, restorePlanFromFile, restorePlanVersion, type VersionRow } from "@/server/actions";
 import { RESTORE_NOTE_MAX } from "@/server/restore-file";
-import { readSketchFile, SKETCH_FILE_MAX_BYTES, SKETCH_KINDS, type FileMode, type FileSummary, type SketchKind } from "@/lib/sketch-diff";
+import { leftOutCount, nothingToSave, readSketchFile, SKETCH_FILE_MAX_BYTES, SKETCH_KINDS, type FileMode, type FileSummary, type SketchKind } from "@/lib/sketch-diff";
 import { ui } from "@/state/store";
 import { timeAgo } from "@/lib/time";
 
@@ -203,7 +203,9 @@ const ids = (xs: string[]) => xs.slice(0, FIRST).join(", ") + (xs.length > FIRST
  * traffic, every other top-level field not kept as it is, and what the checks left out.
  */
 function FileSummaryView({ s }: { s: FileSummary }) {
-  if (s.same) return <p className="text-sm text-muted-foreground">The result is the same as the current version: nothing to save.</p>;
+  const none = nothingToSave(s);
+  // (when items were left out, they are listed with the reasons even though nothing would change)
+  if (none && !leftOutCount(s)) return <p className="text-sm text-muted-foreground">{none}</p>;
   const skipped = SKETCH_KINDS.filter(k => s.dropped[k]).map(k => `${s.dropped[k]} ${KIND_LABEL[k].toLowerCase()}`);
   const removed = s.mode === "apply" ? SKETCH_KINDS.filter(k => s.kinds[k].removed.length) : [];
   const kinds = SKETCH_KINDS.filter(k => s.kinds[k].added.length || s.kinds[k].removed.length || s.kinds[k].changed.length);
@@ -216,6 +218,7 @@ function FileSummaryView({ s }: { s: FileSummary }) {
   const others = s.fields.filter(f => f.field !== "geo" && f.field !== "traffic");
   return (
     <div className="max-h-[50vh] space-y-3 overflow-y-auto text-sm">
+      {none && <p className="font-medium text-destructive">{none}</p>}
       {s.mode === "apply" && (
         <table className="w-full text-xs">
           <thead className="text-left text-muted-foreground">

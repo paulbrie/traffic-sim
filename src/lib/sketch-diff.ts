@@ -118,6 +118,21 @@ export type FileSummary = {
   same: boolean;
 };
 
+/** the file's items the checks left out: refused (apply: a required field cleared, a new item not whole…) or invalid */
+export function leftOutCount(s: FileSummary): number {
+  return s.mode === "apply" ? s.items.filter(x => x.change.startsWith("left out")).length : SKETCH_KINDS.reduce((n, k) => n + (s.dropped[k] ?? 0), 0);
+}
+
+/**
+ * When nothing would change, what to say: plainly "nothing to save", or, when items were left out, that they
+ * were (the list with the reasons follows; T115). Null when something would change.
+ */
+export function nothingToSave(s: FileSummary): string | null {
+  if (!s.same) return null;
+  const n = leftOutCount(s);
+  return n ? `Nothing would change: ${n} item${n === 1 ? " was" : "s were"} left out (see why below).` : "The result is the same as the current version: nothing to save.";
+}
+
 /** a short account of an item's shape, for before / after */
 export function shapeOf(kind: SketchKind, x: unknown): string {
   const o = x as Record<string, unknown>;

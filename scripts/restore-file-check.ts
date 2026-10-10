@@ -2,7 +2,7 @@
 // against the current revision, and the server's decisions (access, V2 only, the revision it was compared
 // with, the note, the merge on the stored sketch), with the data layer mocked.
 import { strict as assert } from "node:assert";
-import { applyPatch, readSketchFile, type FileSummary } from "../src/lib/sketch-diff";
+import { applyPatch, leftOutCount, nothingToSave, readSketchFile, type FileSummary } from "../src/lib/sketch-diff";
 import { restoreFromFile, restoreNote, type RestoreFileDeps } from "../src/server/restore-file";
 import { sanitizeSketch, type Sketch } from "../src/lib/lane-sketch";
 import type { SaveResult } from "../src/server/data/plans";
@@ -159,6 +159,36 @@ async function main() {
     const s = summary(JSON.stringify({ lanes: [{ id: "z", width: 4 }, line("e", 200, 260)] }), "apply");
     assert.deepEqual(s.items.map(x => [x.id, x.change, x.why]), [["z", "left out (invalid)", "a new item must have all its fields"], ["e", "added", undefined]]);
     assert.deepEqual(s.kinds.lanes.added, ["e"]);
+  });
+
+  // ---- nothing would change, but items were left out: say so, with the reasons (T115)
+  await t("apply: a file whose only items are refused says they were left out, not just 'nothing to save'", () => {
+    const shapeNull = summary(JSON.stringify({ lanes: [{ id: "a", shape: null }] }), "apply");
+    assert.equal(shapeNull.same, true);
+    assert.equal(leftOutCount(shapeNull), 1);
+    assert.equal(nothingToSave(shapeNull), "Nothing would change: 1 item was left out (see why below).");
+    assert.equal(shapeNull.items[0].why, "shape can't be cleared");
+    const newPartial = summary(JSON.stringify({ lanes: [{ id: "l99", width: 4 }, { id: "z", width: 3 }] }), "apply");
+    assert.equal(nothingToSave(newPartial), "Nothing would change: 2 items were left out (see why below).");
+    assert.deepEqual(newPartial.items.map(x => x.why), ["a new item must have all its fields", "a new item must have all its fields"]);
+    // unchanged and nothing refused: the plain message; a real change: none
+    assert.equal(nothingToSave(summary(JSON.stringify({ lanes: [line("a", 0, 50)] }), "apply")), "The result is the same as the current version: nothing to save.");
+    assert.equal(nothingToSave(summary(JSON.stringify({ lanes: [{ id: "a", width: 5 }] }), "apply")), null);
+  });
+
+  await t("restore: invalid items left out of an otherwise identical file are counted too", () => {
+    const s = summary(JSON.stringify({ ...base, lanes: [...base.lanes, { id: "bad", shape: { kind: "line", pts: [] } }] }), "restore");
+    assert.equal(s.same, true);
+    assert.equal(nothingToSave(s), "Nothing would change: 1 item was left out (see why below).");
+  });
+
+  await t("apply: compared with the plan as it is now, not as it was (T115: a save in between)", () => {
+    // the dialog reads the stored state each time (fetchPlanState); against the newer one the same file reads differently
+    const before = sanitizeSketch({ ...base, lanes: [{ ...line("a", 0, 50), width: 5 }, line("b", 60, 120), line("c", 0, -50)] })!;
+    const after = sanitizeSketch({ ...base, lanes: [{ ...line("a", 0, 50), width: 4 }, line("b", 60, 120), line("c", 0, -50)] })!;
+    const file = JSON.stringify({ lanes: [{ id: "a", width: 5 }] });
+    assert.equal(summary(file, "apply", before).same, true);
+    assert.deepEqual(summary(file, "apply", after).items.map(x => [x.change, x.fields]), [["changed", ["width"]]]);
   });
 
   await t("apply: nothing new is 'the same'", () => {
