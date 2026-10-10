@@ -98,7 +98,7 @@ function TestResult({ test, freeTime }: { test: NonNullable<RouteUi["test"]>; fr
   return (
     <div className="grid gap-0.5 rounded-md border p-1.5 text-xs" aria-label="Test car">
       <span><span className="font-medium">Test car {Math.abs(test.car)}</span> · {text}</span>
-      {test.otherWay && <span className="text-[11px] text-amber-700 dark:text-amber-500">It went another way than the one traced (looking for another way after waiting, or changing lane where it could): its way shows in blue.</span>}
+      {test.otherWay && <span className="text-[11px] text-amber-700 dark:text-amber-500">It went a longer way than the one traced (as a car looking for another way after waiting does): its way shows in blue.</span>}
     </div>
   );
 }

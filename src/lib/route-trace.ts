@@ -26,6 +26,69 @@ function minRadius(pts: Pt[]) {
   return r;
 }
 
+/** the lanes beside one in its road, running the same way: as RouteTable takes them */
+function besideLanes(sk: Sketch, id: string) {
+  const r = sk.roads.find(x => x.lanes.includes(id)), L = laneById(sk, id);
+  if (!r || !L) return [];
+  const m = pointAt(L.shape, laneLength(L.shape) / 2);
+  return r.lanes.filter(b => b !== id).flatMap(b => {
+    const Bl = laneById(sk, b);
+    if (!Bl) return [];
+    const q = nearestOn(Bl.shape, m.p), d = pointAt(Bl.shape, q.s).d;
+    return q.d <= (L.width + Bl.width) / 2 + 0.75 && m.d.x * d.x + m.d.y * d.y >= 0.5 ? [Bl] : [];
+  });
+}
+
+/** the routing table of a sketch, kept (what a test car drove is looked at again as it goes) */
+const tables = new WeakMap<Sketch, RouteTable>();
+/** metres more than the shortest a car may take (the simulation's: one at random from those within 5 m), and a little over */
+const TIE = 5 + 1;
+
+/**
+ * What a car drove (edge keys, `lane:…` / `conn:…`, in order) off the way traced, where it went another way than the cars
+ * would: the stretches off it where it took a connector longer to the end of the way than the shortest from there by more
+ * than the simulation's 5 m (as one looking for another way after waiting does), or jumped to a lane not beside its own.
+ * Not counted: another lane of the same road beside one of the way's, and the connectors between such lanes, nor a way
+ * off it as short as the traced one, give or take those 5 m (the cars take either). Empty if it kept to the way.
+ */
+export function offRoute(sk: Sketch, steps: ({ kind: "lane" | "connector"; id: string } | { kind: "change"; from: string; to: string })[], path: string[]): string[] {
+  const lanes = new Set<string>(), conns = new Set<string>();
+  for (const x of steps) {
+    if (x.kind === "change") { lanes.add(x.from); lanes.add(x.to); } else (x.kind === "lane" ? lanes : conns).add(x.id);
+  }
+  const to = [...steps].reverse().find((x): x is { kind: "lane"; id: string } => x.kind === "lane")?.id;
+  const near = new Set(lanes);
+  for (const id of lanes) for (const b of besideLanes(sk, id)) near.add(b.id);
+  const idOf = (k: string) => k.slice(k.indexOf(":") + 1);
+  const on = (k: string) => {
+    const id = idOf(k);
+    if (k.startsWith("lane:")) return near.has(id);
+    if (conns.has(id)) return true;
+    const c = sk.connectors.find(x => x.id === id);
+    return !!c && near.has(c.from.lane) && near.has(c.to.lane);
+  };
+  let table = tables.get(sk);
+  if (!table) tables.set(sk, (table = new RouteTable(sk)));
+  /** the step from `prev` to `k` one the cars wouldn't take for the way's end */
+  const astray = (prev: string | undefined, k: string) => {
+    if (!to) return true;
+    if (k.startsWith("lane:")) return !!prev?.startsWith("lane:") && !besideLanes(sk, idOf(prev)).some(b => b.id === idOf(k));
+    const c = sk.connectors.find(x => x.id === idOf(k));
+    if (!c) return true;
+    const via = table.viaConnector(c.id, to), s = Math.max(0, c.from.s - 0.6);
+    return via === Infinity || c.from.s - s + via > table.from(c.from.lane, s, to) + TIE;
+  };
+  const out: string[] = [];
+  for (let i = 0; i < path.length; ) {
+    if (on(path[i])) { i++; continue; }
+    let j = i;
+    while (j < path.length && !on(path[j])) j++;
+    if (path.slice(i, j).some((k, n) => astray(path[i + n - 1], k))) out.push(...path.slice(i, j));
+    i = j;
+  }
+  return out;
+}
+
 export function traceRoute(sk: Sketch, from: string, to: string, table = new RouteTable(sk)): RouteResult {
   const name = (id: string) => sk.roads.find(r => r.lanes.includes(id))?.name ?? `lane ${id}`;
   const A = laneById(sk, from), B = laneById(sk, to);
@@ -40,16 +103,7 @@ export function traceRoute(sk: Sketch, from: string, to: string, table = new Rou
     return { ok: false, reason: `${name(to)} (${to}) can't be reached from ${name(from)} (${from}): ${n ? `${n} other way${n === 1 ? "" : "s"} out can` : "no way out can"}` };
   }
   const v0 = (sk.traffic?.speed ?? 50) / 3.6, limit = (lane: string) => { const k = speedLimitOf(sk, lane); return k !== undefined ? k / 3.6 : v0; };
-  // (lanes beside one in its road, running the same way: as RouteTable takes them)
-  const beside = (id: string) => {
-    const r = sk.roads.find(x => x.lanes.includes(id)), L = laneById(sk, id)!;
-    if (!r) return [];
-    const m = pointAt(L.shape, laneLength(L.shape) / 2);
-    return r.lanes.filter(b => b !== id).flatMap(b => {
-      const Bl = laneById(sk, b)!, q = nearestOn(Bl.shape, m.p), d = pointAt(Bl.shape, q.s).d;
-      return q.d <= (L.width + Bl.width) / 2 + 0.75 && m.d.x * d.x + m.d.y * d.y >= 0.5 ? [Bl] : [];
-    });
-  };
+  const beside = (id: string) => besideLanes(sk, id);
   // (each lane's connectors leaving it)
   const outsOf = new Map<string, typeof sk.connectors>();
   for (const c of sk.connectors) outsOf.set(c.from.lane, [...(outsOf.get(c.from.lane) ?? []), c]);

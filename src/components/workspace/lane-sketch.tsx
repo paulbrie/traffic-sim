@@ -25,6 +25,7 @@ import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type 
 import { EditorKindContext, editorBack, NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, useUiPath, type TestOptions, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
 import { clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
 import { testPiece } from "@/lib/test-piece";
+import { offRoute } from "@/lib/route-trace";
 import { readPalette, speedColor } from "@/render/palette";
 import { arrowGlyph } from "@/render/draw2d";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
@@ -169,10 +170,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const routeShown = useMemo(() => {
     if (!route.result?.ok) return null;
     const lanes = new Set(route.result.steps.flatMap(x => (x.kind === "lane" ? [x.id] : []))), conns = new Set(route.result.steps.flatMap(x => (x.kind === "connector" ? [x.id] : [])));
-    // (the test car's way, where it went another: what it drove that the traced way doesn't have)
-    const keys = route.test?.otherWay ? route.test.path : [];
-    return { lanes, conns, driven: { lanes: new Set(keys.filter(k => k.startsWith("lane:")).map(k => k.slice(5)).filter(id => !lanes.has(id))), conns: new Set(keys.filter(k => k.startsWith("conn:")).map(k => k.slice(5)).filter(id => !conns.has(id))) } };
-  }, [route.result, route.test]);
+    // (the test car's way, where it went another: what it drove off the traced way)
+    const keys = route.test?.otherWay ? offRoute(sketch, route.result.steps, route.test.path) : [];
+    return { lanes, conns, driven: { lanes: new Set(keys.filter(k => k.startsWith("lane:")).map(k => k.slice(5))), conns: new Set(keys.filter(k => k.startsWith("conn:")).map(k => k.slice(5))) } };
+  }, [sketch, route.result, route.test]);
   const in3d = page && mode === "3d";
   /** the 3D view's canvas while it shows (the bridge's screenshot), and what its keys and buttons ask of it */
   const canvas3d = useRef<(() => HTMLCanvasElement | null) | null>(null);
@@ -243,11 +244,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const T = route.test, t = stats?.test;
     if (!T || !stats || !route.result?.ok) return;
     if (t && t.id === T.car && t.t0 === T.t0) {
-      const traced = new Set(route.result.steps.flatMap(x => (x.kind === "change" ? [`lane:${x.to}`] : [`${x.kind === "lane" ? "lane" : "conn"}:${x.id}`])));
-      const next = { ...T, state: t.state, time: Math.round(((t.t1 ?? stats.t) - t.t0) * 10) / 10, stops: t.stops, path: t.path, otherWay: t.path.some(k => !traced.has(k)) };
+      // (another lane of the same road beside the traced one is the same way: where ways as short tie, cars take either)
+      const otherWay = T.path.length === t.path.length ? T.otherWay : offRoute(sketch, route.result.steps, t.path).length > 0;
+      const next = { ...T, state: t.state, time: Math.round(((t.t1 ?? stats.t) - t.t0) * 10) / 10, stops: t.stops, path: t.path, otherWay };
       if (JSON.stringify(next) !== JSON.stringify(T)) setRoute(r => ({ ...r, test: next }));
     } else if (stats.t < T.t0 || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
-  }, [stats, route.result, route.test, setRoute]);
+  }, [stats, sketch, route.result, route.test, setRoute]);
   // what the handlers and the drawing read (kept current after every render)
   const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown });
 
