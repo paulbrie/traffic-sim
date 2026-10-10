@@ -15,8 +15,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T138 | Agents sign in without passwords: npm run agent:login (8 h session cookie into the agent's own agent-browser state file; dev DB and test accounts only), --revoke, --scramble the agents' passwords | Alex | 2026-10-10 | the user's credentials pattern (team.md); with the message hook |
-| T134 | Bistrița: dead-end junctions whose only connector is a U-turn (e.g. Junction 448): find all on rev 92, classify (stub short of a street, map edge, leftover), propose fixes as agent patches, and a detector for the console | Bob | 2026-10-10 | the user's screenshot; read-only |
+| T139 | V2: dead ends with a U-turn drawn as turning circles (2D and 3D, display only); an info line in the console | Tatiana | 2026-10-10 | after T124 |
+| T134 | Bistrița: 172 dead-end U-turn stubs on rev 92: A 71 cut short (connect, reviewed patches in batches of ~10), B 4 at the edge (ways in/out, one patch), C 15 unused (delete, one patch), D 82 real dead ends (keep; drawn as turning circles, T139): the user's choices | Bob | 2026-10-10 | list: /home/genie/bob-scratch/trafficsim/t134/T134-list.md |
 | T129 | V2 editor: draw zones (neighbourhoods): labelled, coloured polygons stored in the plan, a Zone tool, panel, layer, label click | Tom (Tatiana for the editor files), Ramona checks | 2026-10-10 | part 1 (data, history, layer, panel, shared fill): 8df5c21; part 2 (the editor) after Tatiana's T128 |
 | T127 | V2: cars' blinkers when turning, as in V1 (2D and 3D) | Alex (Tatiana for the views, Bob for the sim), Ramona checks | 2026-10-10 | data: 913e1ca; drawing: 71ff865 (amber, 380 ms on/off); browser check pending |
 | T124 | V2: a Problems-console warning and a Tidy step for connectors that turn back sharply (over 150° per segment pair; 5 on Bistrița rev 92) | Tatiana (Bob for sketch-tidy.ts) | 2026-10-10 | from T56 |
@@ -37,6 +37,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T138 | Agents sign in without passwords: npm run agent:login --as/--list/--revoke/--scramble (8 h token sessions into the agent's own agent-browser state file; dev DB, listed test accounts only); tatiana@ and ramona@test.com scrambled (the user's approval), their lines removed from credentials.md | Alex | 2026-10-10 | 142d540 |
 | T132 | Agent patches: agents submit plan patches (npm run patch:submit, checked against the current revision); the V2 plan page lists them with History's preview; the plan's editors apply (one new version, "Agent patch #n") or reject | Alex | 2026-10-10 | 326c64b; migration 0009 on railway |
 | T135 | V2 map: way-in and way-out labels edited in place (click, type, Enter; arrows step; red when out of range; one undo step) | Tatiana | 2026-10-10 | 58e7e07, 4247123 |
 | T130 | V2 map: a junction shaded (selection blue, 22 %) while it's drawn or selected for editing | Tatiana | 2026-10-10 | 68e426f |
