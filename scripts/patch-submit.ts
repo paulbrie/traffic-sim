@@ -46,7 +46,7 @@ async function main() {
     const [plan] = await sql`select id, name, engine, revision, sketch from plans where id = ${o.plan}`;
     if (!plan) throw new Error(`no plan ${o.plan}`);
     if (plan.engine !== "v2") throw new Error(`plan "${plan.name}" isn't a V2 plan: agent patches are for V2 plans`);
-    const check = checkPatch(patchText, sanitizeSketch(plan.sketch));
+    const check = checkPatch(patchText, sanitizeSketch(plan.sketch), title);
     if (!check.ok) {
       console.error(`Refused: the patch doesn't apply cleanly to "${plan.name}" (rev. ${plan.revision}):\n` + check.errors.map((e) => `  - ${e}`).join("\n"));
       process.exitCode = 1;
@@ -61,7 +61,7 @@ async function main() {
       return r.id as number;
     });
     const s = check.summary, items = s.items.filter((x) => x.change !== "unchanged").length, w = s.window;
-    const win = w ? `; adds ${w.counts.lanes} lane${w.counts.lanes === 1 ? "" : "s"} and ${w.counts.junctions} junction${w.counts.junctions === 1 ? "" : "s"} to the Sketch window${w.beside ? ` (${w.beside} m east of its content)` : ""}` : "";
+    const win = w ? `; adds ${w.counts.lanes} lane${w.counts.lanes === 1 ? "" : "s"} and ${w.counts.junctions} junction${w.counts.junctions === 1 ? "" : "s"} as a new sketch "${w.sketchName}" (the user's own sketches untouched)` : "";
     // (the app's address isn't the script's to guess: a shell may hold another app's base path; TRAFFICSIM_URL, if set, is put first)
     const where = `${(process.env.TRAFFICSIM_URL ?? "").replace(/\/$/, "")}/plans/${o.plan}`;
     console.log(`PATCH: #${id} submitted to "${plan.name}" (rev. ${plan.revision}): ${items} item${items === 1 ? "" : "s"} changed or added${win}${supersedes !== null ? `; #${supersedes} superseded` : ""}.`);

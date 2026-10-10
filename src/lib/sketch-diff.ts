@@ -127,10 +127,10 @@ function withoutRemoved(sk: Sketch, rem: Removal): Sketch {
  * "kind:id"), so the current one stays: applying never removes anything. Then its Sketch window piece, if any,
  * added to the window (`window`), or refused (`windowError`).
  */
-export function applyPatchDetail(cur: Sketch | null, patch: SketchPatch): { sketch: Sketch | null; leftOut: Set<string>; problems: string[]; window?: WindowAdd; windowError?: string } {
+export function applyPatchDetail(cur: Sketch | null, patch: SketchPatch, opts: FileOptions = {}): { sketch: Sketch | null; leftOut: Set<string>; problems: string[]; window?: WindowAdd; windowError?: string } {
   const r = applyMain(cur, patch);
   if (!patch.sketchWindowAdd || !r.sketch || r.problems.length) return r;
-  const w = addToSketchWindow(r.sketch, patch.sketchWindowAdd);
+  const w = addToSketchWindow(r.sketch, patch.sketchWindowAdd, opts.sketchName, opts.now);
   return w.ok ? { ...r, sketch: w.sketch, window: w } : { ...r, sketch: null, windowError: w.error };
 }
 
@@ -316,7 +316,9 @@ export function restoreSketch(cur: Sketch | null, file: Sketch, raw: Record<stri
 
 export type FileResult = { ok: true; sketch: Sketch; kept: string[]; file: Sketch | null; patch: SketchPatch; leftOut?: Set<string>; window?: WindowAdd } | { ok: false; error: string; problems?: string[] };
 /** an agent patch: `allowRemove`, its `remove` lists are applied (a plain file's never are, T140); `allowSketchWindow`, its `sketchWindowAdd` too (T152) */
-export type FileOptions = { allowRemove?: boolean; allowSketchWindow?: boolean };
+export type FileOptions = { allowRemove?: boolean; allowSketchWindow?: boolean;
+  /** the new sketch an agent patch's piece goes into: its name (the patch's title), and when it is made (ms; the server's, when it saves) */
+  sketchName?: string; now?: number };
 
 /**
  * The sketch that would be saved from a file's JSON (`raw`) for `mode`, on top of `cur`. The client and the
@@ -328,7 +330,7 @@ export function fileResult(raw: unknown, mode: FileMode, cur: Sketch | null, opt
   if (mode === "apply") {
     if (patch.remove && !opts.allowRemove) return { ok: false, error: "The file asks to remove items: only agent patches may remove (Apply changes from file never removes anything)." };
     if (patch.sketchWindowAdd && !opts.allowSketchWindow) return { ok: false, error: "The file asks to add to the Sketch window: only agent patches may (Apply changes from file changes the main plan only)." };
-    const { sketch, leftOut, problems, window, windowError } = applyPatchDetail(cur, patch);
+    const { sketch, leftOut, problems, window, windowError } = applyPatchDetail(cur, patch, opts);
     if (problems.length) return { ok: false, error: `The removals can't be applied as they are: ${problems.join("; ")}.`, problems };
     if (windowError) return { ok: false, error: windowError, problems: [windowError] };
     return sketch ? { ok: true, sketch, kept: [], file: null, patch, leftOut, ...(window ? { window } : {}) } : { ok: false, error: "Nothing usable is left once the file's items are checked." };
@@ -390,8 +392,8 @@ export function readSketchFile(text: string, mode: FileMode, cur: Sketch | null,
       }
     }
   }
-  // (the Sketch window's piece is told in its own section, not as "scratch differs")
-  const kinds = kindDiffs(cur, sketch), fields = fieldDiffs(cur, sketch, r.kept).filter(f => !(r.window && f.field === "scratch"));
+  // (the new sketch with the piece is told in its own section, not as "sketches differ")
+  const kinds = kindDiffs(cur, sketch), fields = fieldDiffs(cur, sketch, r.kept).filter(f => !(r.window && ["scratch", "sketches", "sketchOpen"].includes(f.field)));
   const geo = !same(cur?.geo, sketch.geo), traffic = !same(cur?.traffic, sketch.traffic);
   const moved = SKETCH_KINDS.some(k => kinds[k].added.length || kinds[k].removed.length || kinds[k].changed.length);
   const sameAll = !moved && !geo && !traffic && !r.window && !fields.some(f => f.change !== "kept from the current version");

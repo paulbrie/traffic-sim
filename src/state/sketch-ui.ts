@@ -79,7 +79,7 @@ export interface RouteUi {
 }
 export type EditorKind = "plan" | "scratch" | "whole";
 /** Test in Sketch's options (kept in the browser): how far out roads are cut, replacing what is in the Sketch or adding beside it, running at once */
-export interface TestOptions { cut: number; mode: "replace" | "add"; run: boolean }
+export interface TestOptions { cut: number; /** instead of the open sketch's content, beside it, or into a new sketch */ mode: "replace" | "add" | "new"; run: boolean }
 export interface SketchUiState {
   /** the editor the user is at: the Sketch window's while it is open and was last used, else the plan's */
   active: "plan" | "scratch";
@@ -87,7 +87,7 @@ export interface SketchUiState {
   /** the inspector's panels folded away (by id; kept in the browser, the same for both editors) */
   panels: { closed: Record<string, true> };
   /** the Sketch window over the plan: open; Test in Sketch's options and the last piece it took there */
-  sketchWindow: { open: boolean; test: TestOptions; lastPiece: { junctions: number; lanes: number; mode: "replace" | "add"; at: number } | null };
+  sketchWindow: { open: boolean; test: TestOptions; lastPiece: { junctions: number; lanes: number; mode: "replace" | "add" | "new"; at: number } | null };
   /** the layers shown (the editor's and the top bar's: sketch-layers.ts, kept in the browser; shown here as they are) */
   layers: SketchLayers;
   /** how the satellite imagery is shown (kept in the browser) */

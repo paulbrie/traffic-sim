@@ -27,7 +27,7 @@ const STATUS: Record<AgentPatchView["status"], string> = { pending: "pending", a
  * the pending ones; the panel lists them all, and one opened shows its description and the same preview as
  * History's "Apply changes from file" (refused items in red, a note when the plan moved on since it was made).
  * The plan's editors apply it (one new version, noted with the patch) or reject it. A patch may also add a piece
- * to the plan's Sketch window (T152), told in its own section: what it adds, where, and that the main plan stays.
+ * as a new sketch of the plan's (T152, T156), told in its own section: its name, what it adds, and that the main plan stays.
  */
 export function AgentPatchesButton({ planId, canApply }: { planId: string; canApply: boolean }) {
   const [open, setOpen] = useState(false);
@@ -115,12 +115,12 @@ function PatchDetail({ planId, p, canApply, onBack, onDecided }: { planId: strin
   const summarise = useCallback(async () => {
     const cur = await fetchPlanState(planId);
     if (!cur) { setPreview({ revision: 0, error: "Couldn't load the plan" }); return null; }
-    // (an agent patch may remove items, T140, and add to the Sketch window, T152)
-    const r = readSketchFile(JSON.stringify(p.patch), "apply", cur.sketch, AGENT_FILE);
+    // (an agent patch may remove items, T140, and add a new sketch named after it, T152 / T156)
+    const r = readSketchFile(JSON.stringify(p.patch), "apply", cur.sketch, { ...AGENT_FILE, sketchName: p.title });
     const next: Preview = r.ok ? { revision: cur.revision, summary: r.summary } : { revision: cur.revision, error: r.error };
     setPreview(next);
     return next;
-  }, [planId, p.patch]);
+  }, [planId, p.patch, p.title]);
   useEffect(() => { void summarise(); }, [summarise]); // eslint-disable-line react-hooks/set-state-in-effect
 
   const apply = async () => {
@@ -187,7 +187,7 @@ function PatchDetail({ planId, p, canApply, onBack, onDecided }: { planId: strin
               <div className="max-h-[50vh] space-y-3 overflow-y-auto">
                 <SketchWindowView w={preview.summary.window} />
                 <h3 className="text-sm font-medium">Main plan</h3>
-                {mainTouched(preview.summary) ? <FileSummaryView s={preview.summary} /> : <p className="text-sm text-muted-foreground">Unchanged: this patch only adds to the Sketch window.</p>}
+                {mainTouched(preview.summary) ? <FileSummaryView s={preview.summary} /> : <p className="text-sm text-muted-foreground">Unchanged: this patch only adds a new sketch.</p>}
               </div>
             )
             : <FileSummaryView s={preview.summary} />}
@@ -223,35 +223,32 @@ function PatchDetail({ planId, p, canApply, onBack, onDecided }: { planId: strin
 const mainTouched = (s: FileSummary) =>
   s.items.length > 0 || s.geo || s.traffic || s.fields.some(f => f.change !== "kept from the current version") || SKETCH_KINDS.some(k => s.kinds[k].added.length || s.kinds[k].removed.length || s.kinds[k].changed.length);
 
-/** what a patch adds to the Sketch window (T152): the counts, where it goes, and a small map of it beside what is there */
+/** what a patch adds as a new sketch (T152, T156): its name, the counts, and a small map of it */
 function SketchWindowView({ w }: { w: WindowAdd }) {
   const c = w.counts, n = (k: number, one: string, many = `${one}s`) => (k ? [`${k} ${k === 1 ? one : many}`] : []);
   const parts = [...n(c.lanes, "lane"), ...n(c.connectors, "connector"), ...n(c.roads, "road"), ...n(c.junctions, "junction"), ...n(c.crossings, "crossing"), ...n(c.zones, "zone")];
   return (
     <div className="space-y-2 rounded-md border p-3 text-sm">
-      <h3 className="font-medium">Sketch window</h3>
+      <h3 className="font-medium">New sketch</h3>
       <div className="flex flex-wrap items-start gap-3">
         <WindowThumb w={w} />
         <div className="min-w-0 flex-1 space-y-1">
-          <p>Adds {parts.join(", ")} to the plan&apos;s Sketch window{w.empty ? " (empty now)" : ", beside your current content"}.</p>
-          {w.beside > 0 && <p className="text-xs text-muted-foreground">At its own place it would lie over what the window holds, so it goes {w.beside} m east of it.</p>}
-          {w.notCarried.length > 0 && <p className="text-xs text-amber-600 dark:text-amber-400">Not carried (as Test in Sketch&apos;s Add): {w.notCarried.join(", ")}.</p>}
-          <p className="text-xs text-muted-foreground">Nothing in the window is replaced, and the window&apos;s traffic settings stay. This part doesn&apos;t change the main plan.</p>
+          <p>Adds a new sketch &ldquo;{w.sketchName}&rdquo;: {parts.join(", ")}.</p>
+          <p className="text-xs text-muted-foreground">Your own sketches stay as they are (the one open stays open: open the new one from the Sketch window&apos;s list). This part doesn&apos;t change the main plan.</p>
         </div>
       </div>
     </div>
   );
 }
 
-/** the window's lanes (grey) and the piece's (in colour), fitted to a small box */
+/** the piece's lanes, fitted to a small box */
 function WindowThumb({ w }: { w: WindowAdd }) {
-  const all = [...w.preview.existing, ...w.preview.added].flat();
+  const all = w.preview.added.flat();
   if (!all.length) return null;
   const x0 = Math.min(...all.map(p => p.x)), y0 = Math.min(...all.map(p => p.y)), x1 = Math.max(...all.map(p => p.x)), y1 = Math.max(...all.map(p => p.y));
   const pad = Math.max(x1 - x0, y1 - y0, 10) * 0.05, path = (pts: { x: number; y: number }[]) => pts.map((p, i) => `${i ? "L" : "M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join("");
   return (
-    <svg viewBox={`${x0 - pad} ${y0 - pad} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}`} className="h-28 w-40 shrink-0 rounded border bg-muted/30" role="img" aria-label="The Sketch window with the piece added">
-      {w.preview.existing.map((pts, i) => <path key={`e${i}`} d={path(pts)} fill="none" stroke="currentColor" strokeOpacity={0.35} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />)}
+    <svg viewBox={`${x0 - pad} ${y0 - pad} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}`} className="h-28 w-40 shrink-0 rounded border bg-muted/30" role="img" aria-label="The new sketch">
       {w.preview.added.map((pts, i) => <path key={`a${i}`} d={path(pts)} fill="none" stroke="#2563eb" strokeWidth={2} vectorEffect="non-scaling-stroke" />)}
     </svg>
   );

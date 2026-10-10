@@ -5,6 +5,7 @@ import { strict as assert } from "node:assert";
 import { applyPatch, leftOutCount, nothingToSave, readSketchFile, type FileSummary } from "../src/lib/sketch-diff";
 import { restoreFromFile, restoreNote, type RestoreFileDeps } from "../src/server/restore-file";
 import { sanitizeSketch, type Sketch } from "../src/lib/lane-sketch";
+import { contentOf, deleteSketch, duplicateSketch, newSketch, openSketch, renameSketch, sketchList } from "../src/lib/sketch-list";
 import type { SaveResult } from "../src/server/data/plans";
 
 const line = (id: string, x0: number, x1: number, y = 0) => ({ id, shape: { kind: "line", pts: [{ x: x0, y }, { x: x1, y }] }, width: 3.5 });
@@ -318,6 +319,56 @@ async function main() {
     // restore: a file with other zones replaces them (z1 removed, z2 added)
     const r = summary(JSON.stringify({ ...base, zones: [zone2] }), "restore");
     assert.deepEqual(r.kinds.zones, { added: ["z2"], removed: ["z1"], changed: [] });
+  });
+
+  await t("saved sketches: an old plan's lone scratch reads as Sketch 1, open; kept so through sanitizing, without a list written", () => {
+    const old = sanitizeSketch(base)!;
+    assert.deepEqual(sketchList(old), { list: [{ id: "s1", name: "Sketch 1", created: 0, updated: 0 }], open: "s1" });
+    assert.equal(old.sketches, undefined);
+    assert.deepEqual(contentOf(old, "s1")!.lanes.map(l => l.id), ["s1"]);
+  });
+
+  await t("saved sketches: new, duplicate, rename, open, delete; each sketch keeps its content, traffic and view; undo puts the list back", () => {
+    const v1 = { cx: 1, cy: 2, scale: 3 }, v2 = { cx: 9, cy: 9, scale: 9 };
+    let sk = sanitizeSketch({ ...base, scratch: { ...base.scratch, traffic: { rate: 50, speed: 30 } } })!;
+    // (a new one: empty, open; the one before put away with its content, traffic and view)
+    const n = newSketch(sk, "Sketch", 100, v1);
+    sk = sanitizeSketch(JSON.parse(JSON.stringify(n.sketch)))!;
+    assert.deepEqual(sketchList(sk).list.map(x => [x.id, x.name]), [["s1", "Sketch 1"], ["s2", "Sketch"]]);
+    assert.equal(sketchList(sk).open, "s2");
+    assert.equal(sk.scratch, undefined);
+    assert.deepEqual(contentOf(sk, "s1")!.traffic, { rate: 50, speed: 30 });
+    assert.deepEqual(sketchList(sk).list[0].view, v1);
+    // (something drawn in it, then a copy of it: the copy open, the same content)
+    sk = { ...sk, scratch: sanitizeSketch({ lanes: [line("n1", 0, 5)], connectors: [], roads: [], junctions: [] })! };
+    const d = duplicateSketch(sk, "s2", 200, v2)!;
+    sk = sanitizeSketch(JSON.parse(JSON.stringify(d.sketch)))!;
+    assert.deepEqual(sketchList(sk).list.map(x => [x.id, x.name]), [["s1", "Sketch 1"], ["s2", "Sketch"], ["s3", "Sketch copy"]]);
+    assert.deepEqual(contentOf(sk, "s3")!.lanes.map(l => l.id), ["n1"]);
+    assert.deepEqual(contentOf(sk, "s2")!.lanes.map(l => l.id), ["n1"]);
+    // (renamed: a name taken gets (2); an empty one changes nothing)
+    sk = renameSketch(sk, "s3", "Sketch 1");
+    assert.equal(sketchList(sk).list[2].name, "Sketch 1 (2)");
+    assert.equal(renameSketch(sk, "s3", "   "), sk);
+    // (opening the first again: its own content and traffic back in the window, its view kept)
+    sk = openSketch(sk, "s1", v2);
+    assert.equal(sketchList(sk).open, "s1");
+    assert.deepEqual(sk.scratch!.lanes.map(l => l.id), ["s1"]);
+    assert.deepEqual(sk.scratch!.traffic, { rate: 50, speed: 30 });
+    assert.deepEqual(sketchList(sk).list[0].view, v1);
+    // (deleted, the open one: the one before it opens; undone by putting the list back)
+    const before = sk;
+    sk = deleteSketch(sk, "s2");
+    assert.deepEqual(sketchList(sk).list.map(x => x.id), ["s1", "s3"]);
+    sk = deleteSketch(sk, "s1");
+    assert.equal(sketchList(sk).open, "s3");
+    assert.deepEqual(sk.scratch!.lanes.map(l => l.id), ["n1"]);
+    const undone = { ...sk, scratch: before.scratch, sketches: before.sketches, sketchOpen: before.sketchOpen };
+    assert.deepEqual(sketchList(undone).list.map(x => x.id), ["s1", "s2", "s3"]);
+    assert.deepEqual(undone.scratch!.lanes.map(l => l.id), ["s1"]);
+    // (the main plan never touched)
+    const main = (k: Sketch) => JSON.stringify({ ...k, scratch: undefined, sketches: undefined, sketchOpen: undefined });
+    assert.equal(main(sk), main(sanitizeSketch(base)!));
   });
 
   console.log(`restore-file: ${ok} checks passed`);

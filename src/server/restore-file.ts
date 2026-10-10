@@ -12,7 +12,7 @@ export const RESTORE_NOTE_MAX = 500;
 export type RestoreFileInput = {
   mode: FileMode; file: unknown; revision: number; note?: unknown; fileName?: unknown;
   /** an agent patch (T132): the version's note, and recorded as its own kind ("Agent patch") */
-  patch?: { note: string };
+  patch?: { note: string; /** the new sketch its piece goes into, if it adds one (T156): named after its title */ sketchName?: string };
 };
 export type RestoreFileResult = { ok: true; revision: number } | { ok: false; error: string; revision?: number };
 
@@ -43,7 +43,7 @@ export async function restoreFromFile(input: RestoreFileInput, deps: RestoreFile
   if (!cur) return { ok: false, error: "Plan not found." };
   if (cur.engine !== "v2") return { ok: false, error: "Only V2 plans can take a sketch file." };
   // (removals and the Sketch window only for an agent patch: the page's own file action never sets `patch`)
-  const r = fileResult(input.file, input.mode, sanitizeSketch(cur.sketch), input.patch ? AGENT_FILE : {});
+  const r = fileResult(input.file, input.mode, sanitizeSketch(cur.sketch), input.patch ? { ...AGENT_FILE, sketchName: input.patch.sketchName, now: Date.now() } : {});
   if (!r.ok) return { ok: false, error: r.error };
   const s = await deps.save({ network: cur.network, settings: cur.settings, underlay: cur.underlay, sketch: r.sketch, revision: input.revision, restore: input.patch && input.mode === "apply" ? { note: input.patch.note, kind: "patch" } : { note: restoreNote(input.mode, input.fileName, input.note), kind: input.mode } });
   if (s.ok) return { ok: true, revision: s.revision };

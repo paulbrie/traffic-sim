@@ -95,9 +95,18 @@ export interface Sketch {
   signalGroups?: SketchSignalGroup[];
   /** areas drawn and labelled (neighbourhoods, zones; see sketch-zones.ts): for reading the plan, the cars don't see them */
   zones?: SketchZone[];
-  /** a V2 plan's ideas sketched apart (its Sketch window, as V1's): saved with the plan, never part of it */
+  /** a V2 plan's ideas sketched apart (its Sketch window, as V1's): saved with the plan, never part of it; the sketch open */
   scratch?: Sketch;
+  /**
+   * The plan's saved sketches (see sketch-list.ts): each named, the one open's content in `scratch`, the others' in their
+   * own `sketch`; none: one, "Sketch 1", the `scratch`
+   */
+  sketches?: SavedSketch[];
+  /** the saved sketch open in the Sketch window (its id) */
+  sketchOpen?: string;
 }
+/** one of a plan's saved sketches: its name, when made and last changed (ms), the view it was left at, and (not open) its content */
+export interface SavedSketch { id: string; name: string; created: number; updated: number; view?: { cx: number; cy: number; scale: number }; sketch?: Sketch }
 /**
  * Journeys, as V1's transit flows: `rate` vehicles an hour coming in on the way in that lane `from` is one of
  * (an entry lane; its road's entry lanes there with it) and going to the way out that lane `to` is one of,
@@ -2213,13 +2222,24 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     }
     if (members.length) signalGroups.push({ id: g.id, name: typeof g.name === "string" && g.name.trim() ? g.name.trim().slice(0, 80) : g.id, cycle, speed: num(g.speed) ? Math.min(130, Math.max(10, g.speed)) : GROUP_SPEED, members });
   }
-  // (the ideas sketched apart: a sketch of their own, without ideas of theirs)
-  const sc = o.scratch && typeof o.scratch === "object" ? sanitizeSketch({ ...(o.scratch as object), scratch: undefined }) : null;
+  // (the ideas sketched apart: a sketch of their own, without ideas or saved sketches of theirs)
+  const inner = (x: unknown) => (x && typeof x === "object" ? sanitizeSketch({ ...(x as object), scratch: undefined, sketches: undefined, sketchOpen: undefined }) : null);
+  const sc = inner(o.scratch);
+  // (the saved sketches: each named once, the one open with no content of its own (it is the scratch))
+  const sketches: SavedSketch[] = [];
+  for (const x of Array.isArray(o.sketches) ? o.sketches : []) {
+    if (!str(x?.id) || sketches.some(y => y.id === x.id) || sketches.length >= 100) continue;
+    const v = x.view, content = x.id === o.sketchOpen ? null : inner(x.sketch);
+    sketches.push({ id: x.id, name: typeof x.name === "string" && x.name.trim() ? x.name.trim().slice(0, 80) : x.id, created: num(x.created) ? x.created : 0, updated: num(x.updated) ? x.updated : 0,
+      ...(v && num(v.cx) && num(v.cy) && num(v.scale) && v.scale > 0 ? { view: { cx: v.cx, cy: v.cy, scale: v.scale } } : {}), ...(content ? { sketch: content } : {}) });
+  }
+  const sketchOpen = sketches.length ? (sketches.some(x => x.id === o.sketchOpen) ? (o.sketchOpen as string) : sketches[0].id) : null;
+  if (sketchOpen) { const k = sketches.findIndex(x => x.id === sketchOpen); if (sketches[k].sketch) { const { sketch: _, ...rest } = sketches[k]; sketches[k] = rest; } }
   // (the zones drawn: a sketch with only zones is a sketch still)
   const zones = sanitizeZones(o.zones);
   const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.zones?.length) ? sc : null;
-  if (!lanes.length && !junctions.length && !geo && !crossings.length && !zones.length && !scratch) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}) };
+  if (!lanes.length && !junctions.length && !geo && !crossings.length && !zones.length && !scratch && !sketches.length) return null;
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
 }
 
 // ---------------------------------------------------------------- elevation (as v1's)

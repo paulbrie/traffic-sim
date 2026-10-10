@@ -23,7 +23,7 @@ import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { EditorKindContext, editorBack, NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, useUiPath, type TestOptions, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
-import { clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
+import { changeSketches, clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
 import { testPiece } from "@/lib/test-piece";
 import { offRoute } from "@/lib/route-trace";
 import { readPalette, speedColor } from "@/render/palette";
@@ -57,6 +57,8 @@ import { tidySketch, type TidyReport } from "@/lib/sketch-tidy";
 import { mergeLanes, mergeRoads, type MergeResult } from "@/lib/sketch-merge";
 import { translucentArea } from "@/render/area-fill";
 import { MemoryGauge } from "@/components/v2/top-bar-tools";
+import { SketchPicker } from "@/components/v2/sketch-picker";
+import { newSketch } from "@/lib/sketch-list";
 import { deleteLanes, dropDangling, takeOutOfRoad } from "@/lib/road-lanes";
 import { carWay, type CarWay } from "@/lib/car-way";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
@@ -639,8 +641,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const { sketch: piece, report } = testPiece(sk, s, { cut: tis.cut, rates: measured ? rates : undefined });
     if (!piece.lanes.length) { toast("Nothing to test there", { description: "The selection has no lanes, and no junction with lanes or connectors on it." }); return; }
     let added = false, addedPiece: Piece | undefined;
+    const what0 = report.junctions ? (sk.junctions.find(j => j.id === s.junctions[0])?.name ?? "junctions") : `${report.lanes} lanes`;
+    // (into a new sketch: the user's others kept as they are)
+    if (tis.mode === "new") changeSketches(k => newSketch(k, `Test: ${what0}`, Date.now()).sketch);
     scratchSketch.edit(cur => {
-      if (tis.mode === "replace" || (!cur.lanes.length && !cur.junctions.length)) return { ...piece, ...(piece.geo ?? cur.geo ? { geo: piece.geo ?? cur.geo } : {}) };
+      if (tis.mode !== "add" || (!cur.lanes.length && !cur.junctions.length)) return { ...piece, ...(piece.geo ?? cur.geo ? { geo: piece.geo ?? cur.geo } : {}) };
       // (beside what is there: where it is on the plan, as the Sketch's own origin has it, so the imagery still lines up)
       added = true;
       const o = geoShift(sk.geo, cur.geo), r = pastePart(cur, piece, o.x, o.y);
@@ -649,7 +654,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     });
     ui.getValue().sketch = true;
     requestScratchFocus({ run: tis.run, piece: addedPiece });
-    sketchUi.getValue().sketchWindow.lastPiece = { junctions: report.junctions, lanes: report.lanes, mode: added ? "add" : "replace", at: Date.now() };
+    sketchUi.getValue().sketchWindow.lastPiece = { junctions: report.junctions, lanes: report.lanes, mode: added ? "add" : tis.mode === "new" ? "new" : "replace", at: Date.now() };
     const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
     const what = report.junctions ? n(report.junctions, "junction") : n(report.lanes, "lane");
     toast.success(`Testing ${what} in the Sketch`, {
@@ -1395,6 +1400,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const f = takeScratchFocus();
       if (!f) return;
       setSel(NO_SEL); setSelCar(null);
+      // (another saved sketch opened: the cars of the one before let go, only the open one's kept; its view as it was left)
+      if (f.fresh) {
+        sim.current?.terminate(); sim.current = null; store.setSim(null);
+        setRunning(false); setStats(null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null);
+        if (f.view) { view.current = { ...f.view }; redraw(); } else fit();
+        return;
+      }
       // (new cars for the piece: the cars before, reset, would still have the last sketch for a quarter of a second,
       // starting on lanes that are going and with what came in where; then lost, and nothing coming in)
       if (sim.current) {
@@ -1529,7 +1541,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       {!page && <ResizeEdges start={start} />}
       <div className={cn("flex items-center gap-2 border-b px-3 py-1.5 select-none", !page && "cursor-move touch-none")} title={page ? undefined : "Drag to move · double-click to put back"}
         onPointerDown={e => { if (!page && !(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!page && !(e.target as HTMLElement).closest("button")) reset(); }}>
-        {!page && <span className="text-sm font-medium">{store.kind === "scratch" ? "Sketch" : "Lane sketch"} <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : store.kind === "scratch" ? "ideas apart from the plan, saved with it" : "saved with the plan"}</span></span>}
+        {!page && store.kind === "scratch" && <span className="flex items-center gap-1"><SketchPicker view={() => view.current} readOnly={readOnly} /><span className="text-xs text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "ideas apart from the plan, saved with it"}</span></span>}
+        {!page && store.kind !== "scratch" && <span className="text-sm font-medium">Lane sketch <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "saved with the plan"}</span></span>}
         <ToggleGroup type="single" value={tool} onValueChange={v => v && changeTool(v as Tool)} aria-label="Drawing tool" className="ml-2">
           {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={in3d && t.id !== "select" ? "Not in 3D: back to the plan to draw" : tip(t)} disabled={in3d && t.id !== "select"} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
         </ToggleGroup>
@@ -2842,6 +2855,7 @@ function TestInSketchPanel({ options: o, setOptions, onTest }: { options: TestOp
         <ToggleGroup type="single" className="w-full" value={o.mode} onValueChange={v => { if (v) setOptions({ ...o, mode: v as TestOptions["mode"] }); }} aria-label="What is in the Sketch">
           <ToggleGroupItem value="replace" className="h-7 flex-1 text-xs" title="Instead of what is in the Sketch (⌘Z there brings it back)">Replace</ToggleGroupItem>
           <ToggleGroupItem value="add" className="h-7 flex-1 text-xs" title="Beside what is in the Sketch">Add</ToggleGroupItem>
+          <ToggleGroupItem value="new" className="h-7 flex-1 text-xs" title="Into a new sketch of its own (the plan&apos;s other sketches kept as they are)">New</ToggleGroupItem>
         </ToggleGroup>
       </div>
       <label className="flex items-center gap-2 text-xs"><Switch checked={o.run} onCheckedChange={v => setOptions({ ...o, run: v })} aria-label="Run the cars at once" /> Run the cars at once</label>

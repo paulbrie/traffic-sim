@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import { Subject } from "subjecto";
 import { emptySketch, settle, type Piece, type Pt, type Sketch } from "@/lib/lane-sketch";
 import { sanitizeZones } from "@/lib/sketch-zones";
+import { sketchList, touchOpen } from "@/lib/sketch-list";
 import type { SketchSimClient } from "./sketch-sim-client";
 import { laneSketch$, sketchReplaced } from "./store";
 
@@ -27,7 +28,7 @@ export interface SketchStore {
   record(before: Sketch): void;
   /** its cars and what they did (kept while the page is open, the editor closed or not) */
   sim(): SketchSimClient | null;
-  setSim(s: SketchSimClient): void;
+  setSim(s: SketchSimClient | null): void;
   /** its undo history forgotten (another plan loaded, or one saved elsewhere merged in) */
   forget(): void;
 }
@@ -62,11 +63,15 @@ function makeStore(kind: SketchStore["kind"], sketch$: Subject<Sketch>, write: (
   return store;
 }
 
+/** what is the Sketch window's, not the plan's: the sketch open, the saved sketches, which is open */
+const WINDOW_KEYS = ["scratch", "sketches", "sketchOpen"];
 /** a sketch without its ideas sketched apart */
-const planPart = (k: Sketch): Sketch => { if (!k.scratch) return k; const { scratch: _, ...rest } = k; return rest; };
+const planPart = (k: Sketch): Sketch => { if (!k.scratch && !k.sketches && !k.sketchOpen) return k; const { scratch: _, sketches: _l, sketchOpen: _o, ...rest } = k; return rest; };
+/** the saved sketches and which is open, as the plan has them */
+const listPart = (k: Sketch): Pick<Sketch, "sketches" | "sketchOpen"> => (k.sketches ? { sketches: k.sketches, sketchOpen: k.sketchOpen } : {});
 /** the same sketch but for the ideas sketched apart (each part the very same) */
 function samePlan(a: Sketch, b: Sketch) {
-  const ka = Object.keys(a).filter(k => k !== "scratch"), kb = Object.keys(b).filter(k => k !== "scratch");
+  const ka = Object.keys(a).filter(k => !WINDOW_KEYS.includes(k)), kb = Object.keys(b).filter(k => !WINDOW_KEYS.includes(k));
   return ka.length === kb.length && ka.every(k => (a as unknown as Record<string, unknown>)[k] === (b as unknown as Record<string, unknown>)[k]);
 }
 
@@ -82,14 +87,32 @@ laneSketch$.subscribe(k => {
 });
 export const planSketch = makeStore("plan", planView$, sk => {
   planView$.next(sk);
-  const sc = laneSketch$.getValue().scratch;
-  laneSketch$.next(sc ? { ...sk, scratch: sc } : sk);
+  const cur = laneSketch$.getValue(), sc = cur.scratch;
+  laneSketch$.next({ ...planPart(sk), ...(sc ? { scratch: sc } : {}), ...listPart(cur) });
 });
 export const scratchSketch = makeStore("scratch", scratchView$, sk => {
   scratchView$.next(sk);
-  const plan = planPart(laneSketch$.getValue()), empty = !sk.lanes.length && !sk.junctions.length && !sk.connectors.length && !sk.crossings?.length && !sk.zones?.length && !sk.traffic;
-  laneSketch$.next(empty ? plan : { ...plan, scratch: planPart(sk) });
+  const cur = laneSketch$.getValue(), plan = planPart(cur), empty = !sk.lanes.length && !sk.junctions.length && !sk.connectors.length && !sk.crossings?.length && !sk.zones?.length && !sk.traffic;
+  // (the sketch open changed now)
+  const list = listPart(touchOpen(cur, Date.now()));
+  laneSketch$.next(empty ? { ...plan, ...list } : { ...plan, scratch: planPart(sk), ...list });
 });
+
+/**
+ * The saved sketches changed (one opened, made, copied, renamed, deleted: sketch-list.ts): the plan's sketch made so;
+ * another one open: the window's undo history and cars let go, and its view put back where that sketch was left
+ */
+export function changeSketches(f: (k: Sketch) => Sketch) {
+  const cur = laneSketch$.getValue(), next = f(cur);
+  if (next === cur) return;
+  const was = sketchList(cur).open;
+  laneSketch$.next(next);
+  if (sketchList(next).open !== was) {
+    scratchSketch.forget();
+    const view = sketchList(next).list.find(x => x.id === sketchList(next).open)?.view;
+    requestScratchFocus({ run: false, fresh: true, ...(view ? { view } : {}) });
+  }
+}
 
 /** the sketch the editor around works on (a V1 plan's window: the whole sketch) */
 export const SketchStoreContext = createContext<SketchStore>(wholeSketch);
@@ -125,7 +148,8 @@ export function readClipText(text: string): SketchClip | null {
 }
 
 /** what the Sketch window does when it next shows a piece put in it ("Test in Sketch"): the view fitted to it, nothing selected, the cars run if `run` */
-export interface ScratchFocus { run: boolean; /** added beside what was there: the view fitted to this only */ piece?: Piece }
+export interface ScratchFocus { run: boolean; /** added beside what was there: the view fitted to this only */ piece?: Piece;
+  /** another saved sketch opened: its cars made afresh, the view put where it was left (none: fitted) */ fresh?: boolean; view?: { cx: number; cy: number; scale: number } }
 let scratchFocus: ScratchFocus | null = null;
 const scratchFocusWaiting = new Set<() => void>();
 export function requestScratchFocus(f: ScratchFocus) { scratchFocus = f; scratchFocusWaiting.forEach(g => g()); }

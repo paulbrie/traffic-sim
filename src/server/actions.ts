@@ -439,7 +439,7 @@ export async function applyAgentPatch(planId: string, id: number, revision: numb
     if (!edit) return refuse("You can't change this plan.");
     const pt = await agentPatches.pendingPatch(plan, id, edit);
     if (!pt) return refuse("That patch was already decided, or isn't this plan's.");
-    const r = await restoreFromFile({ mode: "apply", file: pt.patch, revision, patch: { note: patchNote(pt) } }, fileDeps(user, plan, edit));
+    const r = await restoreFromFile({ mode: "apply", file: pt.patch, revision, patch: { note: patchNote(pt), sketchName: pt.title } }, fileDeps(user, plan, edit));
     if (r.ok) await agentPatches.decideAgentPatch(plan, user, id, { status: "applied", revision: r.revision }, edit);
     return r;
   });
