@@ -17,7 +17,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T84 | Agents City Table: all post-its yellow, the agent's colour only as a small cue | Tom | 2026-10-10 | after T82 |
 | T83 | Agents City Table: bigger cities on the table, a file's name on hover, neighbourhood (folder) names when zoomed in | Tom | 2026-10-10 | after T82 |
-| T82 | Agents City Table: an agent idle for more than 30 s stays in the sleeping posture | Tom | 2026-10-10 | |
 | T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | |
 | T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | after T68, T72 |
 | T72 | Re-test of T69 | Ramona | 2026-10-09 | after T68 |
@@ -28,6 +27,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T82 | Agents City Table: an agent idle for more than 30 s (wall clock, running, not busy) holds the nap pose until its next tool call; guests and ended sessions as before | Tom | 2026-10-10 | admin, next deploy |
 | T80 | Admin: the live tree's features on origin/main with its security hardening kept: an Nginx config manager (no dot names, regular files only, private temp file), a Git graph with diffs, Docker stats; apps no longer inherit the admin's basePath | Alex, Alice | 2026-10-10 | admin: b88fc34 (pushed; not deployed) |
 | T81 | genie: the largest Taz Cloud Server size: xlarge (8 vCPU, 16 GB, 160 GB) per genie's docs; the live list is Taz's /v1/capabilities; "2xlarge" in T51's tool text is only an example | Alex | 2026-10-10 | answer |
 | T50 | Re-test of T48 plus a Next.js 16.4 smoke test: all pass; 3 bridge input-check bugs, a one-off glitch | Ramona | 2026-10-09 | /tmp/ramona/t50/ → T59 |
