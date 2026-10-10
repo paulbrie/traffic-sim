@@ -17,7 +17,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test); 3D tilt by drag not reachable in Ramona's script | Tatiana | 2026-10-10 | from T97, T98 |
 | T111 | Agents City: a plain question at the end of a turn counts as asking the user (session data), so that agent waves too | Alex (data), Tom (wave) | 2026-10-10 | after T110 |
-| T110 | genie: document the 2xlarge size (docs, the create form, the size list, the tools' text); unknown values marked unknown | Alex | 2026-10-10 | after T109 |
 | T109 | Admin: back up /opt/project's local work (branch, tarball, stash) and move its main to origin/main; go/no-go list for the user's deploy | Alex | 2026-10-10 | backups done (backup/local-main-2026-10-10, /home/genie/alex-scratch/t109); first: carry the new local-only content onto origin and untrack nginx/projects.conf (the user's choices), then the checkout; the user deploys |
 | T108 | Agents City (City and Table): an accessed file's building lifts into the air while the touch lingers, then settles; edits higher than reads | Alex (City, the shared curve), Tom (Table) | 2026-10-10 | City and lib/lift.ts: admin 3a899b3; Table after T96 |
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
@@ -43,6 +42,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T110 | genie: the 2xlarge size (16 vCPU, 32 GB, disk unknown) in the API docs, the size list, both create forms and the tools' text | Alex, Alice | 2026-10-10 | genie: a4414f6 (pushed by Alice at the user's request) |
 | T98 | A raised lane (Level 1) over a junction: model, tooltip and 2D pass; tilted 3D shot not reached (→ T112); the 3D screenshot is the bridge's, works for 2D and 3D | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t98 |
 | T97 | Route tracer in the browser: way in/out and lane picking, the orange route, a test car followed to arrival, the lane menu, the 3D route, the bridge's route pass; route.test stays null (→ T112); blue reroute not reachable on a one-path plan | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t97 |
 | T93 | Agents City Table: while thinking, the eyes glance around (80–120 ms glances, 0.6–2.5 s holds, mostly up-left/up-right, some blinks, the head follows long holds), seeded per agent | Tom | 2026-10-10 | admin: 18908ff |
