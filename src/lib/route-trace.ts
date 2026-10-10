@@ -67,8 +67,7 @@ export function offRoute(sk: Sketch, steps: ({ kind: "lane" | "connector"; id: s
     const c = sk.connectors.find(x => x.id === id);
     return !!c && near.has(c.from.lane) && near.has(c.to.lane);
   };
-  let table = tables.get(sk);
-  if (!table) tables.set(sk, (table = new RouteTable(sk)));
+  const table = routeTableOf(sk);
   /** the step from `prev` to `k` one the cars wouldn't take for the way's end */
   const astray = (prev: string | undefined, k: string) => {
     if (!to) return true;
@@ -89,13 +88,21 @@ export function offRoute(sk: Sketch, steps: ({ kind: "lane" | "connector"; id: s
   return out;
 }
 
-export function traceRoute(sk: Sketch, from: string, to: string, table = new RouteTable(sk)): RouteResult {
+/** the sketch's routing table, kept for the last few sketches */
+export function routeTableOf(sk: Sketch): RouteTable {
+  let table = tables.get(sk);
+  if (!table) tables.set(sk, (table = new RouteTable(sk)));
+  return table;
+}
+
+/** `start`: metres along `from` it starts (a car on its way: where it is) */
+export function traceRoute(sk: Sketch, from: string, to: string, table = new RouteTable(sk), start = 0): RouteResult {
   const name = (id: string) => sk.roads.find(r => r.lanes.includes(id))?.name ?? `lane ${id}`;
   const A = laneById(sk, from), B = laneById(sk, to);
   if (!A) return { ok: false, reason: `no lane ${from}` };
   if (!B) return { ok: false, reason: `no lane ${to}` };
   if (!table.exits.includes(to)) return { ok: false, reason: `${name(to)} (${to}) isn't a way out: connectors leave its end` };
-  if (table.from(from, 0, to) === Infinity) {
+  if (table.from(from, start, to) === Infinity) {
     const outs = sk.connectors.filter(c => c.from.lane === from);
     if (!outs.length && from !== to) return { ok: false, reason: `no connector leaves ${name(from)} (${from})` };
     if (!sk.connectors.some(c => c.to.lane === to) && from !== to) return { ok: false, reason: `no connector comes onto ${name(to)} (${to})` };
@@ -108,7 +115,7 @@ export function traceRoute(sk: Sketch, from: string, to: string, table = new Rou
   const outsOf = new Map<string, typeof sk.connectors>();
   for (const c of sk.connectors) outsOf.set(c.from.lane, [...(outsOf.get(c.from.lane) ?? []), c]);
   const steps: RouteStep[] = [];
-  let lane = from, s = 0, length = 0, time = 0, changed = false;
+  let lane = from, s = start, length = 0, time = 0, changed = false;
   for (let guard = 0; guard < 2000; guard++) {
     const L = laneById(sk, lane)!, len = laneLength(L.shape), ring = isFullCircle(L.shape);
     /** metres on from `s` to `at` as a car may go (round a ring; half a metre on at least, or the lane's very end); null: not that way */

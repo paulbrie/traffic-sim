@@ -58,6 +58,7 @@ import { mergeLanes, mergeRoads, type MergeResult } from "@/lib/sketch-merge";
 import { translucentArea } from "@/render/area-fill";
 import { MemoryGauge } from "@/components/v2/top-bar-tools";
 import { deleteLanes, dropDangling, takeOutOfRoad } from "@/lib/road-lanes";
+import { carWay, type CarWay } from "@/lib/car-way";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
@@ -1593,7 +1594,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           </div>
           {in3d && (
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed}
-              selection={sel} car={selCar} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
+              selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c && live.current.replayT === null ? carWay(live.current.sketch, c)?.pts ?? null : null; }} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
           )}
@@ -1626,7 +1627,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
-            <CarPanel info={carInfo} id={selCar} follow={follow} running={running} replayT={replayT}
+            <CarPanel info={carInfo} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
               onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
               onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
               onCopy={async () => {
@@ -1671,6 +1672,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
 }
 
 const fmtM = (m: number) => `${m.toFixed(1)} m`;
+const kmOrM = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`);
 const deg = (r: number) => (r * 180) / Math.PI;
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
@@ -1754,8 +1756,10 @@ function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> 
   return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
-function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
+function CarPanel({ info, id, follow, running, replayT, way, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
   info: ReturnType<SketchSim["inspect"]>; id: number; follow: boolean; running: boolean; replayT: number | null;
+  /** its way on to the end of its trip (drawn on the map), if it has one */
+  way: CarWay | null;
   /** its engine fails now; it is towed away now */
   onBreakDown: () => void; onTow: () => void;
   onFollow: (on: boolean) => void; onPick: (id: number) => void; onClose: () => void; onCopy: () => void;
@@ -1786,7 +1790,22 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
           {row("On", <span className="font-mono">{edgeName(info.edge)} · {info.pos.toFixed(1)}{info.ring ? "" : ` of ${info.len.toFixed(1)}`} m</span>)}
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h <span className="text-muted-foreground">of {info.desiredKmh.toFixed(0)}</span></span>)}
           {info.changeTo && row("Changing to", <span className="font-mono">{edgeName(info.changeTo)}</span>)}
-          {row("Heading for", info.dest ? `the exit at the end of lane ${info.dest}` : "anywhere (no exit it can reach)")}
+          {row("Heading for", info.dest ? `the exit at the end of lane ${info.dest}${way ? ` (${way.destName})` : ""}` : "anywhere (no exit it can reach)")}
+          {way && (
+            <div className="grid gap-0.5 rounded border bg-background/60 px-2 py-1.5 text-xs" aria-label="Its way to the end">
+              <div className="flex justify-between gap-2"><span className="text-muted-foreground">Its way on</span>
+                <span className="font-mono tabular" title="Metres left; the time left at the speed it has now, and at the speed limits">
+                  {kmOrM(way.length)} · {info.kmh >= 3 ? clock(way.length / (info.kmh / 3.6)) : "—"} <span className="text-muted-foreground">({clock(way.freeTime)} at the limits)</span>
+                </span>
+              </div>
+              <ol className="grid gap-px">
+                {way.roads.slice(0, 12).map((r, i) => (
+                  <li key={i} className="flex justify-between gap-2"><span className="truncate">{i + 1}. {r.name}</span><span className="shrink-0 font-mono text-muted-foreground tabular">{kmOrM(r.m)}</span></li>
+                ))}
+                {way.roads.length > 12 && <li className="text-muted-foreground">… {way.roads.length - 12} more, to {way.destName}</li>}
+              </ol>
+            </div>
+          )}
           {row("Going", info.goal ? (info.goal.startsWith("end:") ? `off the end of ${edgeName(info.goal.slice(4))}` : edgeName(info.goal)) : info.leaves ? `off the end of ${edgeName(info.edge)}` : info.exit ? `${edgeName(info.exit)}, then ${edgeName(info.then ?? "")}` : info.then ? `onto ${edgeName(info.then)}` : "round the ring")}
           {row("Now", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
           {Number.isFinite(info.fuel) && row("Fuel so far", <span className="font-mono tabular">{fmtFuel(info.fuel / 1000)}</span>)}
@@ -2719,6 +2738,8 @@ interface PaintState {
   bg: Background | null;
   /** the car picked to inspect, with the way it will go */
   car: ReturnType<SketchSim["inspect"]>;
+  /** the moment replayed (null: live) */
+  replayT?: number | null;
   /** the zebras' pedestrians, if running (live or replayed) */
   peds: PedView[] | null;
   /** the layers shown */
@@ -3266,7 +3287,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   // the car picked: the way it will go, and a ring round it
   if (D && st.car) {
-    const { route, p } = st.car;
+    // (its way on to the end of its trip, as V1 shows it but all of it; going nowhere in particular, or replayed: the way just ahead)
+    const { p } = st.car, way = st.replayT === null ? carWay(sk, st.car) : null, route = way?.pts ?? st.car.route;
     if (route.length > 1) {
       path(route); ctx.strokeStyle = col.sel; ctx.lineWidth = 2.5 * px; ctx.setLineDash([6 * px, 4 * px]); ctx.lineCap = "round"; ctx.stroke(); ctx.setLineDash([]);
       const a = route[route.length - 2], b = route[route.length - 1], l = dist(a, b) || 1;

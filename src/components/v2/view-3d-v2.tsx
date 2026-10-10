@@ -42,6 +42,8 @@ export interface View3DProps {
   /** the cars as shown now (live, or the moment replayed), coloured by their speed or not, and the lights' state */
   cars: () => Car3D[] | null; bySpeed: boolean;
   simT: () => number | null; signals: () => SignalController[] | null;
+  /** the car picked's way on to the end of its trip (drawn on the road), if it has one */
+  carWay?: () => Pt[] | null;
   /** what is selected (drawn over the scene at its own height), the car picked (a ring round it) */
   selection: Piece; car: number | null;
   /** the route traced (orange), and a test car's other way (blue) */
@@ -371,6 +373,32 @@ export function View3DV2(props: View3DProps) {
       const s2 = Math.max(3.2, c.len * 0.8);
       ring.position.set(c.p.x, (c.z ?? 0) * LEVEL_H + 0.2, c.p.y); ring.scale.set(s2, s2, s2); ring.visible = true;
     };
+    // the car picked: its way on to the end of its trip, a ribbon on the road in the selection's colour (made again at most 4 times a second)
+    // (the blue the map draws it in, the selection's there: the 3D view's own green is lost on the asphalt)
+    const wayBlue = () => (document.documentElement.classList.contains("dark") ? "#60a5fa" : "#2563eb");
+    const wayMat = new THREE.MeshBasicMaterial({ color: wayBlue(), transparent: true, opacity: 0.9, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -10, polygonOffsetUnits: -10, side: THREE.DoubleSide });
+    const wayLine = new THREE.Mesh(new THREE.BufferGeometry(), wayMat);
+    wayLine.renderOrder = 5; wayLine.frustumCulled = false; wayLine.visible = false; scene.add(wayLine);
+    let wayAt = 0;
+    const syncWay = (now: number) => {
+      if (now - wayAt < 250) return;
+      wayAt = now;
+      const p = live.current, pts = p.car !== null ? p.carWay?.() ?? null : null;
+      wayLine.visible = !!pts && pts.length > 1;
+      if (!wayLine.visible) return;
+      const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car), y = (c?.z ?? 0) * LEVEL_H + 0.3, hw = 1.2;
+      // (a quad a piece, some two thirds of a lane wide)
+      const pos: number[] = [];
+      for (let i = 1; i < pts!.length; i++) {
+        const a = pts![i - 1], b = pts![i], l = Math.hypot(b.x - a.x, b.y - a.y);
+        if (l < 1e-3) continue;
+        const nx = (-(b.y - a.y) / l) * hw, ny = ((b.x - a.x) / l) * hw;
+        pos.push(a.x + nx, y, a.y + ny, b.x + nx, y, b.y + ny, b.x - nx, y, b.y - ny, a.x + nx, y, a.y + ny, b.x - nx, y, b.y - ny, a.x - nx, y, a.y - ny);
+      }
+      wayLine.geometry.dispose();
+      wayLine.geometry = new THREE.BufferGeometry();
+      wayLine.geometry.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    };
     // a click (not a drag) picks what is under it: the highest level first (a bridge before the road under it)
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hitP = new THREE.Vector3();
     let downAt: { x: number; y: number } | null = null;
@@ -405,7 +433,7 @@ export function View3DV2(props: View3DProps) {
       frame = 0;
       if (disposed) return;
       if (now - lastSync > 500) { lastSync = now; syncSat(); syncUnderlay(); }
-      syncRoads(); syncZones(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing();
+      syncRoads(); syncZones(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now);
       stepHome(now);
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
@@ -414,7 +442,7 @@ export function View3DV2(props: View3DProps) {
     document.addEventListener("visibilitychange", onVisible);
     const ro = new ResizeObserver(() => size());
     ro.observe(el);
-    const onTheme = () => { pal = readPalette(); builtFor = []; selMat.color.set(pal.select); (ring.material as THREE.MeshBasicMaterial).color.set(pal.select); scene.background = new THREE.Color(pal.sky); (scene.fog as THREE.Fog).color.set(pal.sky); (ground.material as THREE.MeshLambertMaterial).color.set(pal.ground); };
+    const onTheme = () => { pal = readPalette(); builtFor = []; selMat.color.set(pal.select); (ring.material as THREE.MeshBasicMaterial).color.set(pal.select); wayMat.color.set(wayBlue()); scene.background = new THREE.Color(pal.sky); (scene.fog as THREE.Fog).color.set(pal.sky); (ground.material as THREE.MeshLambertMaterial).color.set(pal.ground); };
     const mo = new MutationObserver(onTheme);
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     frame = requestAnimationFrame(tick);
