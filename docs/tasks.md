@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T122 | Agents City replay timeline: taller task lanes, labels inside the bars, overlapping tasks in sub-rows | Alex | 2026-10-10 | after T120 |
 | T121 | Agents City: sessions from before the reboot show as nameless "pid NNNNN" agents; recover their names and merge them (T78) | Alex | 2026-10-10 | after T120 |
 | T120 | Admin task board: DONE lines with "+ Tnn", "(part)" or split owners leave tasks in To do | Alex | 2026-10-10 | the user saw 6 in To do |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
