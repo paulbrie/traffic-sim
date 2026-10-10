@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T146 | V2: the user's tab crashed ("Aw, Snap!", error 5, likely out of memory) after hours of editing Bistrița: reproduce with 100–200 edits, find what grows (undo history, proxies, caches), fix | Tatiana | 2026-10-10 | urgent; last save before the crash: rev 171, 16:04 UTC |
 | T143 | Research: the best ways to show an agent swarm at work in 2D or very light graphics (prior art, low-power techniques, 3 concepts with mocks and CPU estimates, a recommendation, a quick win) | Alex | 2026-10-10 | the 3D view spins up the user's M5 fan |
 | T134 | Bistrița: 172 dead-end U-turn stubs on rev 92: corrected to 167 (5 false positives): A1 after a closer check = j696 (a missing roundabout, Petru Maior × Sigmirului) and j405 (a hairpin closing at j404), two patches; j633, j341 are real dead ends; j100, j728 correct as drawn; B 4; C 15; D 143 kept as turning circles; tracks not modelled (the user's choices), B 4 at the edge (ways in/out, one patch), C 15 unused (delete, one patch), D 82 real dead ends (keep; drawn as turning circles, T139): the user's choices | Bob | 2026-10-10 | list: /home/genie/bob-scratch/trafficsim/t134/T134-list.md |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
