@@ -2106,7 +2106,9 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     if (!str(l?.id) || !shape || lanes.some(x => x.id === l.id)) continue;
     lanes.push({ id: l.id, shape, width: num(l.width) ? Math.min(8, Math.max(2, l.width)) : LANE_WIDTH, ...(l.control === "stop" || l.control === "yield" ? { control: l.control } : {}),
       ...(num(l.inRate) && l.inRate >= 0 ? { inRate: Math.min(5000, l.inRate) } : {}), ...(num(l.outWeight) && l.outWeight >= 0 ? { outWeight: Math.min(100, l.outWeight) } : {}),
-      ...(num(l.level) && Math.round(l.level) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(l.level))) } : {}) });
+      ...(num(l.level) && Math.round(l.level) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(l.level))) } : {}),
+      // (its own speed limit, km/h, as the traffic's speed is kept)
+      ...(num(l.speed) ? { speed: Math.min(130, Math.max(10, l.speed)) } : {}) });
   }
   const ids = new Set(lanes.map(l => l.id));
   // (a place a hair before a lane's start, from rounding, is its start)
@@ -2125,7 +2127,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const align = al && typeof al.ref === "string" && rl.includes(al.ref) && Array.isArray(al.lanes)
       ? { ref: al.ref as string, lanes: (al.lanes as { id: unknown; offset: unknown; reverse: unknown }[]).filter(x => typeof x?.id === "string" && rl.includes(x.id) && num(x.offset)).map(x => ({ id: x.id as string, offset: x.offset as number, reverse: !!x.reverse })) }
       : undefined;
-    roads.push({ id: r.id, name: typeof r.name === "string" ? r.name.slice(0, 80) : r.id, lanes: rl, ...(align ? { align } : {}) });
+    roads.push({ id: r.id, name: typeof r.name === "string" ? r.name.slice(0, 80) : r.id, lanes: rl, ...(align ? { align } : {}), ...(num(r.speed) ? { speed: Math.min(130, Math.max(10, r.speed)) } : {}) });
   }
   const junctions: SketchJunction[] = [];
   for (const j of Array.isArray(o.junctions) ? o.junctions : []) {

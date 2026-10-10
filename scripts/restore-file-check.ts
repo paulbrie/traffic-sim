@@ -287,6 +287,19 @@ async function main() {
     assert.ok(restoreNote("apply", "a.json", "x".repeat(5000)).length <= 660);
   });
 
+  await t("speed limits kept through sanitizing (a road's, a lane's in no road), clamped to 10-130 km/h; none kept as none", () => {
+    const sk = sanitizeSketch({ lanes: [line("a", 0, 50), { ...line("b", 0, 50, 10), speed: 30 }, { ...line("c", 0, 50, 20), speed: 500 }], connectors: [], junctions: [],
+      roads: [{ id: "r1", name: "Main", lanes: ["a"], speed: 70 }, { id: "r2", name: "Side", lanes: ["c"], speed: 3 }] })!;
+    const again = sanitizeSketch(JSON.parse(JSON.stringify(sk)))!;
+    for (const x of [sk, again]) {
+      assert.equal(x.roads.find(r => r.id === "r1")!.speed, 70);
+      assert.equal(x.roads.find(r => r.id === "r2")!.speed, 10);
+      assert.equal(x.lanes.find(l => l.id === "b")!.speed, 30);
+      assert.equal(x.lanes.find(l => l.id === "c")!.speed, 130);
+      assert.equal("speed" in x.lanes.find(l => l.id === "a")!, false);
+    }
+  });
+
   console.log(`restore-file: ${ok} checks passed`);
 }
 
