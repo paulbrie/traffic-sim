@@ -1603,6 +1603,48 @@ function reasonOf(why: string | null, kmh: number): { text: string; car?: number
  * Lanes made one curve each, their two ends and a curved point (see curveLanes); a warning for one that
  * bends more than one curve can follow (straying more than half a lane's width from where it ran).
  */
+/** the lanes Smooth would change: each line lane's own (a road's following lane: its lead), those with a point between their ends (any, a ring's) not curved yet */
+function smoothable(sk: Sketch, ids: string[]): string[] {
+  return [...new Set(ids.map(id => leadOf(sk, id) ?? id))].filter(id => {
+    const sh = laneById(sk, id)?.shape;
+    return sh?.kind === "line" && sh.pts.some((_, i) => (sh.closed || (i > 0 && i < sh.pts.length - 1)) && !sh.curved?.[i]);
+  });
+}
+/**
+ * Lanes smoothed: every point between their ends curved, as Alt-click does (a ring's every point), those curved already
+ * kept; a lane following its road's lead: the lead (the others are laid out from it again). Connectors on any lane whose
+ * shape changed stay where they were: at its ends still, elsewhere at the nearest place on the new shape.
+ */
+function smoothLanes(sk: Sketch, ids: string[]): { sketch: Sketch; n: number } {
+  const which = smoothable(sk, ids);
+  if (!which.length) return { sketch: sk, n: 0 };
+  const before = new Map(sk.lanes.map(l => [l.id, l.shape]));
+  const out = settle({ ...sk, lanes: sk.lanes.map(l => {
+    if (!which.includes(l.id) || l.shape.kind !== "line") return l;
+    const sh = l.shape;
+    return { ...l, shape: { ...sh, curved: sh.pts.map((_, i) => !!sh.curved?.[i] || !!sh.closed || (i > 0 && i < sh.pts.length - 1)) } };
+  }) });
+  const moved = new Map(out.lanes.filter(l => before.get(l.id) !== l.shape).map(l => [l.id, { was: before.get(l.id)!, now: l.shape }]));
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  const place = (a: LaneAt): LaneAt => {
+    const m = moved.get(a.lane);
+    if (!m) return a;
+    const L0 = laneLength(m.was), L1 = laneLength(m.now);
+    return { ...a, s: a.s <= 0.01 ? a.s : a.s >= L0 - 0.01 ? r2(L1) : r2(nearestOn(m.now, pointAt(m.was, a.s).p).s) };
+  };
+  return { sketch: { ...out, connectors: out.connectors.map(c => (moved.has(c.from.lane) || moved.has(c.to.lane) ? { ...c, from: place(c.from), to: place(c.to) } : c)) }, n: which.length };
+}
+/** the Smooth button: the lanes smoothed (one undo step), or why it can't */
+function SmoothButton({ sketch, ids, className }: { sketch: Sketch; ids: string[]; className?: string }) {
+  const { edit: editSketch } = useSketchStore();
+  const can = smoothable(sketch, ids).length > 0;
+  return (
+    <Button size="sm" variant="outline" className={className} disabled={!can}
+      title={can ? "Every point between the ends curved, as Alt-click does (those curved already stay; a road side by side: its lead lane, the others follow); its connectors stay where they are" : "Nothing to smooth: no point between the ends that isn't curved already (a lane of two points has none)"}
+      onClick={() => editSketch(s => smoothLanes(s, ids).sketch)}><Spline /> Smooth</Button>
+  );
+}
+
 function makeCurve(editSketch: (f: (s: Sketch) => Sketch) => void, ids: string[]) {
   let off: { lane: string; off: number }[] = [];
   editSketch(s => { const r = curveLanes(s, ids); off = r.off; return r.sketch; });
@@ -2038,6 +2080,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
         <LevelRow sketch={sketch} lanes={road.lanes} />
         <SpeedRow sketch={sketch} id={`road-${road.id}`} own={road.speed} of="road" onSet={v => editSketch(sk => setRoadSpeed(sk, road.id, v))} />
         <div className="flex gap-1.5">
+          <SmoothButton sketch={sketch} ids={road.lanes} className="flex-1" />
           <Button size="sm" variant="outline" className="flex-1" onClick={() => editSketch(sk => ({ ...sk, roads: sk.roads.filter(r => r.id !== road.id) }))}>Ungroup</Button>
           <Button size="sm" variant="ghost" onClick={onDelete} aria-label="Delete the road's lanes" title="Delete the road and its lanes"><Trash2 /></Button>
         </div>
@@ -2129,6 +2172,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             </div>
           ) : <p className="text-[11px] text-muted-foreground">Double-click the lane to add a point; click a point to pick it, Alt-click to curve it, double-click to take it out.</p>
         )}
+        {sh.kind === "line" && <SmoothButton sketch={sketch} ids={[lane.id]} />}
         {sh.kind === "line" && !lead && sh.closed && (
           <Button size="sm" variant="outline" title="The ring as a true circle, the one that fits it best, running the same way (its connectors stay where they are)" onClick={() => editSketch(s => circleLanes(s, [lane.id]))}><Circle /> Make a circle</Button>
         )}
@@ -2204,6 +2248,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             <Button size="sm" variant="outline" title="The selected lanes with only their two ends: straight (rings, arcs and lanes following a lead are left; connectors stay where they are)" onClick={() => editSketch(s => straightenLanes(s, sel.lanes))}>Straighten</Button>
             <Button size="sm" variant="outline" title="The selected lanes without the points they don't need, each kept within half a metre of where it runs" onClick={() => editSketch(s => straightenLanes(s, sel.lanes, 0.5))}>Fewer points</Button>
             <Button size="sm" variant="outline" title="Each selected lane as its two ends and one curved point, the curve kept closest to where it runs (rings, arcs and lanes following a lead are left)" onClick={() => makeCurve(editSketch, sel.lanes)}><Spline /> Make a curve</Button>
+            <SmoothButton sketch={sketch} ids={sel.lanes} />
             <Button size="sm" variant="outline" title="Each selected ring of points as a true circle, the one that fits it best, running the same way (its connectors stay where they are)" onClick={() => editSketch(s => circleLanes(s, sel.lanes))}><Circle /> Make a circle</Button>
           </>}
         </div>
