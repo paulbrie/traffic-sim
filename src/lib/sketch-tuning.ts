@@ -7,7 +7,7 @@
 
 export type TuneKey = "accel" | "brake" | "headway" | "minGap" | "speedSpread" | "patience" | "yieldGap" | "yieldSpeed" | "pedWalk" | "pedYield" | "pedSpeed"
   | "rerouteAfter" | "breakdownsPerHour" | "brokenTowAfter" | "fuelIdleCar" | "fuelIdleTruck" | "stopStartShare" | "truckShare" | "truckLength" | "truckAccel" | "truckHeadway" | "truckSpeed"
-  | "speedVsLimit" | "laneChangePause" | "overtakeRoom" | "bendSpeed" | "ringGap";
+  | "speedVsLimit" | "laneChangePause" | "overtakeRoom" | "bendSpeed" | "ringGap" | "junctionRules";
 export type Tuning = Record<TuneKey, number>;
 export type TuneGroup = "Drivers" | "Trucks" | "Junctions" | "Pedestrians" | "Breakdowns" | "Fuel";
 export interface TuneInfo { key: TuneKey; group: TuneGroup; label: string; unit: string; min: number; max: number; step: number; def: number; help: string }
@@ -32,6 +32,7 @@ export const TUNING: TuneInfo[] = [
   { key: "yieldSpeed", group: "Junctions", label: "Speed up to a yield line", unit: "m/s", min: 1, max: 12, step: 0.5, def: 4, help: "How fast cars come up to a yield line (they go on without stopping if it is clear)." },
   { key: "bendSpeed", group: "Junctions", label: "Speed through bends and junctions", unit: "×", min: 0.6, max: 1.5, step: 0.05, def: 1, help: "How fast drivers take bends, roundabouts and turns at junctions, against the speed at which the bend pushes them sideways as hard as is comfortable." },
   { key: "ringGap", group: "Junctions", label: "Roundabout gap accepted", unit: "s", min: 1, max: 5, step: 0.1, def: 2, help: "The gap in time a car joining a roundabout's ring wants before the next car on the ring (at least 8 m)." },
+  { key: "junctionRules", group: "Junctions", label: "Who goes first", unit: "", min: 0, max: 1, step: 1, def: 0, help: "0: first come, first served where paths cross (as before). 1: by the rules of the road: a roundabout's ring first, give-way lines, the main road, left turns give way, then the car from the right; first come only as a last resort." },
   { key: "rerouteAfter", group: "Junctions", label: "Look for another way after", unit: "s", min: 10, max: 300, step: 5, def: 40, help: "A driver kept waiting this long where it turns off looks for another way to where it is going (once at each place)." },
   { key: "pedWalk", group: "Pedestrians", label: "Walk time at a red", unit: "s", min: 3, max: 20, step: 1, def: 8, help: "At lights: seconds at the start of the traffic's red in which people may step onto the crossing." },
   { key: "pedYield", group: "Pedestrians", label: "Gap left for cars at zebras", unit: "s", min: 0, max: 20, step: 1, def: 5, help: "At zebras: after a group crosses, seconds before the next may step out." },

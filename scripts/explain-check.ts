@@ -114,6 +114,53 @@ const report = (name: string, ok: boolean, text: string) => { results.push(`${na
   report("a moment past", ok, `car ${v} at ${waited.toFixed(1)} s: ${past ? headline(past).text : "none"} (traced ${past?.traced}); car ${h} then: ${other ? headline(other).text : "none"} (traced ${other?.traced}); the frame keeps gap and time standing for every car`);
 }
 
+// T161, who goes first by the junction's rules (the setting junctionRules 1): the right-hand rule at a plain crossing, whoever gets there first
+const RULES: Partial<Sketch> = { traffic: { rate: 0, speed: 50, seed: 1, tune: { junctionRules: 1 } } };
+{
+  // (V runs north to south, H west to east: H comes from V's right, so V gives way, even arriving first)
+  const sim = make(sketch([line("H", [[0, 0], [200, 0]]), line("V", [[100, -100], [100, 100]])], [], RULES));
+  const v = sim.sendTest("V", "V")!;
+  for (let i = 0; i < 4; i++) sim.step(0.1);
+  const h = sim.sendTest("H", "H")!;
+  const k = (sim as unknown as { edges: Map<string, { conflicts: { other: { key: string }; prio: number; prioWhy: string }[] }> }).edges.get("lane:V")!.conflicts.find(x => x.other.key === "lane:H")!;
+  let hWaited = false, vWaited = false;
+  for (let i = 0; i < 300; i++) { sim.step(0.1); const car = (id: number) => sim.vehicles.find(x => x.id === id); if (car(h)?.why?.includes(`car ${v}`)) hWaited = true; if (car(v)?.why?.includes(`car ${h}`)) vWaited = true; }
+  const ok = k.prio === -1 && k.prioWhy === "from the right" && vWaited && !hWaited;
+  report("right-hand rule", ok, `V against H: ${k.prio} (${k.prioWhy}); the car from the left waited ${vWaited}, the one from the right waited ${hWaited}`);
+}
+
+// a roundabout's roles: a lane across its middle gives way to the ring; the ring's ways off go before its ways on
+{
+  const ring: SketchLane = { id: "R", width: 4, inRate: 0, shape: { kind: "arc", c: { x: 0, y: 0 }, r: 10, a0: 0, sweep: -2 * Math.PI } as SketchLane["shape"] };
+  const sim = make(sketch([ring, line("X", [[-40, 1], [40, 1]]), line("IN", [[-40, 30], [-12, 6]], { control: "yield" }), line("OUT", [[6, 12], [30, 40]])],
+    [conn("cIn", "IN", 36.9, "R", 20), conn("cOut", "R", 52, "OUT", 0)], RULES));
+  const E = (sim as unknown as { edges: Map<string, { conflicts: { other: { key: string }; prio: number; prioWhy: string }[] }> }).edges;
+  const across = E.get("lane:X")!.conflicts.filter(x => x.other.key === "lane:R"), xr = across.every(x => x.prio === -1 && x.prioWhy === "roundabout");
+  const ok = across.length > 0 && xr;
+  report("roundabout roles", ok, `the lane across the middle against the ring: ${across.map(x => `${x.prio} (${x.prioWhy})`).join(", ") || "no conflict"}`);
+}
+
+// patience and no flip-flop: a car at a give-way line facing a steady main road gets through, and once it sets off it doesn't stop again
+{
+  const sim = make(sketch([line("M", [[0, 0], [300, 0]], { inRate: 1500 }), line("A", [[150, -80], [150, -8]], { control: "yield" }), line("B", [[150, 8], [150, 80]])],
+    [conn("cAB", "A", 72, "B", 0)], { traffic: { rate: 0, speed: 50, seed: 1, tune: { junctionRules: 1 } } }));
+  for (let i = 0; i < 300; i++) sim.step(0.1);
+  const a = sim.sendTest("A", "B")!;
+  sim.watch(a);
+  let maxStill = 0, flips = 0, last: string | null = null, freeAt = -1, through = false;
+  for (let i = 0; i < 900 && !through; i++) {
+    sim.step(0.1);
+    const car = sim.vehicles.find(x => x.id === a);
+    if (!car) { through = true; break; }
+    maxStill = Math.max(maxStill, car.still);
+    const z = car.why?.startsWith("zone ") ? car.why.replace(/ for car .*/, "") : null;
+    if (z) { if (last === z && freeAt >= 0 && sim.t - freeAt <= 1) flips++; last = z; freeAt = -1; } else if (last && freeAt < 0) freeAt = sim.t;
+    if ((car as unknown as { edge: { key: string } }).edge.key === "lane:B") through = true;
+  }
+  const ok = through && maxStill < 30 && flips === 0;
+  report("patience, no flip-flop", ok, `through ${through}, longest standing ${maxStill.toFixed(1)} s, flip-flops ${flips}`);
+}
+
 for (const r of results) console.log(r);
 console.log(allOk ? "explain check: all ok" : "explain check: FAILED");
 if (!allOk) process.exit(1);
