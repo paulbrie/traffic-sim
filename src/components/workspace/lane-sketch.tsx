@@ -52,6 +52,7 @@ import { stampRoundabout } from "@/lib/roundabout";
 import { tidySketch, type TidyReport } from "@/lib/sketch-tidy";
 import { mergeLanes, mergeRoads, type MergeResult } from "@/lib/sketch-merge";
 import { translucentArea } from "@/render/area-fill";
+import { deadEndTurnarounds } from "@/lib/dead-ends";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
@@ -2729,6 +2730,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     const kLevel = (k: SketchLink) => (leveled ? Math.min(...[k.a.road, k.b.road].flatMap(id => sk.roads.find(r => r.id === id)?.lanes ?? []).map(id => laneLevel(laneById(sk, id)))) : 0);
     const levels = leveled ? [...new Set([0, ...roadLanes.map(laneLevel), ...drawn.map(jLevel), ...autos.map(jLevel)])].sort((x, y) => x - y) : [0];
     const marks = st.layers.markings && v.scale >= 1.5 ? roadMarkings(sk) : [];
+    // (a dead end with a turnaround: a turning circle of road under its U-turn, drawn only)
+    const ends = deadEndTurnarounds(sk);
     for (const lv of levels) {
       const at = <T,>(xs: T[], f: (x: T) => number) => (leveled ? xs.filter(x => f(x) === lv) : xs);
       const js = at(drawn, jLevel), as = at(autos, jLevel), ks = at(linkGeo, x => kLevel(x.k)), ls = at(roadLanes, laneLevel);
@@ -2750,6 +2753,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         if (pass && holes.length) { loopsPath(holes); ctx.fill("nonzero"); }
         // (a link: its sides kerbed, not its ends, where it meets its roads)
         for (const { g } of ks) { if (pass) { path(g.outline); ctx.closePath(); ctx.fill(); } else { ctx.lineWidth = kerbW; for (const side of g.sides) { path(side); ctx.stroke(); } } }
+        for (const d of at(ends, x => x.level)) { ctx.beginPath(); ctx.arc(d.c.x, d.c.y, d.r + (pass ? 0 : kerbW / 2), 0, Math.PI * 2); ctx.fill(); }
         // (the lanes of one width in one go)
         const byWidth = new Map<number, typeof roadLanes>();
         for (const l of ls) byWidth.set(l.width, [...(byWidth.get(l.width) ?? []), l]);

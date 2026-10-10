@@ -10,6 +10,7 @@ import { arrowGlyph } from "@/render/draw2d";
 import type { Palette } from "@/render/palette";
 import type { SketchLayers } from "@/state/sketch-layers";
 import { LEVEL_H } from "@/engine/compile";
+import { circlePts, deadEndTurnarounds } from "@/lib/dead-ends";
 import {
   bandPolygon, crossingFrame, isFullCircle, junctionBands, junctionHoles, junctionLevel, laneLevel, laneLength, linkGeometry,
   outlinePath, pointAt, roadMarkings, samples, smoothJunction, turnArrows, zAt,
@@ -179,6 +180,12 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       for (const hole of junctionHoles(sk, c)) asphalt.polygon(loop(hole), [], h + Y.asphalt);
     }
     for (const k of sk.links ?? []) { const g = linkGeometry(sk, k); if (g) asphalt.polygon(g.outline, [], Y.asphalt); }
+    // (a dead end with a turnaround: a turning circle of road, on its kerb, under the U-turn; drawn only)
+    for (const d of deadEndTurnarounds(sk)) {
+      const h = d.level * LEVEL_H;
+      kerb.polygon(circlePts(d.c, d.r + KERB / 2), [], h + Y.kerb);
+      asphalt.polygon(circlePts(d.c, d.r), [], h + Y.asphalt);
+    }
   }
   if (layers.surfaces && layers.markings) {
     // the lines between lanes (dashed or not), the centre line in its yellow
