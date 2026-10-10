@@ -15,7 +15,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T116 | Re-test of T115 (refused items shown in red; #1 on a fresh page) | Ramona | 2026-10-10 | after T107 |
 | T113 | V2: the tab's renderer grew 5.4 → 7.9 GB in minutes at 30× with a test car followed (Bistrița copy): find and fix the growth | Tatiana (Bob if in the sim) | 2026-10-10 | after T112 |
 | T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test) | Tatiana | 2026-10-10 | from T97 (the 3D tilt was a test artifact, dropped) |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
@@ -37,6 +36,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T116 | Re-test of T115 on a fresh page: {id, width} applies at once; refused-only files say "Nothing would change: 1 item was left out" in red with the reason, Apply disabled: pass | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t116 |
 | T107 | Browser test of T104: camera back to the arrival framing, a drag stops the ease, Escape in search / menus / dialogs only closes them: pass | Ramona, Tatiana | 2026-10-10 | /home/genie/ramona-scratch/t107 |
 | T115 | History from file: refused items shown ("Nothing would change: N left out" in red, the table with reasons); the "stale version" was a tab running pre-b50cf4e code, now pinned by a check; restore:check 26/26 | Alex | 2026-10-10 | 18584b1 |
 | T111 | Agents City: agents waiting for the user all look at the camera and wave: questions (AskUserQuestion, or a turn ending on a question) with "?", permission prompts with an amber "!" and "needs your OK" | Alex, Tom | 2026-10-10 | admin: 8cb65d8, 8202ecf |
