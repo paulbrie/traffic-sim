@@ -75,6 +75,15 @@ between them who goes first and tell Alice.
   memory at all times and paces the work. Heavy jobs (a 900 s Bistrița run is about 1.2 GB, `next build`,
   agent-browser): at most 4 at once per person, browsers closed after use. Below 2.5 GB free, Alice asks people to
   pause; ask her before going over the limit. Scratch goes in `/home/genie/<name>-scratch`: /tmp goes at a reboot.
+- **Worktrees (trafficsim).** Nobody edits files in `/opt/project/projects/trafficsim`: that tree is what the dev
+  server (port 7000) serves, and every save there hot-reloads the user's open pages and can drop their unsaved edits
+  (the user's decision, 2026-10-10). Each agent works in a git worktree of its own,
+  `/home/genie/<name>-scratch/trafficsim-wt`, on a branch `wt/<name>` made from `origin/manual-junctions`, with
+  `node_modules` linked to the main tree's (`ln -s /opt/project/projects/trafficsim/node_modules`). To ship:
+  `git pull --rebase origin manual-junctions`, the checks, then `git push origin HEAD:manual-junctions`, and tell
+  Alice (`PUSHED:`). Alice alone updates the served tree (`git pull --ff-only` there) after each push, and keeps
+  `docs/tasks.md` and `docs/team.md` there. Scripts that need the database still read `DATABASE_URL` from the main
+  tree's `.env.local`. Browser checks run against the dev server, so they see a change once Alice has pulled it.
 - **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser work with Vercel's
   agent-browser (`/usr/bin/agent-browser`), not Playwright scripts, so the admin's /chrome page can show it; close
   its sessions after a run. If something can't be done with it, ask Alice before using anything else.
