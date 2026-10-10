@@ -47,14 +47,15 @@ between them who goes first and tell Alice.
   session (testers have their own test accounts). Test logins for the dev apps are kept together in `/home/genie/team/credentials.md`
   (outside git; the user's decision: dev server, dev database). Add or update your own line when you set a password;
   use another account only when Alice or the user asks. Never put these in a repo, a message or a log.
-- **The user's plans.** Never save to the Bistrița plan (`04604363-4bf8-464e-9e1b-ed2b36618987`) without the user's
-  approval (in your own session, or relayed by Alice: see Approvals); testers keep saves blocked. Each developer and tester has a test plan of their
+- **The user's plans.** Agents never edit the Bistrița plan (`04604363-4bf8-464e-9e1b-ed2b36618987`), with or without
+  approval (the user's decision, 2026-10-10): no saves, no applies, no scripts writing to it. Changes for it are
+  proposed as **agent patches** (T132), which the user reviews and applies in the UI. Reading it is fine. Each developer and tester has a test plan of their
   own ("V2 check (claude)" is Tatiana's, "V2 check (Ramona)" Ramona's).
 - **Database.** Agents may use trafficsim's dev database (Railway, database `railway`; the user's decision): take
   `DATABASE_URL` from trafficsim's `.env.local` only for that (never print it), pass it explicitly (the shell's own
   `DATABASE_URL` is another database, `admin_dashboard`, which stays off limits), and check `select current_database()`
   says `railway` first. Reads are fine. Writes only to your own test cities and plans, or with Alice's or the user's say;
-  never to the user's plans (Bistrița: the user's approval, see Approvals) or to other accounts. Schema changes
+  never to the user's plans (Bistrița: never, see The user's plans) or to other accounts. Schema changes
   only through the migrations (`npm run db:migrate`).
 - **Admin repo (`/opt/project`).** No commit or deploy by Alex or Tom; the user does it, or Alice when the user asks.
   Local `main` there has diverged from `origin/main`; admin work goes up from a clean worktree on `origin/main`.
