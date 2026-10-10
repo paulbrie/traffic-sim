@@ -21,7 +21,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | 6994d9a, 46a9565, 14a24fe, fde6bbb ("other way" only for a longer way: 0 of 40 flagged on an empty map); left: the screenshot (login needs the user in her session), the check with the plan's own traffic; scripts in /home/genie/tatiana-scratch |
 | T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | not started |
 | T68 | Bistrița with repeatable runs (7b27441): repeatability check, every collision with seed and time, deadlocks per place | Ramona | 2026-10-09 | run stopped for the reboot after 35 min, no results; harness in /home/genie/ramona-scratch/t68; re-run split across processes |
-| T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | |
+| T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Patches measured worse, not committed; notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
 ## Done
 
