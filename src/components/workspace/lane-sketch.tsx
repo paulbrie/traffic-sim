@@ -38,6 +38,8 @@ import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { ZonePanel } from "@/components/v2/zone-panel";
+import { ALIGN_BUTTONS, AlignLanes } from "@/components/v2/align-lanes";
+import { alignLanes, canAlign } from "@/lib/lane-align";
 import { FILL_GAP, fillAllJunctions, junctionSurfaceHoles, unfilledJunctions } from "@/lib/junction-fill";
 import { paintZoneDraft, paintZones, zoneAt, zoneEditAt } from "@/components/v2/zone-tools";
 import { addZone, deleteZone, formatArea, insertZoneCorner, moveZoneCorner, nextZoneColor, removeZoneCorner, zoneArea, zoneLabelPoint } from "@/lib/sketch-zones";
@@ -1441,6 +1443,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (mod && k === "v") { e.preventDefault(); void paste(); return; }
     if (mod && k === "d") { e.preventDefault(); duplicate(); return; }
     if (mod) return;
+    // (Alt+A / H / D, W / V / S: the selected lanes aligned, as in a design tool; by the key's place, as Alt changes its letter on a Mac)
+    if (e.altKey && !e.shiftKey) {
+      const b = ALIGN_BUTTONS.find(x => x.code === e.code);
+      if (b) {
+        e.preventDefault();
+        const ids = live.current.sel.lanes;
+        if (!readOnly && canAlign(live.current.sketch, ids)) editSketch(sk => alignLanes(sk, ids, b.how));
+        return;
+      }
+    }
     if (k === " ") { e.preventDefault(); space.current = true; if (hand === "") setHand("grab"); return; }
     if (k === "escape") {
       // (a menu or dialog took it already)
@@ -2491,6 +2503,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             <Button size="sm" variant="outline" title="Each selected ring of points as a true circle, the one that fits it best, running the same way (its connectors stay where they are)" onClick={() => editSketch(s => circleLanes(s, sel.lanes))}><Circle /> Make a circle</Button>
           </>}
         </div>
+        {sel.lanes.length >= 2 && <AlignLanes sketch={sketch} lanes={sel.lanes} readOnly={false} onAlign={how => editSketch(s => alignLanes(s, sel.lanes, how))} />}
         {selRoads.length === 2 && (
           <Button size="sm" variant="outline" onClick={linkSel} title="Join the two roads at their nearest ends so the road carries on: a surface between them, its lines, and a connector for each lane">
             Link {roadName(selRoads[0])} and {roadName(selRoads[1])}
