@@ -63,6 +63,8 @@ import { SketchPicker } from "@/components/v2/sketch-picker";
 import { newSketch } from "@/lib/sketch-list";
 import { deleteLanes, dropDangling, takeOutOfRoad } from "@/lib/road-lanes";
 import { carWay, type CarWay } from "@/lib/car-way";
+import { useJunctionWarnings } from "@/state/junction-warnings-client";
+import type { JunctionWarning } from "@/lib/junction-warnings";
 import { explainMarks, type CarExplain } from "@/lib/car-explain";
 import { keyForEditor, keyTargetOf, somethingOpen } from "@/lib/editor-keys";
 import { CarWhy } from "./car-explain";
@@ -722,6 +724,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const junctionSel = (sk: Sketch, ids: string[]): Sel => {
     const cs = ids.map(id => { const j = sk.junctions.find(x => x.id === id); return j ? junctionContents(sk, j) : null; });
     return { lanes: [...new Set(cs.flatMap(c => c?.lanes ?? []))], connectors: [...new Set(cs.flatMap(c => c?.connectors ?? []))], junctions: ids, road: null };
+  };
+  // (the junctions' warnings, worked out off the page a moment after the sketch stops changing)
+  const jw = useJunctionWarnings(sketch);
+  /** a warning's lanes and connectors selected and framed */
+  const selectItems = (items: string[]) => {
+    const sk = live.current.sketch, ls = new Set(sk.lanes.map(l => l.id)), cs = new Set(sk.connectors.map(c => c.id));
+    const s: Sel = { ...NO_SEL, lanes: items.filter(id => ls.has(id)), connectors: items.filter(id => cs.has(id)) };
+    setSelCar(null); setSel(s); zoomTo({ lanes: s.lanes, connectors: s.connectors, junctions: [] });
   };
   const finishLane = () => {
     const d = draft.current;
@@ -1650,7 +1660,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       </div>
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-56 shrink-0 flex-col overflow-y-auto border-r text-sm" aria-label="Sketch structure">
-          <StructureTree sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
+          <StructureTree warnings={jw.byJunction} sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
             onHover={h => { hover.current = h; redraw(); }} onZoom={zoomTo} onCenter={centerOn} />
         </aside>
         <div className="relative min-w-0 flex-1">
@@ -1761,7 +1771,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           </div>
           <ProblemConsole open={consoleOpen} onOpen={setConsoleOpen} sim={() => sim.current} stats={stats} sketch={sketch} contents={contents} replayFrom={replayRange?.from ?? null} onReplay={showAt}
             onGo={(p, car) => { if (sim.current?.poses().some(c => c.id === car)) { setSel(NO_SEL); setSelCar(car); } centerOnPts([p], true); redraw(); }}
-            onSelect={id => { setSelCar(null); setSel({ ...NO_SEL, connectors: [id] }); redraw(); }} />
+            onSelect={id => { setSelCar(null); setSel({ ...NO_SEL, connectors: [id] }); redraw(); }}
+            junctionWarnings={jw} onItems={selectItems} />
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
@@ -1782,7 +1793,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <CrossingPanel x={sketch.crossings.find(x => x.id === sel.crossing)!} readOnly={readOnly} onDelete={deleteSel}
               live={stats ? peds.find(q => q.id === sel.crossing) ?? null : null} />
           ) : (
-            <SelectionPanel sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
+            <SelectionPanel warnings={jw} onWarning={selectItems} sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
               selPt={selPt} onCurvePoint={curvePoint} onDeletePoint={deletePoint}
               onGroup={groupSel} onJunctionAround={junctionAround} onReverse={reverseSel} onDelete={deleteSel} onHover={h => { hover.current = h; redraw(); }} now={stats?.t ?? null} results={stats} />
           )}
@@ -2308,7 +2319,9 @@ function mergeSelection(sk: Sketch, sel: Sel, edit: (f: (s: Sketch) => Sketch) =
   });
 }
 
-function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover, now = null, results = null }: {
+function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, junctionSel, selPt, onCurvePoint, onDeletePoint, onGroup, onJunctionAround, onReverse, onDelete, onHover, now = null, results = null }: {
+  /** the junction warnings (a selected junction's listed in its panel), and one clicked: its items selected and framed */
+  warnings: { byJunction: Map<string, JunctionWarning[]>; checking: boolean }; onWarning: (items: string[]) => void;
   sketch: Sketch; sel: Sel; setSel: (s: Sel) => void; contents: Map<string, JunctionContents>; junctionSel: (ids: string[]) => Sel;
   selPt: { lane: string; i: number } | null; onCurvePoint: (lane: string, i: number) => void; onDeletePoint: (lane: string, i: number) => void;
   onGroup: () => void; onJunctionAround: () => void; onReverse: () => void; onDelete: () => void; onHover: (h: Hover | null) => void;
@@ -2407,6 +2420,16 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           })()}
         </p>
         {results && <JunctionLine st={results.junctions?.find(x => x.id === junction.id)} t={results.t} />}
+        {(() => {
+          const ws = warnings.byJunction.get(junction.id) ?? [];
+          if (!ws.length) return <p className="text-[11px] text-muted-foreground">{warnings.checking ? "Checking how it is drawn…" : "Nothing in how it is drawn is known to make it work badly."}</p>;
+          return (
+            <div className="grid gap-1 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs">
+              <span className="font-medium text-amber-800 dark:text-amber-300">{ws.length} warning{ws.length === 1 ? "" : "s"} on how it is drawn{warnings.checking ? " (checking again…)" : ""}</span>
+              {ws.map((w, i) => <button key={i} type="button" className="text-left hover:underline" title="Select what it is about, and frame it" onClick={() => onWarning(w.items)}>{w.text}</button>)}
+            </div>
+          );
+        })()}
         <p className="text-[11px] text-muted-foreground">Its shape, on the map: {JUNCTION_HINT}.{junction.shape === "auto" ? " Its surface is Automatic: editing a corner makes it Drawn (the surface then follows the border)." : ""} Moving or turning it takes what is on it along.</p>
         <div className="grid gap-1">
           <span className="text-xs text-muted-foreground">Surface</span>
@@ -2686,8 +2709,10 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
  * and the lanes on them, and what is in neither. A click selects (⇧ adds to the selection) and centres it, a
  * double-click zooms to it, hovering lights it up on the sketch.
  */
-function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, onZoom, onCenter }: {
+function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, onZoom, onCenter, warnings }: {
   sketch: Sketch; sel: Sel; setSel: (s: Sel) => void; contents: Map<string, JunctionContents>; junctionSel: (ids: string[]) => Sel;
+  /** each junction's warnings (junction-warnings.ts), a badge on its row */
+  warnings?: Map<string, JunctionWarning[]>;
   onHover: (h: Hit | null) => void; onZoom: (p: Piece) => void; onCenter: (p: Piece) => void;
 }) {
   const [closed, setClosed] = useState<Set<string>>(() => new Set());
@@ -2814,7 +2839,7 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
         return [
           row({
             key: k, depth: 0, kids: true, on: sel.junctions.includes(j.id), hit: { junction: j.id }, sel: junctionSel([j.id]), zoom: piece({ junctions: [j.id] }),
-            label: <span className="font-medium">{j.name}</span>, note: c.roads.length ? plural(c.roads.length, "road") : plural(c.connectors.length, "connector"),
+            label: <span className="font-medium">{j.name}{(() => { const ws = warnings?.get(j.id); return ws?.length ? <span className="ml-1 rounded bg-amber-500/20 px-1 text-[10px] font-normal text-amber-800 dark:text-amber-300" title={ws.map(w => w.text).join("\n")}>⚠ {ws.length}</span> : null; })()}</span>, note: c.roads.length ? plural(c.roads.length, "road") : plural(c.connectors.length, "connector"),
           }),
           ...(open(k) ? [
             // (those of the same name told apart by which way from the junction they lie: "Bulevardul Decebal (NE)", "(SW)")

@@ -8,8 +8,15 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { resolveTuning, sanitizeTuning, TUNE_GROUPS, TUNING, type TuneInfo, type Tuning } from "@/lib/sketch-tuning";
 import type { SimParams } from "@/lib/lane-sketch-sim";
+
+/**
+ * Junction rules (T165): first come, first served (0, the default), or priority (1): the simulation's tuning field for it
+ * (Bob's, T161), shown as a switch, not a slider. Null until the simulation has it: the switch shown, not yet usable.
+ */
+const JUNCTION_RULES_KEY: TuneInfo["key"] | null = null;
 
 const digits = (step: number) => (step >= 1 ? 0 : step >= 0.1 ? 1 : 2);
 const fmt = (t: TuneInfo, v: number) => `${v.toFixed(digits(t.step))}${t.unit ? ` ${t.unit}` : ""}`;
@@ -64,7 +71,24 @@ function SimSettings({ params, setParams, readOnly }: { params: SimParams; setPa
         {TUNE_GROUPS.map(g => (
           <section key={g} className="grid gap-3">
             <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{g}</h3>
-            {TUNING.filter(t => t.group === g).map(t => {
+            {g === "Junctions" && (
+              <div className="grid gap-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm" id="tune-junction-rules">Junction rules</span>
+                  <ToggleGroup type="single" aria-labelledby="tune-junction-rules" disabled={readOnly || !JUNCTION_RULES_KEY} className="h-7"
+                    value={JUNCTION_RULES_KEY && T[JUNCTION_RULES_KEY] ? "priority" : "first"}
+                    onValueChange={v => { if (v && JUNCTION_RULES_KEY) set({ [JUNCTION_RULES_KEY]: v === "priority" ? 1 : 0 }); }}>
+                    <ToggleGroupItem value="first" className="h-7 px-2 text-xs">First come</ToggleGroupItem>
+                    <ToggleGroupItem value="priority" className="h-7 px-2 text-xs">Priority</ToggleGroupItem>
+                  </ToggleGroup>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  First come: where paths cross, the car that gets there first goes first. Priority: who goes first follows the junction&apos;s rules instead.
+                  {!JUNCTION_RULES_KEY && " (Comes with the next simulation update.)"}
+                </p>
+              </div>
+            )}
+            {TUNING.filter(t => t.group === g && t.key !== JUNCTION_RULES_KEY).map(t => {
               const v = T[t.key], isDef = v === t.def, id = `tune-${t.key}`;
               return (
                 <div key={t.key} className="grid gap-1.5">
