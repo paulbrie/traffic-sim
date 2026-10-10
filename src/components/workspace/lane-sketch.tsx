@@ -2431,6 +2431,8 @@ interface PaintState {
   labels?: NameLabel[];
 }
 
+/** a connector being drawn: yellow, over a dark edge (only while it is drawn: placed, it looks as the others) */
+const DRAWING = "#facc15", DRAWING_EDGE = "rgba(24, 24, 27, 0.75)";
 /** a marking's box (kept: markings are kept per sketch) */
 /** a run at least this long (s) before its flows are taken for a tested piece's ways in */
 const MEASURE_AFTER = 180;
@@ -3065,13 +3067,19 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.stroke(); ctx.globalAlpha = 1;
     } else if (cur) { ctx.beginPath(); ctx.arc(d.c.x, d.c.y, dist(d.c, cur.p), 0, Math.PI * 2); ctx.stroke(); }
   } else if (d?.kind === "connector") {
+    // (in yellow over a dark edge, to be seen over the imagery and the lanes, its start and bends marked so: until placed)
     const a = at(sk, d.from), to = cur && !cur.alt ? placeOn(cur.p) : null, b = to ? at(sk, to) : null;
     if (a) {
       const last = d.via[d.via.length - 1] ?? a.p;
       const end = b ?? (cur ? { p: cur.p, d: (() => { const l = dist(last, cur.p) || 1; return { x: (cur.p.x - last.x) / l, y: (cur.p.y - last.y) / l }; })() } : null);
-      if (end) { path(curveThrough(a, d.via, end)); ctx.stroke(); }
-      ctx.setLineDash([]);
-      for (const p of d.via) dot(p, 3 * px, col.sel);
+      ctx.save(); ctx.setLineDash([]); ctx.lineCap = "round"; ctx.lineJoin = "round";
+      if (end) {
+        path(curveThrough(a, d.via, end));
+        ctx.strokeStyle = DRAWING_EDGE; ctx.lineWidth = 6 * px; ctx.stroke();
+        ctx.strokeStyle = DRAWING; ctx.lineWidth = 3.5 * px; ctx.stroke();
+      }
+      for (const p of [a.p, ...d.via]) { dot(p, 5 * px, DRAWING_EDGE); dot(p, 3.5 * px, DRAWING); }
+      ctx.restore();
     }
   }
   ctx.setLineDash([]);
@@ -3082,7 +3090,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   if (tool === "connector" && cur && !cur.alt) {
     const pl = placeOn(cur.p), a = pl ? at(sk, pl) : null;
-    if (a) dot(a.p, 4 * px, col.sel);
+    if (a && d?.kind === "connector") { dot(a.p, 5.5 * px, DRAWING_EDGE); dot(a.p, 4 * px, DRAWING); } else if (a) dot(a.p, 4 * px, col.sel);
   }
   const g = st.drag;
   if (g?.kind === "handle" && g.h.kind === "end" && cur) {
