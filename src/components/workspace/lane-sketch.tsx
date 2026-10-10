@@ -239,16 +239,20 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
   // (the test car's results, from the cars' stats as they come: into the route's state; the stats of the car sent from it
-  // only (by its number and when it was sent), and once the cars start again without it, no test car any more)
+  // only (by its number and when it was sent), and once the cars start again without it, no test car any more. A frame
+  // from before it was sent can still come in after: the cars' clock behind its start is a fresh start only once it was
+  // seen in them)
+  const testSeen = useRef<number | null>(null);
   useEffect(() => {
     const T = route.test, t = stats?.test;
     if (!T || !stats || !route.result?.ok) return;
     if (t && t.id === T.car && t.t0 === T.t0) {
+      testSeen.current = T.car;
       // (another lane of the same road beside the traced one is the same way: where ways as short tie, cars take either)
       const otherWay = T.path.length === t.path.length ? T.otherWay : offRoute(sketch, route.result.steps, t.path).length > 0;
       const next = { ...T, state: t.state, time: Math.round(((t.t1 ?? stats.t) - t.t0) * 10) / 10, stops: t.stops, path: t.path, otherWay };
       if (JSON.stringify(next) !== JSON.stringify(T)) setRoute(r => ({ ...r, test: next }));
-    } else if (stats.t < T.t0 || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
+    } else if ((stats.t < T.t0 && testSeen.current === T.car) || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
   }, [stats, sketch, route.result, route.test, setRoute]);
   // what the handlers and the drawing read (kept current after every render)
   const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown });
@@ -1446,6 +1450,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               selection={sel} car={selCar} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
+          )}
+          {in3d && (
+            <div className="pointer-events-none absolute inset-x-2 top-2 z-[6] rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
+              <span className="font-medium text-foreground">3D:</span> drag turns and tilts (up towards the horizon, down to straight down) · right-drag or Shift-drag pans · scroll zooms · click picks · F the whole sketch · Esc back where it arrived
+            </div>
           )}
           {hoverCard && (() => {
             const info = describeHover(hoverCard.hit, sketch, contents, stats, hoverCard.car);
