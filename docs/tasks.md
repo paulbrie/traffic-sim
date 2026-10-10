@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T131 | V2: per-road and per-lane speed limits (T52) dropped on every save and load (sanitizeSketch doesn't keep `speed`) | Tatiana | 2026-10-10 | found by Tom; first |
 | T130 | V2: a semi-transparent fill over a junction while it's drawn or selected for editing | Tatiana | 2026-10-10 | after T128 |
 | T129 | V2 editor: draw zones (neighbourhoods): labelled, coloured polygons stored in the plan, a Zone tool, panel, layer, label click | Tom (Tatiana for the editor files), Ramona checks | 2026-10-10 | |
 | T128 | V2 editor: merge two lanes (one continuing the other) or two roads into one, refusing clearly when they don't line up | Tatiana | 2026-10-10 | after T126 |
