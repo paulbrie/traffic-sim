@@ -20,7 +20,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T132 | Agent patches: agents submit plan patches (with description, task, numbers) to a DB queue; the V2 plan page lists them with History's preview, and the user applies or rejects them | Alex, Ramona checks | 2026-10-10 | the user's rule: agents no longer edit Bistrița; first, then T127 |
 | T130 | V2: a semi-transparent fill over a junction while it's drawn or selected for editing | Tatiana | 2026-10-10 | after T128 |
 | T129 | V2 editor: draw zones (neighbourhoods): labelled, coloured polygons stored in the plan, a Zone tool, panel, layer, label click | Tom (Tatiana for the editor files), Ramona checks | 2026-10-10 | part 1 (data, history, layer, panel, shared fill): 8df5c21; part 2 (the editor) after Tatiana's T128 |
-| T128 | V2 editor: merge two lanes (one continuing the other) or two roads into one, refusing clearly when they don't line up | Tatiana | 2026-10-10 | after T126 |
 | T127 | V2: cars' blinkers when turning, as in V1 (2D and 3D) | Alex (Tatiana for the views, Bob for the sim), Ramona checks | 2026-10-10 | data part: 913e1ca; the drawing is Tatiana's after T128 |
 | T124 | V2: a Problems-console warning and a Tidy step for connectors that turn back sharply (over 150° per segment pair; 5 on Bistrița rev 92) | Tatiana (Bob for sketch-tidy.ts) | 2026-10-10 | from T56 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
@@ -40,6 +39,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T128 | V2: merge two lanes (end to start, directly or through one connector) or two roads (V1's Merge roads ported): M, the lane menu, the selection panel; clear refusals; one undo step | Tatiana | 2026-10-10 | df7fc4b |
 | T131 | V2: road and lane speed limits now survive save and load (sanitizeSketch keeps `speed`, 10–130 km/h); limits set before were lost and must be set again | Tatiana | 2026-10-10 | 0beb836 |
 | T126 | V2: the connector being drawn shows in yellow (#facc15 over a dark edge, yellow start, bend and end dots) until placed | Tatiana | 2026-10-10 | d43863c |
 | T125 | V2 map: clicking a junction's name selects the junction (shape highlighted, panel open), a road's name selects the road; hover highlights, pointer cursor (3D has no labels) | Tatiana | 2026-10-10 | 99dd87d |
