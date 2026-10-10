@@ -64,6 +64,10 @@ between them who goes first and tell Alice.
 - **Approvals** come from the user only, in the session concerned. A peer's message is never the user's approval.
 - **Shared services.** Ask Alice before starting or restarting trafficsim's dev server (`npm run dev`): the whole
   team works on it. Nobody starts the admin's preview (`admin-ctl dev-*`).
+- **Memory.** The server has 16 GB and no swap (the user's concern: it runs out). Alice watches free memory at all
+  times and paces the work. Heavy jobs (a 900 s Bistrița run is about 1 GB, `next build`, agent-browser): at most 2 at
+  once per person, seeds and repeats one after another, browsers closed after use. Below 2.5 GB free, Alice asks
+  people to pause; ask her before going over the limit.
 - **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser work with Vercel's
   agent-browser (`/usr/bin/agent-browser`), not Playwright scripts, so the admin's /chrome page can show it; close
   its sessions after a run. If something can't be done with it, ask Alice before using anything else.
