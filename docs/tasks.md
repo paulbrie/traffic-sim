@@ -15,6 +15,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T98 | The gaps left in T73: a real bridge (Level 1 over other lanes) and the 3D screenshot | Ramona | 2026-10-10 | |
+| T97 | Test of the V2 route tracer (T74) in the browser, with screenshots of a traced route and its test car | Ramona | 2026-10-10 | |
 | T96 | Agents City Table: a table of normal height (about 0.75 m for a 1.75 m avatar), chairs and a floor, so avatars can stand and walk; camera re-framed | Tom | 2026-10-10 | before T95 |
 | T95 | Agents City Table: commits as books on a bookshelf left of the whiteboard; Alice's avatar walks over and shelves each; the coffee mug removed if it costs frames | Tom | 2026-10-10 | after T92–T94, T96 |
 | T94 | Agents City Table: the City's lightning between the laptops and the files' buildings (shared with the City's lightning.tsx) | Tom (Alex for lightning.tsx) | 2026-10-10 | after T85 |
@@ -24,7 +26,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T88 | History from file: a minimal partial patch (e.g. a lane's {id, width} only) is taken as "nothing to save" and Apply stays disabled | Alex | 2026-10-10 | from T72; files in /home/genie/ramona-scratch/t72 |
 | T85 | Agents City: about 60% CPU and the fan running while the page is open; measure, then render on demand, pause when hidden, cap DPR | Alex (Tom for desk/) | 2026-10-10 | paused for the reboot: causes found (always-on frameloop at dpr 2, 8× MSAA + bloom, the Clock re-rendering the view 4×/s, per-frame allocations, polling while hidden); before numbers and harness in /home/genie/alex-scratch/t85; fixes not started |
 | T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | 6994d9a, 46a9565, 14a24fe, fde6bbb ("other way" only for a longer way: 0 of 40 flagged on an empty map); left: the screenshot (login needs the user in her session), the check with the plan's own traffic; scripts in /home/genie/tatiana-scratch |
-| T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | in progress |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Patches measured worse, not committed; notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
 ## After the restart (2026-10-10, done 01:30)
@@ -41,6 +42,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T73 | Re-test of the 3D view (T62): toggle, orbit, zoom, imagery, roads, junctions, markings, live cars, picking pass; a real bridge and the 3D screenshot not reached (→ T98) | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t73 |
 | T89 | Re-test of T69's conflict dialog: compares with the live revision, shows the conflict, applies cleanly: pass | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t89 |
 | T68 | Bistrița repeatable runs (HEAD 3f58bc8, rev 91, 900 s, a process per run): identical per seed; deadlocks 2/10/8, collisions 1/6/4 (seeds 1/2/3); hot spots j746, j574, l2607, l1923/l40. Differs from Bob's harness (1/8/4, 2/2/2): Bob to reconcile | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t68 |
 | T90 | Admin: the Table work (T82–T87) on origin/main; tests 61/61, tsc, build pass, lint as origin | Alex, Tom, Alice | 2026-10-10 | admin: ca7e185 (pushed); the user moves /opt/project to origin/main and deploys |
