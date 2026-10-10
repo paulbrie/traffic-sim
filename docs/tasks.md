@@ -15,7 +15,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T95 | Agents City Table: commits as books on a bookshelf left of the whiteboard; Alice's avatar walks over and shelves each; the coffee mug removed if it costs frames | Tom | 2026-10-10 | after T92–T94 |
+| T96 | Agents City Table: a table of normal height (about 0.75 m for a 1.75 m avatar), chairs and a floor, so avatars can stand and walk; camera re-framed | Tom | 2026-10-10 | before T95 |
+| T95 | Agents City Table: commits as books on a bookshelf left of the whiteboard; Alice's avatar walks over and shelves each; the coffee mug removed if it costs frames | Tom | 2026-10-10 | after T92–T94, T96 |
 | T94 | Agents City Table: the City's lightning between the laptops and the files' buildings (shared with the City's lightning.tsx) | Tom (Alex for lightning.tsx) | 2026-10-10 | after T85 |
 | T93 | Agents City Table: while thinking, an avatar's eyes glance around like a person's (quick glances, holds, now and then the head follows) | Tom | 2026-10-10 | after T85, T92 |
 | T92 | Agents City Table: CPU dial shows the total plus one bar per core (from /proc/stat, read by the admin) | Alex (data), Tom (display) | 2026-10-10 | after T85 |
