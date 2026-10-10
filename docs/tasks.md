@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T140 | Agent patches: removals (`remove: {lanes, connectors, junctions, roads, zones}`), checked (ids exist, a lane's connectors listed too), shown struck-through in the review | Alex | 2026-10-10 | blocks Bob's T134 B, C, A and the j534 duplicates |
 | T139 | V2: dead ends with a U-turn drawn as turning circles (2D and 3D, display only); an info line in the console | Tatiana | 2026-10-10 | after T124 |
 | T134 | Bistrița: 172 dead-end U-turn stubs on rev 92: A 71 cut short (connect, reviewed patches in batches of ~10), B 4 at the edge (ways in/out, one patch), C 15 unused (delete, one patch), D 82 real dead ends (keep; drawn as turning circles, T139): the user's choices | Bob | 2026-10-10 | list: /home/genie/bob-scratch/trafficsim/t134/T134-list.md |
 | T129 | V2 editor: draw zones (neighbourhoods): labelled, coloured polygons stored in the plan, a Zone tool, panel, layer, label click | Tom (Tatiana for the editor files), Ramona checks | 2026-10-10 | part 1 (data, history, layer, panel, shared fill): 8df5c21; part 2 (the editor) after Tatiana's T128 |
