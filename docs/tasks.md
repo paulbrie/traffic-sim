@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | the user's aerial photo; read-only |
 | T147 | V2 junction surface: a "Fill holes" option so the inside of an intersection is all road surface (no slivers or holes between connectors; real islands kept) | Tom (Tatiana for the editor) | 2026-10-10 | the user's screenshot of J696 |
 | T146 | V2: the user's tab crashed ("Aw, Snap!", error 5, likely out of memory) after hours of editing Bistrița: reproduce with 100–200 edits, find what grows (undo history, proxies, caches), fix | Tatiana | 2026-10-10 | urgent; last save before the crash: rev 171, 16:04 UTC |
 | T143 | Research: the best ways to show an agent swarm at work in 2D or very light graphics (prior art, low-power techniques, 3 concepts with mocks and CPU estimates, a recommendation, a quick win) | Alex | 2026-10-10 | the 3D view spins up the user's M5 fan |
