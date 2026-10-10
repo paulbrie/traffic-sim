@@ -1,4 +1,4 @@
-import { boundsOfPts, nextId, pastePart, piecePoints, sanitizeSketch, type Piece, type Pt, type Sketch, type SketchCrossing } from "./lane-sketch";
+import { boundsOfPts, geoShift, nextId, pastePart, piecePoints, sanitizeSketch, type Piece, type Pt, type Sketch, type SketchCrossing } from "./lane-sketch";
 
 /**
  * An agent patch's piece added to the plan's Sketch window (T152, the user's choice): beside what the window holds,
@@ -11,12 +11,6 @@ import { boundsOfPts, nextId, pastePart, piecePoints, sanitizeSketch, type Piece
 /** metres kept clear between the window's content and a piece moved beside it */
 export const BESIDE_GAP = 20;
 
-// TODO(Tatiana): a copy of the editor's private geoShift (src/components/workspace/lane-sketch.tsx): export that one and use it in both
-/** metres east and south from origin `to` to origin `from` (both latitude / longitude; nothing if either is missing); as the editor's (lane-sketch.tsx) */
-export function geoShift(from?: { lat: number; lon: number }, to?: { lat: number; lon: number }): Pt {
-  if (!from || !to) return { x: 0, y: 0 };
-  return { x: (from.lon - to.lon) * 111320 * Math.cos((to.lat * Math.PI) / 180), y: (to.lat - from.lat) * 110540 };
-}
 
 export type WindowCounts = { lanes: number; connectors: number; roads: number; junctions: number; crossings: number; zones: number };
 export type WindowAdd = {

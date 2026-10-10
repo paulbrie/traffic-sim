@@ -516,6 +516,13 @@ export function copyPart(sk: Sketch, piece: Piece): Sketch {
 }
 
 /** a piece pasted in with fresh ids, moved by (dx, dy); answers the sketch and what was pasted */
+/** metres east and south from origin `to` to origin `from` (both latitude / longitude; nothing if either is missing): where
+ * a piece of one sketch lies in another placed elsewhere on Earth (Test in Sketch → Add, an agent patch's piece) */
+export function geoShift(from?: { lat: number; lon: number }, to?: { lat: number; lon: number }): Pt {
+  if (!from || !to) return { x: 0, y: 0 };
+  return { x: (from.lon - to.lon) * 111320 * Math.cos((to.lat * Math.PI) / 180), y: (to.lat - from.lat) * 110540 };
+}
+
 export function pastePart(sk: Sketch, part: Sketch, dx: number, dy: number): { sketch: Sketch; piece: Piece } {
   const ids = { l: sk.lanes.map(l => l.id), c: sk.connectors.map(c => c.id), r: sk.roads.map(r => r.id), j: sk.junctions.map(j => j.id) };
   const fresh = (k: keyof typeof ids) => { const id = nextId(k, ids[k]); ids[k].push(id); return id; };
