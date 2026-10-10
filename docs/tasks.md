@@ -29,7 +29,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T93 | Agents City Table: while thinking, an avatar's eyes glance around like a person's (quick glances, holds, now and then the head follows) | Tom | 2026-10-10 | after T85, T92 |
 | T92 | Agents City Table: CPU dial shows the total plus one bar per core (from /proc/stat, read by the admin) | Alex (data), Tom (display) | 2026-10-10 | data: admin 3d03d75 (cpuPerCore in /api/stats); display in progress |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
-| T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | 6994d9a, 46a9565, 14a24fe, fde6bbb ("other way" only for a longer way: 0 of 40 flagged on an empty map); left: the screenshot (login needs the user in her session), the check with the plan's own traffic; scripts in /home/genie/tatiana-scratch |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Patches measured worse, not committed; notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
 ## After the restart (2026-10-10, done 01:30)
@@ -46,6 +45,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T74 | V2 route tracer: way in, way out, lane, route drawn, a test car from the panel, "other way" only for a longer way. With the plan's traffic (3 seeds × 60 cars): 113 of 180 arrived, never faster than the limits, 24 flagged blue, all on real reroutes. Screenshots via Ramona's T97 | Tatiana | 2026-10-10 | 6994d9a, 46a9565, 14a24fe, fde6bbb |
 | T99 | Agents City: folders starting with "." left out of the cities (server-side, before the file cap) unless "Show hidden folders" (?dot=1); dot-files in shown folders stay; touches inside hidden folders draw no bolt | Alex | 2026-10-10 | admin: 941d8aa (pushed, not deployed) |
 | T85 | Agents City and Table: on-demand frames (60 flights, 30 animating, 0 when still or hidden), dpr ≤ 1.5, 4× MSAA, 250 ms clock, stable handlers, no per-frame allocations; idle Table frozen (the user's choice). Harness (SwiftShader): City idle 417% → 4% CPU, Table calm 722% → 32% | Alex, Tom | 2026-10-10 | admin: f1d0b13 (pushed, not deployed) |
 | T88 | History from file: Apply merges the file's fields onto the item with the same id (missing fields kept, null clears optional ones, required ones can't be cleared, a new id needs a whole item); restore:check 23/23 | Alex | 2026-10-10 | b50cf4e |
