@@ -19,12 +19,10 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T93 | Agents City Table: while thinking, an avatar's eyes glance around like a person's (quick glances, holds, now and then the head follows) | Tom | 2026-10-10 | after T85, T92 |
 | T92 | Agents City Table: CPU dial shows the total plus one bar per core (from /proc/stat, read by the admin) | Alex (data), Tom (display) | 2026-10-10 | after T85 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
-| T89 | Re-test of T69's conflict dialog (not reached in T72) | Ramona | 2026-10-10 | |
 | T88 | History from file: a minimal partial patch (e.g. a lane's {id, width} only) is taken as "nothing to save" and Apply stays disabled | Alex | 2026-10-10 | from T72; files in /home/genie/ramona-scratch/t72 |
 | T85 | Agents City: about 60% CPU and the fan running while the page is open; measure, then render on demand, pause when hidden, cap DPR | Alex (Tom for desk/) | 2026-10-10 | paused for the reboot: causes found (always-on frameloop at dpr 2, 8× MSAA + bloom, the Clock re-rendering the view 4×/s, per-frame allocations, polling while hidden); before numbers and harness in /home/genie/alex-scratch/t85; fixes not started |
 | T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | 6994d9a, 46a9565, 14a24fe, fde6bbb ("other way" only for a longer way: 0 of 40 flagged on an empty map); left: the screenshot (login needs the user in her session), the check with the plan's own traffic; scripts in /home/genie/tatiana-scratch |
-| T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | not started |
-| T68 | Bistrița with repeatable runs (7b27441): repeatability check, every collision with seed and time, deadlocks per place | Ramona | 2026-10-09 | run stopped for the reboot after 35 min, no results; harness in /home/genie/ramona-scratch/t68; re-run split across processes |
+| T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | in progress |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Patches measured worse, not committed; notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
 ## After the restart (2026-10-10, done 01:30)
@@ -41,6 +39,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T89 | Re-test of T69's conflict dialog: compares with the live revision, shows the conflict, applies cleanly: pass | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t89 |
+| T68 | Bistrița repeatable runs (HEAD 3f58bc8, rev 91, 900 s, a process per run): identical per seed; deadlocks 2/10/8, collisions 1/6/4 (seeds 1/2/3); hot spots j746, j574, l2607, l1923/l40. Differs from Bob's harness (1/8/4, 2/2/2): Bob to reconcile | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t68 |
 | T90 | Admin: the Table work (T82–T87) on origin/main; tests 61/61, tsc, build pass, lint as origin | Alex, Tom, Alice | 2026-10-10 | admin: ca7e185 (pushed); the user moves /opt/project to origin/main and deploys |
 | T87 | Agents City Table: CPU, MEM and DISK dials on the whiteboard's right edge (from /api/stats; MEM by available memory: amber < 4 GB, red < 2.5 GB; CPU 70/90 %, DISK 80/90 %), polled every 5 s, paused when hidden, repainted only on change | Tom | 2026-10-10 | admin: ca7e185 (deployed 01:24 from the live tree) |
 | T72 | Re-test of T69: Restore keeps geo and journeys, red warning for removed items, "Restored from the file" pass; Apply of a minimal partial patch fails (→ T88); conflict dialog not reached (→ T89) | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t72 |
