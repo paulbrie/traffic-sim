@@ -15,18 +15,20 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T87 | Agents City Table: server CPU, memory and disk gauges (dials on the whiteboard; green, amber, red) | Tom (Alex for the data) | 2026-10-10 | after T83 |
+| T89 | Re-test of T69's conflict dialog (not reached in T72) | Ramona | 2026-10-10 | |
+| T88 | History from file: a minimal partial patch (e.g. a lane's {id, width} only) is taken as "nothing to save" and Apply stays disabled | Alex | 2026-10-10 | from T72; files in /home/genie/ramona-scratch/t72 |
 | T85 | Agents City: about 60% CPU and the fan running while the page is open; measure, then render on demand, pause when hidden, cap DPR | Alex (Tom for desk/) | 2026-10-10 | paused for the reboot: causes found (always-on frameloop at dpr 2, 8× MSAA + bloom, the Clock re-rendering the view 4×/s, per-frame allocations, polling while hidden); before numbers and harness in /home/genie/alex-scratch/t85; fixes not started |
-| T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | |
-| T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | after T68, T72 |
-| T72 | Re-test of T69 | Ramona | 2026-10-09 | alongside T68 |
-| T68 | Bistrița with repeatable runs (7b27441): repeatability check, every collision with seed and time, deadlocks per place | Ramona | 2026-10-09 | after T66 |
+| T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | 6994d9a, 46a9565, 14a24fe, fde6bbb ("other way" only for a longer way: 0 of 40 flagged on an empty map); left: the screenshot (login needs the user in her session), the check with the plan's own traffic; scripts in /home/genie/tatiana-scratch |
+| T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | not started |
+| T68 | Bistrița with repeatable runs (7b27441): repeatability check, every collision with seed and time, deadlocks per place | Ramona | 2026-10-09 | run stopped for the reboot after 35 min, no results; harness in /home/genie/ramona-scratch/t68; re-run split across processes |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | |
 
 ## Done
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T87 | Agents City Table: CPU, MEM and DISK dials on the whiteboard's right edge (from /api/stats; MEM by available memory: amber < 4 GB, red < 2.5 GB; CPU 70/90 %, DISK 80/90 %), polled every 5 s, paused when hidden, repainted only on change | Tom | 2026-10-10 | admin, next deploy |
+| T72 | Re-test of T69: Restore keeps geo and journeys, red warning for removed items, "Restored from the file" pass; Apply of a minimal partial patch fails (→ T88); conflict dialog not reached (→ T89) | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t72 |
 | T86 | Agents City Table: an agent waiting for the user (permission prompt or question) stays awake, sits up, shows "?" and "waiting for you", looks at the camera, laptop screen amber | Tom | 2026-10-10 | admin, next deploy |
 | T83 | Agents City Table: bigger table (r 16) and cities (×1.8 for 3 repos, packed in rows), a file's path on hover, folder names when the camera comes close (fading, at most 12) | Tom | 2026-10-10 | admin, next deploy |
 | T84 | Agents City Table: every post-it yellow (#fff59d), the agent's colour as a small dot top-right; darker amber/red for long elapsed times | Tom | 2026-10-10 | admin, next deploy |
