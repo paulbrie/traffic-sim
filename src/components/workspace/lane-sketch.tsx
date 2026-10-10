@@ -14,7 +14,7 @@ import { unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, addLane, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
-  roadOf, rotation, samples, setControl, junctionHoles, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
+  roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
   type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
@@ -38,6 +38,7 @@ import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { ZonePanel } from "@/components/v2/zone-panel";
+import { FILL_GAP, fillAllJunctions, junctionSurfaceHoles, unfilledJunctions } from "@/lib/junction-fill";
 import { paintZoneDraft, paintZones, zoneAt, zoneEditAt } from "@/components/v2/zone-tools";
 import { addZone, deleteZone, formatArea, insertZoneCorner, moveZoneCorner, nextZoneColor, removeZoneCorner, zoneArea, zoneLabelPoint } from "@/lib/sketch-zones";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
@@ -339,7 +340,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const inJ = (j: SketchJunction) => {
       if (j.shape !== "auto") return insidePolygon(p, outlinePath(j));
       const c = live.current.contents.get(j.id) ?? { lanes: [], connectors: [], roads: [] };
-      return (j.smooth ? insideLoops(p, smoothJunction(sk, j, c)) : onBands(junctionBands(sk, c), p)) || junctionHoles(sk, c).some(h => insidePolygon(p, h));
+      return (j.smooth ? insideLoops(p, smoothJunction(sk, j, c)) : onBands(junctionBands(sk, c), p)) || junctionSurfaceHoles(sk, j, c).some(h => insidePolygon(p, h));
     };
     const jn = sketchIndex(sk).near(p, 1).junctions;
     const js = sk.junctions.filter(j => jn.has(j.id) && inJ(j)).sort((a, b) => polygonArea(a.outline) - polygonArea(b.outline));
@@ -1448,9 +1449,23 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       x?.folded ? `${x.folded} lanes too short for a car folded into ${x.added} connectors` : "no lane too short for a car",
       x?.extended ? `${x.extended} short ways in or out made 15 m long` : "no way in or out too short",
     ];
-    if (!r || !(r.kinks || r.connectorKinks || r.folded || r.extended)) { toast("Nothing to tidy", { description: [...checks(r), r?.kept.length ? `${r.kept.length} short lanes left as they are (a sign, a level, lights, a journey or turning shares, or a road joined at that end)` : ""].filter(Boolean).join(" · ") }); return; }
+    if (!r || !(r.kinks || r.connectorKinks || r.folded || r.extended)) { toast("Nothing to tidy", { description: [...checks(r), r?.kept.length ? `${r.kept.length} short lanes left as they are (a sign, a level, lights, a journey or turning shares, or a road joined at that end)` : ""].filter(Boolean).join(" · "), ...fillOffer() }); return; }
     setSel(NO_SEL);
-    toast.success("Tidied", { description: [...checks(r), r.kept.length ? `${r.kept.length} short lanes left as they are` : "", "⌘Z brings it back"].filter(Boolean).join(" · ") });
+    toast.success("Tidied", { description: [...checks(r), r.kept.length ? `${r.kept.length} short lanes left as they are` : "", "⌘Z brings it back"].filter(Boolean).join(" · "), ...fillOffer() });
+  };
+  /** Tidy's offer (T147), opt-in: "Fill holes" ticked on every automatic junction not filled yet (one undo step; each unticks again) */
+  const fillOffer = () => {
+    const n = unfilledJunctions(live.current.sketch).length;
+    if (!n || readOnly) return {};
+    return {
+      action: {
+        label: `Fill holes in ${plural(n, "junction")}`,
+        onClick: () => {
+          editSketch(s => fillAllJunctions(s).sketch);
+          toast.success(`Holes filled in ${plural(n, "junction")}`, { description: "Their whole inside paved (Fill holes ticked on each: untick it in a junction's panel) · ⌘Z brings it back" });
+        },
+      },
+    };
   };
   const copy = () => {
     void navigator.clipboard.writeText(JSON.stringify(exportSketch(sketch, contents), null, 2))
@@ -2230,6 +2245,10 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             </div>
             {!!junction.smooth && <NumberField id="sk-smooth-r" label="Kerb radius" unit="m" value={junction.smooth} min={0.5} max={50} step={0.5}
               onCommit={r => editSketch(sk => ({ ...sk, junctions: sk.junctions.map(x => (x.id === junction.id ? { ...x, smooth: r } : x)) }))} />}
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <label htmlFor="sk-fill" title={`Pave its whole inside: the slivers and holes left between its connectors filled (gaps under ${FILL_GAP} m). It only adds surface: what is paved stays, a ring lane's island stays ground. The lanes, connectors and cars don't change`}>Fill holes</label>
+              <Switch id="sk-fill" checked={!!junction.fill} onCheckedChange={on => editSketch(sk => ({ ...sk, junctions: sk.junctions.map(x => { if (x.id !== junction.id) return x; const n = { ...x }; if (on) n.fill = true; else delete n.fill; return n; }) }))} />
+            </div>
             <p className="text-[11px] text-muted-foreground">Its border (dashed while selected) still decides which lanes and connectors are on it.</p>
           </>}
         </div>
@@ -2875,7 +2894,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   const loopsOf = new Map(autos.filter(j => j.smooth).map(j => [j.id, smoothJunction(sk, j, contentsOf(j))]));
   const bandsOf = new Map(autos.filter(j => !j.smooth).map(j => [j.id, junctionBands(sk, contentsOf(j))]));
   // (the ground they shut in: paved too; far out, a pixel or two, left out)
-  const holesOf = new Map(autos.map(j => [j.id, far ? [] : junctionHoles(sk, contentsOf(j))]));
+  const holesOf = new Map(autos.map(j => [j.id, far ? [] : junctionSurfaceHoles(sk, j, contentsOf(j))]));
   const loopsPath = (loops: Pt[][]) => { ctx.beginPath(); for (const l of loops) { l.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); } };
   const strokeBands = (g: CanvasRenderingContext2D, bands: Band[], extra: number) => {
     for (const b of bands) {

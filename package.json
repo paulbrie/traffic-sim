@@ -23,6 +23,7 @@
     "agent:login": "tsx scripts/agent-login.ts",
     "agent:check": "tsx scripts/agent-login-check.ts",
     "zones:check": "tsx scripts/zones-check.ts",
+    "fill:check": "tsx scripts/junction-fill-check.ts",
     "engine:baseline": "tsx scripts/engine-baseline.ts",
     "audit": "tsx scripts/junction-audit.ts"
   },

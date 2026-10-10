@@ -68,6 +68,8 @@ export function setLaneSpeed(sk: Sketch, id: string, kmh: number | null): Sketch
 export interface SketchJunction { id: string; name: string; outline: Pt[]; /** corners rounded off, as a line lane's curved points */ curved?: boolean[]; shape?: "auto";
   /** automatic: its notches rounded off to this radius, metres (see `smoothSurface`) */
   smooth?: number;
+  /** automatic: its whole inside paved, the slivers and holes between its connectors filled (see junction-fill.ts) */
+  fill?: true;
   /** traffic lights on the ways in (instead of signs; see `JunctionLights`) */
   lights?: JunctionLights;
   /**
@@ -529,7 +531,7 @@ export function pastePart(sk: Sketch, part: Sketch, dx: number, dy: number): { s
   const way = (k: string) => (k.startsWith("lane:") ? (laneIds.has(k.slice(5)) ? `lane:${laneIds.get(k.slice(5))}` : null) : roadIds.get(k) ?? null);
   const lights = (l: JunctionLights): JunctionLights => (l.phases ? { ...l, phases: l.phases.map(p => ({ ...p, conns: p.conns.flatMap(c => (connIds.has(c) ? [connIds.get(c)!] : [])) })) } : { ...l });
   const splits = (ss: JunctionSplit[]) => ss.flatMap(x => { const from = way(x.from); if (!from) return []; const shares = Object.fromEntries(Object.entries(x.shares).flatMap(([k, v]) => { const w = way(k); return w ? [[w, v]] : []; })); return [{ from, shares }]; });
-  const junctions = part.junctions.map(j => { const sp = j.splits ? splits(j.splits) : []; return { id: fresh("j"), name: copyName(j.name), outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.lights ? { lights: lights(j.lights) } : {}), ...(sp.length ? { splits: sp } : {}) }; });
+  const junctions = part.junctions.map(j => { const sp = j.splits ? splits(j.splits) : []; return { id: fresh("j"), name: copyName(j.name), outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.fill ? { fill: true as const } : {}), ...(j.lights ? { lights: lights(j.lights) } : {}), ...(sp.length ? { splits: sp } : {}) }; });
   const withLanes: Sketch = { ...sk, lanes: [...sk.lanes, ...lanes], connectors: [...sk.connectors, ...connectors], roads: [...sk.roads, ...roads], junctions: [...sk.junctions, ...junctions] };
   const z = pasteZones(withLanes, part.zones ?? [], dx, dy);
   return {
@@ -1580,7 +1582,7 @@ export const onBands = (bands: Band[], p: Pt) => bands.some(b => {
 });
 
 /** a grid (from `x0`, `y0`, `cell` apart) with 1 where a point is within `r` of a band */
-function rasterBands(bands: Band[], x0: number, y0: number, cell: number, nx: number, ny: number, r: number): Uint8Array {
+export function rasterBands(bands: Band[], x0: number, y0: number, cell: number, nx: number, ny: number, r: number): Uint8Array {
   const grown = new Uint8Array(nx * ny);
   for (const b of bands) {
     const pts = b.closed ? [...b.pts, b.pts[0]] : b.pts;
@@ -1603,7 +1605,7 @@ function rasterBands(bands: Band[], x0: number, y0: number, cell: number, nx: nu
   return grown;
 }
 /** where `g` (on a grid from `x0`, `y0`, `cell` apart) is 0: marching squares, the pieces chained into loops */
-function traceLoops(x0: number, y0: number, cell: number, nx: number, ny: number, g: (i: number, j: number) => number): Pt[][] {
+export function traceLoops(x0: number, y0: number, cell: number, nx: number, ny: number, g: (i: number, j: number) => number): Pt[][] {
   const at = (i: number, j: number, i2: number, j2: number) => {
     const a = g(i, j), b = g(i2, j2), t = a === b ? 0.5 : a / (a - b);
     return { x: x0 + (i + (i2 - i) * t) * cell, y: y0 + (j + (j2 - j) * t) * cell };
@@ -2164,7 +2166,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const outline = pts(j?.outline, 3);
     if (!str(j?.id) || !outline || junctions.some(x => x.id === j.id)) continue;
     const curved = Array.isArray(j.curved) && j.curved.length === outline.length ? { curved: (j.curved as unknown[]).map(Boolean) } : {};
-    junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...lightsOf(j.lights), ...splitsOf(j.splits) });
+    junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...(j.fill === true ? { fill: true as const } : {}), ...lightsOf(j.lights), ...splitsOf(j.splits) });
   }
   const g = o.geo as Sketch["geo"];
   const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;

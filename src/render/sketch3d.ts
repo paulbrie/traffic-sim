@@ -10,9 +10,10 @@ import { arrowGlyph } from "@/render/draw2d";
 import type { Palette } from "@/render/palette";
 import type { SketchLayers } from "@/state/sketch-layers";
 import { LEVEL_H } from "@/engine/compile";
+import { junctionSurfaceHoles, nestLoops } from "@/lib/junction-fill";
 import { circlePts, deadEndTurnarounds } from "@/lib/dead-ends";
 import {
-  bandPolygon, crossingFrame, isFullCircle, junctionBands, junctionHoles, junctionLevel, laneLevel, laneLength, linkGeometry,
+  bandPolygon, crossingFrame, isFullCircle, junctionBands, junctionLevel, laneLevel, laneLength, linkGeometry,
   outlinePath, pointAt, roadMarkings, samples, smoothJunction, turnArrows, zAt,
   type JunctionContents, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
@@ -177,7 +178,8 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
         if (b.w1 !== undefined) asphalt.polygon(loop(bandPolygon(b)), [], h + Y.asphalt);
         else { const ps = b.closed ? b.pts : simplify(b.pts, TOL); asphalt.ribbon(ps, ps.map(() => h), b.width, Y.asphalt, b.closed); }
       }
-      for (const hole of junctionHoles(sk, c)) asphalt.polygon(loop(hole), [], h + Y.asphalt);
+      // (the ground it shuts in, and with "Fill holes" its whole inside: an island inside that is a hole in it)
+      for (const p of nestLoops(junctionSurfaceHoles(sk, j, c))) asphalt.polygon(loop(p.outer), p.holes.map(loop), h + Y.asphalt);
     }
     for (const k of sk.links ?? []) { const g = linkGeometry(sk, k); if (g) asphalt.polygon(g.outline, [], Y.asphalt); }
     // (a dead end with a turnaround: a turning circle of road, on its kerb, under the U-turn; drawn only)
