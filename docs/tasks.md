@@ -15,6 +15,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
+| T90 | **First after the restart.** Admin: the Table work (T82–T87, agents3d/desk/*) onto origin/main (b88fc34) in a clean worktree: tests, lint, tsc, build; Alice reviews, commits, pushes; then the user moves /opt/project to origin/main (stray work backed up first) and deploys, so the live admin gets the hardening and the nginx `..` fix | Alex, Tom | 2026-10-10 | the 01:24 deploy came from the old tree: no hardening, nginx `..` bug live. Snapshot: /home/genie/alice-scratch/admin-live-tree-2026-10-10.tgz |
 | T89 | Re-test of T69's conflict dialog (not reached in T72) | Ramona | 2026-10-10 | |
 | T88 | History from file: a minimal partial patch (e.g. a lane's {id, width} only) is taken as "nothing to save" and Apply stays disabled | Alex | 2026-10-10 | from T72; files in /home/genie/ramona-scratch/t72 |
 | T85 | Agents City: about 60% CPU and the fan running while the page is open; measure, then render on demand, pause when hidden, cap DPR | Alex (Tom for desk/) | 2026-10-10 | paused for the reboot: causes found (always-on frameloop at dpr 2, 8× MSAA + bloom, the Clock re-rendering the view 4×/s, per-frame allocations, polling while hidden); before numbers and harness in /home/genie/alex-scratch/t85; fixes not started |
@@ -22,6 +24,16 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | not started |
 | T68 | Bistrița with repeatable runs (7b27441): repeatability check, every collision with seed and time, deadlocks per place | Ramona | 2026-10-09 | run stopped for the reboot after 35 min, no results; harness in /home/genie/ramona-scratch/t68; re-run split across processes |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Patches measured worse, not committed; notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
+
+## After the restart (2026-10-10)
+
+1. The user starts trafficsim's dev server (port 7000) and the team; Alice restarts her memory watcher
+   (`/home/genie/alice-scratch/memwatch.sh 2500`, in the background).
+2. Alice collects the ACKs and sends T90 first (Alex, Tom), then the open tasks: T56 (Bob), T74 (Tatiana),
+   T68 split across processes, T89, T73 (Ramona), T85, T88 (Alex). T85 goes on top of T90's tree, not the old one.
+3. Everyone: agent-browser always with `--session <Name>`. Scratch is in `/home/genie/<name>-scratch` (not /tmp).
+4. Waiting on the user: Tatiana's login (in her session), T91, Bob's Bistrița plan fixes (r1560, J574) once worth it,
+   the 2xlarge sizes in genie (T81), the nginx save's sudo vs a confined helper.
 
 ## Done
 
