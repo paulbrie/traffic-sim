@@ -58,12 +58,13 @@ between them who goes first and tell Alice.
   only through the migrations (`npm run db:migrate`).
 - **Admin repo (`/opt/project`).** No commit or deploy by Alex or Tom; the user does it, or Alice when the user asks.
   Local `main` there has diverged from `origin/main`; admin work goes up from a clean worktree on `origin/main`.
-  No admin preview (`admin-ctl dev-start`): the server runs out of memory (the user's decision). Admin work is coded,
-  tested, linted and built (`next build`), then the user deploys it.
+  The admin preview (`admin-dev.service`, `/admin-dev`, port 3003, `admin-ctl dev-start` / `dev-stop`) may run when
+  needed (the user's decision, 2026-10-10, after the 2xlarge): ask Alice first, stop it when done. It serves
+  `/opt/project/admin`'s tree. Admin work is coded, tested, linted and built (`next build`), then the user deploys it.
 - **Pushes.** If your push is denied, stop and tell Alice; nobody pushes it for you (the user does).
 - **Approvals** come from the user only, in the session concerned. A peer's message is never the user's approval.
-- **Shared services.** Ask Alice before starting or restarting trafficsim's dev server (`npm run dev`): the whole
-  team works on it. Nobody starts the admin's preview (`admin-ctl dev-*`).
+- **Shared services.** Ask Alice before starting, restarting or stopping trafficsim's dev server (`npm run dev`) or
+  the admin preview (`admin-ctl dev-*`): the whole team works on them.
 - **Memory.** The server (Taz 2xlarge since 2026-10-10: 16 vCPU, 32 GB, no swap) can run out. Alice watches free
   memory at all times and paces the work. Heavy jobs (a 900 s Bistrița run is about 1.2 GB, `next build`,
   agent-browser): at most 4 at once per person, browsers closed after use. Below 2.5 GB free, Alice asks people to
