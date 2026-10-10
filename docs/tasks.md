@@ -15,7 +15,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T159 | Test accounts for Alex, Bob and Tom (agent:login allow-list), each with a Bistrița copy in its own city (Bistrița read-only) | Alex | 2026-10-10 | approved by the user |
 | T158 | V2: pause a running simulation the moment an edit starts (drags, tools, deletes, panel fields, undo/redo, patch apply; not select/pan/zoom), toast with Resume; Sketch window too | Tom | 2026-10-10 | |
 | T157 | Per-car explainer: state, speeds, leader, the rule and car holding it, blocking chain (deadlock flagged), plan and rejected gaps, recent decisions; map lines to leader/blocker and the conflict zone; copy as text and in the bridge snapshot | Bob (sim `explain`), Alex (UI) | 2026-10-10 | selected car only |
 | T156 | Several named sketches per plan (new, duplicate, rename, delete; old scratch becomes 'Sketch 1'); agent-patch pieces go into a new sketch | Tatiana (Alex for agent patches) | 2026-10-10 | |
@@ -41,6 +40,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T159 | Test accounts alex/bob/tom@test.com (agent:login), each with a city and a Bistrița copy (rev 249); Bistrița unchanged | Alex | 2026-10-10 | ff75143; plans 4a18995a (Alex), ca9bd06c (Bob), 874497d4 (Tom) |
 | T154 | V2 junction shape editing: border, corners take precedence, '+' at edge middles to add, Delete/double-click to remove, corner menu (curve/sharp/take out), Automatic turns Drawn in the same undo step, hint line | Tatiana | 2026-10-10 | 153bf32 |
 | T153 | V2: a selected car's way on to the end of its trip (dashed blue with an arrow in 2D, a ribbon in 3D; the panel lists roads, distance and time left), recomputed only on a new lane, connector or reroute | Tatiana | 2026-10-10 | 924da66 |
 | T152 | Agent patches can add a piece to the plan's Sketch window (`sketchWindowAdd`): ids remapped as Add does, placed beside the content, main plan byte-identical or refused; a Sketch-window section with a thumbnail in the review | Alex | 2026-10-10 | 716fb25 |
