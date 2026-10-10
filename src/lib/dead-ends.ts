@@ -1,6 +1,7 @@
 /**
- * Dead ends with a turnaround: a lane whose only ways on are U-turns back onto a lane the other way starting within 15 m
- * of its end (Bob's test, T134: real dead-end streets, kept so, the user's choice). The map and the 3D view draw a
+ * Dead ends with a turnaround: a lane whose only ways on are U-turns back along the same street (a lane of its road, or
+ * of a road of the same name drawn the other way) starting within 15 m of its end (Bob's test, T134, corrected: a sharp
+ * turn onto another street heading back isn't one; real dead-end streets, kept so, the user's choice). The map and the 3D view draw a
  * turning circle there, a disc of road a little wider than the U-turn's loop, under it; nothing in the plan or the
  * cars changes. Framework-free.
  */
@@ -28,6 +29,9 @@ export function deadEndTurnarounds(sk: Sketch): DeadEnd[] {
   if (was && was.lanes === sk.lanes) return was.found;
   const outs = new Map<string, Sketch["connectors"]>();
   for (const c of sk.connectors) (outs.get(c.from.lane) ?? outs.set(c.from.lane, []).get(c.from.lane)!).push(c);
+  const roadOf = new Map(sk.roads.flatMap(r => r.lanes.map(id => [id, r] as const)));
+  /** lanes `a` and `b` on the same street: one road, or roads of the same name */
+  const same = (a: string, b: string) => { const x = roadOf.get(a), y = roadOf.get(b); return !!x && !!y && (x === y || (!!x.name && x.name === y.name)); };
   const found: DeadEnd[] = [];
   for (const l of sk.lanes) {
     const os = outs.get(l.id);
@@ -35,7 +39,7 @@ export function deadEndTurnarounds(sk: Sketch): DeadEnd[] {
     const L = laneLength(l.shape), end = pointAt(l.shape, L);
     const back = os.every(c => {
       const t = laneById(sk, c.to.lane);
-      if (!t || c.from.s <= L - 1) return false;
+      if (!t || c.from.s <= L - 1 || !same(l.id, t.id)) return false;
       const q = pointAt(t.shape, c.to.s);
       return dist(q.p, end.p) < NEAR && end.d.x * q.d.x + end.d.y * q.d.y < -0.5;
     });

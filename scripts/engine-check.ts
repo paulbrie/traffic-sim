@@ -24,6 +24,7 @@ import { addNode, deleteLink, updateLink } from "../src/state/ops";
 import { mergeLanes as mergeSketchLanes, mergeRoads as mergeSketchRoads } from "../src/lib/sketch-merge";
 import { CONNECTOR_KINK_LIMIT, connectorKinks, turnsAt, unkinkPts } from "../src/lib/connector-kinks";
 import { tidySketch } from "../src/lib/sketch-tidy";
+import { deadEndTurnarounds } from "../src/lib/dead-ends";
 import { alignmentOf, laneLength, settle as settleSketch, sliceRoad, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
 const net = sampleTown();
 const c = compile(net);
@@ -1465,5 +1466,20 @@ function alongKerb(input: any): any {
   const inSketch = before.length === 1 && before[0].connector === "c5150" && before[0].angle === 166 && tidied.report.connectorKinks === 1 && after.length === 0;
   const ok = flagged && fixed && inSketch;
   console.log(`connectors turning back (over ${CONNECTOR_KINK_LIMIT}°): c5048 ${worst(c5048).toFixed(0)}°, c5150 ${worst(c5150).toFixed(0)}°, a U-turn ${worst(uTurn).toFixed(0)}° | flagged right ${flagged}, fixed (${fa.dropped} + ${fb.dropped} bends out, ends kept, the U-turn left) ${fixed}, in a sketch through Tidy ${inSketch} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// V2 sketch: dead ends with a turnaround (dead-ends.ts, Bob's test, T134, corrected): back along the same street only
+{
+  const P = (a: [number, number][]) => a.map(([x, y]) => ({ x, y }));
+  const lane = (id: string, pts: [number, number][]): SketchLane => ({ id, width: 3.2, shape: { kind: "line", pts: P(pts) } });
+  // (Bistrița's j206: Strada Ecaterina Teodoroiu's l391 turns sharply onto Strada Liviu Rebreanu's l2858, heading back: not a dead end)
+  const l391 = lane("l391", [[357.4, 64.2], [353.6, 59.4], [351.4, 56.4], [349, 52.8], [346.2, 48.3], [345.2, 46.8], [344.3, 46], [343.8, 45.6], [342.7, 45.1], [341.4, 44.6], [338.6, 44]]);
+  const l2858 = lane("l2858", [[337.7, 38.9], [368.6, 18.9]]);
+  const turn: SketchConnector = { id: "c1327", from: { lane: "l391", s: 28.57 }, to: { lane: "l2858", s: 0 }, via: P([[336.77, 41.71]]) };
+  const two = (b: string): Sketch => ({ lanes: [l391, l2858], connectors: [turn], junctions: [], roads: [{ id: "r1", name: "Strada Ecaterina Teodoroiu", lanes: ["l391"] }, { id: "r2", name: b, lanes: ["l2858"] }] });
+  const other = deadEndTurnarounds(two("Strada Liviu Rebreanu")), sameName = deadEndTurnarounds(two("Strada Ecaterina Teodoroiu"));
+  const ok = other.length === 0 && sameName.length === 1 && sameName[0].lane === "l391" && sameName[0].r > 3.2;
+  console.log(`dead ends with a turnaround: j206's sharp turn onto another street ${other.length} (none), the same turn back along a street of the same name ${sameName.length} (r ${sameName[0]?.r.toFixed(1)} m) | ok ${ok}`);
   if (!ok) process.exit(1);
 }
