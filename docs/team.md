@@ -80,7 +80,9 @@ between them who goes first and tell Alice.
   (the user's decision, 2026-10-10). Each agent works in a git worktree of its own,
   `/home/genie/<name>-scratch/trafficsim-wt`, on a branch `wt/<name>` made from `origin/manual-junctions`, with
   `node_modules` as a hard-linked copy of the main tree's (`cp -al /opt/project/projects/trafficsim/node_modules node_modules`:
-  seconds, almost no disk; Turbopack refuses a symlink). After a dependency change, redo it (or `npm ci` there). To ship:
+  seconds, almost no disk; Turbopack refuses a symlink). Its files are shared with the served tree's, so never
+  `npm install` or patch inside it: for a dependency change, first `rm -rf node_modules` in the worktree, then `npm ci`
+  there. To ship:
   `git pull --rebase origin manual-junctions`, the checks, then `git push origin HEAD:manual-junctions`, and tell
   Alice (`PUSHED:`). Alice alone updates the served tree (`git pull --ff-only` there) after each push, and keeps
   `docs/tasks.md` and `docs/team.md` there. Scripts that need the database still read `DATABASE_URL` from the main
