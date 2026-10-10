@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
 | T105 | Agents City Table: an agent asking the user a question looks at the camera and waves (about 1.5 s, every 6–8 s while waiting) | Tom | 2026-10-10 | after T102 |
 | T104 | V2 3D view: Escape resets the camera to its default (after Escape's other jobs) | Tatiana | 2026-10-10 | after T74 |
 | T103 | Agents City (City and Table): Escape resets the camera to its default (after closing whatever is open) | Alex (Tom for the Table's default) | 2026-10-10 | after T102 |
