@@ -17,7 +17,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T158 | V2: pause a running simulation the moment an edit starts (drags, tools, deletes, panel fields, undo/redo, patch apply; not select/pan/zoom), toast with Resume; Sketch window too | Tom | 2026-10-10 | |
 | T157 | Per-car explainer: state, speeds, leader, the rule and car holding it, blocking chain (deadlock flagged), plan and rejected gaps, recent decisions; map lines to leader/blocker and the conflict zone; copy as text and in the bridge snapshot | Bob (sim `explain`), Alex (UI) | 2026-10-10 | selected car only |
-| T156 | Several named sketches per plan (new, duplicate, rename, delete; old scratch becomes 'Sketch 1'); agent-patch pieces go into a new sketch | Tatiana (Alex for agent patches) | 2026-10-10 | |
 | T155 | Check agent patch #5's review on Bistrița (read-only): list, detail, Sketch-window section and thumbnail | Ramona | 2026-10-10 | |
 | T149 | V2: align selected lanes as in a design tool (left, centre, right, top, middle, bottom) against the first-selected lane; roads move as a unit | Tom | 2026-10-10 | after T147 |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | causes in the drawing (cross lanes, one-lane bottleneck, slips); version 1 submitted as agent patch #5, a Sketch-window try-out (the user's choice); the main-plan patch kept ready |
@@ -40,6 +39,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T156 | Several named sketches per plan (picker; new, duplicate, rename, delete with undo; old scratch = 'Sketch 1'); Test in Sketch → New; agent-patch pieces go into a new sketch named after the patch | Tatiana | 2026-10-10 | 58022c1 |
 | T159 | Test accounts alex/bob/tom@test.com (agent:login), each with a city and a Bistrița copy (rev 249); Bistrița unchanged | Alex | 2026-10-10 | ff75143; plans 4a18995a (Alex), ca9bd06c (Bob), 874497d4 (Tom) |
 | T154 | V2 junction shape editing: border, corners take precedence, '+' at edge middles to add, Delete/double-click to remove, corner menu (curve/sharp/take out), Automatic turns Drawn in the same undo step, hint line | Tatiana | 2026-10-10 | 153bf32 |
 | T153 | V2: a selected car's way on to the end of its trip (dashed blue with an arrow in 2D, a ribbon in 3D; the panel lists roads, distance and time left), recomputed only on a new lane, connector or reroute | Tatiana | 2026-10-10 | 924da66 |
