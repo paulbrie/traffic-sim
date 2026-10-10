@@ -88,13 +88,14 @@ between them who goes first and tell Alice.
   `docs/tasks.md` and `docs/team.md` there. Scripts that need the database still read `DATABASE_URL` from the main
   tree's `.env.local`.
 - **Testing (trafficsim).** Before pushing, an agent may check its change in a browser on a private dev server of its
-  own, from its worktree (the user's decision, 2026-10-10): `ln -s /opt/project/projects/trafficsim/.env.local
-  .env.local` once (a link, never a copy, and never printed), then `env -u DATABASE_URL -u NODE_ENV -u NEXT_PUBLIC_BASE_PATH PORT=<port> npm run dev` (a shell may
-  carry another app's values, e.g. the admin's database, which `.env.local` doesn't override), on its own port: Bob 7101,
-  Tatiana 7102, Ramona 7103, Alex 7104, Tom 7105 (`http://localhost:<port>/projects/trafficsim`). It uses the same
-  Railway dev database and the same test logins. Start it only for a check and stop it right after (about 1–2 GB
-  each; Alice paces memory). The final check, after Alice has pulled the push, is on the shared dev instance (port
-  7000), which stays the reference; Ramona's tests run there.
+  own, from its worktree (the user's decision, 2026-10-10), on its own port: Bob 7101, Tatiana 7102, Ramona 7103,
+  Alex 7104, Tom 7105. Next doesn't read a `.env.local` linked from outside the worktree (the server then falls back to
+  a local database and no base path, and logins fail), so pass the two values explicitly, without printing them:
+  `env -u NODE_ENV DATABASE_URL="$(grep '^DATABASE_URL=' /opt/project/projects/trafficsim/.env.local | cut -d= -f2-)"
+  NEXT_PUBLIC_BASE_PATH=/projects/trafficsim PORT=<port> npm run dev` (no `.env.local` link in the worktree). Then
+  `http://localhost:<port>/projects/trafficsim`: the same Railway dev database and test logins. Start it only for a
+  check and stop it right after (about 1–2 GB each; Alice paces memory). The final check, after Alice has pulled the
+  push, is on the shared dev instance (port 7000), which stays the reference; Ramona's tests run there.
 - **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser work with Vercel's
   agent-browser (`/usr/bin/agent-browser`), not Playwright scripts, so the admin's /chrome page can show it; close
   its sessions after a run. If something can't be done with it, ask Alice before using anything else.
