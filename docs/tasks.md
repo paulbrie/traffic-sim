@@ -18,7 +18,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T108 | Agents City (City and Table): an accessed file's building lifts into the air while the touch lingers, then settles; edits higher than reads | Alex (City, the shared curve), Tom (Table) | 2026-10-10 | after T103; Table after T96 |
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
-| T105 | Agents City Table: an agent asking the user a question looks at the camera and waves (about 1.5 s, every 6–8 s while waiting) | Tom | 2026-10-10 | after T102 |
 | T100 | Re-test of T88 (Apply merges field by field) in the browser | Ramona | 2026-10-10 | after T97, T98 |
 | T98 | The gaps left in T73: a real bridge (Level 1 over other lanes) and the 3D screenshot | Ramona | 2026-10-10 | |
 | T97 | Test of the V2 route tracer (T74) in the browser, with screenshots of a traced route and its test car | Ramona | 2026-10-10 | |
@@ -43,6 +42,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T105 | Agents City Table: an agent asking the user a question (AskUserQuestion) looks at the camera and waves, at once then every 6–8 s; permission prompts keep the still look; a plain question at the end of a turn isn't detectable yet | Tom | 2026-10-10 | admin: ac5b812 |
 | T103 | Agents City: Escape closes one thing per press (input, overlay, selection or follow, the Table's board close-up), then flies the camera to its default | Alex, Tom | 2026-10-10 | admin: c004240, cc11ccf |
 | T102 | Agents City Table: who's using a browser: a small browser screen at the owner's seat (host, page title, CPU bar, label), unowned sessions stacked in front; data from /api/agents3d/browsers (host only) | Alex, Tom | 2026-10-10 | admin: 91fc749, cc11ccf |
 | T101 | Agents City Table: gauge needles, numbers and core bars ease to each reading over 0.8 s (needle as a rotated mesh, frames only while easing) | Tom | 2026-10-10 | admin: 0781804 |
