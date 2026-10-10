@@ -18,7 +18,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T149 | V2: align selected lanes as in a design tool (left, centre, right, top, middle, bottom) against the first-selected lane; roads move as a unit | Tom | 2026-10-10 | after T147 |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | the user's aerial photo; read-only |
 | T147 | V2 junction surface: a "Fill holes" option so the inside of an intersection is all road surface (no slivers or holes between connectors; real islands kept) | Tom (Tatiana for the editor) | 2026-10-10 | the user's screenshot of J696 |
-| T146 | V2: the user's tab crashed ("Aw, Snap!", error 5, likely out of memory) after hours of editing Bistrița: reproduce with 100–200 edits, find what grows (undo history, proxies, caches), fix | Tatiana | 2026-10-10 | urgent; last save before the crash: rev 171, 16:04 UTC |
 | T143 | Research: the best ways to show an agent swarm at work in 2D or very light graphics (prior art, low-power techniques, 3 concepts with mocks and CPU estimates, a recommendation, a quick win) | Alex | 2026-10-10 | the 3D view spins up the user's M5 fan |
 | T134 | Bistrița: 172 dead-end U-turn stubs on rev 92: corrected to 167 (5 false positives): A1 after a closer check = j696 (a missing roundabout, Petru Maior × Sigmirului) and j405 (a hairpin closing at j404), two patches; j633, j341 are real dead ends; j100, j728 correct as drawn; B 4; C 15; D 143 kept as turning circles; tracks not modelled (the user's choices), B 4 at the edge (ways in/out, one patch), C 15 unused (delete, one patch), D 82 real dead ends (keep; drawn as turning circles, T139): the user's choices | Bob | 2026-10-10 | list: /home/genie/bob-scratch/trafficsim/t134/T134-list.md |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
@@ -38,6 +37,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T146 | V2: memory grew ~3 MB per edit on Bistrița (16 whole-sketch WeakMap caches kept alive by the 200-step undo history); now a last-6 cache: 150 edits, tab 498 → 1,431 MB rising before, ~1 GB level after; autosave loses at most 9 edits or 2 min | Tatiana | 2026-10-10 | 3108a37 |
 | T145 | Zones on 7000 (save and reload, History, Copy JSON, layer, corner add/remove) and T144's Back/Esc: pass (Alex's harness covers the scroll) | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t145 |
 | T144 | Agent patches dialog: Back and Esc in a patch return to the list (scroll and focus kept), Esc on the list closes | Alex | 2026-10-10 | 4965415 |
 | T129 | V2 editor: zones (neighbourhoods): labelled, coloured polygons stored in the plan; Zone tool (Z), editing, layer, panel, tree, search, hover, copy/paste, History, Copy JSON, 3D | Tom | 2026-10-10 | 8df5c21, 085c395; Ramona's check: /home/genie/ramona-scratch/t129 |
