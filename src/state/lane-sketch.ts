@@ -3,6 +3,7 @@ import { Subject } from "subjecto";
 import { emptySketch, settle, type Piece, type Pt, type Sketch } from "@/lib/lane-sketch";
 import { sanitizeZones } from "@/lib/sketch-zones";
 import { sketchList, touchOpen } from "@/lib/sketch-list";
+import { mapChanged } from "@/lib/sketch-edit";
 import type { SketchSimClient } from "./sketch-sim-client";
 import { laneSketch$, sketchReplaced } from "./store";
 
@@ -31,23 +32,38 @@ export interface SketchStore {
   setSim(s: SketchSimClient | null): void;
   /** its undo history forgotten (another plan loaded, or one saved elsewhere merged in) */
   forget(): void;
+  /**
+   * An edit of the map begins (T158: the cars pause): told by every change made through this store that
+   * changes the map (edit, show, undo, redo; see mapChanged: not the run's settings; not a plan loaded or
+   * merged in), and by the editor where an edit starts before the sketch changes (a drag's first move, a
+   * drawing tool's first click).
+   */
+  beginEdit(): void;
+  /** `f` told at each beginEdit; answers the way to stop telling it */
+  onEdit(f: () => void): () => void;
 }
 
 function makeStore(kind: SketchStore["kind"], sketch$: Subject<Sketch>, write: (sk: Sketch) => void): SketchStore {
   const past: Sketch[] = [], future: Sketch[] = [];
   let sim: SketchSimClient | null = null;
+  const editing = new Set<() => void>();
+  const begin = () => editing.forEach(f => f());
+  // (a change that edits the map, not only the run's settings)
+  const beginIf = (from: Sketch, to: Sketch) => { if (mapChanged(from, to)) begin(); };
   const store: SketchStore = {
-    kind, sketch$, show: write,
+    kind, sketch$, beginEdit: begin,
+    show(sk) { beginIf(sketch$.getValue(), sk); write(sk); },
     edit(f) {
       const cur = sketch$.getValue(), changed = f(cur);
       if (changed === cur) return;
+      beginIf(cur, changed);
       past.push(cur);
       if (past.length > MAX) past.shift();
       future.length = 0;
       write(settle(changed));
     },
-    undo() { const prev = past.pop(); if (!prev) return; future.push(sketch$.getValue()); write(prev); },
-    redo() { const next = future.pop(); if (!next) return; past.push(sketch$.getValue()); write(next); },
+    undo() { const prev = past.pop(); if (!prev) return; beginIf(sketch$.getValue(), prev); future.push(sketch$.getValue()); write(prev); },
+    redo() { const next = future.pop(); if (!next) return; beginIf(sketch$.getValue(), next); past.push(sketch$.getValue()); write(next); },
     record(before) {
       if (sketch$.getValue() === before) return;
       past.push(before);
@@ -57,6 +73,7 @@ function makeStore(kind: SketchStore["kind"], sketch$: Subject<Sketch>, write: (
     sim: () => sim,
     setSim(s) { sim = s; },
     forget() { past.length = 0; future.length = 0; },
+    onEdit(f) { editing.add(f); return () => { editing.delete(f); }; },
   };
   // (another plan loaded: its cars go, their worker stopped)
   sketchReplaced.add(why => { store.forget(); if (why === "load") { sim?.terminate(); sim = null; } });

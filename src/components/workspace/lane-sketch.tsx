@@ -544,6 +544,21 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   useEffect(() => { sim.current?.setParams(params); }, [params]);
   // the cars run in the worker, at the speed picked (it sends a frame after each go: see onSimFrame)
   useEffect(() => { sim.current?.run(running, simSpeed); }, [running, simSpeed]);
+  // (an edit begins while they run live: they pause, and a toast offers to go on (T158). The sketch reaches
+  // them as before, a quarter second after it stops changing: they carry on from where they were)
+  const pauseForEdit = useRef(() => {});
+  useEffect(() => {
+    pauseForEdit.current = () => {
+      if (!running || live.current.replayT !== null) return;
+      setRunning(false);
+      toast("Paused for editing", {
+        id: `edit-pause:${store.kind}`,
+        description: "The cars wait while you change the map; what you change reaches them as you go.",
+        action: { label: "Resume", onClick: () => setRunning(true) },
+      });
+    };
+  });
+  useEffect(() => store.onEdit(() => pauseForEdit.current()), [store]);
   // (while they run, the cars drawn at every frame of the page: on their way between the worker's frames)
   useEffect(() => {
     if (!running) return;
@@ -1228,6 +1243,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         break;
       }
     }
+    // (a drawing tool's first click begins an edit, though nothing is in the sketch yet: T158)
+    if (!d && draft.current) store.beginEdit();
     redraw();
   };
 
@@ -1235,7 +1252,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
    * A drag's sketch shown as it goes, but kept in the editor until the drag ends (then made the plan's
    * sketch once: the panels, the cars, saving and undo see the result, not every move of the drag).
    */
-  const dragShow = (sk: Sketch) => { dragSk.current = sk; redraw(); };
+  const dragShow = (sk: Sketch) => { if (!dragSk.current) store.beginEdit(); dragSk.current = sk; redraw(); };
   /** a click in the 3D view at `p` on level `lv`: a car there, else what the plan view would pick there if it is on that level */
   const pickAt3d = (p: Pt, lv: number) => {
     const sk = live.current.sketch, car = live.current.replayT === null ? sim.current?.carAt(p, 1.5) ?? null : null;
