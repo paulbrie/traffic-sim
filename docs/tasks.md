@@ -15,8 +15,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T113 | V2: the tab's renderer grew 5.4 → 7.9 GB in minutes at 30× with a test car followed (Bistrița copy): find and fix the growth | Tatiana (Bob if in the sim) | 2026-10-10 | after T112 |
-| T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test) | Tatiana | 2026-10-10 | from T97 (the 3D tilt was a test artifact, dropped) |
+| T118 | Re-test of T112 and T113 in the browser (trip kept while running, 3D hint, memory over 5 min at 10×) | Ramona | 2026-10-10 | |
+| T117 | Sim replay: a byte cap on the kept frames (963 MB on Bistrița for 600 s today), oldest dropped first | Bob | 2026-10-10 | from T113 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Plan fix (r1560, J574) approved by the user in Alice's session 2026-10-10, with four more drawn-over spots; Bob extends the patch, then the user applies it through History. Notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
@@ -34,6 +34,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T113 | V2: the tab growing to 8 GB: route writes nested proxies one level deeper each time (reads slowed without limit); updaters now get and store plain copies. 10× with a test car for 5 min: renderer 945 → 2,051 MB, answers in < 0.4 s (before: 4 GB, hung) | Tatiana | 2026-10-10 | 7f0311a |
+| T112 | V2: a test car sent while the cars run keeps its trip (a late worker frame cleared it); a 3D camera hint line | Tatiana | 2026-10-10 | 6e5e66e |
 | T106 | Agents City Table: messages fly as paper planes (sender's colour band, 2.2 s arc with bank and bob, unfold on landing; off the table edge for absentees; staggered) | Tom | 2026-10-10 | admin: d2bc2ee |
 | T95 | Agents City Table: commits as books on a bookshelf left of the whiteboard (newest 90, hover for hash, repo, subject); Alice walks over to shelve each new one (one trip for several); the commit tower and the mug removed | Tom | 2026-10-10 | admin: f84128e |
 | T116 | Re-test of T115 on a fresh page: {id, width} applies at once; refused-only files say "Nothing would change: 1 item was left out" in red with the reason, Apply disabled: pass | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t116 |
@@ -56,7 +58,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T101 | Agents City Table: gauge needles, numbers and core bars ease to each reading over 0.8 s (needle as a rotated mesh, frames only while easing) | Tom | 2026-10-10 | admin: 0781804 |
 | T92 | Agents City Table: a per-core CPU strip under the CPU dial (wraps into rows past 16), from cpuPerCore in /api/stats | Alex, Tom | 2026-10-10 | admin: 3d03d75, 0781804 |
 | T104 | V2 3D view: Escape, after its other jobs, eases the camera back to the framing on entering 3D (0.7 s); editors.<kind>.camera in the UI store | Tatiana | 2026-10-10 | 73a5b56 |
-| T74 | V2 route tracer: way in, way out, lane, route drawn, a test car from the panel, "other way" only for a longer way. With the plan's traffic (3 seeds × 60 cars): 113 of 180 arrived, never faster than the limits, 24 flagged blue, all on real reroutes. Screenshots via Ramona's T97 | Tatiana | 2026-10-10 | 6994d9a, 46a9565, 14a24fe, fde6bbb |
+| T74 | V2 route tracer: way in, way out, lane, route drawn, a test car from the panel, "other way" only for a longer way. With the plan's traffic (3 seeds × 60 cars): 113 of 180 arrived, never faster than the limits, 24 flagged blue, all on real reroutes. Screenshots of a real reroute in 2D and 3D: /home/genie/tatiana-scratch/t74-*-otherway*.png | Tatiana | 2026-10-10 | 6994d9a, 46a9565, 14a24fe, fde6bbb |
 | T99 | Agents City: folders starting with "." left out of the cities (server-side, before the file cap) unless "Show hidden folders" (?dot=1); dot-files in shown folders stay; touches inside hidden folders draw no bolt | Alex | 2026-10-10 | admin: 941d8aa (pushed, not deployed) |
 | T85 | Agents City and Table: on-demand frames (60 flights, 30 animating, 0 when still or hidden), dpr ≤ 1.5, 4× MSAA, 250 ms clock, stable handlers, no per-frame allocations; idle Table frozen (the user's choice). Harness (SwiftShader): City idle 417% → 4% CPU, Table calm 722% → 32% | Alex, Tom | 2026-10-10 | admin: f1d0b13 (pushed, not deployed) |
 | T88 | History from file: Apply merges the file's fields onto the item with the same id (missing fields kept, null clears optional ones, required ones can't be cleared, a new id needs a whole item); restore:check 23/23 | Alex | 2026-10-10 | b50cf4e |
