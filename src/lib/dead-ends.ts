@@ -5,7 +5,7 @@
  * turning circle there, a disc of road a little wider than the U-turn's loop, under it; nothing in the plan or the
  * cars changes. Framework-free.
  */
-import { connectorPts, contentsOf, dist, laneById, laneLength, pointAt, type Pt, type Sketch } from "./lane-sketch";
+import { LastFew, connectorPts, contentsOf, dist, laneById, laneLength, pointAt, type Pt, type Sketch } from "./lane-sketch";
 
 export interface DeadEnd {
   /** the lane coming in, the U-turn connectors off its end and the lanes they go onto */
@@ -21,7 +21,7 @@ const NEAR = 15;
 /** the circle's edge this far out from the U-turn's middle line (m), past half a lane */
 const MARGIN = 0.75;
 
-const kept = new WeakMap<Sketch["connectors"], { lanes: Sketch["lanes"]; found: DeadEnd[] }>();
+const kept = new LastFew<Sketch["connectors"], { lanes: Sketch["lanes"]; found: DeadEnd[] }>();
 
 /** the dead ends with a turnaround, each with its turning circle */
 export function deadEndTurnarounds(sk: Sketch): DeadEnd[] {

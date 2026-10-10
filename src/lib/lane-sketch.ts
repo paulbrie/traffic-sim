@@ -342,8 +342,29 @@ export function bezierPts([p0, p1, p2, p3]: [Pt, Pt, Pt, Pt], n = 24): Pt[] {
 
 // (lookups by id, kept per sketch: a sketch is never changed, only replaced; a lane list or road list
 // replaced or grown in place since is noticed)
-const laneIndex = new WeakMap<Sketch, { lanes: SketchLane[]; n: number; map: Map<string, SketchLane> }>();
-const roadIndex = new WeakMap<Sketch, { roads: SketchRoad[]; n: number; map: Map<string, SketchRoad> }>();
+/**
+ * A cache of what was worked out for the last few keys only (a sketch, or its lane or connector list), where a WeakMap
+ * would keep it as long as the key lives: the undo history keeps the last 200 sketches, and with a WeakMap each kept
+ * its spatial index, markings, turn arrows… (on Bistrița some 3 MB an edit: hours of editing ran the tab out of memory,
+ * T146). The plan's sketch, the Sketch window's, a drag's and an undo or two are what is drawn and asked about.
+ */
+export class LastFew<K extends object, V> {
+  private keys: K[] = [];
+  private vals: V[] = [];
+  constructor(private n = 6) {}
+  get(k: K): V | undefined { const i = this.keys.indexOf(k); return i < 0 ? undefined : this.vals[i]; }
+  has(k: K): boolean { return this.keys.includes(k); }
+  set(k: K, v: V): this {
+    const i = this.keys.indexOf(k);
+    if (i >= 0) { this.keys.splice(i, 1); this.vals.splice(i, 1); }
+    this.keys.push(k); this.vals.push(v);
+    if (this.keys.length > this.n) { this.keys.shift(); this.vals.shift(); }
+    return this;
+  }
+}
+
+const laneIndex = new LastFew<Sketch, { lanes: SketchLane[]; n: number; map: Map<string, SketchLane> }>();
+const roadIndex = new LastFew<Sketch, { roads: SketchRoad[]; n: number; map: Map<string, SketchRoad> }>();
 export const laneById = (sk: Sketch, id: string) => {
   let x = laneIndex.get(sk);
   if (!x || x.lanes !== sk.lanes || x.n !== sk.lanes.length) laneIndex.set(sk, (x = { lanes: sk.lanes, n: sk.lanes.length, map: new Map(sk.lanes.map(l => [l.id, l])) }));
@@ -1197,7 +1218,7 @@ export class SignalController {
 }
 
 /** every junction's lights, as plans (what the cars and the drawing go by) */
-const plansKept = new WeakMap<Sketch, SignalPlan[]>();
+const plansKept = new LastFew<Sketch, SignalPlan[]>();
 export function signalPlans(sk: Sketch): SignalPlan[] {
   // (kept per sketch: drawn every frame while the cars run)
   let x = plansKept.get(sk);
@@ -1434,7 +1455,7 @@ export function polygonArea(poly: Pt[]) {
  * What a junction's surface takes in: the lanes in no road and the connectors that are mostly on
  * it, and the roads those connectors join.
  */
-const inRoads = new WeakMap<Sketch, Set<string>>();
+const inRoads = new LastFew<Sketch, Set<string>>();
 /** every lane in a road (kept per sketch) */
 function lanesInRoads(sk: Sketch) {
   let x = inRoads.get(sk);
@@ -1670,8 +1691,8 @@ export function smoothJunction(sk: Sketch, j: SketchJunction, c: JunctionContent
 const SLIT = 1;
 // (kept while what they come from is the same: the contents, their lanes and connectors, the lanes of
 // the roads joined; and for each sketch, so drawing it again finds them at once)
-const holesKept = new WeakMap<JunctionContents, { deps: object[]; holes: Pt[][] }>(), holesNow = new WeakMap<Sketch, Map<JunctionContents, Pt[][]>>();
-const byId = new WeakMap<Sketch, { conns: Map<string, SketchConnector>; roads: Map<string, SketchRoad> }>();
+const holesKept = new WeakMap<JunctionContents, { deps: object[]; holes: Pt[][] }>(), holesNow = new LastFew<Sketch, Map<JunctionContents, Pt[][]>>();
+const byId = new LastFew<Sketch, { conns: Map<string, SketchConnector>; roads: Map<string, SketchRoad> }>();
 /**
  * The ground an automatic junction's surface shuts in (its bands and the roads it joins all round it,
  * but for slits under a metre), to pave too: everything under a junction is road. Not what a ring lane
@@ -1750,7 +1771,7 @@ function holesOf(sk: Sketch, c: JunctionContents, roadLanes: SketchLane[]): Pt[]
  * road beside it on its left, edge to edge (within half a metre).
  */
 export interface Marking { pts: Pt[]; kind: "lane" | "center"; dashed: boolean; /** the level of the lane it runs beside (drawn with it) */ level?: number }
-const markings = new WeakMap<Sketch, Marking[]>();
+const markings = new LastFew<Sketch, Marking[]>();
 /** a polyline moved `o` metres to its left (each point along the normal there) */
 function offsetPolyline(pts: Pt[], o: number): Pt[] {
   return pts.map((p, i) => {
@@ -1832,7 +1853,7 @@ export function surfaceAround(pts: Pt[], pad = 2): Pt[] {
 export const ENTRY_CLEAR = 10;
 /** a lane leads nowhere (cars leave the sketch at its end) only if nothing leaves it within its last `EXIT_CLEAR` metres */
 export const EXIT_CLEAR = 10;
-const entries = new WeakMap<Sketch, SketchLane[]>(), exits = new WeakMap<Sketch, SketchLane[]>();
+const entries = new LastFew<Sketch, SketchLane[]>(), exits = new LastFew<Sketch, SketchLane[]>();
 export function entryLanes(sk: Sketch): SketchLane[] {
   let x = entries.get(sk);
   if (x) return x;
@@ -1971,7 +1992,7 @@ export class RouteTable {
  * lane in no road on its own.
  */
 export interface DemandWay { key: string; name: string; lanes: string[]; at: Pt }
-const ways = new WeakMap<Sketch, { entries: DemandWay[]; exits: DemandWay[] }>();
+const ways = new LastFew<Sketch, { entries: DemandWay[]; exits: DemandWay[] }>();
 export function demandWays(sk: Sketch): { entries: DemandWay[]; exits: DemandWay[] } {
   let x = ways.get(sk);
   if (!x) ways.set(sk, (x = demandWaysOf(sk)));
@@ -2064,7 +2085,7 @@ export class SketchIndex {
   /** what may be within `r` metres of a point */
   near(p: Pt, r: number) { return this.query({ x0: p.x - r, y0: p.y - r, x1: p.x + r, y1: p.y + r }); }
 }
-const indexes = new WeakMap<Sketch, SketchIndex>();
+const indexes = new LastFew<Sketch, SketchIndex>();
 /** the sketch's index (made when first asked for, then kept) */
 export function sketchIndex(sk: Sketch): SketchIndex {
   let x = indexes.get(sk);
@@ -2218,7 +2239,7 @@ export function setLevel(sk: Sketch, ids: Iterable<string>, level: number): Sket
  * Each lane's levels: its own, and at its start and its end the lowest of its own and those of the lanes its
  * connectors join there (as v1's junctions: at the lowest level of the roads meeting there). Kept per sketch.
  */
-const levelsKept = new WeakMap<Sketch, Map<string, { L: number; a: number; b: number; len: number }>>();
+const levelsKept = new LastFew<Sketch, Map<string, { L: number; a: number; b: number; len: number }>>();
 function levelsOf(sk: Sketch) {
   let m = levelsKept.get(sk);
   if (m) return m;
@@ -2262,14 +2283,14 @@ export function junctionLevel(sk: Sketch, c: JunctionContents): number {
   return Number.isFinite(lv) ? lv : 0;
 }
 /** is any lane off the ground? (most sketches: none, and nothing to work out) */
-const leveled = new WeakMap<SketchLane[], boolean>();
+const leveled = new LastFew<SketchLane[], boolean>();
 export function hasLevels(sk: Sketch) {
   let x = leveled.get(sk.lanes);
   if (x === undefined) leveled.set(sk.lanes, (x = sk.lanes.some(l => l.level)));
   return x;
 }
 /** a connector by its id (an index kept per list of connectors) */
-const connIndexKept = new WeakMap<SketchConnector[], Map<string, SketchConnector>>();
+const connIndexKept = new LastFew<SketchConnector[], Map<string, SketchConnector>>();
 export function connectorById(sk: Sketch, id: string) {
   let m = connIndexKept.get(sk.connectors);
   if (!m) connIndexKept.set(sk.connectors, (m = new Map(sk.connectors.map(c => [c.id, c]))));
@@ -2334,7 +2355,7 @@ export const approachKey = (a: Approach) => a.road ?? `lane:${a.lanes[0]}`;
  * connectors leaving there go: L(eft), S(traight on), R(ight), U(-turn), in that order.
  */
 export interface TurnArrow { lane: string; p: Pt; d: Pt; turns: string; level: number }
-const arrowsKept = new WeakMap<Sketch, TurnArrow[]>();
+const arrowsKept = new LastFew<Sketch, TurnArrow[]>();
 /** the turn arrows of every lane (not a ring) at least 12 m long whose connectors leave at its end */
 export function turnArrows(sk: Sketch): TurnArrow[] {
   let x = arrowsKept.get(sk);

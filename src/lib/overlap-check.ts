@@ -4,7 +4,7 @@
  * crossing as long as the stretch, and they give way to each other along all of it. Usually a road traced twice, or a way back
  * drawn on top of the way there.
  */
-import { hasLevels, insidePolygon, outlinePath, samples, zAt, type Pt, type Sketch } from "./lane-sketch";
+import { LastFew, hasLevels, insidePolygon, outlinePath, samples, zAt, type Pt, type Sketch } from "./lane-sketch";
 
 export interface DrawnOver {
   /** the two roads (a lane in none: its own id), and the lanes the longest stretch is between */
@@ -20,7 +20,7 @@ const SLACK = 0.5;
 /** samples along each lane (m), and the grid the lanes' pieces are filed in (m) */
 const STEP = 2, CELL = 10;
 
-const kept = new WeakMap<Sketch["lanes"], DrawnOver[]>();
+const kept = new LastFew<Sketch["lanes"], DrawnOver[]>();
 
 /** the pairs of roads drawn over each other, each once (its longest stretch), the longest first */
 export function roadsDrawnOver(sk: Sketch): DrawnOver[] {

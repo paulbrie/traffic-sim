@@ -5,7 +5,7 @@
  * the lanes' speed limits (a bend no faster than it can be taken), or why there is none. Framework-free.
  */
 import {
-  CHANGE_COST, RouteTable, connectorPts, dist, isFullCircle, laneById, laneLength, nearestOn, pointAt, speedLimitOf,
+  CHANGE_COST, LastFew, RouteTable, connectorPts, dist, isFullCircle, laneById, laneLength, nearestOn, pointAt, speedLimitOf,
   type Pt, type Sketch,
 } from "./lane-sketch";
 
@@ -40,7 +40,7 @@ function besideLanes(sk: Sketch, id: string) {
 }
 
 /** the routing table of a sketch, kept (what a test car drove is looked at again as it goes) */
-const tables = new WeakMap<Sketch, RouteTable>();
+const tables = new LastFew<Sketch, RouteTable>();
 /** metres more than the shortest a car may take (the simulation's: one at random from those within 5 m), and a little over */
 const TIE = 5 + 1;
 
