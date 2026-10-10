@@ -11,6 +11,7 @@ import { boundsOfPts, nextId, pastePart, piecePoints, sanitizeSketch, type Piece
 /** metres kept clear between the window's content and a piece moved beside it */
 export const BESIDE_GAP = 20;
 
+// TODO(Tatiana): a copy of the editor's private geoShift (src/components/workspace/lane-sketch.tsx): export that one and use it in both
 /** metres east and south from origin `to` to origin `from` (both latitude / longitude; nothing if either is missing); as the editor's (lane-sketch.tsx) */
 export function geoShift(from?: { lat: number; lon: number }, to?: { lat: number; lon: number }): Pt {
   if (!from || !to) return { x: 0, y: 0 };
