@@ -25,7 +25,8 @@ import { mergeLanes as mergeSketchLanes, mergeRoads as mergeSketchRoads } from "
 import { CONNECTOR_KINK_LIMIT, connectorKinks, turnsAt, unkinkPts } from "../src/lib/connector-kinks";
 import { tidySketch } from "../src/lib/sketch-tidy";
 import { deadEndTurnarounds } from "../src/lib/dead-ends";
-import { alignmentOf, laneLength, settle as settleSketch, sliceRoad, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
+import { deleteLanes, takeOutOfRoad } from "../src/lib/road-lanes";
+import { alignmentOf, laneLength, pointAt, settle as settleSketch, sliceRoad, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
 const net = sampleTown();
 const c = compile(net);
 console.log("edges", c.edges.length, "nodes", c.nodes.length, "warnings", c.warnings);
@@ -1481,5 +1482,33 @@ function alongKerb(input: any): any {
   const other = deadEndTurnarounds(two("Strada Liviu Rebreanu")), sameName = deadEndTurnarounds(two("Strada Ecaterina Teodoroiu"));
   const ok = other.length === 0 && sameName.length === 1 && sameName[0].lane === "l391" && sameName[0].r > 3.2;
   console.log(`dead ends with a turnaround: j206's sharp turn onto another street ${other.length} (none), the same turn back along a street of the same name ${sameName.length} (r ${sameName[0]?.r.toFixed(1)} m) | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// V2 sketch: a road's lanes one by one (road-lanes.ts): deleted (the rest laid out again side by side, the lead passed on,
+// the road going with its last lane, what named it let go) or taken out of the road
+{
+  const line = (id: string, y: number): SketchLane => ({ id, width: 3.5, shape: { kind: "line", pts: [{ x: 0, y }, { x: 100, y }] } });
+  const r0 = { id: "r1", name: "Main", lanes: ["a", "b", "c"], speed: 70 };
+  let sk: Sketch = { lanes: [line("a", 0), line("b", -3.5), line("c", -7), line("x", 20)], connectors: [{ id: "cb", from: { lane: "b", s: 100 }, to: { lane: "x", s: 0 } }], roads: [r0],
+    junctions: [{ id: "j1", name: "J", outline: [{ x: 90, y: -10 }, { x: 110, y: -10 }, { x: 110, y: 25 }], splits: [{ from: "lane:x", shares: { r1: 1, "lane:b": 2 } }] }],
+    journeys: [{ id: "j1", from: "b", to: "x", rate: 100 }, { id: "j2", from: "a", to: "x", rate: 50 }] };
+  sk = settleSketch({ ...sk, roads: [{ ...r0, align: alignmentOf({ ...sk, roads: [r0] }, r0) }] });
+  const midY = (s: Sketch, id: string) => { const l = s.lanes.find(x => x.id === id)!; return Math.round(pointAt(l.shape, 50).p.y * 10) / 10; };
+  // (the middle lane deleted: c moves in beside a, no gap; its connector, the journey from it and the share to it gone)
+  const m = settleSketch(deleteLanes(sk, ["b"]).sketch), mr = m.roads[0];
+  const middle = mr.lanes.join() === "a,c" && mr.align?.ref === "a" && midY(m, "c") === -3.5 && !m.connectors.length && m.journeys?.map(j => j.id).join() === "j2" && JSON.stringify(m.junctions[0].splits) === JSON.stringify([{ from: "lane:x", shares: { r1: 1 } }]);
+  // (the lead deleted: b leads, c beside it)
+  const l = settleSketch(deleteLanes(sk, ["a"]).sketch), lr = l.roads[0];
+  const lead = lr.align?.ref === "b" && lr.lanes.join() === "b,c" && midY(l, "b") === -3.5 && midY(l, "c") === -7;
+  // (all of them: the road goes, said; the share by its id let go)
+  const all = deleteLanes(sk, ["a", "b", "c"]), last = !all.sketch.roads.length && all.roadsGone.join() === "Main" && !all.sketch.junctions[0].splits?.some(x => "r1" in x.shares);
+  // (taken out, the middle one: kept where it is, in no road, with the road's speed; the road keeps the rest where they were, not drawn over it;
+  // and the lead taken out: b leads, c where it was)
+  const o = settleSketch(takeOutOfRoad(sk, ["b"]).sketch), ol = settleSketch(takeOutOfRoad(sk, ["a"]).sketch);
+  const out = o.lanes.some(x => x.id === "b" && x.speed === 70) && o.roads[0].lanes.join() === "a,c" && midY(o, "b") === -3.5 && midY(o, "c") === -7
+    && ol.roads[0].align?.ref === "b" && midY(ol, "b") === -3.5 && midY(ol, "c") === -7 && midY(ol, "a") === 0;
+  const ok = middle && lead && last && out;
+  console.log(`road lanes: the middle one deleted, the rest packed ${middle}, the lead deleted ${lead}, the last one (the road goes) ${last}, the middle one and the lead taken out, the rest where they were ${out} | ok ${ok}`);
   if (!ok) process.exit(1);
 }

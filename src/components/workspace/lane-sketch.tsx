@@ -56,6 +56,7 @@ import { tidySketch, type TidyReport } from "@/lib/sketch-tidy";
 import { mergeLanes, mergeRoads, type MergeResult } from "@/lib/sketch-merge";
 import { translucentArea } from "@/render/area-fill";
 import { MemoryGauge } from "@/components/v2/top-bar-tools";
+import { deleteLanes, dropDangling, takeOutOfRoad } from "@/lib/road-lanes";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
@@ -696,8 +697,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const zones = s.zones ?? [];
     if (isEmpty(s) && !zones.length) return;
     const dropZones = (sk: Sketch) => zones.reduce((k, id) => deleteZone(k, id), sk);
-    editSketch(sk => (isEmpty(s) ? dropZones(sk) : remove(dropZones(sk), s)));
+    // (what named what goes let go too: journeys, turning shares; a road's last lane: the road goes, said)
+    const sk0 = live.current.sketch, gone = new Set(s.lanes), roadsGone = s.road ? [] : sk0.roads.filter(r => r.lanes.every(l => gone.has(l))).map(r => r.name);
+    editSketch(sk => (isEmpty(s) ? dropZones(sk) : dropDangling(remove(dropZones(sk), s))));
     setSel(NO_SEL);
+    if (roadsGone.length) toast(`${roadsGone.length === 1 ? roadsGone[0] : `${roadsGone.length} roads`}: no lane left, the road went too`, { description: "⌘Z brings it back" });
   };
   const groupSel = () => {
     const s = live.current.sel, sk = live.current.sketch;
@@ -1528,6 +1532,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                   <DropdownMenuItem disabled={readOnly || !menu.ring} onSelect={() => editSketch(s => circleLanes(s, menu.lanes))}>
                     Make a circle <span className="ml-auto text-[11px] text-muted-foreground">a ring, made round</span>
                   </DropdownMenuItem>
+                  {menu.lanes.some(id => roadOf(sketch, id)) && <>
+                    <DropdownMenuItem disabled={readOnly} onSelect={() => deleteRoadLanes(sketch, menu.lanes, editSketch, setSel)}>
+                      <Trash2 /> {menu.lanes.length === 1 ? "Delete this lane" : "Delete these lanes"} <span className="ml-auto text-[11px] text-muted-foreground">the road keeps the rest</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem disabled={readOnly} onSelect={() => takeLanesOut(sketch, menu.lanes, editSketch, setSel)}>
+                      Take out of the road <span className="ml-auto text-[11px] text-muted-foreground">kept, in no road</span>
+                    </DropdownMenuItem>
+                  </>}
                   {(() => { const t = mergeTarget(sketch, sel); return (
                     <DropdownMenuItem disabled={readOnly || !t} onSelect={() => mergeSelection(sketch, sel, editSketch, setSel)}>
                       {t?.kind === "roads" ? "Merge the roads" : "Merge lanes"} <span className="ml-auto text-[11px] text-muted-foreground">{t ? "the two selected · M" : "select two · M"}</span>
@@ -2057,6 +2069,29 @@ function WayEditor({ edit, onSave, onCancel }: { edit: WayEdit; onSave: (v: numb
     </div>
   );
 }
+/** lanes of a road deleted (the road keeps the rest, laid out again side by side), one undo step; said what went */
+function deleteRoadLanes(sk: Sketch, ids: string[], edit: (f: (s: Sketch) => Sketch) => void, setSel: (s: Sel) => void) {
+  if (!ids.length) return;
+  const roadsGone = deleteLanes(sk, ids).roadsGone, road = roadOf(sk, ids[0]);
+  edit(s => deleteLanes(s, ids).sketch);
+  const left = road && !roadsGone.includes(road.name) ? road.lanes.filter(l => !ids.includes(l)) : [];
+  setSel(left.length ? { ...NO_SEL, lanes: left, road: road!.id } : NO_SEL);
+  toast.success(`${ids.length === 1 ? `Lane ${ids[0]}` : `${ids.length} lanes`} deleted`, {
+    description: [roadsGone.length ? `${roadsGone.join(", ")}: no lane left, the road went too` : road ? `${road.name} has ${left.length} lane${left.length === 1 ? "" : "s"} now` : "", "its connectors, journeys and turning shares naming it went with it", "⌘Z brings it back"].filter(Boolean).join(" · "),
+  });
+}
+/** lanes taken out of their road, kept as lanes in no road, one undo step; said what went */
+function takeLanesOut(sk: Sketch, ids: string[], edit: (f: (s: Sketch) => Sketch) => void, setSel: (s: Sel) => void) {
+  const inRoad = ids.filter(id => roadOf(sk, id));
+  if (!inRoad.length) return;
+  const road = roadOf(sk, inRoad[0])!, roadsGone = takeOutOfRoad(sk, inRoad).roadsGone;
+  edit(s => takeOutOfRoad(s, inRoad).sketch);
+  setSel({ ...NO_SEL, lanes: inRoad });
+  toast.success(`${inRoad.length === 1 ? `Lane ${inRoad[0]}` : `${inRoad.length} lanes`} taken out of ${road.name}`, {
+    description: [roadsGone.length ? `${roadsGone.join(", ")}: no lane left, the road went` : `${road.name} keeps the rest, where they are`, road.speed !== undefined ? `now in no road, with the road's speed limit (${road.speed} km/h) as its own` : "now in no road", "⌘Z brings it back"].join(" · "),
+  });
+}
+
 /** what the selection can be merged as: two whole roads (the first picked keeping its name), else two lanes; null if neither */
 function mergeTarget(sk: Sketch, sel: Sel): { kind: "roads" | "lanes"; a: string; b: string } | null {
   if (sel.connectors.length || sel.junctions.length || sel.link || sel.crossing) return null;
@@ -2127,6 +2162,17 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
     body = (
       <>
         <Input aria-label="Road name" value={road.name} className="h-8" onChange={e => rename("roads", road.id, e.target.value)} />
+        <ul className="grid gap-0.5 text-xs" aria-label={`${road.name}'s lanes`}>
+          {road.lanes.map(id => (
+            <li key={id} className="flex items-center gap-1 rounded px-1 hover:bg-muted" onMouseEnter={() => onHover({ lanes: [id] })} onMouseLeave={() => onHover(null)}>
+              <button type="button" className="flex-1 truncate text-left font-mono" title="Select this lane" onClick={() => setSel({ ...NO_SEL, lanes: [id] })}>
+                {id}{road.align?.ref === id ? <span className="ml-1 font-sans text-muted-foreground">lead</span> : null}
+              </button>
+              <button type="button" className="rounded px-1 text-[11px] text-muted-foreground hover:bg-background hover:text-foreground" aria-label={`Take ${id} out of the road`} title="Take out of the road: keep the lane, in no road" onClick={() => takeLanesOut(sketch, [id], editSketch, setSel)}>out</button>
+              <button type="button" className="rounded p-0.5 text-muted-foreground hover:bg-background hover:text-destructive" aria-label={`Delete lane ${id}`} title={`Delete this lane: the road keeps the rest${road.align ? ", laid out side by side again" : ""}`} onClick={() => deleteRoadLanes(sketch, [id], editSketch, setSel)}><Trash2 className="size-3.5" /></button>
+            </li>
+          ))}
+        </ul>
         <p className="text-xs text-muted-foreground">{plural(road.lanes.length, "lane")} ({road.lanes.join(", ")}) · joined at {sketch.junctions.filter(j => contents.get(j.id)?.roads.includes(road.id)).map(j => j.name).join(", ") || "no junction"}</p>
         {road.lanes.length > 1 && (
           <div className="grid gap-1.5">
@@ -2232,6 +2278,12 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
             : j ? <>on <button className="underline" onClick={() => setSel(junctionSel([j.id]))}>{j.name}</button></> : "in no road or junction"}
         </p>
         {lead && <p className="text-[11px] text-muted-foreground">Side by side with lead lane {lead}: it follows it (move or reshape the lead).</p>}
+        {inRoad && (
+          <div className="grid grid-cols-2 gap-1.5">
+            <Button size="sm" variant="outline" title={`Delete the lane: ${inRoad.name} keeps the rest${inRoad.align ? ", laid out side by side again" : ""} (Del)`} onClick={() => deleteRoadLanes(sketch, [lane.id], editSketch, setSel)}><Trash2 /> Delete this lane</Button>
+            <Button size="sm" variant="outline" title={`Keep the lane, but in no road: ${inRoad.name} keeps the rest`} onClick={() => takeLanesOut(sketch, [lane.id], editSketch, setSel)}>Take out of the road</Button>
+          </div>
+        )}
         {sh.kind === "line" && !lead && (
           pt !== null ? (
             <div className="flex items-center gap-1.5 text-xs">
