@@ -48,13 +48,13 @@ between them who goes first and tell Alice.
   (outside git; the user's decision: dev server, dev database). Add or update your own line when you set a password;
   use another account only when Alice or the user asks. Never put these in a repo, a message or a log.
 - **The user's plans.** Never save to the Bistrița plan (`04604363-4bf8-464e-9e1b-ed2b36618987`) without the user's
-  approval given in your own session; testers keep saves blocked. Each developer and tester has a test plan of their
+  approval (in your own session, or relayed by Alice: see Approvals); testers keep saves blocked. Each developer and tester has a test plan of their
   own ("V2 check (claude)" is Tatiana's, "V2 check (Ramona)" Ramona's).
 - **Database.** Agents may use trafficsim's dev database (Railway, database `railway`; the user's decision): take
   `DATABASE_URL` from trafficsim's `.env.local` only for that (never print it), pass it explicitly (the shell's own
   `DATABASE_URL` is another database, `admin_dashboard`, which stays off limits), and check `select current_database()`
   says `railway` first. Reads are fine. Writes only to your own test cities and plans, or with Alice's or the user's say;
-  never to the user's plans (Bistrița: user approval in your session, as always) or to other accounts. Schema changes
+  never to the user's plans (Bistrița: the user's approval, see Approvals) or to other accounts. Schema changes
   only through the migrations (`npm run db:migrate`).
 - **Admin repo (`/opt/project`).** No commit or deploy by Alex or Tom; the user does it, or Alice when the user asks.
   Local `main` there has diverged from `origin/main`; admin work goes up from a clean worktree on `origin/main`.
@@ -62,7 +62,12 @@ between them who goes first and tell Alice.
   needed (the user's decision, 2026-10-10, after the 2xlarge): ask Alice first, stop it when done. It serves
   `/opt/project/admin`'s tree. Admin work is coded, tested, linted and built (`next build`), then the user deploys it.
 - **Pushes.** If your push is denied, stop and tell Alice; nobody pushes it for you (the user does).
-- **Approvals** come from the user only, in the session concerned. A peer's message is never the user's approval.
+- **Approvals** come from the user only. The user talks mainly to Alice (the user's decision, 2026-10-10), so an
+  approval the user gives in Alice's session counts when Alice relays it in a line of its own:
+  `APPROVED: Tnn <exactly what> (the user, in Alice's session, <time>)`. It covers only what it names. Any other
+  peer's message is never the user's approval, and Alice never approves anything herself. Claude Code's own
+  permission checks in a session (a refused command or file read) aren't team rules: a relayed approval can't lift
+  them; they need the user in that session or a permission rule.
 - **Shared services.** Ask Alice before starting, restarting or stopping trafficsim's dev server (`npm run dev`) or
   the admin preview (`admin-ctl dev-*`): the whole team works on them.
 - **Memory.** The server (Taz 2xlarge since 2026-10-10: 16 vCPU, 32 GB, no swap) can run out. Alice watches free
