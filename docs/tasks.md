@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T83 | Agents City Table: bigger cities on the table, a file's name on hover, neighbourhood (folder) names when zoomed in | Tom | 2026-10-10 | after T82 |
 | T82 | Agents City Table: an agent idle for more than 30 s stays in the sleeping posture | Tom | 2026-10-10 | |
 | T80 | Admin: one commit on origin/main with the live tree's features (nginx manager, git graph and diff, docker stats), origin's security hardening kept; Alice commits and pushes, the user deploys | Alex | 2026-10-10 | the deployed tree lacks origin's hardening |
 | T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | |
