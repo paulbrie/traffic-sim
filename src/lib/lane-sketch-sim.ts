@@ -167,8 +167,16 @@ const FRAME_FIELDS = ["car", "edge", "pos", "v", "exit", "run", "trail", "x", "y
 const KEEP_FRAMES = 10.5, KEEP_EVENTS = 3000;
 /** seconds kept to replay (every car about every 0.1 s, compactly: a few MB for 50 cars) */
 const KEEP_REPLAY = 600;
+/** and at most this many bytes of it, the oldest dropped first: a big town replays less time instead of filling the
+ * worker's memory. About 33 bytes a car a step: the whole 600 s up to about 1,700 cars; Bistrița at 15 min (2,000 cars,
+ * 375 MB for 600 s) keeps 480 s, and busier, as in a long run at 10× (963 MB), about 200 s */
+const REPLAY_BYTES = 320 * 2 ** 20;
 /** at most this many cars and events in a moment copied (the nearest the middle of the view, the nearest in time) */
 const MOMENT_CARS = 400, MOMENT_EVENTS = 1500;
+/** a moment kept to replay: per car [id, x, y, dx, dy, v, share, len] and [edge, exit, why] (indexes into the sim's tags) */
+interface ReplayFrame { t: number; nums: Float32Array; tags: Uint32Array; peds?: { ids: Uint32Array; nums: Float32Array }; /** per truck [index, x, y, dx, dy, len] */ trailers?: Float32Array }
+/** a frame's size in memory, about (its arrays, and a little for each object) */
+const frameBytes = (f: ReplayFrame) => f.nums.byteLength + f.tags.byteLength + 16 + (f.peds ? f.peds.ids.byteLength + f.peds.nums.byteLength : 0) + (f.trailers?.byteLength ?? 0);
 /** a recorded car, as replayed */
 export interface ReplayCar { id: number; p: Pt; d: Pt; len: number; trailer?: Body; share: number; broken?: boolean; kmh: number; edge: string; exit: string | null; why: string | null }
 const r2 = (x: number) => Math.round(x * 100) / 100;
@@ -816,7 +824,7 @@ export class SketchSim {
     this.posed = null;
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
     this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.problemList = []; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, { through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 }); for (const r of this.rTally) Object.assign(r, { through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0, lanes: {} }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
-    this.replay = []; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
+    this.replay = []; this.replayBytes = 0; this.replayCapped = false; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
     for (const x of this.crossings) x.ped = newPed();
     // (from the start again: the same random numbers, the same run)
@@ -1956,7 +1964,10 @@ export class SketchSim {
   private turnCounts = new Map<string, number>();
   /** the vehicles' bodies as the last step left them (until the next step, or the sketch or the run changes) */
   private posed: Map<SimVehicle, Body & { trailer?: Body }> | null = null;
-  private replay: { t: number; nums: Float32Array; tags: Uint32Array; peds?: { ids: Uint32Array; nums: Float32Array }; /** per truck [index, x, y, dx, dy, len] */ trailers?: Float32Array }[] = [];
+  private replay: ReplayFrame[] = [];
+  /** the replay's frames' size (as `frameBytes`), and whether the size has cut them short of `KEEP_REPLAY` */
+  private replayBytes = 0;
+  private replayCapped = false;
   private tags: string[] = [""];
   private tagIndex = new Map<string, number>([["", 0]]);
   private tag(s: string | null) {
@@ -1966,13 +1977,15 @@ export class SketchSim {
     return i;
   }
 
-  /** the time span that can be replayed, the frames kept for it and their size in memory (null: nothing kept yet) */
+  /**
+   * the time span that can be replayed, the frames kept for it and their size in memory (null: nothing kept yet);
+   * `capped`: shorter than `KEEP_REPLAY` because of `REPLAY_BYTES`
+   */
   replayRange() {
     const fr = this.replay;
     if (!fr.length) return null;
-    let bytes = 0;
-    for (const f of fr) bytes += f.nums.byteLength + f.tags.byteLength + 16 + (f.peds ? f.peds.ids.byteLength + f.peds.nums.byteLength : 0);
-    return { from: fr[0].t, to: fr[fr.length - 1].t, frames: fr.length, bytes };
+    const from = fr[0].t, to = fr[fr.length - 1].t;
+    return { from, to, frames: fr.length, bytes: this.replayBytes, capped: this.replayCapped && to - from < KEEP_REPLAY - 1 };
   }
   /**
    * The moment `t` (a replayed one, or now) as it was, to copy: the cars in `box` (the view; null: all) as
@@ -2063,9 +2076,13 @@ export class SketchSim {
       });
       // (the zebras' pedestrians: waiting, crossing, how far across)
       const peds = this.crossings.length ? { ids: Uint32Array.from(this.crossings, x => this.tag(x.def.id)), nums: Float32Array.from(this.peds().flatMap(q => [q.waiting, q.crossing, q.progress])) } : undefined;
-      this.replay.push({ t: r2(this.t), nums, tags, ...(peds ? { peds } : {}), ...(trailers.length ? { trailers: Float32Array.from(trailers) } : {}) });
+      const f: ReplayFrame = { t: r2(this.t), nums, tags, ...(peds ? { peds } : {}), ...(trailers.length ? { trailers: Float32Array.from(trailers) } : {}) };
+      this.replay.push(f); this.replayBytes += frameBytes(f);
+      // (the oldest gone: past the time kept, or while over the size kept, the newest frame always kept)
       let cut = 0;
-      while (cut < this.replay.length && this.replay[cut].t < this.t - KEEP_REPLAY) cut++;
+      while (cut < this.replay.length && this.replay[cut].t < this.t - KEEP_REPLAY) this.replayBytes -= frameBytes(this.replay[cut++]);
+      if (this.replayBytes > REPLAY_BYTES) this.replayCapped = true;
+      while (this.replayBytes > REPLAY_BYTES && cut < this.replay.length - 1) this.replayBytes -= frameBytes(this.replay[cut++]);
       if (cut) this.replay.splice(0, cut);
     }
     if (this.t < this.checkAt) return;

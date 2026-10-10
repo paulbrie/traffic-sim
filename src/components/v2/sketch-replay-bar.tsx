@@ -15,11 +15,12 @@ const clock = (s: number) => {
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 };
 
-export interface ReplayKept { from: number; to: number; frames: number; bytes: number }
+/** `capped`: less than the 10 minutes kept, the memory it may take being full (a big town) */
+export interface ReplayKept { from: number; to: number; frames: number; bytes: number; capped?: boolean }
 
 /**
  * The lane sketch's replay, as V1's (replay-bar.tsx): what the cars did is kept (the last 10 minutes, every
- * 0.1 s); drag to any moment, step back and forward (held, it keeps stepping; ← → too, Shift for a second),
+ * 0.1 s, or less in a big town: then the time kept is shown); drag to any moment, step back and forward (held, it keeps stepping; ← → too, Shift for a second),
  * play it back at the simulation speed, copy the moment to paste into a conversation. Live goes back to the
  * cars as they are (replaying doesn't change them; going into the replay pauses them).
  */
@@ -81,8 +82,8 @@ export function SketchReplayBar({ kept, t, playing, onPlaying, onShow, onLive, o
       <StepButton dir={1} stop={() => onPlaying(false)} step={stepBy} />
       <Slider className="flex-1" min={kept.from} max={kept.to} step={REPLAY_STEP} value={[cur]} onValueChange={([v]) => go(v)} aria-label="Replay position" />
       <span className="w-52 text-right font-mono tabular text-muted-foreground"
-        title={`step ${Math.round(cur / REPLAY_STEP)} · ${kept.frames} steps kept (${(kept.bytes / 1048576).toFixed(1)} MB), from ${clock(kept.from)}`}>
-        {clock(cur)} / {clock(kept.to)} <span className="text-foreground/70">· step {Math.round(cur / REPLAY_STEP)}</span>
+        title={`step ${Math.round(cur / REPLAY_STEP)} · ${kept.frames} steps kept (${(kept.bytes / 1048576).toFixed(1)} MB), from ${clock(kept.from)}${kept.capped ? " (the last " + clock(kept.to - kept.from) + " only: the memory kept for the replay is full)" : ""}`}>
+        {clock(cur)} / {clock(kept.to)} <span className="text-foreground/70">· {kept.capped ? `last ${clock(kept.to - kept.from)}` : `step ${Math.round(cur / REPLAY_STEP)}`}</span>
       </span>
       <Button size="icon-sm" variant="ghost" aria-label="Copy this moment's data"
         title="Copy this moment's data (the cars in view, the lights, and what happened a minute either side) to paste into a conversation"
