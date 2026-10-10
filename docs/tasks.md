@@ -15,7 +15,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T121 | Agents City: sessions from before the reboot show as nameless "pid NNNNN" agents; recover their names and merge them (T78) | Alex | 2026-10-10 | after T120 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Plan fix applied: Bistrița rev 92 (2026-10-10 13:27, by Bob on the user's go, through the app's restoreFromFile): five drawn-over places (r1560, J574, J577, Strada Tărpiului, l879/l2954, l2476/l2513); seeds 1–8 deadlocks 71 → 102 (76 of them one j671 ping-pong), collisions 17 → 34, out +1%; rev 91 backed up. Step 3 on rev 92: j671 was a sim rule (f270dab: a car stopped up to 0.5 m into a zone counts as short): seeds 1–8 deadlocks 102 → 31, collisions 34 → 27; next j21 (l40 drawn 2.4 m into the ring), j746, l3241/j169. Notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
@@ -33,6 +32,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T121 | Agents City: no more nameless "pid NNNNN" agents in short windows (a day of transcripts read for pairing and names; names from /rename or "You are <Name>"; only agents active in the window listed) | Alex | 2026-10-10 | admin: 563903d |
 | T123 | Agents City Table: bubbles and paper planes start when the page first sees a message (message ids marked with the beats) | Tom | 2026-10-10 | admin: 0f87d23 |
 | T122 | Agents City replay bar: 22 px task lanes with the label inside, overlapping tasks stacked; also recent edits no longer all flash on page load (quiet City after load 26% → 3% CPU) | Alex | 2026-10-10 | admin: ec6e5e5 |
 | T120 | Task parser: ids with a bracketed note or a dash, tasks split between owners (one part each), re-sent TASKs don't reopen done work, the manager's COMMIT/PUSHED closes a blocked part; Kanban and whiteboard checked identical per window | Alex | 2026-10-10 | admin: 2c742c1 |
