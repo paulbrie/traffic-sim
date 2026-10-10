@@ -3,7 +3,7 @@ import { Subject } from "subjecto";
 import { emptySketch, settle, type Piece, type Pt, type Sketch } from "@/lib/lane-sketch";
 import { sanitizeZones } from "@/lib/sketch-zones";
 import { sketchList, touchOpen } from "@/lib/sketch-list";
-import { mapChanged } from "@/lib/sketch-edit";
+import { mapChanged, stepBack } from "@/lib/sketch-edit";
 import type { SketchSimClient } from "./sketch-sim-client";
 import { laneSketch$, sketchReplaced } from "./store";
 
@@ -43,13 +43,23 @@ export interface SketchStore {
   onEdit(f: () => void): () => void;
 }
 
+interface Step { back: Sketch; left: Sketch }
+
 function makeStore(kind: SketchStore["kind"], sketch$: Subject<Sketch>, write: (sk: Sketch) => void): SketchStore {
-  const past: Sketch[] = [], future: Sketch[] = [];
+  // (each step: the sketch to go back to, and the sketch the step left; see stepBack)
+  const past: Step[] = [], future: Step[] = [];
   let sim: SketchSimClient | null = null;
   const editing = new Set<() => void>();
   const begin = () => editing.forEach(f => f());
   // (a change that edits the map, not only the run's settings)
   const beginIf = (from: Sketch, to: Sketch) => { if (mapChanged(from, to)) begin(); };
+  // (a step undone or redone: answers the step that takes it back)
+  const step = (s: Step): Step => {
+    const cur = sketch$.getValue(), next = stepBack(s.back, s.left, cur);
+    beginIf(cur, next);
+    write(next);
+    return { back: cur, left: next };
+  };
   const store: SketchStore = {
     kind, sketch$, beginEdit: begin,
     show(sk) { beginIf(sketch$.getValue(), sk); write(sk); },
@@ -57,16 +67,18 @@ function makeStore(kind: SketchStore["kind"], sketch$: Subject<Sketch>, write: (
       const cur = sketch$.getValue(), changed = f(cur);
       if (changed === cur) return;
       beginIf(cur, changed);
-      past.push(cur);
+      const next = settle(changed);
+      past.push({ back: cur, left: next });
       if (past.length > MAX) past.shift();
       future.length = 0;
-      write(settle(changed));
+      write(next);
     },
-    undo() { const prev = past.pop(); if (!prev) return; beginIf(sketch$.getValue(), prev); future.push(sketch$.getValue()); write(prev); },
-    redo() { const next = future.pop(); if (!next) return; beginIf(sketch$.getValue(), next); past.push(sketch$.getValue()); write(next); },
+    // (the map as it was; the run's settings changed since kept as they are, T160)
+    undo() { const s = past.pop(); if (s) future.push(step(s)); },
+    redo() { const s = future.pop(); if (s) past.push(step(s)); },
     record(before) {
       if (sketch$.getValue() === before) return;
-      past.push(before);
+      past.push({ back: before, left: sketch$.getValue() });
       if (past.length > MAX) past.shift();
       future.length = 0;
     },
