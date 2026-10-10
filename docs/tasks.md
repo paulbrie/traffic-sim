@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T149 | V2: align selected lanes as in a design tool (left, centre, right, top, middle, bottom) against the first-selected lane; roads move as a unit | Tom | 2026-10-10 | after T147 |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | the user's aerial photo; read-only |
 | T147 | V2 junction surface: a "Fill holes" option so the inside of an intersection is all road surface (no slivers or holes between connectors; real islands kept) | Tom (Tatiana for the editor) | 2026-10-10 | the user's screenshot of J696 |
 | T146 | V2: the user's tab crashed ("Aw, Snap!", error 5, likely out of memory) after hours of editing Bistrița: reproduce with 100–200 edits, find what grows (undo history, proxies, caches), fix | Tatiana | 2026-10-10 | urgent; last save before the crash: rev 171, 16:04 UTC |
