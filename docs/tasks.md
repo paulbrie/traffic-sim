@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T85 | Agents City: about 60% CPU and the fan running while the page is open; measure, then render on demand, pause when hidden, cap DPR | Alex (Tom for desk/) | 2026-10-10 | |
 | T83 | Agents City Table: bigger cities on the table, a file's name on hover, neighbourhood (folder) names when zoomed in | Tom | 2026-10-10 | after T82 |
 | T74 | V2 route tracer (from V1): pick a way in, a way out and a lane, draw the route, send a test car | Tatiana | 2026-10-09 | |
 | T73 | Re-test of the 3D view (T62) | Ramona | 2026-10-09 | after T68, T72 |
