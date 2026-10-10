@@ -18,7 +18,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T102 | Agents City Table: who is using a browser (each open agent-browser session at its owner's seat, with its CPU; unowned ones marked) | Alex (data), Tom (display) | 2026-10-10 | after T92 |
 | T101 | Agents City Table: the gauges ease to each new value instead of jumping (about 0.8 s) | Tom | 2026-10-10 | with T92 |
 | T100 | Re-test of T88 (Apply merges field by field) in the browser | Ramona | 2026-10-10 | after T97, T98 |
-| T99 | Agents City: folders starting with "." (.next, .git…) left out of the cities by default; a "Show hidden folders" switch | Alex | 2026-10-10 | after T85, T88 |
 | T98 | The gaps left in T73: a real bridge (Level 1 over other lanes) and the 3D screenshot | Ramona | 2026-10-10 | |
 | T97 | Test of the V2 route tracer (T74) in the browser, with screenshots of a traced route and its test car | Ramona | 2026-10-10 | |
 | T96 | Agents City Table: a table of normal height (about 0.75 m for a 1.75 m avatar), chairs and a floor, so avatars can stand and walk; camera re-framed | Tom | 2026-10-10 | before T95 |
@@ -44,6 +43,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T99 | Agents City: folders starting with "." left out of the cities (server-side, before the file cap) unless "Show hidden folders" (?dot=1); dot-files in shown folders stay; touches inside hidden folders draw no bolt | Alex | 2026-10-10 | admin: 941d8aa (pushed, not deployed) |
 | T85 | Agents City and Table: on-demand frames (60 flights, 30 animating, 0 when still or hidden), dpr ≤ 1.5, 4× MSAA, 250 ms clock, stable handlers, no per-frame allocations; idle Table frozen (the user's choice). Harness (SwiftShader): City idle 417% → 4% CPU, Table calm 722% → 32% | Alex, Tom | 2026-10-10 | admin: f1d0b13 (pushed, not deployed) |
 | T88 | History from file: Apply merges the file's fields onto the item with the same id (missing fields kept, null clears optional ones, required ones can't be cleared, a new id needs a whole item); restore:check 23/23 | Alex | 2026-10-10 | b50cf4e |
 | T73 | Re-test of the 3D view (T62): toggle, orbit, zoom, imagery, roads, junctions, markings, live cars, picking pass; a real bridge and the 3D screenshot not reached (→ T98) | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t73 |
