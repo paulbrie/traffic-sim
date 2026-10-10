@@ -79,14 +79,16 @@ between them who goes first and tell Alice.
   server (port 7000) serves, and every save there hot-reloads the user's open pages and can drop their unsaved edits
   (the user's decision, 2026-10-10). Each agent works in a git worktree of its own,
   `/home/genie/<name>-scratch/trafficsim-wt`, on a branch `wt/<name>` made from `origin/manual-junctions`, with
-  `node_modules` linked to the main tree's (`ln -s /opt/project/projects/trafficsim/node_modules`). To ship:
+  `node_modules` as a hard-linked copy of the main tree's (`cp -al /opt/project/projects/trafficsim/node_modules node_modules`:
+  seconds, almost no disk; Turbopack refuses a symlink). After a dependency change, redo it (or `npm ci` there). To ship:
   `git pull --rebase origin manual-junctions`, the checks, then `git push origin HEAD:manual-junctions`, and tell
   Alice (`PUSHED:`). Alice alone updates the served tree (`git pull --ff-only` there) after each push, and keeps
   `docs/tasks.md` and `docs/team.md` there. Scripts that need the database still read `DATABASE_URL` from the main
   tree's `.env.local`.
 - **Testing (trafficsim).** Before pushing, an agent may check its change in a browser on a private dev server of its
   own, from its worktree (the user's decision, 2026-10-10): `ln -s /opt/project/projects/trafficsim/.env.local
-  .env.local` once (a link, never a copy, and never printed), then `PORT=<port> npm run dev`, on its own port: Bob 7101,
+  .env.local` once (a link, never a copy, and never printed), then `env -u DATABASE_URL -u NODE_ENV -u NEXT_PUBLIC_BASE_PATH PORT=<port> npm run dev` (a shell may
+  carry another app's values, e.g. the admin's database, which `.env.local` doesn't override), on its own port: Bob 7101,
   Tatiana 7102, Ramona 7103, Alex 7104, Tom 7105 (`http://localhost:<port>/projects/trafficsim`). It uses the same
   Railway dev database and the same test logins. Start it only for a check and stop it right after (about 1–2 GB
   each; Alice paces memory). The final check, after Alice has pulled the push, is on the shared dev instance (port
