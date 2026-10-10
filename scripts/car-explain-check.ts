@@ -42,6 +42,7 @@ t("crossing waits with the junction rules' reasons (T161): in words, unknown one
   const x = (kind: "give-way" | "zone" | "priority", detail?: string): CarExplain => ({ ...base, rule: { kind, ...(detail ? { detail } : {}) }, blocker: { car: 147, edge: "lane:l3254" }, since: 3.2 });
   assert.equal(patienceNote(x("give-way", "give-way line")), "Patience: 3.2 of 10 s at the give-way; then it goes once car 147 can still stop comfortably.");
   assert.equal(patienceNote(x("zone", "first come")), "Patience: 3.2 of 6 s; then the one waiting longer goes.");
+  assert.equal(patienceNote(x("zone", "first come"), 12), "Patience: 3.2 of 12 s; then the one waiting longer goes.", "the plan's own tuning");
   assert.equal(patienceNote(x("priority", "from the right")), null);
   assert.equal(patienceNote(x("zone", "already in the zone")), null);
   assert.match(explainText(x("give-way", "give-way line"), clock), /\nPatience: 3\.2 of 10 s at the give-way/);

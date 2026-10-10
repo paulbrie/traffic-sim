@@ -68,15 +68,19 @@ export const REASON_WORDS: Record<string, string> = {
   "already in the zone": "already in the crossing",
   "set off first": "it set off first",
 };
-/** the default patience (s): at a give-way, then a car goes once the other can still stop comfortably; equal standing ("first come"), then the one waiting longer goes */
+/**
+ * Patience (s): at a give-way, then a car goes once the other can still stop comfortably (fixed in the sim,
+ * GIVE_PATIENCE); at equal standing ("first come"), then the one waiting longer goes (the plan's tuning "patience",
+ * this its default: the page passes the plan's own)
+ */
 export const PATIENCE = { giveWay: 10, firstCome: 6 };
 
 /** a crossing wait's patience, in words: how long it has waited of how long, and what happens then; null for other holds */
-export function patienceNote(x: CarExplain): string | null {
+export function patienceNote(x: CarExplain, firstCome = PATIENCE.firstCome): string | null {
   const r = x.rule?.kind, b = x.blocker;
   if (!b || (r !== "give-way" && r !== "zone")) return null;
   if (r === "give-way") return `Patience: ${x.since.toFixed(1)} of ${PATIENCE.giveWay} s at the give-way; then it goes once car ${b.car} can still stop comfortably.`;
-  if (x.rule?.detail === "first come") return `Patience: ${x.since.toFixed(1)} of ${PATIENCE.firstCome} s; then the one waiting longer goes.`;
+  if (x.rule?.detail === "first come") return `Patience: ${x.since.toFixed(1)} of ${firstCome} s; then the one waiting longer goes.`;
   return null;
 }
 
@@ -111,9 +115,9 @@ export function headline(x: CarExplain): { text: string; car?: number } {
 }
 
 /** the explanation as plain text, to copy (for pasting into a conversation, and the bridge) */
-export function explainText(x: CarExplain, clock: (t: number) => string): string {
+export function explainText(x: CarExplain, clock: (t: number) => string, firstCome = PATIENCE.firstCome): string {
   const out = [`Car ${x.car} at ${clock(x.t)}${x.traced ? "" : " (from the recording: a car not watched then)"}: ${headline(x).text}`];
-  const pn = patienceNote(x);
+  const pn = patienceNote(x, firstCome);
   if (pn) out.push(pn);
   if (x.rule) out.push(`Rule: ${RULE_WORDS[x.rule.kind]}${x.rule.edge ? ` on ${edgeName(x.rule.edge)}` : ""}${x.rule.detail ? ` (${x.rule.detail})` : ""}, for ${s1(x.since)}`);
   if (x.speed) out.push(`Speed: ${kmh(x.speed.kmh)} km/h now, ${kmh(x.speed.desiredKmh)} desired, ${kmh(x.speed.targetKmh)} target (${x.speed.accel.toFixed(1)} m/s²)`);

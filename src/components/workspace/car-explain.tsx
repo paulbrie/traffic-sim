@@ -13,14 +13,19 @@ const one = (x: number) => x.toFixed(1);
  * and the car holding it, how far its stop point is, for how long; the chain of cars holding each other (a ring is a
  * deadlock), its plan and the gaps it turned down, its last decisions. Each car named is a link that picks it.
  */
-export function CarWhy({ x, live, onPick }: { x: CarExplain | null; live: boolean; onPick: (id: number) => void }) {
+export function CarWhy({ x, live, patience: firstCome, onPick }: {
+  x: CarExplain | null; live: boolean;
+  /** the plan's tuning "patience" (s): how long cars of equal standing wait before the one waiting longer goes */
+  patience?: number;
+  onPick: (id: number) => void;
+}) {
   if (!x) return null;
   const h = headline(x), car = (id: number) => <button key={id} className="font-mono underline" onClick={() => onPick(id)} title={`Pick car ${id}`}>{id}</button>;
   const row = (label: string, value: React.ReactNode) => (
     <div className="flex justify-between gap-2"><span className="shrink-0 text-muted-foreground">{label}</span><span className="min-w-0 text-right">{value}</span></div>
   );
-  const ring = new Set(x.deadlock ?? []), patience = patienceNote(x);
-  const copy = () => void navigator.clipboard.writeText(explainText(x, clock)).then(() => toast.success(`Car ${x.car}'s explanation copied`), () => toast.error("Couldn't copy"));
+  const ring = new Set(x.deadlock ?? []), patience = patienceNote(x, firstCome);
+  const copy = () => void navigator.clipboard.writeText(explainText(x, clock, firstCome)).then(() => toast.success(`Car ${x.car}'s explanation copied`), () => toast.error("Couldn't copy"));
   return (
     <div className="grid gap-1 rounded border bg-background/60 px-2 py-1.5 text-xs" aria-label="Why">
       <div className="flex items-center justify-between gap-2">

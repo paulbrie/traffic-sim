@@ -67,6 +67,7 @@ import { useJunctionWarnings } from "@/state/junction-warnings-client";
 import type { JunctionWarning } from "@/lib/junction-warnings";
 import { explainMarks, type CarExplain } from "@/lib/car-explain";
 import { keyForEditor, keyTargetOf, somethingOpen } from "@/lib/editor-keys";
+import { resolveTuning } from "@/lib/sketch-tuning";
 import { CarWhy } from "./car-explain";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
 
@@ -1776,7 +1777,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
-            <CarPanel info={carInfo} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
+            <CarPanel info={carInfo} patience={resolveTuning(params.tune).patience} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
               onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
               onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
               onCopy={async () => {
@@ -1911,10 +1912,12 @@ function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> 
   return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
-function CarPanel({ info, why, id, follow, running, replayT, way, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
+function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
   info: ReturnType<SketchSim["inspect"]>; id: number; follow: boolean; running: boolean; replayT: number | null;
   /** why it does what it does (T157), if the sim says */
   why: CarExplain | null;
+  /** the plan's tuning "patience" (s), for the explanation's patience note */
+  patience: number;
   /** its way on to the end of its trip (drawn on the map), if it has one */
   way: CarWay | null;
   /** its engine fails now; it is towed away now */
@@ -1937,7 +1940,7 @@ function CarPanel({ info, why, id, follow, running, replayT, way, onFollow, onPi
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h</span>)}
           {info.exit && row("Going", edgeName(info.exit))}
           {row("Then", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
-          <CarWhy x={why} live={replayT === null} onPick={onPick} />
+          <CarWhy x={why} live={replayT === null} patience={patience} onPick={onPick} />
           <Button size="sm" variant={follow ? "secondary" : "outline"} className="h-7" aria-pressed={follow} onClick={() => onFollow(!follow)} title="Keep the view on the car while the replay plays">
             <Crosshair /> {follow ? "Following" : "Follow"}
           </Button>
@@ -1966,7 +1969,7 @@ function CarPanel({ info, why, id, follow, running, replayT, way, onFollow, onPi
           )}
           {row("Going", info.goal ? (info.goal.startsWith("end:") ? `off the end of ${edgeName(info.goal.slice(4))}` : edgeName(info.goal)) : info.leaves ? `off the end of ${edgeName(info.edge)}` : info.exit ? `${edgeName(info.exit)}, then ${edgeName(info.then ?? "")}` : info.then ? `onto ${edgeName(info.then)}` : "round the ring")}
           {row("Now", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
-          <CarWhy x={why} live={replayT === null} onPick={onPick} />
+          <CarWhy x={why} live={replayT === null} patience={patience} onPick={onPick} />
           {Number.isFinite(info.fuel) && row("Fuel so far", <span className="font-mono tabular">{fmtFuel(info.fuel / 1000)}</span>)}
           {info.journey && row("Journey", <span className="font-mono">{info.journey}</span>)}
           {info.reroutes > 0 && row("Went another way", `${info.reroutes} time${info.reroutes === 1 ? "" : "s"}`)}
