@@ -227,6 +227,8 @@ interface Edge {
   /** connectors: metres from the start still within reach of the lane they leave, and before the end within reach of the lane they join */
   forkShared: number;
   mergeBefore: number;
+  /** connectors: the lane they leave drawn into the lane they join, its last `len` m (from `at` on that lane): the join starts there */
+  joinBack?: { len: number; at: number };
   /** connectors: for every half metre along, the place beside it on the lane it leaves and on the lane it joins */
   onFrom: number[];
   onTo: number[];
@@ -717,6 +719,19 @@ export class SketchSim {
         A.conflicts.push({ other: B, at: r.at, otherAt: r.otherAt, before: r.at - r.a0, after, otherBefore: r.otherBefore, otherAfter, join });
         B.conflicts.push({ other: A, at: r.otherAt, otherAt: r.at, before: r.otherBefore, after: otherAfter, otherBefore: r.at - r.a0, otherAfter: after, join });
       }
+    }
+    // (a lane drawn into the lane its connectors join, short of where they join it, as a way into a roundabout drawn up into
+    // the ring: that stretch is the join itself, waited for before it as the join is, not a crossing of the two lanes)
+    for (const F of all) {
+      if (F.kind !== "lane" || !F.outs.length) continue;
+      const T = F.outs[0].conn.to!.lane;
+      if (F.outs.some(o => o.conn.to!.lane !== T || o.s < F.len - 1) || !(T.ring || F.outs.every(o => o.conn.to!.s > 1))) continue;
+      const k = F.conflicts.find(x => x.other === T && !x.join && x.at + x.after >= F.len - 0.5);
+      if (!k) continue;
+      F.conflicts = F.conflicts.filter(x => x !== k);
+      T.conflicts = T.conflicts.filter(x => !(x.other === F && Math.abs(x.at - k.otherAt) < 1e-6));
+      const at = k.otherAt - k.otherBefore;
+      for (const o of F.outs) o.conn.joinBack = { len: F.len - (k.at - k.before), at: T.ring ? ((at % T.len) + T.len) % T.len : Math.max(0, at) };
     }
     for (const e of all) {
       const zs = e.conflicts.filter(k => !k.join).map(k => ({ s: k.at - k.before, e: k.at + k.after })).sort((p, q) => p.s - q.s);
@@ -1679,13 +1694,13 @@ export class SketchSim {
         const hold = (z: number) => (minor && v.edge !== r.edge ? Math.min(z, r.off + 0.5) : z);
         // joining a lane part-way: give way to the cars coming along it
         if (r.edge.kind === "conn") {
-          const t = r.edge.to!, dMerge = r.off + r.edge.len - r.a, z = dMerge - r.edge.mergeBefore;
+          const t = r.edge.to!, dMerge = r.off + r.edge.len - r.a, jb = r.edge.joinBack, z = Math.min(dMerge - r.edge.mergeBefore, jb ? r.off - r.a - jb.len : Infinity);
           if ((t.lane.ring || t.s > 1) && dMerge < 40) {
             zones.push({ s: z, e: dMerge });
             if (canStopBefore(hold(z))) {
               const arrive = tMe(dMerge), onLane = byEdge.get(t.lane) ?? [];
               // (how far back along the lane the joining stretch reaches)
-              const laneZone = Math.max(0, this.diff(t.lane, this.beside(r.edge.onTo, r.edge.len - r.edge.mergeBefore), t.s));
+              const laneZone = Math.max(0, this.diff(t.lane, this.beside(r.edge.onTo, r.edge.len - r.edge.mergeBefore), t.s), jb ? this.diff(t.lane, jb.at, t.s) : 0);
               if (!forced && t.lane.ring && onLane.reduce((a, w) => a + w.len + S0, 0) > 0.75 * t.lane.len) yields.push({ at: hold(z), why: `merge ${t.lane.key}: ring nearly full` });
               for (const w of onLane) {
                 // (one holding back to let it in)
