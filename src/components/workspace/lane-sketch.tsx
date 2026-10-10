@@ -261,6 +261,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (the plan's editor takes the keys: on opening the page, and when the sketch window over it closes)
   const [sketchOpen] = useDeepSubject(ui, "sketch");
   useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
+  // (and after the header's Plan / 3D switch: the keys (Esc, the shortcuts) go to the editor, not the switch)
+  useEffect(() => { if (page && document.activeElement?.closest('[role="group"][aria-label="View"], [role="radiogroup"][aria-label="View"]')) panel.current?.focus({ preventScroll: true }); }, [page, in3d, panel]);
   // the background (V2 plans): how the imagery shows, the image, a scale being set by two clicks
   // (how the imagery shows: in the V2 UI store, kept in the browser)
   const [sat, setSat] = useUiPath<SatOptions>("background");
