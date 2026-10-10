@@ -15,12 +15,12 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T115 | History from file: refused items hidden behind "nothing to save"; the dialog compares against a stale current version after a save in the same page | Alex | 2026-10-10 | from T100 |
 | T113 | V2: the tab's renderer grew 5.4 → 7.9 GB in minutes at 30× with a test car followed (Bistrița copy): find and fix the growth | Tatiana (Bob if in the sim) | 2026-10-10 | after T112 |
 | T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test); 3D tilt by drag not reachable in Ramona's script | Tatiana | 2026-10-10 | from T97, T98 |
 | T111 | Agents City: a plain question at the end of a turn counts as asking the user (session data), so that agent waves too; permission prompts wave too (the user, via Alex), with their own bubble | Alex (data), Tom (wave) | 2026-10-10 | data: admin 8cb65d8 (CommsNode.asking); the wave is Tom's |
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
-| T100 | Re-test of T88 (Apply merges field by field) in the browser | Ramona | 2026-10-10 | after T97, T98 |
 | T95 | Agents City Table: commits as books on a bookshelf left of the whiteboard; Alice's avatar walks over and shelves each; the coffee mug removed if it costs frames | Tom | 2026-10-10 | after T92–T94, T96 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Plan fix (r1560, J574) approved by the user in Alice's session 2026-10-10, with four more drawn-over spots; Bob extends the patch, then the user applies it through History. Notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
@@ -39,6 +39,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T100 | Re-test of T88 (preview only; the save clicks are refused by Ramona's permission check): the merge is right in all 5 cases; refused items hidden and a stale current version (→ T115) | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t100 |
 | T114 | Agents City Table: browsers shown by their label only (host, CPU) at the owner's seat, no screen | Tom | 2026-10-10 | admin: 609bdfe |
 | T108 | Agents City: a touched file's building lifts (edits 1.5 storeys, reads 1), with a ground shadow, bolts ending on the lifted roof, then settles; City and Table share lib/lift.ts | Alex, Tom | 2026-10-10 | admin: 3a899b3, 52f78d7 |
 | T94 | Agents City Table: the City's lightning from each laptop to its newest touched files (shared BoltPool), replacing the glowing threads; claim threads kept | Tom | 2026-10-10 | admin: 52f78d7 |
