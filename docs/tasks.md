@@ -17,7 +17,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T113 | V2: the tab's renderer grew 5.4 → 7.9 GB in minutes at 30× with a test car followed (Bistrița copy): find and fix the growth | Tatiana (Bob if in the sim) | 2026-10-10 | after T112 |
 | T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test); 3D tilt by drag not reachable in Ramona's script | Tatiana | 2026-10-10 | from T97, T98 |
-| T111 | Agents City: a plain question at the end of a turn counts as asking the user (session data), so that agent waves too | Alex (data), Tom (wave) | 2026-10-10 | data: admin 8cb65d8 (CommsNode.asking); the wave is Tom's |
+| T111 | Agents City: a plain question at the end of a turn counts as asking the user (session data), so that agent waves too; permission prompts wave too (the user, via Alex), with their own bubble | Alex (data), Tom (wave) | 2026-10-10 | data: admin 8cb65d8 (CommsNode.asking); the wave is Tom's |
 | T108 | Agents City (City and Table): an accessed file's building lifts into the air while the touch lingers, then settles; edits higher than reads | Alex (City, the shared curve), Tom (Table) | 2026-10-10 | City and lib/lift.ts: admin 3a899b3; Table after T96 |
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
