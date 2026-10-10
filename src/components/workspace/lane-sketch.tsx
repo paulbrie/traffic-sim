@@ -51,6 +51,7 @@ import { underlayImg$ } from "@/state/underlay-image";
 import { stampRoundabout } from "@/lib/roundabout";
 import { tidySketch, type TidyReport } from "@/lib/sketch-tidy";
 import { mergeLanes, mergeRoads, type MergeResult } from "@/lib/sketch-merge";
+import { translucentArea } from "@/render/area-fill";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
@@ -2528,6 +2529,8 @@ interface PaintState {
   labels?: NameLabel[];
 }
 
+/** a junction being drawn or edited: shaded in the selection's colour, the lanes under it showing through */
+const EDITED_AREA = { fill: 0.22 };
 /** a car's turn signal: its colour and how long it is lit, then dark (ms; V1's) */
 export const BLINK = "#ffab1a", BLINK_MS = 380;
 /** a connector being drawn: yellow, over a dark edge (only while it is drawn: placed, it looks as the others) */
@@ -3106,10 +3109,12 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       else { square(p); if (picked) { ctx.fillStyle = col.sel; ctx.fillRect(p.x - 3.5 * px, p.y - 3.5 * px, 7 * px, 7 * px); } }
     });
   }
-  // a junction's corners: squares, rounded ones as circles (with the corners it rounds off dotted)
+  // a junction's corners: squares, rounded ones as circles (with the corners it rounds off dotted); while it is edited, what it
+  // takes in shaded over the imagery and lanes (they still show through)
   for (const id of s.junctions) {
     const j = sk.junctions.find(x => x.id === id);
     if (!j) continue;
+    translucentArea(ctx, outlinePath(j), col.sel, px, EDITED_AREA);
     if (j.curved?.some(Boolean)) curveGuide(j.outline, true);
     j.outline.forEach((p, i) => {
       if (!j.curved?.[i]) { square(p); return; }
@@ -3150,8 +3155,9 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     path(cur ? [...d.pts, cur.p] : d.pts);
     ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.lineJoin = "round"; ctx.stroke(); ctx.globalAlpha = 1;
   } else if (d?.kind === "junction") {
-    path(cur ? [...d.pts, cur.p] : d.pts); ctx.closePath();
-    ctx.fillStyle = col.jFill; ctx.fill(); ctx.setLineDash([]); ctx.stroke();
+    const pts = cur ? [...d.pts, cur.p] : d.pts;
+    translucentArea(ctx, pts, col.sel, px, EDITED_AREA);
+    path(pts); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.setLineDash([]); ctx.stroke();
     d.pts.forEach(square);
     if (cur && d.pts.length >= 3 && dist(cur.p, d.pts[0]) <= 10 * px) { ctx.beginPath(); ctx.arc(d.pts[0].x, d.pts[0].y, 7 * px, 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.stroke(); }
   } else if (d?.kind === "crossing") {
