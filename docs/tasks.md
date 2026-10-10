@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T114 | Agents City Table: no browser screen on the table, only the label (host, CPU) at the owner's seat | Tom | 2026-10-10 | first |
 | T113 | V2: the tab's renderer grew 5.4 → 7.9 GB in minutes at 30× with a test car followed (Bistrița copy): find and fix the growth | Tatiana (Bob if in the sim) | 2026-10-10 | after T112 |
 | T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test); 3D tilt by drag not reachable in Ramona's script | Tatiana | 2026-10-10 | from T97, T98 |
 | T111 | Agents City: a plain question at the end of a turn counts as asking the user (session data), so that agent waves too; permission prompts wave too (the user, via Alex), with their own bubble | Alex (data), Tom (wave) | 2026-10-10 | data: admin 8cb65d8 (CommsNode.asking); the wave is Tom's |
