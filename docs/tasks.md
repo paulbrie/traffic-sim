@@ -17,7 +17,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T122 | Agents City replay timeline: taller task lanes, labels inside the bars, overlapping tasks in sub-rows | Alex | 2026-10-10 | after T120 |
 | T121 | Agents City: sessions from before the reboot show as nameless "pid NNNNN" agents; recover their names and merge them (T78) | Alex | 2026-10-10 | after T120 |
-| T120 | Admin task board: DONE lines with "+ Tnn", "(part)" or split owners leave tasks in To do | Alex | 2026-10-10 | the user saw 6 in To do |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Plan fix applied: Bistrița rev 92 (2026-10-10 13:27, by Bob on the user's go, through the app's restoreFromFile): five drawn-over places (r1560, J574, J577, Strada Tărpiului, l879/l2954, l2476/l2513); seeds 1–8 deadlocks 71 → 102 (76 of them one j671 ping-pong), collisions 17 → 34, out +1%; rev 91 backed up. Step 3 on rev 92: j671, j746/l3241/j169/j21, the collisions, the patient rule. Notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
@@ -35,6 +34,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T120 | Task parser: ids with a bracketed note or a dash, tasks split between owners (one part each), re-sent TASKs don't reopen done work, the manager's COMMIT/PUSHED closes a blocked part; Kanban and whiteboard checked identical per window | Alex | 2026-10-10 | admin: 2c742c1 |
 | T119 | Replay cap in the browser (Bistrița copy, 10×, test car followed, 5 min): renderer 1,012 → 1,584 MB, flat from 1 min (T113 after: 2,051 and rising); replay held at 320 MB; answers in < 0.6 s | Tatiana | 2026-10-10 | /home/genie/tatiana-scratch/t119-*.txt |
 | T118 | Re-test of T112 and T113: the trip kept while running (panel and bridge), the 3D hint, Bistrița read-only at 10× for 5 min (JS heap 70–170 MB): pass; a followed test car on real traffic not covered (her Restore is refused; Tatiana's T119 covers it) | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t118 |
 | T117 | Sim replay capped at 320 MB (oldest frames first; the bar shows "last m:ss" when capped); same-seed runs unchanged; Bistrița 900 s: replay 375 → 320 MB | Bob | 2026-10-10 | a96d0d4 |
