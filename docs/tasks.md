@@ -15,7 +15,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T114 | Agents City Table: no browser screen on the table, only the label (host, CPU) at the owner's seat | Tom | 2026-10-10 | first |
 | T113 | V2: the tab's renderer grew 5.4 → 7.9 GB in minutes at 30× with a test car followed (Bistrița copy): find and fix the growth | Tatiana (Bob if in the sim) | 2026-10-10 | after T112 |
 | T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test); 3D tilt by drag not reachable in Ramona's script | Tatiana | 2026-10-10 | from T97, T98 |
 | T111 | Agents City: a plain question at the end of a turn counts as asking the user (session data), so that agent waves too; permission prompts wave too (the user, via Alex), with their own bubble | Alex (data), Tom (wave) | 2026-10-10 | data: admin 8cb65d8 (CommsNode.asking); the wave is Tom's |
@@ -40,6 +39,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T114 | Agents City Table: browsers shown by their label only (host, CPU) at the owner's seat, no screen | Tom | 2026-10-10 | admin: 609bdfe |
 | T108 | Agents City: a touched file's building lifts (edits 1.5 storeys, reads 1), with a ground shadow, bolts ending on the lifted roof, then settles; City and Table share lib/lift.ts | Alex, Tom | 2026-10-10 | admin: 3a899b3, 52f78d7 |
 | T94 | Agents City Table: the City's lightning from each laptop to its newest touched files (shared BoltPool), replacing the glowing threads; claim threads kept | Tom | 2026-10-10 | admin: 52f78d7 |
 | T109 | Admin: local-only content carried to origin (eu-funding workflow and agents, AGENTS-IMPROVEMENTS.md, TASKS.md), nginx/projects.conf untracked; /opt/project moved to origin/main, clean; backups: branch backup/local-main-2026-10-10, stash@{0}, /home/genie/alex-scratch/t109 | Alex, Alice | 2026-10-10 | admin: 5e606f7; ready for the user's deploy |
