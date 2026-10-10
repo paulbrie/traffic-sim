@@ -15,7 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T108 | Agents City (City and Table): an accessed file's building lifts into the air while the touch lingers, then settles; edits higher than reads | Alex (City, the shared curve), Tom (Table) | 2026-10-10 | after T103; Table after T96 |
+| T108 | Agents City (City and Table): an accessed file's building lifts into the air while the touch lingers, then settles; edits higher than reads | Alex (City, the shared curve), Tom (Table) | 2026-10-10 | City and lib/lift.ts: admin 3a899b3; Table after T96 |
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
 | T100 | Re-test of T88 (Apply merges field by field) in the browser | Ramona | 2026-10-10 | after T97, T98 |
