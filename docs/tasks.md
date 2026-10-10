@@ -17,7 +17,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T154 | V2 junctions: edit the shape: drag, add and remove corners, curve them (Automatic surfaces too, turning Drawn), visible handles and menu | Tatiana | 2026-10-10 | after T153 |
 | T153 | V2: a selected car's itinerary to its end, as in V1 (2D, 3D, panel list), live, updated on reroute | Tatiana (Bob for the sim) | 2026-10-10 | |
-| T152 | Agent patches can add a piece to the plan's Sketch window (beside the current content, never replacing it; main plan untouched) | Alex | 2026-10-10 | for Bob's J696 version 1 (T148), the user's choice |
 | T149 | V2: align selected lanes as in a design tool (left, centre, right, top, middle, bottom) against the first-selected lane; roads move as a unit | Tom | 2026-10-10 | after T147 |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | the user's aerial photo; read-only |
 | T143 | Research: the best ways to show an agent swarm at work in 2D or very light graphics (prior art, low-power techniques, 3 concepts with mocks and CPU estimates, a recommendation, a quick win) | Alex | 2026-10-10 | the 3D view spins up the user's M5 fan |
@@ -39,6 +38,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T152 | Agent patches can add a piece to the plan's Sketch window (`sketchWindowAdd`): ids remapped as Add does, placed beside the content, main plan byte-identical or refused; a Sketch-window section with a thumbnail in the review | Alex | 2026-10-10 | 716fb25 |
 | T147 | V2 junctions: "Fill holes" (per junction, off by default; Tidy offers it for all): gaps under 4 m between bands paved, only adding paving; 2D and 3D | Tom | 2026-10-10 | 84defd4; Ramona: /home/genie/ramona-scratch/t147 |
 | T151 | V2: "Delete this lane" (menu, Lane panel, the Road panel's new lane list; side-by-side re-packed, last lane takes the road) and "Take out of the road" (kept, with the road's speed); every delete now cleans dangling journeys and turning shares | Tatiana | 2026-10-10 | 4987e2f |
 | T150 | V2 header (and the Sketch window): a page memory gauge after the fps counter, every 3 s, amber > 1 GB, red > 2 GB with "save and reload"; hidden in Safari and Firefox | Tatiana | 2026-10-10 | bfe0d5f |
