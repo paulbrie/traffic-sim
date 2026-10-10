@@ -19,7 +19,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
 | T105 | Agents City Table: an agent asking the user a question looks at the camera and waves (about 1.5 s, every 6–8 s while waiting) | Tom | 2026-10-10 | after T102 |
-| T103 | Agents City (City and Table): Escape resets the camera to its default (after closing whatever is open) | Alex (Tom for the Table's default) | 2026-10-10 | after T102 |
+| T103 | Agents City (City and Table): Escape resets the camera to its default (after closing whatever is open) | Alex (Tom for the Table's default) | 2026-10-10 | City: admin c004240; the Table side goes with T102 |
 | T102 | Agents City Table: who is using a browser (each open agent-browser session at its owner's seat, with its CPU; unowned ones marked) | Alex (data), Tom (display) | 2026-10-10 | data: admin 91fc749 (/api/agents3d/browsers); display after T92 |
 | T100 | Re-test of T88 (Apply merges field by field) in the browser | Ramona | 2026-10-10 | after T97, T98 |
 | T98 | The gaps left in T73: a real bridge (Level 1 over other lanes) and the 3D screenshot | Ramona | 2026-10-10 | |
