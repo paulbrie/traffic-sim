@@ -17,7 +17,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T149 | V2: align selected lanes as in a design tool (left, centre, right, top, middle, bottom) against the first-selected lane; roads move as a unit | Tom | 2026-10-10 | after T147 |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | the user's aerial photo; read-only |
-| T147 | V2 junction surface: a "Fill holes" option so the inside of an intersection is all road surface (no slivers or holes between connectors; real islands kept) | Tom (Tatiana for the editor) | 2026-10-10 | the user's screenshot of J696 |
 | T143 | Research: the best ways to show an agent swarm at work in 2D or very light graphics (prior art, low-power techniques, 3 concepts with mocks and CPU estimates, a recommendation, a quick win) | Alex | 2026-10-10 | the 3D view spins up the user's M5 fan |
 | T134 | Bistrița: 172 dead-end U-turn stubs on rev 92: corrected to 167 (5 false positives): A1 after a closer check = j696 (a missing roundabout, Petru Maior × Sigmirului) and j405 (a hairpin closing at j404), two patches; j633, j341 are real dead ends; j100, j728 correct as drawn; B 4; C 15; D 143 kept as turning circles; tracks not modelled (the user's choices), B 4 at the edge (ways in/out, one patch), C 15 unused (delete, one patch), D 82 real dead ends (keep; drawn as turning circles, T139): the user's choices | Bob | 2026-10-10 | list: /home/genie/bob-scratch/trafficsim/t134/T134-list.md |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
@@ -37,6 +36,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T147 | V2 junctions: "Fill holes" (per junction, off by default; Tidy offers it for all): gaps under 4 m between bands paved, only adding paving; 2D and 3D | Tom | 2026-10-10 | 84defd4; Ramona: /home/genie/ramona-scratch/t147 |
 | T151 | V2: "Delete this lane" (menu, Lane panel, the Road panel's new lane list; side-by-side re-packed, last lane takes the road) and "Take out of the road" (kept, with the road's speed); every delete now cleans dangling journeys and turning shares | Tatiana | 2026-10-10 | 4987e2f |
 | T150 | V2 header (and the Sketch window): a page memory gauge after the fps counter, every 3 s, amber > 1 GB, red > 2 GB with "save and reload"; hidden in Safari and Firefox | Tatiana | 2026-10-10 | bfe0d5f |
 | T146 | V2: memory grew ~3 MB per edit on Bistrița (16 whole-sketch WeakMap caches kept alive by the 200-step undo history); now a last-6 cache: 150 edits, tab 498 → 1,431 MB rising before, ~1 GB level after; autosave loses at most 9 edits or 2 min | Tatiana | 2026-10-10 | 3108a37 |
