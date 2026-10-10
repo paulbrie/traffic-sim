@@ -19,7 +19,7 @@ import { SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from
 import { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
 
 /** the drawing tools */
-export type Tool = "select" | "lane" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing";
+export type Tool = "select" | "lane" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing" | "zone";
 /** what is selected: lanes, connectors and junctions (a road: its lanes, with its id), or a link, or a zebra crossing */
 export type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null };
 export const NO_SEL: Sel = { lanes: [], connectors: [], junctions: [], road: null };
@@ -106,7 +106,7 @@ const editor = (tool: Tool): EditorUi => ({
 export const freshEditor = (): EditorUi => editor("select");
 
 /** the inspector's panels (their ids): the only ones that can be folded away */
-export const PANEL_IDS = ["selection", "car", "crossing", "test-in-sketch", "background", "traffic", "fuel", "junction-results", "road-results", "demand", "route"];
+export const PANEL_IDS = ["selection", "car", "crossing", "zone", "test-in-sketch", "background", "traffic", "fuel", "junction-results", "road-results", "demand", "route"];
 // (kept in the browser: the panels folded away, Test in Sketch's options)
 const PANELS_KEY = "trafficsim:v2-closed-panels", TEST_KEY = "laneSketch:testInSketch", DISPLAY_KEY = "v2:display";
 const stored = <T,>(key: string, fallback: T): T => {

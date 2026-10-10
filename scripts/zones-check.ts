@@ -17,6 +17,7 @@ import {
   zoneArea,
   zoneLabelPoint,
 } from "../src/lib/sketch-zones";
+import { zoneEditAt } from "../src/components/v2/zone-tools";
 
 let ok = true;
 const check = (name: string, pass: boolean, detail = "") => {
@@ -93,5 +94,17 @@ check("paste: a fresh id, '… copy', moved", pasted.ids[0] === "z2" && pz.name 
 const again = pasteZones(pasted.sketch, [pz], 5, 5);
 check("a copy of a copy is '… copy' still", again.sketch.zones!.find(z => z.id === again.ids[0])!.name === "Park copy");
 check("the original untouched", base.zones![0].outline[0].x === 0);
+
+// A double-click on a selected zone (the editor's handler: zoneEditAt).
+const zsq = { id: "z9", name: "Q", outline: square, color: "#3b82f6" };
+const rm = zoneEditAt(zsq, { x: 100.5, y: 99.4 }, 1);
+check("double-click on a corner: that corner out", rm?.kind === "remove" && rm.i === 2, JSON.stringify(rm));
+const add = zoneEditAt(zsq, { x: 50, y: 100.8 }, 1);
+check("double-click just off an edge: a corner in, after the edge's start", add?.kind === "insert" && add.i === 3, JSON.stringify(add));
+check("…and in after the last corner on the closing edge", zoneEditAt(zsq, { x: -0.5, y: 50 }, 1)?.i === 4);
+check("double-click inside, away from the border: nothing", zoneEditAt(zsq, { x: 50, y: 50 }, 1) === null);
+check("a triangle's corner stays (three at least)", zoneEditAt({ ...zsq, outline: square.slice(0, 3) }, { x: 0, y: 0 }, 1) === null);
+const grown = insertZoneCorner(zsq, add!.i, { x: 50, y: 100 });
+check("the corner goes where it was clicked, between the edge's ends", grown.outline[3].x === 50 && grown.outline[2].x === 100 && grown.outline[4].x === 0);
 
 process.exit(ok ? 0 : 1);

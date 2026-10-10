@@ -452,6 +452,8 @@ export function transformPiece(sk: Sketch, piece: Piece, t: Transform): Sketch {
     lanes: sk.lanes.map(l => (lanes.has(l.id) ? { ...l, shape: t.shape(l.shape) } : l)),
     connectors: sk.connectors.map(c => (c.via?.length && (conns.has(c.id) || (lanes.has(c.from.lane) && lanes.has(c.to.lane))) ? { ...c, via: c.via.map(t.pt) } : c)),
     junctions: sk.junctions.map(j => (js.has(j.id) ? { ...j, outline: j.outline.map(t.pt) } : j)),
+    // (its zones, when it has some: moved and turned as the rest)
+    ...(piece.zones?.length && sk.zones ? { zones: sk.zones.map(z => (piece.zones!.includes(z.id) ? { ...z, outline: z.outline.map(t.pt) } : z)) } : {}),
   };
 }
 

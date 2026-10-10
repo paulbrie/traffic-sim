@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Car, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +37,9 @@ import { RoadResults } from "@/components/v2/road-results";
 import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
+import { ZonePanel } from "@/components/v2/zone-panel";
+import { paintZoneDraft, paintZones, zoneAt, zoneEditAt } from "@/components/v2/zone-tools";
+import { addZone, deleteZone, formatArea, insertZoneCorner, moveZoneCorner, nextZoneColor, removeZoneCorner, zoneArea, zoneLabelPoint } from "@/lib/sketch-zones";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
 import { describeHover, SketchHoverCard, type HoverHit } from "@/components/v2/sketch-hover-card";
@@ -67,19 +70,20 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
   { id: "slice", key: "K", label: "Slice", icon: <Scissors />, hint: "Click a road to cut it across there into two roads (Shift: keep them linked, so the road carries on; Alt: only the lane under the pointer) · its connectors stay with the piece they are on" },
   { id: "crossing", key: "X", label: "Zebra crossing", icon: <Footprints />, hint: "Click one kerb, then the other: the zebra runs between them (4 m wide, 300 pedestrians an hour; set them in its panel) · Esc cancels" },
   { id: "junction", key: "J", label: "Junction", icon: <Pentagon />, hint: "Click the junction's corners; click the first again (or Enter, or double-click) to close it. The lanes in no road and the connectors on it are its own" },
+  { id: "zone", key: "Z", label: "Zone", icon: <LandPlot />, hint: "Click the zone's corners; click the first again (or Enter, or double-click) to close it · Backspace takes the last corner back · Esc cancels. A labelled area (a neighbourhood, a zone) for reading the plan: the cars don't see it" },
 ];
 const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
 
 interface View { cx: number; cy: number; /** px per metre */ scale: number }
-type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string };
+type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { zone: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[] };
 /** a road's or a junction's name as drawn on the map: what it names, and its pill (px on the canvas) */
-type NameLabel = { kind: "road" | "junction" | "in" | "out"; id: string; /** a way in's or out's lanes */ lanes?: string[]; x0: number; y0: number; x1: number; y1: number };
+type NameLabel = { kind: "road" | "junction" | "in" | "out" | "zone"; id: string; /** a way in's or out's lanes */ lanes?: string[]; x0: number; y0: number; x1: number; y1: number };
 /** a way in's traffic, or a way out's share of the trips, being edited on its label: its lanes, where (px), the value it had */
 type WayEdit = { kind: "in" | "out"; lanes: string[]; x: number; y: number; value: number };
 /** a point to drag: a lane's, a connector's bend or end (moved along its lane or onto another), a junction's corner */
-type Handle = { kind: "lane" | "bend" | "corner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" };
+type Handle = { kind: "lane" | "bend" | "corner" | "zcorner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" };
 
 type Draft =
   | { kind: "lane"; pts: Pt[] }
@@ -88,6 +92,7 @@ type Draft =
   | { kind: "roundabout"; c: Pt }
   | { kind: "connector"; from: LaneAt; via: Pt[] }
   | { kind: "junction"; pts: Pt[] }
+  | { kind: "zone"; pts: Pt[] }
   | { kind: "crossing"; a: Pt };
 type Drag =
   | { kind: "pan"; x0: number; y0: number; v0: View; /** with the right button: a click without moving opens the menu */ right?: boolean }
@@ -103,7 +108,7 @@ const isEmpty = (p: Piece) => !p.lanes.length && !p.connectors.length && !p.junc
  * What turns of a selection: its lanes and junctions. Connectors don't turn by themselves (their ends are on
  * their lanes); the bends of those between two lanes that turn go with them.
  */
-const turning = (p: Piece): Piece => ({ lanes: p.lanes, connectors: [], junctions: p.junctions });
+const turning = (p: Piece): Piece => ({ lanes: p.lanes, connectors: [], junctions: p.junctions, ...(p.zones?.length ? { zones: p.zones } : {}) });
 /** the box round what turns of the selection, its centre and the handle to turn it by (over the box, 28 px up) */
 function rotateHandle(sk: Sketch, piece: Piece, scale: number) {
   const b = boundsOfPts(piecePoints(sk, turning(piece)));
@@ -132,6 +137,8 @@ function prune(sel: Sel, sk: Sketch): Sel {
   const ids = new Set(sk.lanes.map(l => l.id)), cids = new Set(sk.connectors.map(c => c.id)), jids = new Set(sk.junctions.map(j => j.id));
   const linkOk = !sel.link || !!sk.links?.some(k => k.id === sel.link), crossingOk = !sel.crossing || !!sk.crossings?.some(x => x.id === sel.crossing);
   if (!crossingOk) return { ...sel, crossing: null };
+  // (a zone deleted, or undone away: let go)
+  if (sel.zones?.some(id => !sk.zones?.some(z => z.id === id))) return { ...sel, zones: sel.zones.filter(id => sk.zones?.some(z => z.id === id)) };
   if (linkOk && sel.lanes.every(l => ids.has(l)) && sel.connectors.every(c => cids.has(c)) && sel.junctions.every(j => jids.has(j)) && (!sel.road || sk.roads.some(r => r.id === sel.road))) return sel;
   return { lanes: sel.lanes.filter(l => ids.has(l)), connectors: sel.connectors.filter(c => cids.has(c)), junctions: sel.junctions.filter(j => jids.has(j)), road: sk.roads.some(r => r.id === sel.road) ? sel.road : null, link: linkOk ? sel.link : null };
 }
@@ -146,6 +153,8 @@ function exportSketch(sk: Sketch, contents: Map<string, JunctionContents>) {
     connectors: sk.connectors.map(c => ({ ...c, junction: junctionOf("connectors", c.id) })),
     roads: sk.roads,
     junctions: sk.junctions.map(j => ({ ...j, ...contents.get(j.id) })),
+    // (the zones, with their area: a file to restore from keeps them)
+    ...(sk.zones?.length ? { zones: sk.zones.map(z => ({ ...z, area: Math.round(zoneArea(z.outline)) })) } : {}),
   };
 }
 
@@ -290,7 +299,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     return null;
   };
   /** what a name shows lit while the pointer is on it: its junction, or its road's lanes */
-  const labelHover = (b: NameLabel): Hover => (b.kind === "junction" ? { junction: b.id } : b.lanes ? { lanes: b.lanes } : { lanes: live.current.sketch.roads.find(r => r.id === b.id)?.lanes ?? [] });
+  const labelHover = (b: NameLabel): Hover => (b.kind === "junction" ? { junction: b.id } : b.kind === "zone" ? { zone: b.id } : b.lanes ? { lanes: b.lanes } : { lanes: live.current.sketch.roads.find(r => r.id === b.id)?.lanes ?? [] });
   // (a way in's or out's label clicked: its number edited right there)
   const [wayEdit, setWayEdit] = useState<WayEdit | null>(null);
   const saveWay = (w: WayEdit, v: number) => {
@@ -332,7 +341,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     };
     const jn = sketchIndex(sk).near(p, 1).junctions;
     const js = sk.junctions.filter(j => jn.has(j.id) && inJ(j)).sort((a, b) => polygonArea(a.outline) - polygonArea(b.outline));
-    return js.length ? { junction: js[0].id } : null;
+    if (js.length) return { junction: js[0].id };
+    // (a zone: under everything, the smallest holding the pointer; not while hidden. A selected one's border
+    // counts a little outside too (6 px), so a double-click just off it still adds a corner there)
+    if (!live.current.layers.zones) return null;
+    const mine = live.current.sel.zones ?? [];
+    const z = zoneAt(sk.zones, p) ?? (sk.zones ?? []).find(x => mine.includes(x.id) && nearestOn({ kind: "line", pts: [...x.outline, x.outline[0]] }, p).d <= 6 * px) ?? null;
+    return z ? { zone: z.id } : null;
   };
   /** a place on the lane under `p` (connectors over it don't hide it), snapped to the lane's ends within 12 px */
   const placeOn = (p: Pt): LaneAt | null => {
@@ -348,7 +363,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the selection's point under `p` */
   const handleAt = (p: Pt): Handle | null => {
     const sk = live.current.sketch, s = live.current.sel, tol = 7 / view.current.scale;
-    const find = (kind: "lane" | "bend" | "corner", id: string, pts: Pt[] | undefined) => { const i = pts?.findIndex(q => dist(p, q) <= tol) ?? -1; return i >= 0 ? { kind, id, i } : null; };
+    const find = (kind: "lane" | "bend" | "corner" | "zcorner", id: string, pts: Pt[] | undefined) => { const i = pts?.findIndex(q => dist(p, q) <= tol) ?? -1; return i >= 0 ? { kind, id, i } : null; };
     for (const id of s.connectors) {
       const c = sk.connectors.find(x => x.id === id);
       if (!c) continue;
@@ -359,6 +374,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     // (a lane following a lead in a side-by-side road is shaped by its lead)
     for (const id of s.lanes) { const l = laneById(sk, id); const h = l?.shape.kind === "line" && !leadOf(sk, id) ? find("lane", id, l.shape.pts) : null; if (h) return h; }
     for (const id of s.junctions) { const h = find("corner", id, sk.junctions.find(j => j.id === id)?.outline); if (h) return h; }
+    for (const id of s.zones ?? []) { const h = find("zcorner", id, sk.zones?.find(z => z.id === id)?.outline); if (h) return h; }
     return null;
   };
 
@@ -654,6 +670,18 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     redraw();
   };
+  const finishZone = () => {
+    const d = draft.current;
+    if (d?.kind !== "zone") return;
+    const pts = d.pts.filter((q, i) => i === 0 || dist(q, d.pts[i - 1]) > 0.05);
+    draft.current = null;
+    if (pts.length >= 3) {
+      let made = "";
+      editSketch(k => { const [next, z] = addZone(k, pts); made = z.id; return next; });
+      if (made) { setSel({ ...NO_SEL, zones: [made] }); changeTool("select"); }
+    }
+    redraw();
+  };
   const addShape = (shape: LaneShape) => {
     const id = nextId("l", live.current.sketch.lanes.map(l => l.id));
     editSketch(s => addLane(s, { id, shape, width: LANE_WIDTH }));
@@ -663,8 +691,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const s = live.current.sel;
     if (s.link) { const id = s.link; editSketch(sk => unlink(sk, id)); setSel(NO_SEL); return; }
     if (s.crossing) { const id = s.crossing; editSketch(sk => deleteCrossing(sk, id)); setSel(NO_SEL); return; }
-    if (isEmpty(s)) return;
-    editSketch(sk => remove(sk, s));
+    // (zones with it or on their own: one undo step for it all)
+    const zones = s.zones ?? [];
+    if (isEmpty(s) && !zones.length) return;
+    const dropZones = (sk: Sketch) => zones.reduce((k, id) => deleteZone(k, id), sk);
+    editSketch(sk => (isEmpty(s) ? dropZones(sk) : remove(dropZones(sk), s)));
     setSel(NO_SEL);
   };
   const groupSel = () => {
@@ -699,7 +730,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
   const copySel = () => {
     const sk = live.current.sketch, s0 = live.current.sel;
-    if (!s0.lanes.length && !s0.junctions.length) return false;
+    if (!s0.lanes.length && !s0.junctions.length && !s0.zones?.length) return false;
     // (a junction comes with what is on it and the whole lanes its connectors join, so it pastes working)
     const lanes = new Set(s0.lanes);
     for (const id of s0.junctions) {
@@ -737,7 +768,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the selection copied a little off (leaves what was copied alone) */
   const duplicate = () => {
     const sk = live.current.sketch, s = live.current.sel;
-    if (s.lanes.length || s.junctions.length) place(copyPart(sk, s), 4, 4);
+    if (s.lanes.length || s.junctions.length || s.zones?.length) place(copyPart(sk, s), 4, 4);
   };
   const fit = () => { const sk = live.current.sketch; zoomTo({ lanes: sk.lanes.map(l => l.id), connectors: [], junctions: sk.junctions.map(j => j.id) }); };
   /** zoomed in (f > 1) or out about the middle of the view, within the wheel's limits */
@@ -793,6 +824,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       case "junction": setSel(junctionSel(sk, [to.id])); centerOn(piece({ junctions: [to.id] })); break;
       case "link": { const k = sk.links?.find(x => x.id === to.id); if (k) { setSel({ ...NO_SEL, link: k.id }); centerOn(piece({ connectors: k.conns })); } break; }
       case "crossing": { const x = sk.crossings?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, crossing: x.id }); centerOnPts([x.a, x.b]); } break; }
+      case "zone": { const z = sk.zones?.find(y => y.id === to.id); if (z) { setSel({ ...NO_SEL, zones: [z.id] }); centerOnPts(z.outline); } break; }
     }
     redraw();
   };
@@ -826,6 +858,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       editSketch(k => ({ ...k, junctions: k.junctions.map(j => (j.id === h.id ? removeCorner(j, h.i) : j)) }));
       return true;
     }
+    if (h?.kind === "zcorner") {
+      editSketch(k => ({ ...k, zones: (k.zones ?? []).map(z => (z.id === h.id ? removeZoneCorner(z, h.i) : z)) }));
+      return true;
+    }
     const hit = pick(p), q = snap(p).p;
     // (on a selected line lane: a point added there)
     if (hit && "lane" in hit && s.lanes.includes(hit.lane) && !leadOf(sk, hit.lane)) {
@@ -851,6 +887,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       editSketch(k => ({ ...k, junctions: k.junctions.map(x => (x.id === id ? insertCorner(x, i, q) : x)) }));
       return true;
     }
+    // (on a selected zone's border: a corner put in there; see zoneEditAt)
+    for (const id of s.zones ?? []) {
+      const z = sk.zones?.find(x => x.id === id), act = z ? zoneEditAt(z, p, 6 / view.current.scale) : null;
+      if (act?.kind !== "insert") continue;
+      editSketch(k => ({ ...k, zones: (k.zones ?? []).map(x => (x.id === id ? insertZoneCorner(x, act.i, q) : x)) }));
+      return true;
+    }
     return false;
   };
 
@@ -866,7 +909,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
 
   /** an agent's select/goTo: { kind, id }, checked (a car's id a number, the others' a string) */
   const target = (a: Record<string, unknown>): SearchTarget => {
-    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "car"];
+    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "zone", "car"];
     if (!kinds.includes(kind)) throw new Error(`kind: one of ${kinds.join(", ")}`);
     const sk = live.current.sketch;
     if (kind === "car") {
@@ -876,7 +919,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     const id = argOf(a, "id", "string", true)!;
     const there = kind === "road" ? sk.roads.some(x => x.id === id) : kind === "lane" ? sk.lanes.some(x => x.id === id) : kind === "connector" ? sk.connectors.some(x => x.id === id)
-      : kind === "junction" ? sk.junctions.some(x => x.id === id) : kind === "link" ? (sk.links ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
+      : kind === "junction" ? sk.junctions.some(x => x.id === id) : kind === "link" ? (sk.links ?? []).some(x => x.id === id)
+      : kind === "zone" ? (sk.zones ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
     if (!there) throw new Error(`no ${kind} ${id}`);
     return { kind: kind as Exclude<SearchTarget["kind"], "car">, id };
   };
@@ -1004,7 +1048,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         const rt = live.current.replayT, car = lab ? null : (rt !== null ? sim.current?.replayCarAt(rt, raw, 4 / view.current.scale) : sim.current?.carAt(raw, 4 / view.current.scale)) ?? null;
         if (car !== null && !e.shiftKey) { setSelCar(car); setSel(NO_SEL); redraw(); return; }
         setSelCar(null);
-        const hit = lab?.kind === "junction" ? { junction: lab.id } : pick(raw);
+        const hit = lab?.kind === "junction" ? { junction: lab.id } : lab?.kind === "zone" ? { zone: lab.id } : pick(raw);
         if (!hit) {
           if (!e.shiftKey) setSel(NO_SEL);
           drag.current = { kind: "box", a: raw, b: raw, add: e.shiftKey };
@@ -1014,6 +1058,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         if ("link" in hit) { setSel({ ...NO_SEL, link: hit.link }); return; }
         // (a zebra crossing: selected on its own, dragged whole)
         if ("crossing" in hit) { setSel({ ...NO_SEL, crossing: hit.crossing }); drag.current = { kind: "crossing", base: sk, id: hit.crossing, part: "move", from: raw }; return; }
+        // (a zone: selected on its own, dragged whole)
+        if ("zone" in hit) {
+          const zs = s.zones?.includes(hit.zone) ? s : { ...NO_SEL, zones: [hit.zone] };
+          if (zs !== s) setSel(zs);
+          drag.current = { kind: "move", base: sk, from: snap(raw).p, piece: zs };
+          return;
+        }
         const has = "lane" in hit ? s.lanes.includes(hit.lane) : "connector" in hit ? s.connectors.includes(hit.connector) : s.junctions.includes(hit.junction);
         if (e.shiftKey) {
           setSel("lane" in hit ? { ...s, road: null, lanes: toggle(s.lanes, hit.lane) } : "connector" in hit ? { ...s, road: null, connectors: toggle(s.connectors, hit.connector) }
@@ -1063,6 +1114,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         const p = snap(raw).p;
         if (d?.kind !== "junction") { draft.current = { kind: "junction", pts: [p] }; break; }
         if (d.pts.length >= 3 && dist(raw, d.pts[0]) <= 10 / view.current.scale) { finishJunction(); return; }
+        d.pts.push(p);
+        break;
+      }
+      case "zone": {
+        const p = snap(raw).p;
+        if (d?.kind !== "zone") { draft.current = { kind: "zone", pts: [p] }; break; }
+        if (d.pts.length >= 3 && dist(raw, d.pts[0]) <= 10 / view.current.scale) { finishZone(); return; }
         d.pts.push(p);
         break;
       }
@@ -1141,7 +1199,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       setSel(junctionSel(sk, [hit.junction]));
     } else if ("connector" in hit) setSel({ ...NO_SEL, connectors: [hit.connector] });
     else if ("link" in hit) setSel({ ...NO_SEL, link: hit.link });
-    else setSel({ ...NO_SEL, crossing: hit.crossing });
+    else if ("crossing" in hit) setSel({ ...NO_SEL, crossing: hit.crossing });
+    else setSel({ ...NO_SEL, zones: [hit.zone] });
     setSelCar(null);
     return true;
   };
@@ -1157,7 +1216,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       // (a car, live, over what it drives on; else what is there)
       const lab = labelAt(e), lr = lab?.kind === "road" ? live.current.sketch.roads.find(r => r.id === lab.id)?.lanes[0] : null;
       const car = !lab && live.current.replayT === null ? sim.current?.carAt(p, 4 / view.current.scale) ?? null : null;
-      const hit = lab ? (lab.kind === "junction" ? { junction: lab.id } : lr ? { lane: lr } : null) : car !== null ? { car } : (pick(p) as HoverHit | null);
+      const hit = lab ? (lab.kind === "junction" ? { junction: lab.id } : lab.kind === "zone" ? { zone: lab.id } : lr ? { lane: lr } : null) : car !== null ? { car } : (pick(p) as HoverHit | null);
       hoverCarId.current = car;
       if (hit) setHoverCard({ hit, x, y, car: car !== null ? sim.current?.inspect(car) ?? null : null });
     }, 450);
@@ -1186,6 +1245,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       } else if (kind === "bend") {
         const q = { x: Math.round(raw.x * 4) / 4, y: Math.round(raw.y * 4) / 4 };
         dragShow({ ...b, connectors: b.connectors.map(c => (c.id === id ? { ...c, via: c.via!.map((x, k) => (k === i ? q : x)) } : c)) });
+      } else if (kind === "zcorner") {
+        dragShow({ ...b, zones: (b.zones ?? []).map(z => (z.id === id ? moveZoneCorner(z, i, snap(raw).p) : z)) });
       } else {
         dragShow({ ...b, junctions: b.junctions.map(j => (j.id === id ? { ...j, outline: j.outline.map((x, k) => (k === i ? snap(raw).p : x)) } : j)) });
       }
@@ -1253,6 +1314,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const onDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (tool === "lane") { finishLane(); return; }
     if (tool === "junction") { finishJunction(); return; }
+    if (tool === "zone") { finishZone(); return; }
     if (tool !== "select") return;
     const p = toWorld(e);
     if (editPoints(p)) return;
@@ -1325,13 +1387,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       if (e.defaultPrevented) return;
       if (d) draft.current = null;
       // (in 3D, with nothing to let go: the camera back where it arrived)
-      else if (in3d && !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && live.current.selCar === null) api3d.current?.home();
+      else if (in3d && !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.zones?.length && live.current.selCar === null) api3d.current?.home();
       else { setSel(NO_SEL); setSelCar(null); }
       redraw();
       return;
     }
-    if (k === "enter") { finishLane(); finishJunction(); return; }
-    if (k === "backspace" && d && (d.kind === "lane" || d.kind === "junction" || d.kind === "connector")) {
+    if (k === "enter") { finishLane(); finishJunction(); finishZone(); return; }
+    if (k === "backspace" && d && (d.kind === "lane" || d.kind === "junction" || d.kind === "zone" || d.kind === "connector")) {
       e.preventDefault();
       if (d.kind === "connector") { if (!d.via.pop()) draft.current = null; } else { d.pts.pop(); if (!d.pts.length) draft.current = null; }
       redraw();
@@ -1367,6 +1429,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const onKeyUp = (e: React.KeyboardEvent) => { if (e.key === " ") { space.current = false; if (drag.current?.kind !== "pan") setHand(""); } };
 
   const toolInfo = TOOLS.find(t => t.id === tool)!;
+  // (a zone selected on its own: its panel)
+  const zoneSel = sel.zones?.length === 1 && isEmpty(sel) ? sketch.zones?.find(z => z.id === sel.zones![0]) ?? null : null;
   /** the sketch tidied (see sketch-tidy.ts), and what was done told */
   const tidy = () => {
     let rep: TidyReport | null = null;
@@ -1543,7 +1607,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                 void navigator.clipboard.writeText(text).then(() => toast.success(`Car ${selCar}'s data copied`, { description: "Its state, its last 10 s and what happened to it. Paste it into the conversation." }), () => toast.error("Couldn't copy"));
               }} />
           )}
-          {sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
+          {zoneSel ? (
+            <ZonePanel sketch={sketch} zone={zoneSel} readOnly={readOnly} onDelete={deleteSel} />
+          ) : sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
             <CrossingPanel x={sketch.crossings.find(x => x.id === sel.crossing)!} readOnly={readOnly} onDelete={deleteSel}
               live={stats ? peds.find(q => q.id === sel.crossing) ?? null : null} />
           ) : (
@@ -2544,6 +2610,16 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
           })()}
         </>}
       </>}
+      {/* zones (T129): all of them, whatever is selected (areas to find the way by) */}
+      {!!sketch.zones?.length && <>
+        <div className="mt-2 border-t pt-1" />
+        {heading("h:zones", "Zones", sketch.zones.length)}
+        {open("h:zones") && sketch.zones.map(z => row({
+          key: `zone:${z.id}`, depth: 0, on: !!sel.zones?.includes(z.id), hit: { zone: z.id }, sel: { ...NO_SEL, zones: [z.id] }, zoom: { ...piece({}), zones: [z.id] },
+          label: <><span className="mr-1 inline-block size-2 rounded-full align-middle" style={{ background: z.color }} />{z.name}</>,
+          note: formatArea(zoneArea(z.outline)), title: z.note,
+        }))}
+      </>}
     </div>
   );
 }
@@ -2712,6 +2788,9 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     ctx.strokeStyle = color; ctx.lineWidth = px; ctx.stroke();
     ctx.globalAlpha = 1;
   }
+
+  // zones (T129): under everything else, a light fill and a dashed border in each one's colour (the selected one stronger)
+  if (S && st.layers.zones && sk.zones?.length) paintZones(ctx, sk.zones, px, s.zones?.length === 1 ? s.zones[0] : null, st.hover && "zone" in st.hover ? st.hover.zone : null);
 
   const path = (pts: Pt[]) => { ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); };
   const label = (text: string, p: Pt, color: string) => {
@@ -3174,6 +3253,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       curveHandle(p, false);
     });
   }
+  // a selected zone's corners
+  for (const id of s.zones ?? []) sk.zones?.find(z => z.id === id)?.outline.forEach(p => square(p));
   for (const id of s.connectors) {
     const cn = sk.connectors.find(c => c.id === id);
     for (const p of cn?.via ?? []) {
@@ -3213,6 +3294,10 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     path(pts); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.setLineDash([]); ctx.stroke();
     d.pts.forEach(square);
     if (cur && d.pts.length >= 3 && dist(cur.p, d.pts[0]) <= 10 * px) { ctx.beginPath(); ctx.arc(d.pts[0].x, d.pts[0].y, 7 * px, 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.stroke(); }
+  } else if (d?.kind === "zone") {
+    paintZoneDraft(ctx, d.pts, cur?.p ?? null, nextZoneColor(sk), px);
+    d.pts.forEach(square);
+    if (cur && d.pts.length >= 3 && dist(cur.p, d.pts[0]) <= 10 * px) { ctx.beginPath(); ctx.arc(d.pts[0].x, d.pts[0].y, 7 * px, 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.setLineDash([]); ctx.stroke(); }
   } else if (d?.kind === "crossing") {
     const b = cur?.p ?? d.a;
     if (dist(d.a, b) > 0.1) {
@@ -3250,7 +3335,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   ctx.setLineDash([]);
   if (d && "c" in d) dot(d.c, 3 * px, col.sel);
-  if (cur && (tool === "lane" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "crossing")) {
+  if (cur && (tool === "lane" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "zone" || tool === "crossing")) {
     ctx.beginPath(); ctx.arc(cur.p.x, cur.p.y, (cur.snapped ? 5 : 3) * px, 0, Math.PI * 2);
     ctx.strokeStyle = col.sel; ctx.fillStyle = col.sel; ctx.lineWidth = 1.5 * px; if (cur.snapped) ctx.stroke(); else ctx.fill();
   }
@@ -3295,6 +3380,12 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     };
     for (const w of entries) tag(w.lanes, false, `→ ${Math.round(w.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0))}/h`, dark ? "#4ade80" : "#15803d");
     for (const w of exits) { const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0); tag(w.lanes, true, ws === 0 ? "closed" : `${sumW ? Math.round((ws / sumW) * 100) : 0}% →`, dark ? "#93c5fd" : "#1d4ed8"); }
+  }
+  // zones' names (T129) at their middles, in their colours (before the roads': a road's name over a zone's wins the click)
+  for (const z of st.layers.zones ? sk.zones ?? [] : []) {
+    const p = zoneLabelPoint(z.outline);
+    if (p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
+    st.labels?.push({ kind: "zone", id: z.id, ...label(z.name, p, z.color) });
   }
   // (a road's name once on the screen, a street cut into several roads named once)
   const named = new Set<string>();

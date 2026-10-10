@@ -28,11 +28,14 @@ export function nextZoneId(zones: SketchZone[]): string {
   return `z${n + 1}`;
 }
 
+/** the colour the next new zone takes (round the palette) */
+export const nextZoneColor = (sk: Sketch): string => ZONE_COLORS[(sk.zones?.length ?? 0) % ZONE_COLORS.length];
+
 /** a new zone with these corners: "Zone n", the next colour round the palette (unless given) */
 export function addZone(sk: Sketch, outline: Pt[], opts: { name?: string; color?: string } = {}): [Sketch, SketchZone] {
   const zones = sk.zones ?? [];
   const id = nextZoneId(zones);
-  const z: SketchZone = { id, name: opts.name ?? `Zone ${id.slice(1)}`, outline: outline.map(roundPt), color: opts.color ?? ZONE_COLORS[zones.length % ZONE_COLORS.length] };
+  const z: SketchZone = { id, name: opts.name ?? `Zone ${id.slice(1)}`, outline: outline.map(roundPt), color: opts.color ?? nextZoneColor(sk) };
   return [{ ...sk, zones: [...zones, z] }, z];
 }
 

@@ -16,6 +16,7 @@ import { connectorPts, junctionLevel, laneById, laneLength, outlinePath, pointAt
 import { LEVEL_H } from "@/engine/compile";
 import { speedColor } from "@/render/palette";
 import { buildSketch3D, type Sketch3D } from "@/render/sketch3d";
+import { buildZones3D, type Zones3D } from "@/render/zones3d";
 import type { SketchLayers } from "@/state/sketch-layers";
 import type { Underlay } from "@/lib/underlay";
 import { readPalette } from "@/render/palette";
@@ -156,6 +157,17 @@ export function View3DV2(props: View3DProps) {
       if (built) { scene.remove(built.group); built.dispose(); }
       built = buildSketch3D(p.sketch, p.contents, pal, p.layers);
       scene.add(built.group);
+    };
+    // the zones (T129): tinted areas on the ground with their names, made again when they (or their layer) change
+    let zonesBuilt: Zones3D | null = null, zonesFor: unknown[] = [];
+    const syncZones = () => {
+      const p = live.current, key = [p.sketch.zones, p.layers.zones];
+      if (key.every((x, i) => x === zonesFor[i])) return;
+      zonesFor = key;
+      if (zonesBuilt) { scene.remove(zonesBuilt.group); zonesBuilt.dispose(); zonesBuilt = null; }
+      if (!p.layers.zones || !p.sketch.zones?.length) return;
+      zonesBuilt = buildZones3D(p.sketch.zones);
+      scene.add(zonesBuilt.group);
     };
 
     // the satellite imagery under the sketch (where it has a place on Earth), and the reference image
@@ -393,7 +405,7 @@ export function View3DV2(props: View3DProps) {
       frame = 0;
       if (disposed) return;
       if (now - lastSync > 500) { lastSync = now; syncSat(); syncUnderlay(); }
-      syncRoads(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing();
+      syncRoads(); syncZones(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing();
       stepHome(now);
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
@@ -421,6 +433,7 @@ export function View3DV2(props: View3DProps) {
       live.current.onLeave({ cx: t.x, cy: t.z, scale: Math.min(80, Math.max(0.3, (el.clientWidth || 1) / Math.max(1, across))) });
       live.current.canvasRef.current = null; live.current.apiRef.current = null;
       if (built) { scene.remove(built.group); built.dispose(); }
+      if (zonesBuilt) { scene.remove(zonesBuilt.group); zonesBuilt.dispose(); }
       controls.dispose();
       scene.traverse(o => {
         const m = o as THREE.Mesh;
