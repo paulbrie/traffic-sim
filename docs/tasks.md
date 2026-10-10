@@ -15,8 +15,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T119 | Browser measurement of T117's replay cap (Bistrița copy, 10×, test car, 5 min) | Tatiana | 2026-10-10 | |
 | T118 | Re-test of T112 and T113 in the browser (trip kept while running, 3D hint, memory over 5 min at 10×) | Ramona | 2026-10-10 | |
-| T117 | Sim replay: a byte cap on the kept frames (963 MB on Bistrița for 600 s today), oldest dropped first | Bob | 2026-10-10 | from T113 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Plan fix (r1560, J574) approved by the user in Alice's session 2026-10-10, with four more drawn-over spots; Bob extends the patch, then the user applies it through History. Notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
@@ -34,6 +34,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T117 | Sim replay capped at 320 MB (oldest frames first; the bar shows "last m:ss" when capped); same-seed runs unchanged; Bistrița 900 s: replay 375 → 320 MB | Bob | 2026-10-10 | a96d0d4 |
 | T113 | V2: the tab growing to 8 GB: route writes nested proxies one level deeper each time (reads slowed without limit); updaters now get and store plain copies. 10× with a test car for 5 min: renderer 945 → 2,051 MB, answers in < 0.4 s (before: 4 GB, hung) | Tatiana | 2026-10-10 | 7f0311a |
 | T112 | V2: a test car sent while the cars run keeps its trip (a late worker frame cleared it); a 3D camera hint line | Tatiana | 2026-10-10 | 6e5e66e |
 | T106 | Agents City Table: messages fly as paper planes (sender's colour band, 2.2 s arc with bank and bob, unfold on landing; off the table edge for absentees; staggered) | Tom | 2026-10-10 | admin: d2bc2ee |
