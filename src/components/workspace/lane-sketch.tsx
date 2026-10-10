@@ -64,6 +64,7 @@ import { newSketch } from "@/lib/sketch-list";
 import { deleteLanes, dropDangling, takeOutOfRoad } from "@/lib/road-lanes";
 import { carWay, type CarWay } from "@/lib/car-way";
 import { explainMarks, type CarExplain } from "@/lib/car-explain";
+import { keyForEditor, keyTargetOf, somethingOpen } from "@/lib/editor-keys";
 import { CarWhy } from "./car-explain";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
 
@@ -261,8 +262,22 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (the plan's editor takes the keys: on opening the page, and when the sketch window over it closes)
   const [sketchOpen] = useDeepSubject(ui, "sketch");
   useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
-  // (and after the header's Plan / 3D switch: the keys (Esc, the shortcuts) go to the editor, not the switch)
-  useEffect(() => { if (page && document.activeElement?.closest('[role="group"][aria-label="View"], [role="radiogroup"][aria-label="View"]')) panel.current?.focus({ preventScroll: true }); }, [page, in3d, panel]);
+  // (the plan's editor has its keys wherever the focus is, unless they belong there: a text field, an open menu or
+  // dialog, a control's own Enter / Space / arrows (editor-keys.ts); the editor's own keydown handles the rest)
+  const keys = useRef<{ down: (e: KeyLike) => void; up: (e: KeyLike) => void } | null>(null);
+  useEffect(() => {
+    if (!page) return;
+    const fwd = (up: boolean) => (e: KeyboardEvent) => {
+      const p = panel.current, a = document.activeElement;
+      if (e.defaultPrevented || !p || ui.getValue().sketch || (a && p.contains(a))) return;
+      if (!keyForEditor(e.key, e.metaKey || e.ctrlKey, keyTargetOf(a), somethingOpen())) return;
+      if (up) keys.current?.up(e); else keys.current?.down(e);
+    };
+    const down = fwd(false), up = fwd(true);
+    document.addEventListener("keydown", down);
+    document.addEventListener("keyup", up);
+    return () => { document.removeEventListener("keydown", down); document.removeEventListener("keyup", up); };
+  }, [page, panel]);
   // the background (V2 plans): how the imagery shows, the image, a scale being set by two clicks
   // (how the imagery shows: in the V2 UI store, kept in the browser)
   const [sat, setSat] = useUiPath<SatOptions>("background");
@@ -1472,7 +1487,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   }, [store.kind]);
 
   // ------------------------------------------------------------ keys (kept from the plan's shortcuts while the window has focus)
-  const onKeyDown = (e: React.KeyboardEvent) => {
+  const onKeyDown = (e: KeyLike) => {
     if ((e.target as HTMLElement).closest("input,textarea")) { e.stopPropagation(); return; }
     e.stopPropagation();
     const k = e.key.toLowerCase(), mod = e.metaKey || e.ctrlKey, d = draft.current;
@@ -1543,7 +1558,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const t = TOOLS.find(t => t.key.toLowerCase() === k);
     if (t) changeTool(t.id);
   };
-  const onKeyUp = (e: React.KeyboardEvent) => { if (e.key === " ") { space.current = false; if (drag.current?.kind !== "pan") setHand(""); } };
+  const onKeyUp = (e: KeyLike) => { if (e.key === " ") { space.current = false; if (drag.current?.kind !== "pan") setHand(""); } };
+  useEffect(() => { keys.current = { down: onKeyDown, up: onKeyUp }; });
 
   const toolInfo = TOOLS.find(t => t.id === tool)!;
   // (a zone selected on its own: its panel)
@@ -1875,6 +1891,9 @@ function makeCurve(editSketch: (f: (s: Sketch) => Sketch) => void, ids: string[]
 
 /** the sim's explanation of the car watched, as `inspect` passes it on (T157) */
 const explainOf = (info: ReturnType<SketchSim["inspect"]>): CarExplain | null => (info && "explain" in info ? info.explain ?? null : null);
+
+/** what the editor's key handlers read of a key event: React's, or the page's forwarded (editor-keys.ts) */
+type KeyLike = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "defaultPrevented" | "preventDefault" | "stopPropagation" | "target">;
 
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
