@@ -15,6 +15,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T102 | Agents City Table: who is using a browser (each open agent-browser session at its owner's seat, with its CPU; unowned ones marked) | Alex (data), Tom (display) | 2026-10-10 | after T92 |
+| T101 | Agents City Table: the gauges ease to each new value instead of jumping (about 0.8 s) | Tom | 2026-10-10 | with T92 |
 | T100 | Re-test of T88 (Apply merges field by field) in the browser | Ramona | 2026-10-10 | after T97, T98 |
 | T99 | Agents City: folders starting with "." (.next, .git…) left out of the cities by default; a "Show hidden folders" switch | Alex | 2026-10-10 | after T85, T88 |
 | T98 | The gaps left in T73: a real bridge (Level 1 over other lanes) and the 3D screenshot | Ramona | 2026-10-10 | |
