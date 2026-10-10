@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T129 | V2 editor: draw zones (neighbourhoods): labelled, coloured polygons stored in the plan, a Zone tool, panel, layer, label click | Tom (Tatiana for the editor files), Ramona checks | 2026-10-10 | |
 | T128 | V2 editor: merge two lanes (one continuing the other) or two roads into one, refusing clearly when they don't line up | Tatiana | 2026-10-10 | after T126 |
 | T127 | V2: cars' blinkers when turning, as in V1 (2D and 3D) | Alex (Tatiana for the views, Bob for the sim), Ramona checks | 2026-10-10 | |
 | T124 | V2: a Problems-console warning and a Tidy step for connectors that turn back sharply (over 150° per segment pair; 5 on Bistrița rev 92) | Tatiana (Bob for sketch-tidy.ts) | 2026-10-10 | from T56 |
