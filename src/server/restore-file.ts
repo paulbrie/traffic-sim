@@ -2,6 +2,7 @@
 // from the database and the session so they can be checked (scripts/restore-file-check.ts). The server action
 // in actions.ts proves the access and passes the data layer in.
 import { sanitizeSketch, type Sketch } from "@/lib/lane-sketch";
+import { AGENT_FILE } from "@/lib/agent-patch";
 import { fileResult, pickPatch, type FileMode } from "@/lib/sketch-diff";
 import type { SaveResult } from "./data/plans";
 
@@ -41,8 +42,8 @@ export async function restoreFromFile(input: RestoreFileInput, deps: RestoreFile
   const cur = await deps.current();
   if (!cur) return { ok: false, error: "Plan not found." };
   if (cur.engine !== "v2") return { ok: false, error: "Only V2 plans can take a sketch file." };
-  // (removals only for an agent patch: the page's own file action never sets `patch`)
-  const r = fileResult(input.file, input.mode, sanitizeSketch(cur.sketch), { allowRemove: !!input.patch });
+  // (removals and the Sketch window only for an agent patch: the page's own file action never sets `patch`)
+  const r = fileResult(input.file, input.mode, sanitizeSketch(cur.sketch), input.patch ? AGENT_FILE : {});
   if (!r.ok) return { ok: false, error: r.error };
   const s = await deps.save({ network: cur.network, settings: cur.settings, underlay: cur.underlay, sketch: r.sketch, revision: input.revision, restore: input.patch && input.mode === "apply" ? { note: input.patch.note, kind: "patch" } : { note: restoreNote(input.mode, input.fileName, input.note), kind: input.mode } });
   if (s.ok) return { ok: true, revision: s.revision };

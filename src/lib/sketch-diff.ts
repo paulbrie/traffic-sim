@@ -1,4 +1,5 @@
 import { sanitizeSketch, type Sketch } from "./lane-sketch";
+import { addToSketchWindow, type WindowAdd } from "./sketch-window-add";
 
 /**
  * A V2 plan's sketch from a file, for History's two file actions, and what each changes against the plan's
@@ -8,7 +9,8 @@ import { sanitizeSketch, type Sketch } from "./lane-sketch";
  *   crossings, zones); each changes the current item with its id, field by field (only the fields it has: `{id, width}`
  *   changes a lane's width; null clears an optional field), or is added (then it must be whole); nothing is
  *   removed, and everything else is kept (`applyPatch`). An agent patch (T140) may also remove items by id
- *   (`remove`), checked so nothing goes unlisted (`removalProblems`); a plain file may not.
+ *   (`remove`), checked so nothing goes unlisted (`removalProblems`), and add a piece to the plan's Sketch window
+ *   (`sketchWindowAdd`, T152: beside what the window holds, the main plan untouched); a plain file may do neither.
  * Both results go through `sanitizeSketch`, the same checks the server applies to every saved sketch, and
  * whatever those leave out is reported, so nothing is dropped silently. The server repeats the merge itself
  * against the stored sketch (src/server/restore-file.ts).
@@ -25,7 +27,7 @@ type Item = { id: string };
 export type FileMode = "restore" | "apply";
 /** items to remove, by kind, ids only (agent patches only) */
 export type Removal = Partial<Record<SketchKind, string[]>>;
-export type SketchPatch = Partial<Record<SketchKind, unknown[]>> & { remove?: Removal };
+export type SketchPatch = Partial<Record<SketchKind, unknown[]>> & { remove?: Removal; sketchWindowAdd?: Record<string, unknown> };
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const items = (sk: Sketch | null | undefined, k: SketchKind): Item[] => (sk?.[k] ?? []) as Item[];
@@ -55,6 +57,7 @@ export function pickPatch(raw: unknown): SketchPatch | null {
     }
     if (Object.keys(remove).length) patch.remove = remove;
   }
+  if (isObj(b.sketchWindowAdd)) { patch.sketchWindowAdd = b.sketchWindowAdd; n++; }
   return n ? patch : null;
 }
 
@@ -121,11 +124,19 @@ function withoutRemoved(sk: Sketch, rem: Removal): Sketch {
 /**
  * `cur` with the patch's items merged onto those with the same id (the item's own fields over the current
  * ones), and the new ones added; sanitised. An item the checks leave out is left out of the patch (`leftOut`,
- * "kind:id"), so the current one stays: applying never removes anything.
+ * "kind:id"), so the current one stays: applying never removes anything. Then its Sketch window piece, if any,
+ * added to the window (`window`), or refused (`windowError`).
  */
-export function applyPatchDetail(cur: Sketch | null, patch: SketchPatch): { sketch: Sketch | null; leftOut: Set<string>; problems: string[] } {
+export function applyPatchDetail(cur: Sketch | null, patch: SketchPatch): { sketch: Sketch | null; leftOut: Set<string>; problems: string[]; window?: WindowAdd; windowError?: string } {
+  const r = applyMain(cur, patch);
+  if (!patch.sketchWindowAdd || !r.sketch || r.problems.length) return r;
+  const w = addToSketchWindow(r.sketch, patch.sketchWindowAdd);
+  return w.ok ? { ...r, sketch: w.sketch, window: w } : { ...r, sketch: null, windowError: w.error };
+}
+
+function applyMain(cur: Sketch | null, patch: SketchPatch): { sketch: Sketch | null; leftOut: Set<string>; problems: string[] } {
   const leftOut = new Set<string>();
-  let p: SketchPatch = { ...patch, remove: undefined };
+  let p: SketchPatch = { ...patch, remove: undefined, sketchWindowAdd: undefined };
   for (;;) {
     const sketch = merge(cur, p), bad: string[] = [];
     for (const k of SKETCH_KINDS) {
@@ -203,6 +214,8 @@ export type FileSummary = {
   dropped: Partial<Record<SketchKind, number>>;
   /** nothing would change */
   same: boolean;
+  /** an agent patch's piece added to the Sketch window (T152) */
+  window?: WindowAdd;
 };
 
 /** the file's items the checks left out: refused (apply: a required field cleared, a new item not whole…) or invalid */
@@ -301,9 +314,9 @@ export function restoreSketch(cur: Sketch | null, file: Sketch, raw: Record<stri
   return { sketch: sanitizeSketch(out) ?? file, kept: kept.sort() };
 }
 
-export type FileResult = { ok: true; sketch: Sketch; kept: string[]; file: Sketch | null; patch: SketchPatch; leftOut?: Set<string> } | { ok: false; error: string; problems?: string[] };
-/** `allowRemove`: an agent patch, whose `remove` lists are applied (a plain file's never are, T140) */
-export type FileOptions = { allowRemove?: boolean };
+export type FileResult = { ok: true; sketch: Sketch; kept: string[]; file: Sketch | null; patch: SketchPatch; leftOut?: Set<string>; window?: WindowAdd } | { ok: false; error: string; problems?: string[] };
+/** an agent patch: `allowRemove`, its `remove` lists are applied (a plain file's never are, T140); `allowSketchWindow`, its `sketchWindowAdd` too (T152) */
+export type FileOptions = { allowRemove?: boolean; allowSketchWindow?: boolean };
 
 /**
  * The sketch that would be saved from a file's JSON (`raw`) for `mode`, on top of `cur`. The client and the
@@ -314,9 +327,11 @@ export function fileResult(raw: unknown, mode: FileMode, cur: Sketch | null, opt
   if (!patch) return { ok: false, error: "The file has no sketch items (lanes, connectors, roads, junctions, links, crossings or zones, each with an id)." };
   if (mode === "apply") {
     if (patch.remove && !opts.allowRemove) return { ok: false, error: "The file asks to remove items: only agent patches may remove (Apply changes from file never removes anything)." };
-    const { sketch, leftOut, problems } = applyPatchDetail(cur, patch);
+    if (patch.sketchWindowAdd && !opts.allowSketchWindow) return { ok: false, error: "The file asks to add to the Sketch window: only agent patches may (Apply changes from file changes the main plan only)." };
+    const { sketch, leftOut, problems, window, windowError } = applyPatchDetail(cur, patch);
     if (problems.length) return { ok: false, error: `The removals can't be applied as they are: ${problems.join("; ")}.`, problems };
-    return sketch ? { ok: true, sketch, kept: [], file: null, patch, leftOut } : { ok: false, error: "Nothing usable is left once the file's items are checked." };
+    if (windowError) return { ok: false, error: windowError, problems: [windowError] };
+    return sketch ? { ok: true, sketch, kept: [], file: null, patch, leftOut, ...(window ? { window } : {}) } : { ok: false, error: "Nothing usable is left once the file's items are checked." };
   }
   const b = body(raw);
   if (!isObj(b) || !Array.isArray(b.lanes)) return { ok: false, error: "The file isn't a whole V2 sketch (no lanes list). Use \"Apply changes from file\" for a file with only some items." };
@@ -375,9 +390,10 @@ export function readSketchFile(text: string, mode: FileMode, cur: Sketch | null,
       }
     }
   }
-  const kinds = kindDiffs(cur, sketch), fields = fieldDiffs(cur, sketch, r.kept);
+  // (the Sketch window's piece is told in its own section, not as "scratch differs")
+  const kinds = kindDiffs(cur, sketch), fields = fieldDiffs(cur, sketch, r.kept).filter(f => !(r.window && f.field === "scratch"));
   const geo = !same(cur?.geo, sketch.geo), traffic = !same(cur?.traffic, sketch.traffic);
   const moved = SKETCH_KINDS.some(k => kinds[k].added.length || kinds[k].removed.length || kinds[k].changed.length);
-  const sameAll = !moved && !geo && !traffic && !fields.some(f => f.change !== "kept from the current version");
-  return { ok: true, summary: { mode, sketch, kinds, geo, traffic, fields, items: changes, dropped, same: sameAll }, payload: payloadOf(raw, mode) };
+  const sameAll = !moved && !geo && !traffic && !r.window && !fields.some(f => f.change !== "kept from the current version");
+  return { ok: true, summary: { mode, sketch, kinds, geo, traffic, fields, items: changes, dropped, same: sameAll, ...(r.window ? { window: r.window } : {}) }, payload: payloadOf(raw, mode) };
 }

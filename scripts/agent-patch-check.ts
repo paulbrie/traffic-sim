@@ -1,6 +1,7 @@
 // Agent patches (T132): what a submit accepts and refuses, and applying one: one save through the same path as
 // "Apply changes from file", noted "Agent patch #n (T56, Bob): title" and recorded as its own kind; a conflict
-// refuses with the new revision; the page's own file action can't pass itself off as a patch.
+// refuses with the new revision; the page's own file action can't pass itself off as a patch. Removals (T140) and
+// a piece added to the Sketch window (T152).
 import { strict as assert } from "node:assert";
 import { checkPatch, patchNote, authorColor } from "../src/lib/agent-patch";
 import { readSketchFile } from "../src/lib/sketch-diff";
@@ -160,6 +161,102 @@ async function main() {
     const plain = await restoreFromFile({ mode: "apply", file: { remove: { connectors: ["kU"] } }, revision: 7 }, d);
     assert.equal(plain.ok, false);
     assert.equal(m.saves.length, 1);
+  });
+
+  // ---- the Sketch window (T152)
+  const geo = { lat: 47.13, lon: 24.49 };
+  const windowNow = { lanes: [line("l1", 0, 40), line("l2", 50, 90)], connectors: [{ id: "c1", from: { lane: "l1", s: 40 }, to: { lane: "l2", s: 0 } }], roads: [{ id: "r1", name: "Old", lanes: ["l1", "l2"] }], junctions: [], crossings: [{ id: "x1", a: { x: 20, y: -5 }, b: { x: 20, y: 5 }, width: 4, peds: 300 }], traffic: { rate: 10, speed: 40, seed: 2 } };
+  const withWindow = sanitizeSketch({ ...rich, geo, scratch: windowNow })!;
+  assert.ok(withWindow.scratch?.lanes.length === 2 && withWindow.scratch.crossings?.length === 1, "fixture: the window");
+  // (Bob's kind of piece: its own ids, the same place as the window's content, a zebra, its own traffic)
+  const piece = {
+    lanes: [line("l1", 0, 30, 2), line("l366", 40, 70, 2)],
+    connectors: [{ id: "c-t148-1", from: { lane: "l1", s: 30 }, to: { lane: "l366", s: 0 } }],
+    roads: [{ id: "r1607", name: "Strada", lanes: ["l1", "l366"] }],
+    junctions: [{ id: "j696", name: "J696", outline: [{ x: 28, y: -4 }, { x: 42, y: -4 }, { x: 42, y: 8 }], lights: { green: 18, amber: 3, allRed: 2, mode: "each", minGreen: 6, actuated: false, phases: [{ green: 20, conns: ["c-t148-1"] }] } }],
+    crossings: [{ id: "z-t148-1", a: { x: 10, y: -3 }, b: { x: 10, y: 7 }, width: 3, peds: 30 }],
+    traffic: { rate: 20, speed: 50, seed: 1 }, geo,
+  };
+  const wcheck = (patch: object, on = withWindow) => checkPatch(JSON.stringify(patch), on);
+  const mainOf = (sk: object) => JSON.stringify({ ...sk, scratch: undefined });
+
+  await t("window: a piece alone goes beside the window's content, fresh ids, its zebra too; the main plan unchanged", () => {
+    const r = wcheck({ sketchWindowAdd: piece });
+    assert.ok(r.ok, r.ok ? "" : r.errors.join("; "));
+    const s = r.ok ? r.summary : null!, w = s.window!, sc = s.sketch.scratch!;
+    assert.equal(mainOf(s.sketch), mainOf(withWindow));
+    assert.equal(s.items.length, 0);
+    assert.equal(s.same, false);
+    assert.ok(!s.fields.some(f => f.field === "scratch"), "told in its own section");
+    assert.deepEqual(w.counts, { lanes: 2, connectors: 1, roads: 1, junctions: 1, crossings: 1, zones: 0 });
+    // (ids remapped against the window's: l1, c1, r1, x1 are taken)
+    assert.deepEqual(w.added, { lanes: ["l3", "l4"], connectors: ["c2"], junctions: ["j1"], crossings: ["x2"] });
+    assert.deepEqual(sc.lanes.map(l => l.id), ["l1", "l2", "l3", "l4"]);
+    assert.deepEqual(sc.roads.map(x => x.id), ["r1", "r2"]);
+    assert.deepEqual(sc.junctions[0].lights?.phases?.[0].conns, ["c2"]);
+    // (it would lie over the window's lanes (0..90 m): moved east, 20 m clear of them)
+    assert.equal(w.beside, 110);
+    const l3 = sc.lanes.find(l => l.id === "l3")!.shape;
+    assert.deepEqual(l3.kind === "line" && l3.pts[0], { x: 110, y: 2 });
+    assert.deepEqual(sc.crossings!.map(x => [x.id, x.a.x]), [["x1", 20], ["x2", 120]]);
+    // (the window's own traffic and place kept; the window's content as it was)
+    assert.deepEqual(sc.traffic, { rate: 10, speed: 40, seed: 2 });
+    assert.deepEqual(sc.geo, geo);
+    assert.deepEqual(sc.lanes.slice(0, 2), withWindow.scratch!.lanes);
+  });
+
+  await t("window: into an empty window at its own place, with the piece's traffic; the plan's geo puts it where it is", () => {
+    const r = wcheck({ sketchWindowAdd: { ...piece, geo: { lat: geo.lat, lon: geo.lon + 0.001 } } }, rc);
+    assert.ok(r.ok, r.ok ? "" : r.errors.join("; "));
+    const w = r.ok ? r.summary.window! : null!, sc = r.ok ? r.summary.sketch.scratch! : null!;
+    assert.equal(w.empty, true);
+    assert.equal(w.beside, 0);
+    assert.deepEqual(w.added.lanes, ["l1", "l2"]);
+    assert.deepEqual(sc.traffic, { rate: 20, speed: 50, seed: 1 });
+    // (the plan has no geo here: nothing to shift by)
+    const sh = sc.lanes[0].shape;
+    assert.deepEqual(sh.kind === "line" && sh.pts[0], { x: 0, y: 2 });
+    const r2 = wcheck({ sketchWindowAdd: { ...piece, geo: { lat: geo.lat, lon: geo.lon + 0.001 } } }, sanitizeSketch({ ...rich, geo })!);
+    const sh2 = r2.ok ? r2.summary.sketch.scratch!.lanes[0].shape : null;
+    assert.ok(sh2?.kind === "line" && Math.abs(sh2.pts[0].x - 75.8) < 0.1, "0.001° of longitude east at 47.13° N is about 75.8 m");
+  });
+
+  await t("window: with main items too, both done in one; the note says so", () => {
+    const r = wcheck({ lanes: [{ id: "a", width: 5 }], sketchWindowAdd: piece });
+    assert.ok(r.ok, r.ok ? "" : r.errors.join("; "));
+    const s = r.ok ? r.summary : null!;
+    assert.deepEqual(s.items.map(x => [x.id, x.change]), [["a", "changed"]]);
+    assert.equal(s.sketch.lanes.find(l => l.id === "a")!.width, 5);
+    assert.equal(s.sketch.scratch!.lanes.length, 4);
+    assert.equal(patchNote({ id: 9, task: "T148", author: "Bob", title: "J696 v1", patch: { sketchWindowAdd: piece } }), "Agent patch #9 (T148, Bob): J696 v1 (Sketch window)");
+    assert.equal(patchNote({ id: 9, task: "T148", author: "Bob", title: "J696 v1", patch: { lanes: [{ id: "a", width: 5 }], sketchWindowAdd: piece } }), "Agent patch #9 (T148, Bob): J696 v1 (plan and Sketch window)");
+  });
+
+  await t("window: a piece that isn't a usable sketch is refused", () => {
+    const no = (p: unknown) => { const r = wcheck({ sketchWindowAdd: p }); assert.equal(r.ok, false); return r.ok ? "" : r.errors.join("; "); };
+    assert.match(no({ lanes: [] }), /isn't a usable sketch/);
+    assert.match(no({ lanes: [{ id: "l1", width: 3 }], connectors: [] }), /isn't a usable sketch/);
+    // (not an object: no patch at all)
+    assert.match(no([piece]), /no sketch items/);
+  });
+
+  await t("window: a plain file (History's Apply changes from file) can't add to it; nor the page's own action on the server", async () => {
+    const r = readSketchFile(JSON.stringify({ sketchWindowAdd: piece }), "apply", withWindow);
+    assert.match(r.ok ? "" : r.error, /only agent patches may/);
+    const m = { saves: [] as Saved[] };
+    const d: RestoreFileDeps = {
+      canEdit: true,
+      current: async () => ({ engine: "v2", network: { nodes: [] }, settings: {}, underlay: null, sketch: { ...rich, geo, scratch: windowNow } }),
+      save: async s => { m.saves.push(s); return { ok: true, revision: 8, savedAt: "" } as SaveResult; },
+    };
+    assert.equal((await restoreFromFile({ mode: "apply", file: { sketchWindowAdd: piece }, revision: 7 }, d)).ok, false);
+    assert.equal(m.saves.length, 0);
+    const ok3 = await restoreFromFile({ mode: "apply", file: { sketchWindowAdd: piece }, revision: 7, patch: { note: "Agent patch #9 (T148, Bob): J696 v1 (Sketch window)" } }, d);
+    assert.deepEqual(ok3, { ok: true, revision: 8 });
+    assert.equal(m.saves.length, 1);
+    assert.equal(mainOf(m.saves[0].sketch), mainOf(withWindow));
+    assert.equal(m.saves[0].sketch.scratch!.lanes.length, 4);
+    assert.deepEqual(m.saves[0].restore, { note: "Agent patch #9 (T148, Bob): J696 v1 (Sketch window)", kind: "patch" });
   });
 
   console.log(`agent-patch: ${ok} checks passed`);

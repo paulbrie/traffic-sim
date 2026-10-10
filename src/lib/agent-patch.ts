@@ -1,11 +1,13 @@
 import type { Sketch } from "./lane-sketch";
-import { leftOutCount, readSketchFile, type FileSummary } from "./sketch-diff";
+import { leftOutCount, pickPatch, readSketchFile, SKETCH_KINDS, type FileSummary } from "./sketch-diff";
 
 /**
  * Agent patches (T132): changes an agent proposes to a plan instead of editing it, applied or rejected by the
  * plan's editors on its page. A patch is what "Apply changes from file" takes (lanes, connectors, roads,
  * junctions, links, crossings, zones, each with an id; an item's own fields over the current one's), and may also
- * remove items: `remove: { lanes: ["l5"], connectors: ["c7"], … }`, ids only, checked so nothing goes unlisted.
+ * remove items: `remove: { lanes: ["l5"], connectors: ["c7"], … }`, ids only, checked so nothing goes unlisted;
+ * and add a piece to the plan's Sketch window: `sketchWindowAdd: { lanes, connectors, roads, junctions, crossings,
+ * zones, geo?, … }` (a sketch fragment, as Test in Sketch's Add takes it; T152), alone or with the rest.
  */
 
 export type AgentPatchStatus = "pending" | "applied" | "rejected" | "superseded";
@@ -24,7 +26,7 @@ export const PATCH_TITLE_MAX = 160, PATCH_DESC_MAX = 20_000;
  * plan; this only keeps unusable patches out of the editors' list.
  */
 export function checkPatch(patchText: string, current: Sketch | null): { ok: true; summary: FileSummary; payload: unknown } | { ok: false; errors: string[] } {
-  const r = readSketchFile(patchText, "apply", current, { allowRemove: true });
+  const r = readSketchFile(patchText, "apply", current, AGENT_FILE);
   if (!r.ok) return { ok: false, errors: r.problems ?? [r.error] };
   const s = r.summary, errors: string[] = [];
   if (leftOutCount(s))
@@ -33,10 +35,15 @@ export function checkPatch(patchText: string, current: Sketch | null): { ok: tru
   return errors.length ? { ok: false, errors } : { ok: true, summary: s, payload: r.payload };
 }
 
-/** the version note an applied patch gets in the plan's history */
-export function patchNote(p: Pick<AgentPatchRow, "id" | "task" | "author" | "title">): string {
-  const who = [p.task, p.author].filter(Boolean).join(", ");
-  return `Agent patch #${p.id}${who ? ` (${who})` : ""}: ${p.title}`.slice(0, 500);
+/** what an agent patch may do that a plain file may not */
+export const AGENT_FILE = { allowRemove: true, allowSketchWindow: true };
+
+/** the version note an applied patch gets in the plan's history ("… (Sketch window)" when it adds there) */
+export function patchNote(p: Pick<AgentPatchRow, "id" | "task" | "author" | "title"> & { patch?: unknown }): string {
+  const who = [p.task, p.author].filter(Boolean).join(", "), pt = pickPatch(p.patch);
+  const where = !pt?.sketchWindowAdd ? "" : SKETCH_KINDS.some(k => pt[k]?.length) || pt.remove ? " (plan and Sketch window)" : " (Sketch window)";
+  const head = `Agent patch #${p.id}${who ? ` (${who})` : ""}: `;
+  return `${head}${p.title.slice(0, 500 - head.length - where.length)}${where}`;
 }
 
 /** a steady colour for an author's name (the agents' own colours live in the admin, not here) */

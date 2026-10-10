@@ -2,7 +2,8 @@
  * Submits an agent patch (T132): a change an agent proposes to a plan, for its editors to apply or reject on the
  * plan's page ("Agent patches"). It never changes the plan.
  *   npm run patch:submit -- --plan <id> --author Bob --task T56 --title "…" --desc what-and-why.md --patch patch.json [--supersedes <n>]
- * The patch is what "Apply changes from file" takes. It is checked against the plan's current revision first:
+ * The patch is what "Apply changes from file" takes, and may also remove items (`remove`) and add a piece to the
+ * plan's Sketch window (`sketchWindowAdd`, see src/lib/agent-patch.ts). It is checked against the plan's current revision first:
  * refused (exit 1, with the reasons) if it isn't a patch, if the checks would leave any item out, or if nothing
  * would change; and for a plan that doesn't exist or isn't V2. --supersedes marks the author's older pending
  * patch on that plan superseded. Prints the new patch's #n and where to see it (the plan's path in the app;
@@ -59,10 +60,11 @@ async function main() {
       const [r] = await tx`insert into agent_patches (plan_id, author, task, title, description, patch, base_revision) values (${o.plan}, ${author}, ${task}, ${title}, ${description}, ${tx.json(check.payload as never)}, ${plan.revision}) returning id`;
       return r.id as number;
     });
-    const s = check.summary, items = s.items.filter((x) => x.change !== "unchanged").length;
+    const s = check.summary, items = s.items.filter((x) => x.change !== "unchanged").length, w = s.window;
+    const win = w ? `; adds ${w.counts.lanes} lane${w.counts.lanes === 1 ? "" : "s"} and ${w.counts.junctions} junction${w.counts.junctions === 1 ? "" : "s"} to the Sketch window${w.beside ? ` (${w.beside} m east of its content)` : ""}` : "";
     // (the app's address isn't the script's to guess: a shell may hold another app's base path; TRAFFICSIM_URL, if set, is put first)
     const where = `${(process.env.TRAFFICSIM_URL ?? "").replace(/\/$/, "")}/plans/${o.plan}`;
-    console.log(`PATCH: #${id} submitted to "${plan.name}" (rev. ${plan.revision}): ${items} item${items === 1 ? "" : "s"} changed or added${supersedes !== null ? `; #${supersedes} superseded` : ""}.`);
+    console.log(`PATCH: #${id} submitted to "${plan.name}" (rev. ${plan.revision}): ${items} item${items === 1 ? "" : "s"} changed or added${win}${supersedes !== null ? `; #${supersedes} superseded` : ""}.`);
     console.log(`See it on the plan's page, "Agent patches": ${where}`);
   } finally {
     await sql.end();
