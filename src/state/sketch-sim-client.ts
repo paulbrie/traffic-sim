@@ -172,6 +172,8 @@ export class SketchSimClient {
   /** the problems the run has had, and the cars stuck now (for the console) */
   problems() { return this.ask<Extract<FromSimWorker, { type: "problems" }>>({ type: "problems" }).then(r => ({ problems: r.problems, stuck: r.stuck })); }
   /** the moment `t` as it was, to copy: the cars in `box` (the view), the lights and the events a minute either side */
+  /** why car `id` does what it does at `t` (the car watched: traced as it ran; another, or in the replay: from the recording) */
+  explain(id: number, t: number) { return this.ask<Extract<FromSimWorker, { type: "explain" }>>({ type: "explain", id, t }).then(r => r.explain); }
   moment(t: number, box: Parameters<SketchSim["moment"]>[1]) { return this.ask<Extract<FromSimWorker, { type: "moment" }>>({ type: "moment", t, box }).then(r => r.moment); }
   /** a car's last 10 s and what happened to it */
   car(id: number) { return this.ask<Extract<FromSimWorker, { type: "car" }>>({ type: "car", id }).then(r => ({ frames: r.frames, events: r.events })); }

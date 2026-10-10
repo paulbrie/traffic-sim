@@ -19,6 +19,7 @@ export type ToSimWorker =
   | { type: "report"; req: number }
   | { type: "problems"; req: number }
   | { type: "moment"; t: number; box: Parameters<SketchSim["moment"]>[1]; req: number }
+  | { type: "explain"; id: number; t: number; req: number }
   | { type: "car"; id: number; req: number }
   | { type: "breakDown"; id: number }
   | { type: "tow"; id: number }
@@ -46,6 +47,7 @@ export type FromSimWorker =
   | { type: "report"; req: number; report: ReturnType<SketchSim["report"]> }
   | ({ type: "problems"; req: number } & ReturnType<SketchSim["problems"]>)
   | { type: "moment"; req: number; moment: ReturnType<SketchSim["moment"]> | null }
+  | { type: "explain"; req: number; explain: ReturnType<SketchSim["explain"]> }
   | { type: "car"; req: number; frames: ReturnType<SketchSim["carFrames"]>; events: SketchSim["log"] }
   | { type: "sendTest"; req: number; id: number | null; t: number };
 
@@ -94,7 +96,7 @@ function tick() {
 self.onmessage = (e: MessageEvent<ToSimWorker>) => {
   const m = e.data;
   switch (m.type) {
-    case "init": sim = new SketchSim(m.sketch, m.params); frame(true); break;
+    case "init": sim = new SketchSim(m.sketch, m.params); sim.watch(watch); frame(true); break;
     case "sketch": sim?.setSketch(m.sketch); frame(true); break;
     case "params": sim?.setParams(m.params); frame(true); break;
     case "reset": sim?.reset(); frame(true); break;
@@ -103,7 +105,7 @@ self.onmessage = (e: MessageEvent<ToSimWorker>) => {
       if (m.running && !running) { running = true; last = performance.now(); owed = 0; rateSince = last; rateSim = 0; if (!timer) timer = setTimeout(tick, 0); }
       if (!m.running) { running = false; rate = 0; frame(true); }
       break;
-    case "watch": watch = m.id; frame(false); break;
+    case "watch": watch = m.id; sim?.watch(m.id); frame(false); break;
     case "breakDown": sim?.breakDown(m.id); frame(true); break;
     case "tow": sim?.tow(m.id); frame(true); break;
     case "sendTest": { const id = sim?.sendTest(m.from, m.to) ?? null; post({ type: "sendTest", req: m.req, id, t: sim?.t ?? 0 }); frame(true); break; }
@@ -111,6 +113,8 @@ self.onmessage = (e: MessageEvent<ToSimWorker>) => {
     case "report": if (sim) post({ type: "report", req: m.req, report: sim.report() }); break;
     case "problems": post({ type: "problems", req: m.req, ...(sim?.problems() ?? { problems: [], stuck: [] }) }); break;
     case "moment": post({ type: "moment", req: m.req, moment: sim?.moment(m.t, m.box) ?? null }); break;
+    // (why a car does what it does: the car watched as traced; another, or a moment past, from the recording)
+    case "explain": post({ type: "explain", req: m.req, explain: sim?.explain(m.id, m.t) ?? null }); break;
     case "car": if (sim) post({ type: "car", req: m.req, frames: sim.carFrames(m.id), events: sim.log.filter(x => x.car === m.id || x.with === m.id).slice(-60) }); break;
   }
 };
