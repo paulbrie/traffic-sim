@@ -21,7 +21,9 @@ export type ToSimWorker =
   | { type: "moment"; t: number; box: Parameters<SketchSim["moment"]>[1]; req: number }
   | { type: "car"; id: number; req: number }
   | { type: "breakDown"; id: number }
-  | { type: "tow"; id: number };
+  | { type: "tow"; id: number }
+  /** a test car sent now from the start of lane `from` to the end of exit lane `to` (its id and the time answered, id null if it couldn't come in) */
+  | { type: "sendTest"; from: string; to: string; req: number };
 
 export interface SimFrame {
   type: "frame";
@@ -44,7 +46,8 @@ export type FromSimWorker =
   | { type: "report"; req: number; report: ReturnType<SketchSim["report"]> }
   | ({ type: "problems"; req: number } & ReturnType<SketchSim["problems"]>)
   | { type: "moment"; req: number; moment: ReturnType<SketchSim["moment"]> | null }
-  | { type: "car"; req: number; frames: ReturnType<SketchSim["carFrames"]>; events: SketchSim["log"] };
+  | { type: "car"; req: number; frames: ReturnType<SketchSim["carFrames"]>; events: SketchSim["log"] }
+  | { type: "sendTest"; req: number; id: number | null; t: number };
 
 let sim: SketchSim | null = null, running = false, speed = 1, watch: number | null = null;
 let last = performance.now(), lastStats = 0, timer: ReturnType<typeof setTimeout> | null = null;
@@ -103,6 +106,7 @@ self.onmessage = (e: MessageEvent<ToSimWorker>) => {
     case "watch": watch = m.id; frame(false); break;
     case "breakDown": sim?.breakDown(m.id); frame(true); break;
     case "tow": sim?.tow(m.id); frame(true); break;
+    case "sendTest": { const id = sim?.sendTest(m.from, m.to) ?? null; post({ type: "sendTest", req: m.req, id, t: sim?.t ?? 0 }); frame(true); break; }
     case "replay": post({ type: "replay", req: m.req, frame: sim?.replayAt(m.t) ?? null }); break;
     case "report": if (sim) post({ type: "report", req: m.req, report: sim.report() }); break;
     case "problems": post({ type: "problems", req: m.req, ...(sim?.problems() ?? { problems: [], stuck: [] }) }); break;

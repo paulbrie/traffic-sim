@@ -70,6 +70,8 @@ export interface RouteUi {
   from: string | null; to: string | null;
   /** what was found: the steps in order (lanes, connectors, lane changes), its length (m) and its time at the speed limits (s); or why there is none */
   result: { ok: true; steps: ({ kind: "lane" | "connector"; id: string } | { kind: "change"; from: string; to: string })[]; length: number; freeTime: number } | { ok: false; reason: string } | null;
+  /** the last test car sent on it: its id, the cars' time it was sent at, driving / arrived / gone, its time (s) and stops, the way it drove (edge keys) and whether that was another than the one traced */
+  test: { car: number; t0: number; state: "driving" | "arrived" | "gone"; time: number | null; stops: number; path: string[]; otherWay: boolean } | null;
 }
 export type EditorKind = "plan" | "scratch" | "whole";
 /** Test in Sketch's options (kept in the browser): how far out roads are cut, replacing what is in the Sketch or adding beside it, running at once */
@@ -95,7 +97,7 @@ const editor = (tool: Tool): EditorUi => ({
   run: { running: false, speed: 1, t: 0, replayT: null, playing: false, kept: null },
   dialogs: { search: { open: false, query: "" }, console: { open: false, kind: "all", text: "", clearedAt: -1 }, settings: false, optimizer: { open: false, junction: null, chosen: [], effort: "quick", stage: "setup" } },
   tables: { junctions: { by: "delay", flip: false, shown: 12 }, roads: { by: "delay", flip: false, shown: 12 } },
-  route: { from: null, to: null, result: null },
+  route: { from: null, to: null, result: null, test: null },
 });
 export const freshEditor = (): EditorUi => editor("select");
 
@@ -264,7 +266,7 @@ export function offerSketchUiToBridge() {
     // the route tracer: { from, to, editor? } (lanes: the one it starts on, the exit lane), or { clear: true }
     bridgeApp.register("route", a => {
       const r = editorFor(a).route;
-      if (argOf(a, "clear", "boolean")) { r.from = null; r.to = null; r.result = null; return { cleared: true }; }
+      if (argOf(a, "clear", "boolean")) { r.from = null; r.to = null; r.result = null; r.test = null; return { cleared: true }; }
       r.from = argOf(a, "from", "string", true)!; r.to = argOf(a, "to", "string", true)!;
       return { from: r.from, to: r.to, note: "the route is worked out by the page: read editors.<editor>.route.result" };
     }),

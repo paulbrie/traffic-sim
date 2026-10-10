@@ -7,7 +7,7 @@
  * Demand lists them) or from a lane's menu on the map ("Route from here", "Route to here"). In the V2 UI store.
  */
 import { useEffect, useMemo } from "react";
-import { X } from "lucide-react";
+import { Car, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { demandWays, type Sketch } from "@/lib/lane-sketch";
@@ -19,7 +19,11 @@ import { InspectorPanel } from "./inspector-panel";
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 const m = (x: number) => (x >= 1000 ? `${(x / 1000).toFixed(2)} km` : `${Math.round(x)} m`);
 
-export function RoutePanel({ sketch, onGo }: { sketch: Sketch; onGo: (step: { kind: "lane" | "connector"; id: string }) => void }) {
+export function RoutePanel({ sketch, onGo, onSendTest }: {
+  sketch: Sketch; onGo: (step: { kind: "lane" | "connector"; id: string }) => void;
+  /** a test car sent on the route (the cars run, the view follows it) */
+  onSendTest: () => void;
+}) {
   const [route, setRoute] = useUiPath<RouteUi>(`editors/${useEditorKind()}/route`);
   const ways = useMemo(() => {
     const { entries, exits } = demandWays(sketch);
@@ -37,7 +41,8 @@ export function RoutePanel({ sketch, onGo }: { sketch: Sketch; onGo: (step: { ki
     return { ok: true, steps: r.route.steps.map(x => (x.kind === "change" ? x : { kind: x.kind, id: x.id })), length: Math.round(r.route.length * 10) / 10, freeTime: Math.round(r.route.freeTime * 10) / 10 };
   }, [sketch, route.from, route.to, outWay]);
   useEffect(() => {
-    if (JSON.stringify(result) !== JSON.stringify(route.result)) setRoute(r => ({ ...r, result }));
+    // (a test car sent on another route is no test of this one)
+    if (JSON.stringify(result) !== JSON.stringify(route.result)) setRoute(r => ({ ...r, result, test: null }));
   }, [result, route.result, setRoute]);
   if (!ways.entries.length || !ways.exits.length) return null;
   const pick = (label: string, list: typeof ways.entries, way: (typeof ways.entries)[number] | null, set: (lane: string) => void) => (
@@ -48,7 +53,7 @@ export function RoutePanel({ sketch, onGo }: { sketch: Sketch; onGo: (step: { ki
   );
   return (
     <InspectorPanel id="route" title="Route"
-      actions={route.from || route.to ? <Button size="icon-sm" variant="ghost" aria-label="Clear the route" title="Clear the route" onClick={() => setRoute({ from: null, to: null, result: null })}><X /></Button> : undefined}>
+      actions={route.from || route.to ? <Button size="icon-sm" variant="ghost" aria-label="Clear the route" title="Clear the route" onClick={() => setRoute({ from: null, to: null, result: null, test: null })}><X /></Button> : undefined}>
       <p className="text-[11px] text-muted-foreground">The way the cars would go from a way in to a way out: the shortest (the simulation doesn&apos;t route round queues; cars kept waiting may look for another way).</p>
       <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5">
         <div className="flex items-center gap-1.5"><span className="w-8 shrink-0 text-[11px] text-muted-foreground">From</span>{pick("Route from", ways.entries, inWay, lane => setRoute(r => ({ ...r, from: lane })))}</div>
@@ -75,8 +80,25 @@ export function RoutePanel({ sketch, onGo }: { sketch: Sketch; onGo: (step: { ki
               </li>
             ))}
           </ol>
+          <Button size="sm" variant="outline" onClick={onSendTest} title="Send one car on this route now (the cars run), follow it, and see how long it takes and how often it stops">
+            <Car /> Send a test car
+          </Button>
+          {route.test && <TestResult test={route.test} freeTime={result.freeTime} />}
         </>
       )}
     </InspectorPanel>
+  );
+}
+
+/** how the test car did: on its way (how long so far), arrived (its time, its stops, against the time at the limits), or gone */
+function TestResult({ test, freeTime }: { test: NonNullable<RouteUi["test"]>; freeTime: number }) {
+  const text = test.state === "arrived" ? `arrived in ${mmss(test.time ?? 0)} (${mmss(freeTime)} at the limits), ${test.stops} stop${test.stops === 1 ? "" : "s"}`
+    : test.state === "gone" ? "left the plan elsewhere (or was towed, or its lane was edited away)"
+    : `on its way${test.time !== null ? ` (${mmss(test.time)} so far)` : ""}, ${test.stops} stop${test.stops === 1 ? "" : "s"}`;
+  return (
+    <div className="grid gap-0.5 rounded-md border p-1.5 text-xs" aria-label="Test car">
+      <span><span className="font-medium">Test car {Math.abs(test.car)}</span> · {text}</span>
+      {test.otherWay && <span className="text-[11px] text-amber-700 dark:text-amber-500">It went another way than the one traced (looking for another way after waiting, or changing lane where it could): its way shows in blue.</span>}
+    </div>
   );
 }

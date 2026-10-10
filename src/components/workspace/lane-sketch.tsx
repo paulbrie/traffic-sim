@@ -166,7 +166,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [mode] = useEditorState(ek, "mode");
   // (the route traced: its lanes and connectors drawn over the map)
   const [route, setRoute] = useEditorState(ek, "route");
-  const routeShown = useMemo(() => (route.result?.ok ? { lanes: new Set(route.result.steps.flatMap(x => (x.kind === "lane" ? [x.id] : []))), conns: new Set(route.result.steps.flatMap(x => (x.kind === "connector" ? [x.id] : []))) } : null), [route.result]);
+  const routeShown = useMemo(() => {
+    if (!route.result?.ok) return null;
+    const lanes = new Set(route.result.steps.flatMap(x => (x.kind === "lane" ? [x.id] : []))), conns = new Set(route.result.steps.flatMap(x => (x.kind === "connector" ? [x.id] : [])));
+    // (the test car's way, where it went another: what it drove that the traced way doesn't have)
+    const keys = route.test?.otherWay ? route.test.path : [];
+    return { lanes, conns, driven: { lanes: new Set(keys.filter(k => k.startsWith("lane:")).map(k => k.slice(5)).filter(id => !lanes.has(id))), conns: new Set(keys.filter(k => k.startsWith("conn:")).map(k => k.slice(5)).filter(id => !conns.has(id))) } };
+  }, [route.result, route.test]);
   const in3d = page && mode === "3d";
   /** the 3D view's canvas while it shows (the bridge's screenshot), and what its keys and buttons ask of it */
   const canvas3d = useRef<(() => HTMLCanvasElement | null) | null>(null);
@@ -231,6 +237,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
+  // (the test car's results, from the cars' stats as they come: into the route's state; the stats of the car sent from it
+  // only (by its number and when it was sent), and once the cars start again without it, no test car any more)
+  useEffect(() => {
+    const T = route.test, t = stats?.test;
+    if (!T || !stats || !route.result?.ok) return;
+    if (t && t.id === T.car && t.t0 === T.t0) {
+      const traced = new Set(route.result.steps.flatMap(x => (x.kind === "change" ? [`lane:${x.to}`] : [`${x.kind === "lane" ? "lane" : "conn"}:${x.id}`])));
+      const next = { ...T, state: t.state, time: Math.round(((t.t1 ?? stats.t) - t.t0) * 10) / 10, stops: t.stops, path: t.path, otherWay: t.path.some(k => !traced.has(k)) };
+      if (JSON.stringify(next) !== JSON.stringify(T)) setRoute(r => ({ ...r, test: next }));
+    } else if (stats.t < T.t0 || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
+  }, [stats, route.result, route.test, setRoute]);
   // what the handlers and the drawing read (kept current after every render)
   const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown });
 
@@ -486,6 +503,20 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replayPlaying, simSpeed]);
+  /** a test car on the route traced: sent now, the cars running, the view following it (its number; or why it couldn't go) */
+  const sendTestCar = async (): Promise<number> => {
+    const r = sketchUi.getValue().editors[ek].route, res = r.result;
+    if (!r.from || !res?.ok) throw new Error(res && !res.ok ? `no route: ${res.reason}` : "no route traced: choose a way in and a way out first");
+    const last = [...res.steps].reverse().find(x => x.kind === "lane") as { id: string } | undefined;
+    if (!last) throw new Error("the route has no lane");
+    if (!sim.current) { sim.current = new SketchSimClient(live.current.sketch, params, onSimFrame); store.setSim(sim.current); }
+    if (live.current.replayT !== null) goLive();
+    const { id, t } = await sim.current.sendTest(r.from, last.id);
+    if (id === null) throw new Error("the test car couldn't come in: no room at the start of its lane just now; try again in a moment");
+    setRoute(x => ({ ...x, test: { car: id, t0: t, state: "driving", time: 0, stops: 0, path: [], otherWay: false } }));
+    setSel(NO_SEL); setSelCar(id); setFollow(true); setRunning(true);
+    return id;
+  };
   const play = () => {
     if (!sim.current) { sim.current = new SketchSimClient(live.current.sketch, params, onSimFrame); store.setSim(sim.current); }
     // (running carries on from now: out of the replay)
@@ -842,6 +873,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         return { t };
       }),
       bridgeApp.register("restart", () => { resetCars(); return { running }; }),
+      // (as the Route panel's button: a test car on the route traced, its trip in editors.<editor>.route.test)
+      bridgeApp.register("testCar", async () => ({ car: await sendTestCar() })),
       bridgeState.register("sketch", () => {
         const s = sk();
         return { lanes: s.lanes.length, connectors: s.connectors.length, roads: s.roads.length, junctions: s.junctions.length, crossings: s.crossings?.length ?? 0, links: s.links?.length ?? 0,
@@ -1397,7 +1430,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           </div>
           {in3d && (
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} bySpeed={bySpeed}
-              selection={sel} car={selCar} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
+              selection={sel} car={selCar} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
           )}
@@ -1448,7 +1481,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
           {stats ? <RoadResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "road", id })} /> : null}
-          {page && <RoutePanel sketch={sketch} onGo={x => goTo({ kind: x.kind, id: x.id })} />}
+          {page && <RoutePanel sketch={sketch} onGo={x => goTo({ kind: x.kind, id: x.id })} onSendTest={() => sendTestCar().catch((e: Error) => toast.error("No test car", { description: e.message }))} />}
           <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} heldBack={stats?.heldBackBy}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
@@ -1520,7 +1553,7 @@ function CarPanel({ info, id, follow, running, replayT, onFollow, onPick, onClos
   );
   const reason = info ? reasonOf(info.why, info.kmh) : null;
   return (
-    <InspectorPanel id="car" title={`${info?.truck ? "Truck" : "Car"} ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
+    <InspectorPanel id="car" title={id < 0 ? `Test car ${-id}` : `${info?.truck ? "Truck" : "Car"} ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
       actions={<button className="rounded p-0.5 hover:bg-muted" aria-label="Stop inspecting the car" title="Stop inspecting (Esc)" onClick={onClose}><X className="size-3.5" /></button>}>
       {!info ? <p className="text-xs text-muted-foreground">{replayT !== null ? `Not on the ${where} at this moment.` : `It has left the ${where}.`}</p> : replayT !== null ? (
         <>
@@ -2334,8 +2367,8 @@ interface PaintState {
   selPt: { lane: string; i: number } | null;
   /** the cars coloured by their speed (else all one colour, a truck's cab its own) */
   bySpeed: boolean;
-  /** the route traced (its lanes and connectors), drawn over the map */
-  route: { lanes: Set<string>; conns: Set<string> } | null;
+  /** the route traced (its lanes and connectors), drawn over the map; and where a test car drove another way */
+  route: { lanes: Set<string>; conns: Set<string>; driven: { lanes: Set<string>; conns: Set<string> } } | null;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
   cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean }[] | null;
   /** the time of the cars shown (live or replayed), for the traffic lights; null with no cars */
@@ -2639,6 +2672,10 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     ctx.strokeStyle = "#f97316"; ctx.globalAlpha = 0.55; ctx.lineCap = "round"; ctx.lineJoin = "round";
     for (const l of sk.lanes) { if (!st.route.lanes.has(l.id) || !vis.lanes.has(l.id)) continue; path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath(); ctx.lineWidth = l.width + 3 * px; ctx.stroke(); }
     for (const c of sk.connectors) { if (!st.route.conns.has(c.id)) continue; const pts = connectorPts(sk, c); if (!pts) continue; path(pts); ctx.lineWidth = Math.max(1.6, 6 * px); ctx.stroke(); }
+    // (a test car's other way, in blue)
+    ctx.strokeStyle = "#2563eb";
+    for (const l of sk.lanes) { if (!st.route.driven.lanes.has(l.id) || !vis.lanes.has(l.id)) continue; path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath(); ctx.lineWidth = l.width + 3 * px; ctx.stroke(); }
+    for (const c of sk.connectors) { if (!st.route.driven.conns.has(c.id)) continue; const pts = connectorPts(sk, c); if (!pts) continue; path(pts); ctx.lineWidth = Math.max(1.6, 6 * px); ctx.stroke(); }
     ctx.globalAlpha = 1;
   }
   // lanes: a green line down the middle (on a faint band as wide as the lane), with chevrons along their direction of travel

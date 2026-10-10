@@ -132,6 +132,8 @@ export class SketchSimClient {
   /** car `id`'s engine fails now (it stops where it is until towed away); or it is towed away now */
   breakDown(id: number) { this.send({ type: "breakDown", id }); }
   tow(id: number) { this.send({ type: "tow", id }); }
+  /** a test car sent now from the start of lane `from` to the end of exit lane `to`: its id (negative; null if it couldn't come in), and the cars' time then */
+  sendTest(from: string, to: string) { return this.ask<Extract<FromSimWorker, { type: "sendTest" }>>({ type: "sendTest", from, to }).then(r => ({ id: r.id, t: r.t })); }
   unwatch() { if (this.watching !== null) { this.watching = null; this.watched = null; this.send({ type: "watch", id: null }); } }
   /** the car under `p` (on its body, or within `tol` metres), from the cars last sent */
   carAt(p: Pt, tol: number): number | null {

@@ -51,7 +51,7 @@ process; a restart drops them: the page reconnects, the agent pairs again).
 | `type` | `{ role?, name?, selector?, text, submit?: boolean }` | `{ typed }` |
 | `key` | `{ key: string }` (e.g. `"Control+k"`, `"Escape"`) | `{}` |
 | `navigate` | `{ url }` (same origin) | `{ url }` |
-| `app` | `{ action, args }`: `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30…), `replay` `{ t }`, `restart`; on a V2 plan also `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
+| `app` | `{ action, args }`: `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30…), `replay` `{ t }`, `restart`, `testCar` (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
 
 Targets by role and name follow Playwright's `getByRole` (name: case-insensitive substring unless `exact`).
 Every command is shown to the user in the activity log; `click` / `type` / `key` move the agent's cursor there first
@@ -78,7 +78,8 @@ Editor = { mode: "plan" | "3d",                  // the map from above or in 3D 
            dialogs: { search: { open, query }, console: { open, kind, text, clearedAt }, settings,
                       optimizer: { open, junction, chosen, effort, stage } },
            tables: { junctions: { by, flip, shown }, roads: { by, flip, shown } },   // the results tables' sort
-           route: { from, to, result: { ok, steps, length, freeTime } | { ok: false, reason } | null } }   // the route tracer
+           route: { from, to, result: { ok, steps, length, freeTime } | { ok: false, reason } | null,   // the route tracer
+                    test: { car, t0, state: "driving" | "arrived" | "gone", time, stops, path, otherWay } | null } }   // its test car
 ```
 
 Changes an agent may ask for (`app`; no others, nothing written by path):
@@ -89,6 +90,7 @@ Changes an agent may ask for (`app`; no others, nothing written by path):
 | `console` | `{ open?, kind?, text?, editor? }` | the problem console: open or close it, show one kind (`all`, `stuck`, `collision`, `jump`, `deadlock`, `breakdown`, `towed`), filter its lines |
 | `search` | `{ open, query?, editor? }` | the search box (Cmd/Ctrl+K), with what is typed in it |
 | `route` | `{ from, to, editor? }` or `{ clear: true }` | the route tracer from a lane to an exit lane; the page works it out (read `editors.<editor>.route.result`: the steps in order, metres, seconds at the speed limits; or why there is none) |
+| `testCar` | | a test car on the route traced, as the Route panel's "Send a test car": `{ car }` (its number, negative), the cars running and the view following it; an error if no route is traced or there is no room where it starts. Its trip in `editors.<editor>.route.test`: driving, arrived or gone, its time (s) so far or in all, the times it stood still 2 s or more, the edges it drove (`lane:…`, `conn:…`) and `otherWay` if it left the route traced (drawn in blue). Kept until the route changes or the cars start again |
 | `mode` | `{ mode: "plan" \| "3d", editor? }` | the plan's map from above or in 3D, as the header's Plan / 3D switch (the plan's editor only, for now) |
 | `sketchWindow` | `{ open? }` | the Sketch window over the plan opened or closed (without `open`: the other way), as the top bar's Sketch button does |
 | `layers` | `{ set: { [id]: boolean } }` | layers shown or hidden (ids as in `layers`), kept in the browser as the user's own are |

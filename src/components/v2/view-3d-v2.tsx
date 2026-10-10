@@ -40,6 +40,8 @@ export interface View3DProps {
   simT: () => number | null; signals: () => SignalController[] | null;
   /** what is selected (drawn over the scene at its own height), the car picked (a ring round it) */
   selection: Piece; car: number | null;
+  /** the route traced (orange), and a test car's other way (blue) */
+  route: { lanes: Set<string>; conns: Set<string>; driven: { lanes: Set<string>; conns: Set<string> } } | null;
   /** a click on the scene at `p`, on level `level` (the highest first): true if it picked something there */
   pickAt: (p: Pt, level: number) => boolean;
   /** a click on nothing */
@@ -240,12 +242,31 @@ export function View3DV2(props: View3DProps) {
     // what is selected, drawn over the scene at its own height (a bridge's lane on the bridge), and a ring round the car picked
     const selMat = new THREE.MeshBasicMaterial({ color: pal.select, transparent: true, opacity: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8, side: THREE.DoubleSide });
     let overlay: THREE.Mesh | null = null, overlayFor: unknown[] = [];
+    const routeMats = [new THREE.MeshBasicMaterial({ color: "#f97316", transparent: true, opacity: 0.6, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -7, side: THREE.DoubleSide }), new THREE.MeshBasicMaterial({ color: "#2563eb", transparent: true, opacity: 0.6, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -7, side: THREE.DoubleSide })];
+    let routeMeshes: THREE.Mesh[] = [], routeFor: unknown[] = [];
+    const syncRoute = () => {
+      const p = live.current, key = [p.route, p.sketch];
+      if (key.every((x, i) => x === routeFor[i])) return;
+      routeFor = key;
+      for (const m of routeMeshes) { scene.remove(m); m.geometry.dispose(); }
+      routeMeshes = [];
+      if (!p.route) return;
+      [{ lanes: [...p.route.lanes], connectors: [...p.route.conns], junctions: [] }, { lanes: [...p.route.driven.lanes], connectors: [...p.route.driven.conns], junctions: [] }].forEach((pc, i) => {
+        const g = overlayGeo(pc);
+        if (g) { const m = new THREE.Mesh(g, routeMats[i]); m.renderOrder = 1; scene.add(m); routeMeshes.push(m); }
+      });
+    };
     const syncSelection = () => {
       const p = live.current, key = [p.selection, p.sketch];
       if (key.every((x, i) => x === overlayFor[i])) return;
       overlayFor = key;
       if (overlay) { scene.remove(overlay); overlay.geometry.dispose(); overlay = null; }
-      const sk = p.sketch, pos: number[] = [], idx: number[] = [];
+      const g = overlayGeo(p.selection);
+      if (g) { overlay = new THREE.Mesh(g, selMat); overlay.renderOrder = 2; scene.add(overlay); }
+    };
+    /** lanes, connectors and junctions as flat shapes just over them, each at its own height */
+    const overlayGeo = (sel: Piece): THREE.BufferGeometry | null => {
+      const p = live.current, sk = p.sketch, pos: number[] = [], idx: number[] = [];
       const ribbon = (pts: Pt[], hs: number[], w: number) => {
         const base = pos.length / 3, n = pts.length;
         for (let i = 0; i < n; i++) {
@@ -260,30 +281,30 @@ export function View3DV2(props: View3DProps) {
         for (const q of loop) pos.push(q.x, h + 0.15, q.y);
         for (const t of tris) idx.push(base + t[0], base + t[2], base + t[1]);
       };
-      for (const id of p.selection.lanes) {
+      for (const id of sel.lanes) {
         const l = laneById(sk, id);
         if (!l) continue;
         const L = laneLength(l.shape), pts: Pt[] = [], hs: number[] = [];
         for (let s2 = 0; s2 <= L + 1e-6; s2 += Math.max(0.5, Math.min(2, L / 40))) { pts.push(pointAt(l.shape, Math.min(s2, L)).p); hs.push(zAt(sk, id, Math.min(s2, L)) * LEVEL_H); }
         ribbon(pts, hs, l.width);
       }
-      for (const id of p.selection.connectors) {
+      for (const id of sel.connectors) {
         const c = sk.connectors.find(x => x.id === id), pts = c && connectorPts(sk, c);
         if (!c || !pts) continue;
         const h0 = zAt(sk, c.from.lane, c.from.s) * LEVEL_H, h1 = zAt(sk, c.to.lane, c.to.s) * LEVEL_H;
         ribbon(pts, pts.map((_, i) => h0 + ((h1 - h0) * i) / Math.max(1, pts.length - 1)), 1.2);
       }
-      for (const id of p.selection.junctions) {
+      for (const id of sel.junctions) {
         const j = sk.junctions.find(x => x.id === id), c = p.contents.get(id);
         if (!j || !c) continue;
         const h = junctionLevel(sk, c) * LEVEL_H;
         if (j.shape === "auto" && j.smooth) for (const loop of smoothJunction(sk, j, c).slice(0, 1)) flat(loop, h);
         else flat(outlinePath(j), h);
       }
-      if (!idx.length) return;
+      if (!idx.length) return null;
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
-      overlay = new THREE.Mesh(g, selMat); overlay.renderOrder = 2; scene.add(overlay);
+      return g;
     };
     const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.08, 6, 40), new THREE.MeshBasicMaterial({ color: pal.select }));
     ring.rotation.x = -Math.PI / 2; ring.visible = false; scene.add(ring);
@@ -330,7 +351,7 @@ export function View3DV2(props: View3DProps) {
       frame = 0;
       if (disposed) return;
       if (now - lastSync > 500) { lastSync = now; syncSat(); syncUnderlay(); }
-      syncRoads(); syncCars(now); syncLights(); syncSelection(); syncRing();
+      syncRoads(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing();
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
     };
