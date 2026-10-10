@@ -5,7 +5,7 @@
  * /tmp/sketch-<planId>.json for the next run (delete it to read the plan again). The run uses the sketch's own traffic
  * (rate, speed, settings), stepped 0.1 s at a time. SIM=<module> runs another copy of the sim (to compare with HEAD's).
  * Prints, per seed: deadlocks broken, collisions, cars stuck at the end, vehicles in and out, arrivals held back; then
- * where the deadlocks and collisions were (by junction, else by lane).
+ * where the deadlocks and collisions were (by junction, else by lane); VERBOSE=1 lists each one.
  */
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
@@ -52,6 +52,7 @@ async function main() {
     console.log(`  deadlocks at ${top(by("deadlock"))}`);
     console.log(`  collisions at ${top(by("collision"))}`);
     console.log(`  stuck at ${top(stuck)}`);
+    if (process.env.VERBOSE) for (const p of all) if (p.kind === "deadlock" || p.kind === "collision") console.log(`  ${p.t} ${p.kind} ${where(p.edge)} ${p.edge} car ${p.car}${p.other !== undefined ? `/${p.other}` : ""}: ${p.detail}`);
   }
 }
 main().catch(e => { console.error(e); process.exit(1); });
