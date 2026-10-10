@@ -15,8 +15,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T142 | V2: the dead-end test's same-street rule (167 on Bistrița, not 172; no turning circle at j206 etc.) | Tatiana | 2026-10-10 | after T141 |
-| T141 | V2 Lane panel: a "Smooth" button that curves every interior point of the lane (or of each selected lane / road) | Tatiana | 2026-10-10 | before T139 |
 | T134 | Bistrița: 172 dead-end U-turn stubs on rev 92: corrected to 167 (5 false positives): A1 = j696, j405, j633, j341 (link + U-turn removed) and j728, j100 (straight-on links), one patch; B 4; C 15; D 143 kept as turning circles; tracks not modelled (the user's choices), B 4 at the edge (ways in/out, one patch), C 15 unused (delete, one patch), D 82 real dead ends (keep; drawn as turning circles, T139): the user's choices | Bob | 2026-10-10 | list: /home/genie/bob-scratch/trafficsim/t134/T134-list.md |
 | T129 | V2 editor: draw zones (neighbourhoods): labelled, coloured polygons stored in the plan, a Zone tool, panel, layer, label click | Tom (Tatiana for the editor files), Ramona checks | 2026-10-10 | part 1 (data, history, layer, panel, shared fill): 8df5c21; part 2 (the editor) after Tatiana's T128 |
 | T127 | V2: cars' blinkers when turning, as in V1 (2D and 3D) | Alex (Tatiana for the views, Bob for the sim), Ramona checks | 2026-10-10 | data: 913e1ca; drawing: 71ff865 (amber, 380 ms on/off); browser check pending |
@@ -37,6 +35,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T142 | V2: dead-end test only counts a U-turn back onto the same street: 167 on Bistrița (no circle at j206, j728, j100, j266) | Tatiana, Bob | 2026-10-10 | 5d6eb2b |
+| T141 | V2: a "Smooth" button (Lane, Road and multi-lane panels) curving every point between a lane's ends; side-by-side lanes follow; one undo step | Tatiana | 2026-10-10 | feb7f78 |
 | T139 | V2: dead ends with only a U-turn drawn on a turning circle (2D and 3D, display only; 172 on Bistrița); an info line in the console | Tatiana | 2026-10-10 | 0c9e20d |
 | T140 | Agent patches can remove (lanes, connectors, junctions, roads, links, crossings, zones), with checks so nothing goes unlisted; shown struck through in the review; plain History files still can't remove | Alex | 2026-10-10 | f6b79b1 |
 | T124 | V2: connectors that turn back over 150° flagged in the Problems console ("Turns back", click to select) and straightened by a Tidy step (bends dropped, ends kept); 5 on Bistrița | Tatiana, Bob | 2026-10-10 | 223bad2 |
