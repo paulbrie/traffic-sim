@@ -16,7 +16,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
 | T160 | V2: undo/redo of a map edit must not bring back old Traffic/Demand numbers (they aren't on the undo stack) | Tom | 2026-10-10 | found in T158 |
-| T157 | Per-car explainer: state, speeds, leader, the rule and car holding it, blocking chain (deadlock flagged), plan and rejected gaps, recent decisions; map lines to leader/blocker and the conflict zone; copy as text and in the bridge snapshot | Bob (sim `explain`), Alex (UI) | 2026-10-10 | selected car only |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | causes in the drawing (cross lanes, one-lane bottleneck, slips); version 1 submitted as agent patch #5, a Sketch-window try-out (the user's choice); the main-plan patch kept ready |
 | T143 | Research: the best ways to show an agent swarm at work in 2D or very light graphics (prior art, low-power techniques, 3 concepts with mocks and CPU estimates, a recommendation, a quick win) | Alex | 2026-10-10 | the 3D view spins up the user's M5 fan |
 | T134 | Bistrița: 172 dead-end U-turn stubs on rev 92: corrected to 167 (5 false positives): A1 after a closer check = j696 (a missing roundabout, Petru Maior × Sigmirului) and j405 (a hairpin closing at j404), two patches; j633, j341 are real dead ends; j100, j728 correct as drawn; B 4; C 15; D 143 kept as turning circles; tracks not modelled (the user's choices), B 4 at the edge (ways in/out, one patch), C 15 unused (delete, one patch), D 82 real dead ends (keep; drawn as turning circles, T139): the user's choices | Bob | 2026-10-10 | list: /home/genie/bob-scratch/trafficsim/t134/T134-list.md |
@@ -37,6 +36,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T157 | Per-car explainer: 'Why' box (headline, speeds, leader, rule, held by, stop point, chain with Deadlock badge, plan, recent decisions, Copy), map/3D lines to leader and blocker and the conflict zone, replay from the recording, bridge selection.explain | Bob (sim), Alex (UI) | 2026-10-10 | 4410e63, 34f8bd7; Ramona's check on 7000 pending |
 | T158 | V2: a running simulation pauses when a map edit begins (drags, tools, panel fields, undo/redo of map edits; not select/pan/zoom or traffic/demand numbers), toast with Resume | Tom | 2026-10-10 | 4d44bff |
 | T149 | V2: align selected lanes like a design tool (left, centre, right, top, middle, bottom) | Tom | 2026-10-10 | bc2709a; checked by Ramona |
 | T155 | Check agent patch #5 on Bistrița: already applied by the user at rev 244; History entry and Sketch-window piece correct, main plan unchanged | Ramona | 2026-10-10 | ramona-scratch/t155/report.md |
