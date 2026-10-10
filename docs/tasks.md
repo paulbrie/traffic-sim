@@ -15,7 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T115 | History from file: refused items hidden behind "nothing to save"; the dialog compares against a stale current version after a save in the same page | Alex | 2026-10-10 | from T100 |
+| T116 | Re-test of T115 (refused items shown in red; #1 on a fresh page) | Ramona | 2026-10-10 | after T107 |
 | T113 | V2: the tab's renderer grew 5.4 → 7.9 GB in minutes at 30× with a test car followed (Bistrița copy): find and fix the growth | Tatiana (Bob if in the sim) | 2026-10-10 | after T112 |
 | T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test); 3D tilt by drag not reachable in Ramona's script | Tatiana | 2026-10-10 | from T97, T98 |
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
@@ -38,6 +38,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T115 | History from file: refused items shown ("Nothing would change: N left out" in red, the table with reasons); the "stale version" was a tab running pre-b50cf4e code, now pinned by a check; restore:check 26/26 | Alex | 2026-10-10 | 18584b1 |
 | T111 | Agents City: agents waiting for the user all look at the camera and wave: questions (AskUserQuestion, or a turn ending on a question) with "?", permission prompts with an amber "!" and "needs your OK" | Alex, Tom | 2026-10-10 | admin: 8cb65d8, 8202ecf |
 | T100 | Re-test of T88 (preview only; the save clicks are refused by Ramona's permission check): the merge is right in all 5 cases; refused items hidden and a stale current version (→ T115) | Ramona | 2026-10-10 | /home/genie/ramona-scratch/t100 |
 | T114 | Agents City Table: browsers shown by their label only (host, CPU) at the owner's seat, no screen | Tom | 2026-10-10 | admin: 609bdfe |
