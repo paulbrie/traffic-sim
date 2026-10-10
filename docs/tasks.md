@@ -15,7 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T163 | Admin: a 2D 'Ops' view (agent cards + swimlanes + flat repo map), the default, drawn on change; 2D/3D toggle | Alex | 2026-10-10 | after T162; approved by the user |
+| T163 | Admin: a 2D 'Ops' view (agent cards + swimlanes + isometric repo map, the user's choice), the default, drawn on change; 2D/3D toggle | Alex | 2026-10-10 | after T162; approved by the user |
 | T162 | Admin quick wins: finite status-dot pings; Low power switch for the 3D views | Alex | 2026-10-10 | approved by the user (T143) |
 | T161 | Priority model for roundabouts and complex junctions (ring priority, geometry/sign-based conflicts, first come first served only as last resort, no flip-flop) and editor warnings; proposal first | Bob | 2026-10-10 | approved by the user: build all; user report: car 93 waited 28 s at J696 |
 | T158b | Run after an edit pause restarted the sim from 0 after a geometry drag; should carry on like Resume | Tom | 2026-10-10 | cause: dev hot-reload of the sketch store module, not the drag; T158b' keeps stores/client across hot-reloads and stops the old worker |
