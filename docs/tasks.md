@@ -15,7 +15,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
-| T165 | V2: show junction warnings (console, tree badges, panel count; computed off the main thread after edits) and a 'Junction rules: first come / priority' toggle in sim settings | Tatiana | 2026-10-10 | approved by the user |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | causes in the drawing (cross lanes, one-lane bottleneck, slips); version 1 submitted as agent patch #5, a Sketch-window try-out (the user's choice); the main-plan patch kept ready |
 | T143 | Research: the best ways to show an agent swarm at work in 2D or very light graphics (prior art, low-power techniques, 3 concepts with mocks and CPU estimates, a recommendation, a quick win) | Alex | 2026-10-10 | the 3D view spins up the user's M5 fan |
 | T134 | Bistrița: 172 dead-end U-turn stubs on rev 92: corrected to 167 (5 false positives): A1 after a closer check = j696 (a missing roundabout, Petru Maior × Sigmirului) and j405 (a hairpin closing at j404), two patches; j633, j341 are real dead ends; j100, j728 correct as drawn; B 4; C 15; D 143 kept as turning circles; tracks not modelled (the user's choices), B 4 at the edge (ways in/out, one patch), C 15 unused (delete, one patch), D 82 real dead ends (keep; drawn as turning circles, T139): the user's choices | Bob | 2026-10-10 | list: /home/genie/bob-scratch/trafficsim/t134/T134-list.md |
@@ -36,6 +35,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T165 | V2: junction warnings in a worker after edits (console filter, tree badges, junction panel, click selects); 'Junction rules: First come / Priority' in sim settings | Tatiana | 2026-10-10 | c7dd890, 3d7f267 |
 | T161 | Junction priority model (roundabout roles, give-way, lights, main road, left turn, from the right; first come as timed last resort; commitment) behind tuning junctionRules (0 first come default, 1 priority); off = HEAD to the car on 16 seeds; editor warnings function | Bob | 2026-10-10 | 45439df, a455ded; toggle and warnings UI: T165 |
 | T161b | Car explainer: plain words for the junction-rule reasons and a patience note; unchanged with the setting off | Alex | 2026-10-10 | 6719f5b |
 | T157b | V2: editor shortcuts work whenever focus isn't in a text field or an open menu/dialog (document-level, pure rules in editor-keys.ts) | Alex | 2026-10-10 | a895829 |
