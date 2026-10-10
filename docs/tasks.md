@@ -18,12 +18,10 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T113 | V2: the tab's renderer grew 5.4 → 7.9 GB in minutes at 30× with a test car followed (Bistrița copy): find and fix the growth | Tatiana (Bob if in the sim) | 2026-10-10 | after T112 |
 | T112 | V2: editors.<kind>.route.test stays null after a test car (the trip shows only in stats.test); 3D tilt by drag not reachable in Ramona's script | Tatiana | 2026-10-10 | from T97, T98 |
 | T111 | Agents City: a plain question at the end of a turn counts as asking the user (session data), so that agent waves too; permission prompts wave too (the user, via Alex), with their own bubble | Alex (data), Tom (wave) | 2026-10-10 | data: admin 8cb65d8 (CommsNode.asking); the wave is Tom's |
-| T108 | Agents City (City and Table): an accessed file's building lifts into the air while the touch lingers, then settles; edits higher than reads | Alex (City, the shared curve), Tom (Table) | 2026-10-10 | City and lib/lift.ts: admin 3a899b3; Table after T96 |
 | T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
 | T100 | Re-test of T88 (Apply merges field by field) in the browser | Ramona | 2026-10-10 | after T97, T98 |
 | T95 | Agents City Table: commits as books on a bookshelf left of the whiteboard; Alice's avatar walks over and shelves each; the coffee mug removed if it costs frames | Tom | 2026-10-10 | after T92–T94, T96 |
-| T94 | Agents City Table: the City's lightning between the laptops and the files' buildings (shared with the City's lightning.tsx) | Tom (Alex for lightning.tsx) | 2026-10-10 | after T85 |
 | T91 | Agents City Table: a BLOCKED agent looks at Alice's avatar (open question to the user) | Tom | 2026-10-10 | waits for the user's answer |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Plan fix (r1560, J574) approved by the user in Alice's session 2026-10-10, with four more drawn-over spots; Bob extends the patch, then the user applies it through History. Notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
@@ -41,6 +39,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T108 | Agents City: a touched file's building lifts (edits 1.5 storeys, reads 1), with a ground shadow, bolts ending on the lifted roof, then settles; City and Table share lib/lift.ts | Alex, Tom | 2026-10-10 | admin: 3a899b3, 52f78d7 |
+| T94 | Agents City Table: the City's lightning from each laptop to its newest touched files (shared BoltPool), replacing the glowing threads; claim threads kept | Tom | 2026-10-10 | admin: 52f78d7 |
 | T109 | Admin: local-only content carried to origin (eu-funding workflow and agents, AGENTS-IMPROVEMENTS.md, TASKS.md), nginx/projects.conf untracked; /opt/project moved to origin/main, clean; backups: branch backup/local-main-2026-10-10, stash@{0}, /home/genie/alex-scratch/t109 | Alex, Alice | 2026-10-10 | admin: 5e606f7; ready for the user's deploy |
 | T96 | Agents City Table: table top at the avatars' seated elbow height (2.75 = 0.35 of standing, the user's choice), feet on a floor, chairs on it, a walking ring and the bookshelf's spot; camera re-framed | Tom | 2026-10-10 | admin: beaa4ee |
 | T110 | genie: the 2xlarge size (16 vCPU, 32 GB, disk unknown) in the API docs, the size list, both create forms and the tools' text | Alex, Alice | 2026-10-10 | genie: a4414f6 (pushed by Alice at the user's request) |
