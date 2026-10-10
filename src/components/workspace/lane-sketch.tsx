@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { cn } from "@/lib/utils";
 import { unproject } from "@/lib/osm/area";
 import {
-  LANE_WIDTH, addLane, contentsOf, setLaneSpeed, setRoadSpeed, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, junctionHoles, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -73,7 +73,9 @@ type Hit = { lane: string } | { connector: string } | { junction: string } | { l
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[] };
 /** a road's or a junction's name as drawn on the map: what it names, and its pill (px on the canvas) */
-type NameLabel = { kind: "road" | "junction"; id: string; x0: number; y0: number; x1: number; y1: number };
+type NameLabel = { kind: "road" | "junction" | "in" | "out"; id: string; /** a way in's or out's lanes */ lanes?: string[]; x0: number; y0: number; x1: number; y1: number };
+/** a way in's traffic, or a way out's share of the trips, being edited on its label: its lanes, where (px), the value it had */
+type WayEdit = { kind: "in" | "out"; lanes: string[]; x: number; y: number; value: number };
 /** a point to drag: a lane's, a connector's bend or end (moved along its lane or onto another), a junction's corner */
 type Handle = { kind: "lane" | "bend" | "corner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" };
 
@@ -286,7 +288,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     return null;
   };
   /** what a name shows lit while the pointer is on it: its junction, or its road's lanes */
-  const labelHover = (b: NameLabel): Hover => (b.kind === "junction" ? { junction: b.id } : { lanes: live.current.sketch.roads.find(r => r.id === b.id)?.lanes ?? [] });
+  const labelHover = (b: NameLabel): Hover => (b.kind === "junction" ? { junction: b.id } : b.lanes ? { lanes: b.lanes } : { lanes: live.current.sketch.roads.find(r => r.id === b.id)?.lanes ?? [] });
+  // (a way in's or out's label clicked: its number edited right there)
+  const [wayEdit, setWayEdit] = useState<WayEdit | null>(null);
+  const saveWay = (w: WayEdit, v: number) => {
+    setWayEdit(null);
+    if (Math.round(v * 10) !== Math.round(w.value * 10)) editSketch(s => (w.kind === "in" ? setInRate(s, w.lanes, Math.round(v)) : setOutShare(s, w.lanes, v)));
+    panel.current?.focus();
+  };
   /** what is under `p`: zebras, then connectors (on top of the lanes), then lanes, then the smallest junction surface */
   const pick = (p: Pt): Hit | null => {
     const sk = live.current.sketch, px = 1 / view.current.scale;
@@ -977,6 +986,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         if (h) { drag.current = { kind: "handle", base: sk, h }; return; }
         // (a name: what it names, as a click on it would pick it; a road's, the whole road, as a double-click on a lane of it)
         const lab = labelAt(e), road = lab?.kind === "road" ? sk.roads.find(r => r.id === lab.id) : null;
+        // (a way in's or out's label: its number edited there, as in Demand)
+        if (lab && lab.lanes && (lab.kind === "in" || lab.kind === "out")) {
+          if (readOnly) return;
+          const lane = (id: string) => laneById(sk, id)!, ws = (ids: string[]) => ids.reduce((b, id) => b + laneOutWeight(lane(id)), 0);
+          const all = ws(demandWays(sk).exits.flatMap(w => w.lanes));
+          const value = lab.kind === "in" ? Math.round(lab.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0)) : all > 0 ? Math.round((ws(lab.lanes) / all) * 100) : 0;
+          setWayEdit({ kind: lab.kind, lanes: lab.lanes, x: lab.x0, y: lab.y0, value });
+          return;
+        }
         if (road) { setSelCar(null); setSel(e.shiftKey ? { ...s, road: null, lanes: [...new Set([...s.lanes, ...road.lanes])] } : { ...NO_SEL, lanes: road.lanes, road: road.id }); redraw(); return; }
         // a car, to inspect (over what it drives on)
         const rt = live.current.replayT, car = lab ? null : (rt !== null ? sim.current?.replayCarAt(rt, raw, 4 / view.current.scale) : sim.current?.carAt(raw, 4 / view.current.scale)) ?? null;
@@ -1190,7 +1208,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const lab = tool === "select" && !g ? labelAt(e) : null;
     if (canvas.current && tool === "select" && !g) {
       const rh = rotateHandle(live.current.sketch, live.current.sel, v.scale);
-      canvas.current.style.cursor = (rh && dist(raw, rh.h) <= 8 / v.scale) || handleAt(raw) ? "grab" : lab ? "pointer" : "";
+      const way = lab?.kind === "in" || lab?.kind === "out";
+      canvas.current.style.cursor = (rh && dist(raw, rh.h) <= 8 / v.scale) || handleAt(raw) ? "grab" : lab && !(way && readOnly) ? "pointer" : "";
+      canvas.current.title = way && !readOnly ? (lab.kind === "in" ? "Click to edit the traffic coming in here (veh/h)" : "Click to edit this way out's share of the trips (%)") : "";
     }
     const d = draft.current;
     if (d?.kind === "arc" && d.start) {
@@ -1483,6 +1503,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               <span className="font-medium text-foreground">3D:</span> drag turns and tilts (up towards the horizon, down to straight down) · right-drag or Shift-drag pans · scroll zooms · click picks · F the whole sketch · Esc back where it arrived
             </div>
           )}
+          {wayEdit && <WayEditor key={`${wayEdit.lanes.join()}:${wayEdit.kind}`} edit={wayEdit} onSave={v => saveWay(wayEdit, v)} onCancel={() => { setWayEdit(null); panel.current?.focus(); }} />}
           {hoverCard && (() => {
             const info = describeHover(hoverCard.hit, sketch, contents, stats, hoverCard.car);
             return info ? <SketchHoverCard info={info} x={hoverCard.x} y={hoverCard.y} /> : null;
@@ -1882,6 +1903,43 @@ function GeometrySection({ sketch, lanes, lead }: { sketch: Sketch; lanes: strin
   );
 }
 
+/** a way out's share of the trips set to `pct` %: its lanes' weight made so, the other ways' kept (none else: any share is all of it) */
+function setOutShare(sk: Sketch, lanes: string[], pct: number): Sketch {
+  const w = (id: string) => laneOutWeight(laneById(sk, id)!);
+  const other = demandWays(sk).exits.flatMap(x => x.lanes).filter(id => !lanes.includes(id)).reduce((a, id) => a + w(id), 0);
+  if (pct <= 0) return setOutWeight(sk, lanes, 0);
+  if (other <= 0) return setOutWeight(sk, lanes, 1);
+  return setOutWeight(sk, lanes, Number(Math.min(100, (pct * other) / (100 - pct) / lanes.length).toFixed(3)));
+}
+/** a way in's traffic (veh/h) or a way out's share (%) edited on its label: Enter or a click away saves, Esc leaves it; ↑↓ step it */
+function WayEditor({ edit, onSave, onCancel }: { edit: WayEdit; onSave: (v: number) => void; onCancel: () => void }) {
+  const inWay = edit.kind === "in", max = inWay ? 5000 : 99, step = inWay ? 10 : 1;
+  const [text, setText] = useState(String(edit.value));
+  const done = useRef(false);
+  const v = Number(text.replace(",", ".")), ok = text.trim() !== "" && Number.isFinite(v) && v >= 0 && v <= max;
+  const leave = (save: boolean) => { if (done.current) return; done.current = true; if (save && ok) onSave(v); else onCancel(); };
+  return (
+    <div className="absolute z-[7] flex items-center gap-1 rounded bg-background/95 px-1 py-0.5 shadow-md" style={{ left: edit.x - 2, top: edit.y - 4 }}>
+      <input autoFocus onFocus={e => e.currentTarget.select()} value={text} inputMode="numeric" aria-invalid={!ok}
+        aria-label={inWay ? "Traffic coming in here, vehicles per hour" : "This way out's share of the trips, per cent"}
+        title={ok ? (inWay ? "Vehicles per hour, 0 to 5000 · Enter saves, Esc leaves it · ↑↓ ±10 (Shift ±100)" : "Per cent of the trips, 0 to 99 · Enter saves, Esc leaves it · ↑↓ ±1 (Shift ±10)") : `A number from 0 to ${max}`}
+        className={cn("h-6 w-16 rounded border bg-transparent px-1 text-right font-mono text-xs tabular outline-none", ok ? "border-input focus:border-primary" : "border-red-500 text-red-600")}
+        onChange={e => setText(e.target.value)}
+        onBlur={() => leave(true)}
+        onKeyDown={e => {
+          e.stopPropagation();
+          if (e.key === "Enter") { e.preventDefault(); if (ok) leave(true); }
+          else if (e.key === "Escape") { e.preventDefault(); leave(false); }
+          else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+            e.preventDefault();
+            const d = (e.key === "ArrowUp" ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
+            setText(String(Math.min(max, Math.max(0, Math.round((ok ? v : edit.value) + d)))));
+          }
+        }} />
+      <span className="text-[11px] text-muted-foreground">{inWay ? "veh/h" : "% of trips"}</span>
+    </div>
+  );
+}
 /** what the selection can be merged as: two whole roads (the first picked keeping its name), else two lanes; null if neither */
 function mergeTarget(sk: Sketch, sel: Sel): { kind: "roads" | "lanes"; a: string; b: string } | null {
   if (sel.connectors.length || sel.junctions.length || sel.link || sel.crossing) return null;
@@ -3155,6 +3213,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   // names: roads at the middle of their first lane, junctions at their top
   // the ways in and out: the traffic coming in, the share of trips leaving
   // (labels only once close enough to read them: ways in and out and road names from 1.5 px/m, junction names from 3)
+  // (each name and way's label drawn kept with where it is: a click or the pointer on one is on what it is of)
+  if (st.labels) st.labels.length = 0;
   if (st.layers.demand && v.scale >= 1.5) {
     const { entries, exits } = demandWays(sk), lane = (id: string) => laneById(sk, id)!;
     const sumW = exits.reduce((a, w) => a + w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0), 0);
@@ -3172,13 +3232,12 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         k += 4 * px;
       }
       tags.push({ ...c, hw, hh });
-      label(text, c, color);
+      st.labels?.push({ kind: atEnd ? "out" : "in", id: ids[0], lanes: ids, ...label(text, c, color) });
     };
     for (const w of entries) tag(w.lanes, false, `→ ${Math.round(w.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0))}/h`, dark ? "#4ade80" : "#15803d");
     for (const w of exits) { const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0); tag(w.lanes, true, ws === 0 ? "closed" : `${sumW ? Math.round((ws / sumW) * 100) : 0}% →`, dark ? "#93c5fd" : "#1d4ed8"); }
   }
-  // (a road's name once on the screen, a street cut into several roads named once; each name kept with where it is)
-  if (st.labels) st.labels.length = 0;
+  // (a road's name once on the screen, a street cut into several roads named once)
   const named = new Set<string>();
   for (const r of st.layers.names && v.scale >= 1.5 ? sk.roads : []) {
     const l = laneById(sk, r.lanes[0]), p = l && pointAt(l.shape, laneLength(l.shape) / 2).p;
