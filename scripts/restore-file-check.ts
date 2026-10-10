@@ -88,12 +88,12 @@ async function main() {
   });
 
   // ---- apply: some items
-  await t("apply: replaces by id, adds new ones, removes nothing, keeps everything else", () => {
+  await t("apply: changes by id, adds new ones, removes nothing, keeps everything else", () => {
     // as captured from the sim: derived fields too, which the checks drop
     const b2 = { ...line("b", 60, 120), shape: { kind: "line", pts: [{ x: 60, y: 0 }, { x: 80, y: 2 }, { x: 100, y: 2 }, { x: 120, y: 0 }] }, len: 60.2, poly: [1, 2] };
     const s = summary(JSON.stringify({ lanes: [b2, line("e", 200, 260), line("a", 0, 50)] }), "apply");
     assert.deepEqual(s.items, [
-      { kind: "lanes", id: "b", change: "replaced", before: "2 points", after: "4 points" },
+      { kind: "lanes", id: "b", change: "changed", before: "2 points", after: "4 points", fields: ["shape"] },
       { kind: "lanes", id: "e", change: "added", after: "2 points" },
       { kind: "lanes", id: "a", change: "unchanged", before: "2 points", after: "2 points" },
     ]);
@@ -107,19 +107,57 @@ async function main() {
 
   await t("apply: a connector or junction alone, against the current lanes", () => {
     const s = summary(JSON.stringify({ sketch: { connectors: [{ id: "k1", from: { lane: "a", s: 50 }, to: { lane: "b", s: 0 }, via: [{ x: 55, y: 1 }] }], junctions: [{ id: "j1", name: "J", outline: [{ x: 50, y: -5 }, { x: 60, y: -5 }, { x: 60, y: 5 }, { x: 50, y: 5 }] }] } }), "apply");
-    assert.deepEqual(s.items.map(x => [x.id, x.change, x.before, x.after]), [["k1", "replaced", "0 bend points", "1 bend points"], ["j1", "replaced", "3 outline points", "4 outline points"]]);
+    assert.deepEqual(s.items.map(x => [x.id, x.change, x.before, x.after]), [["k1", "changed", "0 bend points", "1 bend points"], ["j1", "changed", "3 outline points", "4 outline points"]]);
   });
 
   await t("apply: invalid items are left out and shown; the current one stays", () => {
     const s = summary(JSON.stringify({ lanes: [{ id: "b", shape: { kind: "line", pts: [] } }, { id: "z", shape: { kind: "line", pts: [] } }, line("e", 200, 260)] }), "apply");
     assert.deepEqual(s.items, [
       { kind: "lanes", id: "b", change: "left out (invalid; the current one stays)", before: "2 points", after: "2 points" },
-      { kind: "lanes", id: "z", change: "left out (invalid)" },
+      { kind: "lanes", id: "z", change: "left out (invalid)", why: "a new item must have all its fields" },
       { kind: "lanes", id: "e", change: "added", after: "2 points" },
     ]);
     assert.deepEqual(s.dropped, { lanes: 2 });
     // nothing removed: lane b, its connector and its road as they were
     for (const k of ["lanes", "connectors", "roads"] as const) assert.deepEqual(s.kinds[k].removed, [], k);
+    assert.deepEqual(s.kinds.lanes.added, ["e"]);
+  });
+
+  // ---- apply: partial items, field by field (T88)
+  await t("apply: an item with only some fields changes those (T72's {id, width})", () => {
+    const s = summary(JSON.stringify({ lanes: [{ id: "b", width: 5 }] }), "apply");
+    assert.deepEqual(s.items, [{ kind: "lanes", id: "b", change: "changed", before: "2 points", after: "2 points", fields: ["width"] }]);
+    assert.equal(s.same, false);
+    assert.deepEqual(s.kinds.lanes, { added: [], removed: [], changed: ["b"] });
+    const b = s.sketch.lanes.find(l => l.id === "b")!;
+    assert.deepEqual([b.width, b.shape], [5, cur.lanes.find(l => l.id === "b")!.shape]);
+    assert.deepEqual(s.dropped, {});
+  });
+
+  await t("apply: a field the file lacks is kept; null clears an optional one", () => {
+    const c2 = sanitizeSketch({ ...base, lanes: [{ ...line("a", 0, 50), control: "stop", inRate: 300 }, line("b", 60, 120), line("c", 0, -50)] })!;
+    const kept = summary(JSON.stringify({ lanes: [{ id: "a", width: 4 }] }), "apply", c2).sketch.lanes[0];
+    assert.deepEqual([kept.width, kept.control, kept.inRate], [4, "stop", 300]);
+    const s = summary(JSON.stringify({ lanes: [{ id: "a", control: null }] }), "apply", c2);
+    assert.deepEqual(s.items.map(x => [x.change, x.fields]), [["changed", ["control"]]]);
+    assert.equal("control" in s.sketch.lanes[0], false);
+    assert.equal(s.sketch.lanes[0].inRate, 300);
+  });
+
+  await t("apply: null on a required field is refused and says which; the current item stays", () => {
+    const s = summary(JSON.stringify({ lanes: [{ id: "a", shape: null, width: 5 }], connectors: [{ id: "k1", from: null }] }), "apply");
+    assert.deepEqual(s.items.map(x => [x.id, x.change, x.why]), [
+      ["a", "left out (invalid; the current one stays)", "shape can't be cleared"],
+      ["k1", "left out (invalid; the current one stays)", "from can't be cleared"],
+    ]);
+    assert.equal(s.same, true);
+    assert.deepEqual(s.sketch.lanes.find(l => l.id === "a"), cur.lanes.find(l => l.id === "a"));
+    assert.deepEqual(s.dropped, { lanes: 1, connectors: 1 });
+  });
+
+  await t("apply: a new id needs a whole item", () => {
+    const s = summary(JSON.stringify({ lanes: [{ id: "z", width: 4 }, line("e", 200, 260)] }), "apply");
+    assert.deepEqual(s.items.map(x => [x.id, x.change, x.why]), [["z", "left out (invalid)", "a new item must have all its fields"], ["e", "added", undefined]]);
     assert.deepEqual(s.kinds.lanes.added, ["e"]);
   });
 
@@ -176,6 +214,15 @@ async function main() {
     assert.deepEqual([s.scratch, s.journeys, s.connectors, s.roads], [cur.scratch, cur.journeys, cur.connectors, cur.roads]);
     // recorded as an apply, not a restore (History: "Applied from file", T69)
     assert.deepEqual(m.saves[0].restore, { note: "Applied changes from the file patch.json", kind: "apply" });
+  });
+
+  await t("apply on the server: an item's own fields merged onto the stored one (T88)", async () => {
+    const m = deps();
+    const r = await restoreFromFile({ mode: "apply", file: { lanes: [{ id: "b", width: 5 }] }, revision: 7 }, m.d);
+    assert.equal(r.ok, true);
+    const b = m.saves[0].sketch.lanes.find(l => l.id === "b")!;
+    assert.deepEqual([b.width, b.shape], [5, cur.lanes.find(l => l.id === "b")!.shape]);
+    assert.deepEqual(m.saves[0].sketch.connectors, cur.connectors);
   });
 
   await t("restore on the server keeps what the file lacks, from the stored sketch", async () => {

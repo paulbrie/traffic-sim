@@ -173,7 +173,7 @@ export function HistoryButton({ planId, canRestore, fromFile = true }: { planId:
             <AlertDialogTitle>{file ? MODE_TITLE[file.mode] : ""} {file?.fileName}?</AlertDialogTitle>
             <AlertDialogDescription>
               {file?.mode === "apply"
-                ? "The file's items replace the plan's with the same id and new ones are added; nothing is removed and everything else stays as it is. "
+                ? "Each of the file's items changes the plan's item with the same id (only the fields it has) and new ones are added; nothing is removed and everything else stays as it is. "
                 : "The file's sketch replaces the plan's; whatever the file lacks (its place on Earth, traffic, journeys, …) is kept from the current version. "}
               Compared with the current version (rev. {file?.revision}). It is saved as a new version for everyone who opens the plan; the current state stays in the history, so you can switch back.
             </AlertDialogDescription>
@@ -198,7 +198,7 @@ const FIRST = 4;
 const ids = (xs: string[]) => xs.slice(0, FIRST).join(", ") + (xs.length > FIRST ? ` +${xs.length - FIRST}` : "");
 
 /**
- * What the file changes: for "apply" each of its items (added / replaced / unchanged, shape before → after);
+ * What the file changes: for "apply" each of its items (added / changed and which fields / unchanged, shape before → after);
  * for both, per kind added / removed / changed against the current version (counts and the first ids), geo,
  * traffic, every other top-level field not kept as it is, and what the checks left out.
  */
@@ -225,7 +225,7 @@ function FileSummaryView({ s }: { s: FileSummary }) {
             {s.items.map(x => (
               <tr key={`${x.kind}:${x.id}`} className={x.change === "unchanged" ? "text-muted-foreground" : x.change.startsWith("left out") ? "text-destructive" : ""}>
                 <td className="py-1 pr-2"><span className="text-muted-foreground">{KIND_LABEL[x.kind].replace(/s$/, "").toLowerCase()} </span><span className="font-mono">{x.id}</span></td>
-                <td className="py-1 pr-2">{x.change}</td>
+                <td className="py-1 pr-2">{x.change}{x.fields ? `: ${x.fields.join(", ")}` : ""}{x.why ? ` (${x.why})` : ""}</td>
                 <td className="py-1 tabular">{x.before ?? "—"} → {x.after ?? "—"}</td>
               </tr>
             ))}

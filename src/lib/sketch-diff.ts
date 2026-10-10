@@ -5,8 +5,9 @@ import { sanitizeSketch, type Sketch } from "./lane-sketch";
  * current revision:
  * - "Restore from file": the file is a whole sketch and replaces the plan's;
  * - "Apply changes from file": the file holds only some items (lanes, connectors, roads, junctions, links,
- *   crossings); each replaces the current item with its id or is added, nothing is removed, and everything
- *   else is kept (`applyPatch`).
+ *   crossings); each changes the current item with its id, field by field (only the fields it has: `{id, width}`
+ *   changes a lane's width; null clears an optional field), or is added (then it must be whole); nothing is
+ *   removed, and everything else is kept (`applyPatch`).
  * Both results go through `sanitizeSketch`, the same checks the server applies to every saved sketch, and
  * whatever those leave out is reported, so nothing is dropped silently. The server repeats the merge itself
  * against the stored sketch (src/server/restore-file.ts).
@@ -47,9 +48,9 @@ export function pickPatch(raw: unknown): SketchPatch | null {
 }
 
 /**
- * `cur` with the patch's items in place of those with the same id, and the new ones added; sanitised. An item
- * the checks leave out is left out of the patch (`leftOut`, "kind:id"), so the current one stays: applying
- * never removes anything.
+ * `cur` with the patch's items merged onto those with the same id (the item's own fields over the current
+ * ones), and the new ones added; sanitised. An item the checks leave out is left out of the patch (`leftOut`,
+ * "kind:id"), so the current one stays: applying never removes anything.
  */
 export function applyPatchDetail(cur: Sketch | null, patch: SketchPatch): { sketch: Sketch | null; leftOut: Set<string> } {
   const leftOut = new Set<string>();
@@ -77,7 +78,8 @@ function merge(cur: Sketch | null, patch: SketchPatch): Sketch | null {
     const list: unknown[] = [...items(cur, k)], at = new Map(list.map((x, i) => [(x as Item).id, i]));
     for (const x of add) {
       const id = (x as Item).id, i = at.get(id);
-      if (i === undefined) { at.set(id, list.length); list.push(x); } else list[i] = x;
+      // (field by field: a file with only {id, width} changes the width, T88)
+      if (i === undefined) { at.set(id, list.length); list.push(x); } else list[i] = { ...(list[i] as object), ...(x as object) };
     }
     out[k] = list;
   }
@@ -89,7 +91,14 @@ export type KindDiff = { added: string[]; removed: string[]; changed: string[] }
 export type FieldChange = "differs" | "cleared by the file" | "only in file" | "kept from the current version";
 export type FieldDiff = { field: string; change: FieldChange };
 /** an item the file touches, for "apply": what it was and what it becomes */
-export type ItemChange = { kind: SketchKind; id: string; change: "added" | "replaced" | "unchanged" | "left out (invalid)" | "left out (invalid; the current one stays)"; before?: string; after?: string };
+export type ItemChange = {
+  kind: SketchKind; id: string; change: "added" | "changed" | "unchanged" | "left out (invalid)" | "left out (invalid; the current one stays)";
+  before?: string; after?: string;
+  /** "changed": the item's fields that change */
+  fields?: string[];
+  /** "left out": why, when it can be told (a required field cleared with null, a new item that isn't whole) */
+  why?: string;
+};
 
 export type FileSummary = {
   mode: FileMode;
@@ -124,6 +133,19 @@ export function shapeOf(kind: SketchKind, x: unknown): string {
     case "links": return `${n(o.conns)} connectors`;
     case "crossings": return "2 points";
   }
+}
+
+/** an item's fields set to null that it can't do without (e.g. a lane's shape), as "shape can't be cleared" */
+function clearedRequired(cur: Sketch | null, k: SketchKind, x: Item): string | undefined {
+  const nulls = Object.keys(x).filter(f => (x as Record<string, unknown>)[f] === null);
+  const bad = nulls.filter(f => applyPatchDetail(cur, { [k]: [{ id: x.id, [f]: null }] }).leftOut.size > 0);
+  return bad.length ? `${bad.join(", ")} can't be cleared` : undefined;
+}
+
+/** the top-level fields of an item that differ between two versions of it */
+function changedFields(before: object, after: object): string[] {
+  const b = before as Record<string, unknown>, a = after as Record<string, unknown>;
+  return [...new Set([...Object.keys(b), ...Object.keys(a)])].filter(f => !same(b[f], a[f]));
 }
 
 function kindDiffs(cur: Sketch | null, next: Sketch) {
@@ -229,8 +251,14 @@ export function readSketchFile(text: string, mode: FileMode, cur: Sketch | null)
       let lost = 0;
       for (const x of patch[k] ?? []) {
         const id = (x as Item).id, b = before.get(id), a = after.get(id);
-        if (!a || r.leftOut?.has(`${k}:${id}`)) { lost++; changes.push({ kind: k, id, change: b ? "left out (invalid; the current one stays)" : "left out (invalid)", ...(b ? { before: shapeOf(k, b), after: shapeOf(k, b) } : {}) }); continue; }
-        changes.push({ kind: k, id, change: !b ? "added" : same(a, b) ? "unchanged" : "replaced", ...(b ? { before: shapeOf(k, b) } : {}), after: shapeOf(k, a) });
+        if (!a || r.leftOut?.has(`${k}:${id}`)) {
+          lost++;
+          const why = b ? clearedRequired(cur, k, x as Item) : "a new item must have all its fields";
+          changes.push({ kind: k, id, change: b ? "left out (invalid; the current one stays)" : "left out (invalid)", ...(b ? { before: shapeOf(k, b), after: shapeOf(k, b) } : {}), ...(why ? { why } : {}) });
+          continue;
+        }
+        const fields = b ? changedFields(b, a) : [];
+        changes.push({ kind: k, id, change: !b ? "added" : fields.length ? "changed" : "unchanged", ...(b ? { before: shapeOf(k, b) } : {}), after: shapeOf(k, a), ...(fields.length ? { fields } : {}) });
       }
       if (lost) dropped[k] = lost;
     }
