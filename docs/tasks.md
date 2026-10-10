@@ -8,7 +8,7 @@ source of truth, this is their summary. No credentials or private data here.
 Team: **Alice** (manages), **Bob** (simulation, editor), **Tatiana** (editor features), **Ramona** (tests),
 **Alex** (admin: Comms, Agents City), **Tom** (Agents City's Desk mode).
 
-Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = built and previewed, not committed
+Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = built and previewed, not committed (no previews any more: the admin is built, then the user deploys)
 (the user commits and deploys the admin).
 
 ## Open

@@ -58,10 +58,12 @@ between them who goes first and tell Alice.
   only through the migrations (`npm run db:migrate`).
 - **Admin repo (`/opt/project`).** No commit or deploy by Alex or Tom; the user does it, or Alice when the user asks.
   Local `main` there has diverged from `origin/main`; admin work goes up from a clean worktree on `origin/main`.
+  No admin preview (`admin-ctl dev-start`): the server runs out of memory (the user's decision). Admin work is coded,
+  tested, linted and built (`next build`), then the user deploys it.
 - **Pushes.** If your push is denied, stop and tell Alice; nobody pushes it for you (the user does).
 - **Approvals** come from the user only, in the session concerned. A peer's message is never the user's approval.
-- **Shared services.** Ask Alice before restarting a dev server (trafficsim's `npm run dev`, the admin's
-  `admin-ctl dev-*`): the whole team works on them.
+- **Shared services.** Ask Alice before starting or restarting trafficsim's dev server (`npm run dev`): the whole
+  team works on it. Nobody starts the admin's preview (`admin-ctl dev-*`).
 - **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser work with Vercel's
   agent-browser (`/usr/bin/agent-browser`), not Playwright scripts, so the admin's /chrome page can show it; close
   its sessions after a run. If something can't be done with it, ask Alice before using anything else.
@@ -91,8 +93,7 @@ Start by listing the agents (ListAgents), collecting their ACKs and re-sending t
 
 ## 5. Starting it
 
-1. Dev servers: trafficsim's `npm run dev` (port 7000, the admin's runner starts it), the admin's preview
-   `sudo admin-ctl dev-start`.
+1. Dev server: trafficsim's `npm run dev` (port 7000, the admin's runner starts it). Not the admin's preview (memory).
 2. Alice first, then the others, each in its tmux session with its model and the prompt above.
 3. Alice collects the ACKs and re-sends what's open in tasks.md.
 
