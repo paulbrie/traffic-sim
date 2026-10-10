@@ -55,6 +55,7 @@ import { stampRoundabout } from "@/lib/roundabout";
 import { tidySketch, type TidyReport } from "@/lib/sketch-tidy";
 import { mergeLanes, mergeRoads, type MergeResult } from "@/lib/sketch-merge";
 import { translucentArea } from "@/render/area-fill";
+import { MemoryGauge } from "@/components/v2/top-bar-tools";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
@@ -1467,6 +1468,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={in3d && t.id !== "select" ? "Not in 3D: back to the plan to draw" : tip(t)} disabled={in3d && t.id !== "select"} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
         </ToggleGroup>
         <div className="ml-auto flex items-center gap-0.5">
+          {/* (the Sketch window over the plan: the page's memory here too, the plan's header being under it) */}
+          {!page && <span className="mr-2"><MemoryGauge /></span>}
           <Button size="sm" variant={running ? "secondary" : "default"} className="mr-0.5 h-7 w-20" onClick={play} title={running ? "Pause the cars (P)" : "Run cars on the sketch (P)"}>
             {running ? <><Pause /> Pause</> : <><Play /> Run</>}
           </Button>

@@ -11,7 +11,7 @@ import { UserMenu, type MenuUser } from "@/components/auth/user-menu";
 import { HistoryButton } from "@/components/workspace/history-dialog";
 import { AgentPatchesButton } from "@/components/workspace/agent-patches";
 import { LaneSketch } from "@/components/workspace/lane-sketch";
-import { FrameRate, SketchLayerPicker } from "./top-bar-tools";
+import { FrameRate, MemoryGauge, SketchLayerPicker } from "./top-bar-tools";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
 import { loadPlan, ui } from "@/state/store";
 import { planSketch, scratchSketch, SketchStoreContext } from "@/state/lane-sketch";
@@ -62,6 +62,7 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
           <SketchLayerPicker />
           <div className="ml-auto flex items-center gap-3">
             <FrameRate />
+            <MemoryGauge />
             <UserMenu user={user} />
           </div>
         </header>
