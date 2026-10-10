@@ -15,9 +15,9 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T107 | Browser test of T104 (Escape in the V2 3D view) | Ramona | 2026-10-10 | after T97, T98, T100 |
 | T106 | Agents City Table: messages between agents fly as paper planes from sender to receiver | Tom | 2026-10-10 | after T96 |
 | T105 | Agents City Table: an agent asking the user a question looks at the camera and waves (about 1.5 s, every 6–8 s while waiting) | Tom | 2026-10-10 | after T102 |
-| T104 | V2 3D view: Escape resets the camera to its default (after Escape's other jobs) | Tatiana | 2026-10-10 | after T74 |
 | T103 | Agents City (City and Table): Escape resets the camera to its default (after closing whatever is open) | Alex (Tom for the Table's default) | 2026-10-10 | after T102 |
 | T102 | Agents City Table: who is using a browser (each open agent-browser session at its owner's seat, with its CPU; unowned ones marked) | Alex (data), Tom (display) | 2026-10-10 | data: admin 91fc749 (/api/agents3d/browsers); display after T92 |
 | T101 | Agents City Table: the gauges ease to each new value instead of jumping (about 0.8 s) | Tom | 2026-10-10 | with T92 |
@@ -46,6 +46,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T104 | V2 3D view: Escape, after its other jobs, eases the camera back to the framing on entering 3D (0.7 s); editors.<kind>.camera in the UI store | Tatiana | 2026-10-10 | 73a5b56 |
 | T74 | V2 route tracer: way in, way out, lane, route drawn, a test car from the panel, "other way" only for a longer way. With the plan's traffic (3 seeds × 60 cars): 113 of 180 arrived, never faster than the limits, 24 flagged blue, all on real reroutes. Screenshots via Ramona's T97 | Tatiana | 2026-10-10 | 6994d9a, 46a9565, 14a24fe, fde6bbb |
 | T99 | Agents City: folders starting with "." left out of the cities (server-side, before the file cap) unless "Show hidden folders" (?dot=1); dot-files in shown folders stay; touches inside hidden folders draw no bolt | Alex | 2026-10-10 | admin: 941d8aa (pushed, not deployed) |
 | T85 | Agents City and Table: on-demand frames (60 flights, 30 animating, 0 when still or hidden), dpr ≤ 1.5, 4× MSAA, 250 ms clock, stable handlers, no per-frame allocations; idle Table frozen (the user's choice). Harness (SwiftShader): City idle 417% → 4% CPU, Table calm 722% → 32% | Alex, Tom | 2026-10-10 | admin: f1d0b13 (pushed, not deployed) |
