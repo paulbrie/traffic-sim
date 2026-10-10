@@ -45,10 +45,32 @@ export interface SketchStore {
 
 interface Step { back: Sketch; left: Sketch }
 
+/**
+ * What a store keeps that a hot reload in development must not lose (T158b'): its undo history and its cars.
+ * A pull on the dev server that touches this module evaluates it again; without this, every open page's stores
+ * started over (the next Run a new run from 0, the undo history gone, the old worker left running). Kept on
+ * globalThis, with what the evaluation before had hooked up undone; the functions are made again, so the new
+ * code runs. Not in production (no hot reloads there).
+ */
+interface Kept { past: Step[]; future: Step[]; sim: SketchSimClient | null }
+/** raised when Kept changes shape: what an older evaluation kept is then let go (its workers stopped) */
+const KEPT_VERSION = 1;
+interface Carried { version: number; kept: Partial<Record<SketchStore["kind"], Kept>>; dispose: (() => void)[] }
+const carried: Carried | null = process.env.NODE_ENV === "production" ? null : (() => {
+  const g = globalThis as { __trafficsimSketchStores?: Carried };
+  const old = g.__trafficsimSketchStores;
+  old?.dispose.forEach(f => f());
+  const same = old?.version === KEPT_VERSION;
+  if (old && !same) for (const k of Object.values(old.kept)) k?.sim?.terminate();
+  return (g.__trafficsimSketchStores = { version: KEPT_VERSION, kept: same ? old.kept : {}, dispose: [] });
+})();
+/** `off` run when this module is evaluated again (development) */
+const onDispose = (off: () => void) => { carried?.dispose.push(off); };
+
 function makeStore(kind: SketchStore["kind"], sketch$: Subject<Sketch>, write: (sk: Sketch) => void): SketchStore {
   // (each step: the sketch to go back to, and the sketch the step left; see stepBack)
-  const past: Step[] = [], future: Step[] = [];
-  let sim: SketchSimClient | null = null;
+  const kept: Kept = carried?.kept[kind] ?? { past: [], future: [], sim: null }, { past, future } = kept;
+  if (carried) carried.kept[kind] = kept;
   const editing = new Set<() => void>();
   const begin = () => editing.forEach(f => f());
   // (a change that edits the map, not only the run's settings)
@@ -82,13 +104,15 @@ function makeStore(kind: SketchStore["kind"], sketch$: Subject<Sketch>, write: (
       if (past.length > MAX) past.shift();
       future.length = 0;
     },
-    sim: () => sim,
-    setSim(s) { sim = s; },
+    sim: () => kept.sim,
+    setSim(s) { kept.sim = s; },
     forget() { past.length = 0; future.length = 0; },
     onEdit(f) { editing.add(f); return () => { editing.delete(f); }; },
   };
   // (another plan loaded: its cars go, their worker stopped)
-  sketchReplaced.add(why => { store.forget(); if (why === "load") { sim?.terminate(); sim = null; } });
+  const replaced = (why: "load" | "merge") => { store.forget(); if (why === "load") { kept.sim?.terminate(); kept.sim = null; } };
+  sketchReplaced.add(replaced);
+  onDispose(() => sketchReplaced.delete(replaced));
   return store;
 }
 
@@ -109,11 +133,11 @@ export const wholeSketch = makeStore("whole", laneSketch$, sk => laneSketch$.nex
 const planView$ = new Subject<Sketch>(planPart(laneSketch$.getValue()), { name: "planSketch", updateIfStrictlyEqual: false });
 const scratchView$ = new Subject<Sketch>(laneSketch$.getValue().scratch ?? emptySketch(), { name: "scratchSketch", updateIfStrictlyEqual: false });
 // (the plan loaded, merged, or restored: each part shown again if it changed)
-laneSketch$.subscribe(k => {
+onDispose(laneSketch$.subscribe(k => {
   if (!samePlan(k, planView$.getValue())) planView$.next(planPart(k));
   const sc = k.scratch ?? null, cur = scratchView$.getValue();
   if (sc ? sc !== cur : cur.lanes.length || cur.junctions.length || cur.connectors.length || cur.crossings?.length || cur.zones?.length) scratchView$.next(sc ?? emptySketch());
-});
+}).unsubscribe);
 export const planSketch = makeStore("plan", planView$, sk => {
   planView$.next(sk);
   const cur = laneSketch$.getValue(), sc = cur.scratch;
