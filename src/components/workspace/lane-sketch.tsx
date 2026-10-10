@@ -87,7 +87,9 @@ type NameLabel = { kind: "road" | "junction" | "in" | "out" | "zone"; id: string
 /** a way in's traffic, or a way out's share of the trips, being edited on its label: its lanes, where (px), the value it had */
 type WayEdit = { kind: "in" | "out"; lanes: string[]; x: number; y: number; value: number };
 /** a point to drag: a lane's, a connector's bend or end (moved along its lane or onto another), a junction's corner */
-type Handle = { kind: "lane" | "bend" | "corner" | "zcorner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" };
+type Handle = { kind: "lane" | "bend" | "corner" | "zcorner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" }
+  /** the middle of a selected junction's edge after corner `i`: a corner put in there */
+  | { kind: "jmid"; id: string; i: number; p: Pt };
 
 type Draft =
   | { kind: "lane"; pts: Pt[] }
@@ -101,7 +103,7 @@ type Draft =
 type Drag =
   | { kind: "pan"; x0: number; y0: number; v0: View; /** with the right button: a click without moving opens the menu */ right?: boolean }
   | { kind: "move"; base: Sketch; from: Pt; piece: Piece }
-  | { kind: "handle"; base: Sketch; h: Handle }
+  | { kind: "handle"; base: Sketch; h: Handle; /** dragged from this (a corner just put in), undone back to `base` */ from?: Sketch }
   | { kind: "box"; a: Pt; b: Pt; add: boolean }
   | { kind: "rotate"; base: Sketch; o: Pt; a0: number; piece: Piece; angle: number }
   /** a zebra crossing: moved whole, or one kerb end */
@@ -203,6 +205,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [rawSel, setSel] = useEditorState(ek, "selection");
   /** a line lane's point picked (to curve or delete) */
   const [selPt, setSelPt] = useEditorState(ek, "point");
+  /** a selected junction's corner picked (to take out with Delete) */
+  const [selCorner, setSelCorner] = useState<{ junction: string; i: number } | null>(null);
   /** a car picked to inspect (by its number), and the view kept on it */
   const [selCar, setSelCarId] = useEditorState(ek, "car");
   const [carInfo, setCarInfo] = useState<ReturnType<SketchSim["inspect"]>>(null);
@@ -256,7 +260,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // the hand shown over the map: open while Space is held (ready to drag it), closed while it is dragged
   const [hand, setHand] = useState<"" | "grab" | "grabbing">("");
   // the menu a right click opens, where it was clicked, and the lanes it is for
-  const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null; /** the place on the lane clicked a point can go (a line lane, not following a lead) */ add: { lane: string; p: Pt } | null } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null; /** the place on the lane clicked a point can go (a line lane, not following a lead) */ add: { lane: string; p: Pt } | null;
+    /** on a selected junction's corner: that corner (its own items) */ corner?: { junction: string; i: number; curved: boolean } | null } | null>(null);
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
@@ -277,7 +282,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     } else if ((stats.t < T.t0 && testSeen.current === T.car) || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
   }, [stats, sketch, route.result, route.test, setRoute]);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown });
 
   // ------------------------------------------------------------ coordinates, snapping, picking
   const toWorld = (e: { clientX: number; clientY: number }): Pt => {
@@ -368,6 +373,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const handleAt = (p: Pt): Handle | null => {
     const sk = live.current.sketch, s = live.current.sel, tol = 7 / view.current.scale;
     const find = (kind: "lane" | "bend" | "corner" | "zcorner", id: string, pts: Pt[] | undefined) => { const i = pts?.findIndex(q => dist(p, q) <= tol) ?? -1; return i >= 0 ? { kind, id, i } : null; };
+    // (a junction selected: its corners before what is on it, then the "+" in each edge's middle)
+    for (const id of s.junctions) { const h = find("corner", id, sk.junctions.find(j => j.id === id)?.outline); if (h) return h; }
+    if (s.junctions.length === 1) {
+      const j = sk.junctions.find(x => x.id === s.junctions[0]);
+      if (j) for (const [i, m] of edgeMiddles(j.outline).entries()) if (dist(p, m) <= tol) return { kind: "jmid", id: j.id, i, p: m };
+    }
     for (const id of s.connectors) {
       const c = sk.connectors.find(x => x.id === id);
       if (!c) continue;
@@ -377,7 +388,6 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     // (a lane following a lead in a side-by-side road is shaped by its lead)
     for (const id of s.lanes) { const l = laneById(sk, id); const h = l?.shape.kind === "line" && !leadOf(sk, id) ? find("lane", id, l.shape.pts) : null; if (h) return h; }
-    for (const id of s.junctions) { const h = find("corner", id, sk.junctions.find(j => j.id === id)?.outline); if (h) return h; }
     for (const id of s.zones ?? []) { const h = find("zcorner", id, sk.zones?.find(z => z.id === id)?.outline); if (h) return h; }
     return null;
   };
@@ -487,8 +497,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (a render: the kept image drawn again only if something it shows changed, not for the cars' stats)
   const shownBy = useRef<unknown[]>([]);
   useEffect(() => {
-    live.current = { sketch, sel, tool, contents, selPt, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown };
-    const now = [sketch, sel, tool, contents, selPt, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown];
+    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown };
+    const now = [sketch, sel, tool, contents, selPt, selCorner, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown];
     const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
     shownBy.current = now;
     redraw(changed);
@@ -855,14 +865,34 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
   }, [page, panel, ek]);
+  /** a junction's corners edited, one undo step; an Automatic surface made the Drawn one its border makes, said */
+  const editCorners = (id: string, f: (j: SketchJunction) => SketchJunction) => {
+    const was = live.current.sketch.junctions.find(j => j.id === id);
+    editSketch(k => ({ ...k, junctions: k.junctions.map(j => (j.id === id ? asDrawn(f(j)) : j)) }));
+    if (was?.shape === "auto") drawnNow(was.name);
+  };
+  /** a junction's corner taken out (not below three) */
+  const removeJunctionCorner = (id: string, i: number) => {
+    const j = live.current.sketch.junctions.find(x => x.id === id);
+    if (!j) return;
+    if (j.outline.length <= 3) { toast("A junction keeps three corners at least", { description: "Delete the junction instead (its panel's bin)." }); return; }
+    editCorners(id, x => removeCorner(x, i));
+    setSelCorner(null);
+  };
   /** a point added to a selected connector (a bend) or junction (a corner) where it was double-clicked; on a point, the point taken out */
   const editPoints = (p: Pt) => {
     const sk = live.current.sketch, s = live.current.sel, h = handleAt(p);
     if (h?.kind === "end") return true;
     if (h?.kind === "lane") { deletePoint(h.id, h.i); return true; }
     if (h?.kind === "bend") { editSketch(k => ({ ...k, connectors: k.connectors.map(c => (c.id === h.id ? { ...c, via: c.via!.filter((_, i) => i !== h.i) } : c)) })); return true; }
-    if (h?.kind === "corner") {
-      editSketch(k => ({ ...k, junctions: k.junctions.map(j => (j.id === h.id ? removeCorner(j, h.i) : j)) }));
+    if (h?.kind === "corner") { removeJunctionCorner(h.id, h.i); return true; }
+    if (h?.kind === "jmid") { editCorners(h.id, j => insertCorner(j, h.i + 1, snap(h.p).p)); return true; }
+    // (a selected junction's border: a corner put in there, before its own lanes and connectors under it get a point)
+    for (const id of s.junctions) {
+      const j = sk.junctions.find(x => x.id === id)!, border = outlinePath(j);
+      if (nearestOn({ kind: "line", pts: [...border, border[0]] }, p).d > 6 / view.current.scale) continue;
+      const q = snap(p).p, i = insertIndex(j.outline, q, true);
+      editCorners(id, x => insertCorner(x, i, q));
       return true;
     }
     if (h?.kind === "zcorner") {
@@ -884,14 +914,6 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const c = sk.connectors.find(x => x.id === hit.connector)!, a = at(sk, c.from)!, b = at(sk, c.to)!, via = c.via ?? [];
       const i = insertIndex([a.p, ...via, b.p], q, false) - 1;
       editSketch(k => ({ ...k, connectors: k.connectors.map(x => (x.id === c.id ? { ...x, via: [...via.slice(0, i), q, ...via.slice(i)] } : x)) }));
-      return true;
-    }
-    for (const id of s.junctions) {
-      const j = sk.junctions.find(x => x.id === id)!;
-      const border = outlinePath(j);
-      if (nearestOn({ kind: "line", pts: [...border, border[0]] }, p).d > 6 / view.current.scale) continue;
-      const i = insertIndex(j.outline, q, true);
-      editSketch(k => ({ ...k, junctions: k.junctions.map(x => (x.id === id ? insertCorner(x, i, q) : x)) }));
       return true;
     }
     // (on a selected zone's border: a corner put in there; see zoneEditAt)
@@ -990,6 +1012,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const viewNow = () => { const c = canvas.current, v = view.current; return { cx: v.cx, cy: v.cy, wm: (c?.clientWidth ?? 800) / v.scale, hm: (c?.clientHeight ?? 600) / v.scale }; };
   const openMenu = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const sk = live.current.sketch, s = live.current.sel, raw = toWorld(e), l = laneUnder(sk, raw, 1 / view.current.scale);
+    // (on a selected junction's corner: that corner's menu)
+    const h = handleAt(raw);
+    if (h?.kind === "corner") {
+      const j = sk.junctions.find(x => x.id === h.id), r0 = e.currentTarget.getBoundingClientRect();
+      setSelCorner({ junction: h.id, i: h.i });
+      setMenu({ x: e.clientX - r0.left, y: e.clientY - r0.top, lanes: [], straightenable: false, ring: false, geo: null, add: null, corner: { junction: h.id, i: h.i, curved: !!j?.curved?.[h.i] } });
+      return;
+    }
     // (on a lane of the selection: all the lanes selected; on another: that one, selected; off any: the lanes selected, if any)
     const lanes = l ? (s.lanes.includes(l.id) ? s.lanes : [l.id]) : s.lanes;
     // (where on Earth, the sketch placed on the map: the spot to open in Google Maps, as in V1)
@@ -1035,7 +1065,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           if (e.altKey) { curvePoint(h.id, h.i); return; }
         } else setSelPt(null);
         // (Alt on a junction's corner: rounded off, or a corner again)
-        if (h?.kind === "corner" && e.altKey) { editSketch(k => ({ ...k, junctions: k.junctions.map(j => (j.id === h.id ? toggleCorner(j, h.i) : j)) })); return; }
+        if (h?.kind === "corner" && e.altKey) { editCorners(h.id, j => toggleCorner(j, h.i)); return; }
+        setSelCorner(h?.kind === "corner" ? { junction: h.id, i: h.i } : null);
+        // (an edge's "+": a corner put in its middle, and dragged from there; one undo step)
+        if (h?.kind === "jmid") {
+          const q = snap(h.p).p, from = { ...sk, junctions: sk.junctions.map(j => (j.id === h.id ? asDrawn(insertCorner(j, h.i + 1, q)) : j)) };
+          dragShow(from);
+          drag.current = { kind: "handle", base: sk, from, h: { kind: "corner", id: h.id, i: h.i + 1 } };
+          setSelCorner({ junction: h.id, i: h.i + 1 });
+          return;
+        }
         if (h) { drag.current = { kind: "handle", base: sk, h }; return; }
         // (a name: what it names, as a click on it would pick it; a road's, the whole road, as a double-click on a lane of it)
         const lab = labelAt(e), road = lab?.kind === "road" ? sk.roads.find(r => r.id === lab.id) : null;
@@ -1245,7 +1284,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       if (place && !(place.lane === other.lane && Math.abs(place.s - other.s) < 0.5 && !c.via?.length))
         dragShow({ ...b, connectors: b.connectors.map(x => (x.id === id ? { ...x, [end]: place } : x)) });
     } else if (g?.kind === "handle" && g.h.kind !== "end") {
-      const { kind, id, i } = g.h, b = g.base;
+      const { kind, id, i } = g.h as Extract<Handle, { i: number }>, b = g.from ?? g.base;
       if (kind === "lane") {
         const l = laneById(b, id)!;
         if (l.shape.kind === "line") dragShow(settle(reshape(b, id, { ...l.shape, pts: l.shape.pts.map((q, k) => (k === i ? snap(raw, id).p : q)) })));
@@ -1255,7 +1294,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       } else if (kind === "zcorner") {
         dragShow({ ...b, zones: (b.zones ?? []).map(z => (z.id === id ? moveZoneCorner(z, i, snap(raw).p) : z)) });
       } else {
-        dragShow({ ...b, junctions: b.junctions.map(j => (j.id === id ? { ...j, outline: j.outline.map((x, k) => (k === i ? snap(raw).p : x)) } : j)) });
+        dragShow({ ...b, junctions: b.junctions.map(j => (j.id === id ? asDrawn({ ...j, outline: j.outline.map((x, k) => (k === i ? snap(raw).p : x)) }) : j)) });
       }
     } else if (g?.kind === "crossing") {
       // (to the half metre, as points are; Shift: off the grid)
@@ -1304,6 +1343,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     // a right click (not a right drag): the menu for the lane under it, or the lanes selected
     if (g?.kind === "pan" && g.right && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) { openMenu(e); return; }
     if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || (g?.kind === "crossing" && store.sketch$.getValue() !== g.base)) recordSketch(g.base);
+    // (an Automatic junction's corner moved, or put in: its surface Drawn now, said)
+    if (g?.kind === "handle" && g.h.kind === "corner" && store.sketch$.getValue() !== g.base) { const j = g.base.junctions.find(x => x.id === (g.h as { id: string }).id); if (j?.shape === "auto") drawnNow(j.name); }
     if (g?.kind === "box" && dist(g.a, g.b) * view.current.scale > 3) {
       const sk = live.current.sketch, x0 = Math.min(g.a.x, g.b.x), x1 = Math.max(g.a.x, g.b.x), y0 = Math.min(g.a.y, g.b.y), y1 = Math.max(g.a.y, g.b.y);
       const inside = (pts: Pt[] | null) => !!pts?.length && pts.every(p => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1);
@@ -1404,6 +1445,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       e.preventDefault();
       if (d.kind === "connector") { if (!d.via.pop()) draft.current = null; } else { d.pts.pop(); if (!d.pts.length) draft.current = null; }
       redraw();
+      return;
+    }
+    if ((k === "delete" || k === "backspace") && live.current.selCorner && live.current.sel.junctions.includes(live.current.selCorner.junction)) {
+      e.preventDefault();
+      removeJunctionCorner(live.current.selCorner.junction, live.current.selCorner.i);
       return;
     }
     if (k === "delete" || k === "backspace") {
@@ -1531,6 +1577,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <DropdownMenu open onOpenChange={o => { if (!o) setMenu(null); }}>
               <DropdownMenuTrigger asChild><span className="absolute size-px" style={{ left: menu.x, top: menu.y }} aria-hidden /></DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56" onCloseAutoFocus={e => { e.preventDefault(); panel.current?.focus(); }}>
+                {menu.corner && <>
+                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Corner {menu.corner.i + 1} of {sketch.junctions.find(j => j.id === menu.corner!.junction)?.name ?? menu.corner.junction}</DropdownMenuLabel>
+                  <DropdownMenuItem disabled={readOnly} onSelect={() => { const c = menu.corner!; editCorners(c.junction, j => toggleCorner(j, c.i)); }}>
+                    {menu.corner.curved ? "Make sharp" : "Make a curve"} <span className="ml-auto text-[11px] text-muted-foreground">Alt-click</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={readOnly} onSelect={() => { const c = menu.corner!; removeJunctionCorner(c.junction, c.i); }}>
+                    <Trash2 /> Take out this corner <span className="ml-auto text-[11px] text-muted-foreground">Del · double-click</span>
+                  </DropdownMenuItem>
+                </>}
                 {menu.lanes.length > 0 && <>
                   <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{menu.lanes.length === 1 ? `Lane ${menu.lanes[0]}` : `${menu.lanes.length} lanes`}</DropdownMenuLabel>
                   <DropdownMenuItem disabled={readOnly || !menu.add} onSelect={() => addPointAt(menu.add!)}>
@@ -1590,7 +1645,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             onPointerLeave={() => { cursor.current = null; hover.current = null; hoverOff(); redraw(); }}
             onDoubleClick={onDoubleClick} onContextMenu={e => e.preventDefault()} />
           <div className={cn("pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm", in3d && "hidden")}>
-            <span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
+            {tool === "select" && sel.junctions.length === 1 && !sel.connectors.some(c => !contents.get(sel.junctions[0])?.connectors.includes(c))
+              ? <><span className="font-medium text-foreground">Junction shape:</span> {JUNCTION_HINT} · </>
+              : <><span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · </>}scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
           {in3d && (
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed}
@@ -2103,6 +2160,16 @@ function WayEditor({ edit, onSave, onCancel }: { edit: WayEdit; onSave: (v: numb
     </div>
   );
 }
+/** the middle of each edge of a closed outline (edge i: from corner i to the next) */
+const edgeMiddles = (pts: Pt[]) => pts.map((p, i) => { const q = pts[(i + 1) % pts.length]; return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }; });
+/** how a selected junction's shape is edited (the map's hint line, and its panel) */
+const JUNCTION_HINT = "drag a corner to move it · drag a + (an edge's middle) to add one, or double-click the edge · click a corner, then Delete (or double-click it) to take it out · Alt-click or right-click a corner to curve it · one ⌘Z undoes each";
+/** a junction whose corners are edited: an Automatic surface (its border only saying what it takes in) made the Drawn one its border makes */
+const asDrawn = (j: SketchJunction): SketchJunction => { if (j.shape !== "auto") return j; const { shape: _, ...rest } = j; return rest; };
+/** said once an Automatic junction's corners were edited */
+const drawnNow = (name: string) => toast(`${name}: its surface is Drawn now`, {
+  description: "Automatic, its border only said what it takes in; with its corners edited, the surface is the border. ⌘Z brings it back (or Surface: Automatic, in its panel).",
+});
 /** lanes of a road deleted (the road keeps the rest, laid out again side by side), one undo step; said what went */
 function deleteRoadLanes(sk: Sketch, ids: string[], edit: (f: (s: Sketch) => Sketch) => void, setSel: (s: Sel) => void) {
   if (!ids.length) return;
@@ -2249,7 +2316,7 @@ function SelectionPanel({ sketch, sel, setSel, contents, junctionSel, selPt, onC
           })()}
         </p>
         {results && <JunctionLine st={results.junctions?.find(x => x.id === junction.id)} t={results.t} />}
-        <p className="text-[11px] text-muted-foreground">Drag its corners to reshape it; double-click its edge to add a corner, a corner to take it out; Alt-click a corner to round it off (again to make it sharp). Moving or turning it takes what is on it along.</p>
+        <p className="text-[11px] text-muted-foreground">Its shape, on the map: {JUNCTION_HINT}.{junction.shape === "auto" ? " Its surface is Automatic: editing a corner makes it Drawn (the surface then follows the border)." : ""} Moving or turning it takes what is on it along.</p>
         <div className="grid gap-1">
           <span className="text-xs text-muted-foreground">Surface</span>
           <ToggleGroup type="single" value={junction.shape ?? "drawn"} aria-label="Junction surface" className="w-full"
@@ -2724,6 +2791,8 @@ interface PaintState {
   cursor: { p: Pt; snapped: boolean; alt: boolean } | null; hover: Hover | null;
   placeOn: (p: Pt) => LaneAt | null;
   selPt: { lane: string; i: number } | null;
+  /** a selected junction's corner picked */
+  selCorner?: { junction: string; i: number } | null;
   /** the cars coloured by their speed (else all one colour, a truck's cab its own) */
   bySpeed: boolean;
   /** the route traced (its lanes and connectors), drawn over the map; and where a test car drove another way */
@@ -3342,12 +3411,18 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   for (const id of s.junctions) {
     const j = sk.junctions.find(x => x.id === id);
     if (!j) continue;
-    translucentArea(ctx, outlinePath(j), col.sel, px, EDITED_AREA);
+    translucentArea(ctx, outlinePath(j), col.sel, px, { ...EDITED_AREA, border: 1.5 });
     if (j.curved?.some(Boolean)) curveGuide(j.outline, true);
+    const picked = (i: number) => st.selCorner?.junction === id && st.selCorner.i === i;
     j.outline.forEach((p, i) => {
-      if (!j.curved?.[i]) { square(p); return; }
-      curveHandle(p, false);
+      if (!j.curved?.[i]) { square(p); if (picked(i)) { ctx.fillStyle = col.sel; ctx.fillRect(p.x - 3.5 * px, p.y - 3.5 * px, 7 * px, 7 * px); } return; }
+      curveHandle(p, picked(i));
     });
+    // (one junction selected: a "+" in each edge's middle, to drag a corner out of)
+    if (s.junctions.length === 1) for (const m of edgeMiddles(j.outline)) {
+      ctx.beginPath(); ctx.arc(m.x, m.y, 4.5 * px, 0, Math.PI * 2); ctx.fillStyle = col.bg; ctx.fill(); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.25 * px; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(m.x - 2.5 * px, m.y); ctx.lineTo(m.x + 2.5 * px, m.y); ctx.moveTo(m.x, m.y - 2.5 * px); ctx.lineTo(m.x, m.y + 2.5 * px); ctx.stroke();
+    }
   }
   // a selected zone's corners
   for (const id of s.zones ?? []) sk.zones?.find(z => z.id === id)?.outline.forEach(p => square(p));
