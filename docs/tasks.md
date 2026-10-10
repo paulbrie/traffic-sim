@@ -25,7 +25,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T68 | Bistrița with repeatable runs (7b27441): repeatability check, every collision with seed and time, deadlocks per place | Ramona | 2026-10-09 | run stopped for the reboot after 35 min, no results; harness in /home/genie/ramona-scratch/t68; re-run split across processes |
 | T56 | Bistrița after T46: lane-change standoffs (l2847–l2849, l14/l15), the deadlocks left by 900 s, held-back arrivals shown | Bob | 2026-10-09 | d7d31ba, a47d023, 371e800; held-back shown (68eda39). HEAD, 900 s, seeds 1/2/3: deadlocks 1/8/4, collisions 2/2/2. Causes: r1560 drawn over r7/r1459 (l14 never accepts a lane change), J574's head-on connectors (a plan fix, needs approval). Patches measured worse, not committed; notes in /home/genie/bob-scratch/trafficsim/T56-NOTES.md |
 
-## After the restart (2026-10-10)
+## After the restart (2026-10-10, done 01:30)
 
 1. The user starts trafficsim's dev server (port 7000) and the team; Alice restarts her memory watcher
    (`/home/genie/alice-scratch/memwatch.sh 2500`, in the background).
