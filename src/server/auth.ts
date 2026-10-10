@@ -1,13 +1,13 @@
 import "server-only";
 import { cache } from "react";
-import { createHash, randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { and, eq, gt } from "drizzle-orm";
 import { db, schema } from "@/db";
 import type { ViewerId } from "@/lib/ids";
+import { newSessionToken, SESSION_COOKIE, sessionDigest as digest } from "@/lib/session-token";
 
-export const SESSION_COOKIE = "gl_session";
+export { SESSION_COOKIE };
 
 /** anyone can create a free account unless ALLOW_SIGNUP=false */
 export const signupOpen = () => process.env.ALLOW_SIGNUP !== "false";
@@ -16,12 +16,10 @@ const SESSION_DAYS = 30;
 /** the signed-in user; `id` is a ViewerId, made here and nowhere else (see src/lib/ids.ts) */
 export type CurrentUser = Pick<schema.User, "email" | "name" | "role" | "mustChangePassword"> & { id: ViewerId };
 
-const digest = (token: string) => createHash("sha256").update(token).digest("hex");
-
 export async function createSession(userId: string) {
-  const token = randomBytes(32).toString("base64url");
+  const { token, id } = newSessionToken();
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
-  await db.insert(schema.sessions).values({ id: digest(token), userId, expiresAt });
+  await db.insert(schema.sessions).values({ id, userId, expiresAt });
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", expires: expiresAt,
   });
