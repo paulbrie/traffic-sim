@@ -251,6 +251,8 @@ interface Edge {
   neighbors: Neighbor[];
   /** connectors: a way off a two-lane roundabout's inner ring (across the outer one): it gives way to the outer ring (T179) */
   innerOff?: boolean;
+  /** a roundabout's: a ring, or a way on or off one (for `ringDriving`) */
+  atRing?: boolean;
   /** where it crosses other lanes and connectors (or, connectors, ends where another does) */
   conflicts: Conflict[];
   /** connectors: stretches of it in reach of other paths (crossing zones overlapping one another as one; not joins): one in there is committed */
@@ -343,8 +345,12 @@ let TRUCK_A = 1, TRUCK_HW = 1.8;
 /** a vehicle's acceleration and time gap (a truck's, or the drivers') */
 /** how far behind its front a vehicle's body may still be over something it went past */
 const reach = (v: SimVehicle) => (v.truck ? v.len + SWEEP : v.len);
-const accOf = (v: SimVehicle) => (v.truck ? TRUCK_A : A_MAX);
-const hwOf = (v: SimVehicle) => (v.truck ? TRUCK_HW : T_HEAD);
+/** roundabout driving (`ringDriving`, T172): livelier at a roundabout (on a ring, a way on or off one, the last 40 m before a way on) */
+let RING_DRIVE = false;
+const RING_A = 2.5, RING_HW = 0.9, RING_YIELD_V = 6, RING_BEND = 1.3;
+const atRing = (v: SimVehicle) => RING_DRIVE && (v.edge.atRing || (v.edge.kind === "lane" && v.edge.len - v.pos < 40 && v.edge.outs.some(o => o.conn.atRing && o.conn.to!.lane.ring)));
+const accOf = (v: SimVehicle) => (v.truck ? TRUCK_A : atRing(v) ? Math.max(A_MAX, RING_A) : A_MAX);
+const hwOf = (v: SimVehicle) => (v.truck ? TRUCK_HW : atRing(v) ? Math.min(T_HEAD, RING_HW) : T_HEAD);
 /** seconds of waiting after which a car goes before cars that can still stop for it */
 let PATIENCE = 6;
 /** a car giving way (its path ranked after the other's) that has waited this long goes before one that can still stop for it (s) */
@@ -373,6 +379,7 @@ function applyTuning(t: Tuning) {
   TRUCK_A = t.truckAccel; TRUCK_HW = t.truckHeadway;
   LC_PAUSE = t.laneChangePause; OVERTAKE_ROOM = t.overtakeRoom; RING_GAP = t.ringGap;
   VISION = t.visionCone >= 0.5;
+  RING_DRIVE = t.ringDriving >= 0.5;
 }
 /** drivers' field of view (`visionCone`, T179): crossing foes outside it aren't considered */
 let VISION = false;
@@ -652,7 +659,7 @@ export class SketchSim {
     const sk = this.sketch;
     // (where it is drawn moves with the lanes: an edit isn't a jump)
     this.drawn.clear(); this.unseen = true;
-    const v0 = this.params.speed / 3.6, edges = new Map<string, Edge>(), paths = new Map<string, Pt[]>(), bf = this.tuning.bendSpeed;
+    const v0 = this.params.speed / 3.6, edges = new Map<string, Edge>(), paths = new Map<string, Pt[]>(), bf = this.tuning.bendSpeed, rd = this.tuning.ringDriving >= 0.5;
     // (each lane's speed limit: its road's, or its own, else the sketch's)
     const limit = (lane: string) => { const k = speedLimitOf(sk, lane); return k !== undefined ? k / 3.6 : v0; };
     // (lanes into a junction with lights: those, not lines; the lights carried on as they were)
@@ -672,7 +679,7 @@ export class SketchSim {
         key: `lane:${l.id}`, kind: "lane", id: l.id, len, ring, z: null, outs: [], ins: [], from: null, to: null, siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
         control: ring || signals.has(l.id) ? null : l.control ?? null, minor: null, signal: ring ? null : signals.get(l.id) ?? null, atEnd: false,
         // (bends slow it down: arcs, and lines with curved points or closed round; a sharp drawn corner doesn't slow a whole lane)
-        vmax: (lv => (sh.kind === "arc" ? bendSpeed(sh.r, lv, bf) : sh.curved?.some(Boolean) || ring ? bendSpeed(minRadius(samples(sh, 1)), lv, bf) : lv))(limit(l.id)),
+        vmax: (lv => (sh.kind === "arc" ? bendSpeed(sh.r, lv, bf * (ring && rd ? RING_BEND : 1)) : sh.curved?.some(Boolean) || ring ? bendSpeed(minRadius(samples(sh, 1)), lv, bf * (ring && rd ? RING_BEND : 1)) : lv))(limit(l.id)), ...(ring ? { atRing: true } : {}),
         locate: pos => pointAt(sh, ring ? ((pos % len) + len) % len : pos),
       });
     }
@@ -685,7 +692,8 @@ export class SketchSim {
       const e: Edge = {
         key: `conn:${c.id}`, kind: "conn", id: c.id, len: Math.max(pl.len, 0.1), ring: false, z: null, outs: [], ins: [], siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
         control: null, minor: from.control && c.from.s >= from.len - 1 ? from.control : null, signal: null, atEnd: c.from.s >= from.len - 1,
-        from: { lane: from, s: Math.min(c.from.s, from.len) }, to: { lane: to, s: Math.min(c.to.s, to.len) }, vmax: bendSpeed(minRadius(pts), limit(c.to.lane), bf), locate: pl.locate,
+        from: { lane: from, s: Math.min(c.from.s, from.len) }, to: { lane: to, s: Math.min(c.to.s, to.len) }, vmax: bendSpeed(minRadius(pts), limit(c.to.lane), bf * (rd && (from.ring || to.ring) ? RING_BEND : 1)), locate: pl.locate,
+        ...(from.ring || to.ring ? { atRing: true } : {}),
       };
       edges.set(e.key, e);
       paths.set(e.key, pts);
@@ -1349,6 +1357,11 @@ export class SketchSim {
     const near = (k: Conflict, w: SimVehicle, pos: number) => pos - w.len < k.otherAt + k.otherAfter && pos > k.otherAt - k.otherBefore - (w.v > 0.5 ? 2 + 2 * w.v : 0);
     const inUse = (k: Conflict) => !n.round || k.other.ring || (byEdge.get(k.other) ?? NO_VEHICLES).some(w => near(k, w, w.pos)) || (this.tails.get(k.other) ?? NO_PLACES).some(t => near(k, t.w, t.pos));
     for (const k of L.conflicts) if (rel(k.at - k.before) < 2 && rel(k.at + k.after) > -v.len - 2 && inUse(k)) return null;
+    // (roundabout driving: not over to the other ring beside where one is about to come onto it, within 4 s)
+    if (n.round && RING_DRIVE) for (const o of L.ins) {
+      if (o.conn.from!.lane.ring) continue;
+      for (const w of byEdge.get(o.conn) ?? NO_VEHICLES) { const d = rel(o.s); if ((o.conn.len - w.pos) / Math.max(w.v, 1) < 4 && d > -(v.len + 8) && d < 15) return null; }
+    }
     // (each one there, as occupants() has them, looked at in place: whoever it is, any one too close is enough)
     let ahead = Infinity;
     const at = (w: SimVehicle, pos: number) => {
@@ -1825,7 +1838,7 @@ export class SketchSim {
         if (line < 1.5 && v.v < 0.2) v.stopped = true;
         else behind(Math.max(0.1, line - 0.5 + S0), 0, `stop ${v.edge.key}`);
       }
-      if (line !== null && v.edge.control === "yield") vmax = Math.min(vmax, Math.sqrt(YIELD_V ** 2 + 2 * B_COMF * line));
+      if (line !== null && v.edge.control === "yield") vmax = Math.min(vmax, Math.sqrt((RING_DRIVE && v.exit?.atRing ? Math.max(YIELD_V, RING_YIELD_V) : YIELD_V) ** 2 + 2 * B_COMF * line));
       // lights: waiting at the line on red, and on amber if it can still stop in comfort
       if (line !== null && v.edge.signal) {
         const st = v.exit ? v.edge.signal.stateOf(v.exit.id) : null;
@@ -1866,6 +1879,20 @@ export class SketchSim {
           if (r.edge === v.edge) for (const { w, pos } of waitIn.get(r.edge) ?? []) {
             const x = ahead(pos) - w.len - 3;
             if (x > 0.1 && x <= 30 && canStopBefore(x)) behind(x + S0, 0, `letting car ${w.id} change lane`);
+          }
+          // (keeping lanes on a two-lane roundabout (`ringKeepLane`): on the outer ring, easing off, if it can in comfort, for one on the
+          // inner ring just ahead about to move out to its way off: bounded courtesy)
+          if (r.edge === v.edge && r.edge.ring && this.tuning.ringKeepLane >= 0.5) for (const n of r.edge.neighbors) {
+            const back = n.round && n.lane.len < r.edge.len ? n.lane.neighbors.find(x => x.lane === r.edge && x.round) : undefined;
+            if (!back) continue;
+            for (const w of byEdge.get(n.lane) ?? []) {
+              const x = w.goal?.conn;
+              if (!x || w.goal!.lane !== r.edge || w.v < 1) continue;
+              const m = this.across(back, w.pos)!, d = this.along(r.edge, v.pos, m);
+              if (d < 0.5 || d > 25 || this.along(r.edge, m, this.exitS(x)) > (1.6 * r.edge.len) / TAU) continue;
+              if (this.idm(v.v, r.edge.vmax, Math.max(0.1, d - w.len), w.v, accOf(v), hwOf(v)) < -B_COMF) continue;
+              behind(d - w.len, w.v, `letting car ${w.id} change lane`);
+            }
           }
           // …also one turning off this lane, while still beside it…
           for (const o of r.edge.outs) {
@@ -1953,11 +1980,14 @@ export class SketchSim {
           const t = r.edge.to!, dMerge = r.off + r.edge.len - r.a, jb = r.edge.joinBack, z = Math.min(dMerge - r.edge.mergeBefore, jb ? r.off - r.a - jb.len : Infinity);
           if ((t.lane.ring || t.s > 1) && dMerge < 40) {
             zones.push({ s: z, e: dMerge });
-            if (canStopBefore(hold(z))) {
+            // (roundabout driving: onto an inner ring across the outer one, the checks for joining it made before that crossing, not standing in it)
+            const xs = RING_DRIVE ? r.edge.conflicts.filter(k => !k.join && k.other.ring && k.other !== t.lane).map(k => r.off + k.at - k.before - r.a) : [], firstX = xs.length ? Math.min(...xs) : Infinity;
+            const mh = firstX < z - 0.1 && firstX > 0.1 && canStopBefore(hold(firstX)) ? hold(firstX) : hold(z);
+            if (canStopBefore(mh)) {
               const arrive = tMe(dMerge), onLane = byEdge.get(t.lane) ?? [];
               // (how far back along the lane the joining stretch reaches)
               const laneZone = Math.max(0, this.diff(t.lane, this.beside(r.edge.onTo, r.edge.len - r.edge.mergeBefore), t.s), jb ? this.diff(t.lane, jb.at, t.s) : 0);
-              if (!forced && t.lane.ring && onLane.reduce((a, w) => a + w.len + S0, 0) > 0.75 * t.lane.len) yields.push({ at: hold(z), why: `merge ${t.lane.key}: ring nearly full`, ...(W ? { info: { kind: "ring-full", edge: t.lane.key } } : {}) });
+              if (!forced && t.lane.ring && onLane.reduce((a, w) => a + w.len + S0, 0) > 0.75 * t.lane.len) yields.push({ at: mh, why: `merge ${t.lane.key}: ring nearly full`, ...(W ? { info: { kind: "ring-full", edge: t.lane.key } } : {}) });
               // (or, a two-lane roundabout's, the ring beside it, cars on this one having to get over to that one: waited for before
               // the connector crosses anything (the other ring), not standing across it; once in there, on)
               else if (!forced && t.lane.ring) {
@@ -1969,15 +1999,15 @@ export class SketchSim {
                 if (w === v || (w.v < 0.3 && w.why?.includes(`letting car ${v.id} in`))) continue;
                 // (no room just past where it joins)
                 const past = this.along(t.lane, t.s, w.pos);
-                if (past < w.len + S0 + 2 && w.v < 3 && (t.lane.ring || w.pos > t.s)) { yields.push({ at: hold(z), why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
+                if (past < w.len + S0 + 2 && w.v < 3 && (t.lane.ring || w.pos > t.s)) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
                 const u = this.along(t.lane, w.pos, t.s);
-                if (!t.lane.ring && w.pos > t.s) { if (w.pos - t.s < w.len + 1) { yields.push({ at: hold(z), why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "just past where it joins", car: w.id, edge: t.lane.key } } : {}) }); break; } continue; }
+                if (!t.lane.ring && w.pos > t.s) { if (w.pos - t.s < w.len + 1) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "just past where it joins", car: w.id, edge: t.lane.key } } : {}) }); break; } continue; }
                 if (u > 70) continue;
                 // (it leaves before getting here)
                 if (w.exit && this.along(t.lane, w.pos, this.exitS(w.exit)) < u) continue;
                 // (told to go: only one right there stops it)
                 if (forced && u >= laneZone + v.len + 1) continue;
-                if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v)) { yields.push({ at: hold(z), why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, gap: r2(Math.max(0, u - laneZone - w.v * arrive)), need: r2(Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v, v.len + 1)) } } : {}) }); break; }
+                if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v)) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, gap: r2(Math.max(0, u - laneZone - w.v * arrive)), need: r2(Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v, v.len + 1)) } } : {}) }); break; }
               }
               // (keeping lanes on a two-lane roundabout (`ringKeepLane`): one on the inner ring about to move out onto this ring, to its
               // way off, counts as on it already)
@@ -1989,7 +2019,7 @@ export class SketchSim {
                   if (!x || w.goal!.lane !== t.lane) continue;
                   const m = this.across(back, w.pos)!, u = this.along(t.lane, m, t.s);
                   if (u > 70 || this.along(t.lane, m, this.exitS(x)) > (1.6 * t.lane.len) / TAU || this.along(t.lane, m, this.exitS(x)) < u) continue;
-                  if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, RING_GAP * w.v)) { yields.push({ at: hold(z), why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "moving out from the inner ring" } } : {}) }); break; }
+                  if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, RING_GAP * w.v)) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "moving out from the inner ring" } } : {}) }); break; }
                 }
               }
             }
