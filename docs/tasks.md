@@ -17,7 +17,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 |---|---|---|---|---|
 | T193 | Claude bridge panel: code countdown / expired / used; each agent's last seen and a quiet hint; why a message stays 'sent'; 'pairing lost' after a server loss | Bob | 2026-10-11 | 273bea7 pushed; live check in the user's page pending |
 | T210 | Agents City Ops view: idle agents at a cafeteria table with coffee (their desks left empty); back to the desk on the first new tool call | Tom | 2026-10-11 | the user's ask; after T209 |
-| T211 | Admin stats: bandwidth in/out on the public interface (rate + 60 samples) and public listening ports (proto, service; firewall state if readable) for T209 | Alex | 2026-10-11 | the user's ask |
 | T209b | Ops view server: bandwidth in/out gauge cabled to the rack, public ports as labelled sockets (data from T211) | Tom | 2026-10-11 | after T211 |
 | T206 | Sketch 1 copy rev 338: 5 collisions per 4 seeds with keep your lane + roundabout driving; find and fix | Bob | 2026-10-11 | after T193 |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | patch #5 (Sketch-window piece) applied by the user at rev 244; c5258 gone in the full T148 layout. The user has since redrawn J696 themselves (rev 274): waits on the user, whether to redo the main-plan patch on their drawing |
@@ -39,6 +38,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T211 | /api/stats: net (bytes/s in/out on the default-route interface, 60 samples) and ports (public TCP/UDP listeners from ss, fixed argv, cached; firewall state not readable without root, left out) | Alex | 2026-10-11 | admin 2e6ca77 (on admin-dev) |
 | T209 | Agents City Ops view: our server rack beyond the belts: a blade per core lit by load, CPU / MEM free / DISK free meters with the Table thresholds, host label; /api/stats every 5 s, eased; also fixed a T204c bug redrawing the map ~4×/s | Tom | 2026-10-11 | admin d5f0ba3 (on admin-dev) |
 | T208 | Comms parser: CLAIM/RELEASE read every path-like token (task ids, repo names and filler skipped; prose with slashes, tags, URLs ignored; brace lists expanded; directory and glob releases); a release matches the sender's one held file; bare names map to one file or none; 246 tests | Alex | 2026-10-11 | admin c18e3eb (on admin-dev) |
 | T207 | Agents City Ops view: agent cards in one slim row under the map (scrolls sideways if too many); chips and timeline stay on top; no page scroll at 1440×900 | Alex | 2026-10-11 | admin 0c59ea0 (on admin-dev) |
