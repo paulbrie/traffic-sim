@@ -24,8 +24,11 @@ const SWITCHES: TuneSwitch[] = [
     hint: "On a two-lane roundabout, cars take the lane for their exit before the ring: first exit outer, third or later inner, straight on either." },
 ];
 const SWITCH_KEYS = new Set<string>(SWITCHES.map(x => x.key));
+/** sliders shown in another group of the dialog than their tuning group (the roundabout-only ones with the roundabout switches; keys and values as they are) */
+const SHOWN_IN: Partial<Record<TuneInfo["key"], string>> = { ringGap: "Roundabouts" };
+const sectionOf = (t: TuneInfo) => SHOWN_IN[t.key] ?? t.group;
 /** the dialog's groups: the tuning's, and those only switches have (Roundabouts), after Junctions */
-const extra = [...new Set(SWITCHES.map(x => x.section).filter(x => !(TUNE_GROUPS as readonly string[]).includes(x)))];
+const extra = [...new Set([...SWITCHES.map(x => x.section), ...Object.values(SHOWN_IN)].filter(x => !(TUNE_GROUPS as readonly string[]).includes(x)))];
 const SECTIONS: string[] = TUNE_GROUPS.flatMap(g => (g === "Junctions" ? [g, ...extra] : [g]));
 
 const digits = (step: number) => (step >= 1 ? 0 : step >= 0.1 ? 1 : 2);
@@ -96,7 +99,7 @@ function SimSettings({ params, setParams, readOnly }: { params: SimParams; setPa
                 </div>
               );
             })}
-            {TUNING.filter(t => t.group === g && !SWITCH_KEYS.has(t.key)).map(t => {
+            {TUNING.filter(t => sectionOf(t) === g && !SWITCH_KEYS.has(t.key)).map(t => {
               const v = T[t.key], isDef = v === t.def, id = `tune-${t.key}`;
               return (
                 <div key={t.key} className="grid gap-1.5">
