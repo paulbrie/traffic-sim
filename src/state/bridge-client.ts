@@ -328,7 +328,12 @@ async function exec(type: string, a: Record<string, unknown>, said: (t: string) 
       // (the native setter, so React sees the change)
       Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, text);
       el.dispatchEvent(new Event("input", { bubbles: true }));
-      if (a.submit) { press(el, "Enter"); el.form?.requestSubmit(); }
+      if (a.submit) {
+        press(el, "Enter"); el.form?.requestSubmit();
+        // (a browser window without the focus sends no focus events: a field that keeps what was typed when it loses the
+        // focus, as on Enter, would never hear it; told so here, as the user's own Enter and click away would)
+        if (!document.hasFocus()) { el.dispatchEvent(new FocusEvent("blur", { relatedTarget: null })); el.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null })); }
+      }
       trace(`typed in ${describe(el)}`);
       return { typed: text };
     }

@@ -593,6 +593,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   }, [params.tune, ek]);
   // the cars run in the worker, at the speed picked (it sends a frame after each go: see onSimFrame)
   useEffect(() => { sim.current?.run(running, simSpeed); }, [running, simSpeed]);
+  // (opened again with "running" kept from before, no cars made yet: not running, so Run (and the bridge's run) starts them)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (running && !sim.current) setRunning(false); }, []);
   // (an edit begins while they run live: they pause, and a toast offers to go on (T158). The sketch reaches
   // them as before, a quarter second after it stops changing: they carry on from where they were)
   const pauseForEdit = useRef(() => {});
