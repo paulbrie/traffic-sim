@@ -1,6 +1,7 @@
 /**
- * Roundabouts at capacity (T172): a one-lane ring (S) and a two-lane one (A: rings of 12 m and 16 m in one road, the inside lane
- * in joining the inner ring across the outer one, both lanes out leaving the outer ring), 4 arms, every way in queued (600
+ * Roundabouts at capacity (T172): a one-lane ring (S) and two two-lane ones (rings of 12 m and 16 m in one road, the inside lane
+ * in joining the inner ring across the outer one; A: both lanes out leaving the outer ring, as J696's cut; B: the inside lane out
+ * leaving the inner ring, across the outer one), 4 arms, every way in queued (600
  * vehicles/h a lane). Per way on: cars onto the ring an hour, the flow circulating past where it joins, the time between queued
  * cars going on (follow-up), and HCM 7's capacity for that lane at that flow (c = A·e^(−B·v_c)). Then: how many go onto the inner
  * ring, missed exits (going more than half a lap past the way off), collisions and deadlocks. As things are, and with each setting
@@ -10,7 +11,7 @@
 import { SketchSim } from "../src/lib/lane-sketch-sim";
 import type { Sketch, SketchConnector, SketchLane } from "../src/lib/lane-sketch";
 
-type Variant = "S" | "A";
+type Variant = "S" | "A" | "B";
 const TAU = 2 * Math.PI, r2 = (v: number) => Math.round(v * 100) / 100;
 
 /** the test roundabout: 4 arms (at 0.4 rad and every quarter turn), 50 m of each, ending 40 m from the middle; the ways on joining
@@ -22,7 +23,7 @@ export function testRoundabout(variant: Variant, rate: number, NEAR = Number(pro
   const ringR = new Map(rings.map(g => [g.id, g.r]));
   const ringS = (id: string, a: number) => r2(((((0 - a) % TAU) + TAU) % TAU) * ringR.get(id)!);
   const lanes: SketchLane[] = rings.map(g => ({ id: g.id, width: g.width, inRate: 0, shape: { kind: "arc", c: C, r: g.r, a0: 0, sweep: -TAU } as SketchLane["shape"] }));
-  const connectors: SketchConnector[] = [], roads = variant === "A" ? [{ id: "ring", name: "Ring", lanes: ["I", "O"] }] : [];
+  const connectors: SketchConnector[] = [], roads = variant !== "S" ? [{ id: "ring", name: "Ring", lanes: ["I", "O"] }] : [];
   for (let k = 0; k < 4; k++) {
     const th = (k * TAU) / 4 + 0.4, u = { x: Math.cos(th), y: Math.sin(th) }, t = { x: Math.sin(th), y: -Math.cos(th) };
     const at = (r: number, off: number) => ({ x: r2(u.x * r + t.x * off), y: r2(u.y * r + t.y * off) });
@@ -32,12 +33,12 @@ export function testRoundabout(variant: Variant, rate: number, NEAR = Number(pro
     lanes.push(inFar, outFar);
     connectors.push({ id: `c-in-f-${k}`, from: { lane: inFar.id, s: FAR - NEAR }, to: { lane: "O", s: ringS("O", th - D) } });
     connectors.push({ id: `c-out-f-${k}`, from: { lane: "O", s: ringS("O", th + D) }, to: { lane: outFar.id, s: 0 } });
-    if (variant === "A") {
+    if (variant !== "S") {
       const inNear = line(`in-n-${k}`, at(FAR, 2), at(NEAR, 2), rate), outNear = line(`out-n-${k}`, at(NEAR, -2), at(FAR, -2), 0);
       lanes.push(inNear, outNear);
       roads.push({ id: `arm-${k}`, name: `Arm ${k}`, lanes: [inNear.id, inFar.id, outNear.id, outFar.id] });
       connectors.push({ id: `c-in-n-${k}`, from: { lane: inNear.id, s: FAR - NEAR }, to: { lane: "I", s: ringS("I", th - D) } });
-      connectors.push({ id: `c-out-n-${k}`, from: { lane: "O", s: ringS("O", th + D + 0.05) }, to: { lane: outNear.id, s: 0 } });
+      connectors.push(variant === "B" ? { id: `c-out-n-${k}`, from: { lane: "I", s: ringS("I", th + D) }, to: { lane: outNear.id, s: 0 } } : { id: `c-out-n-${k}`, from: { lane: "O", s: ringS("O", th + D + 0.05) }, to: { lane: outNear.id, s: 0 } });
     }
   }
   return { lanes, connectors, roads, junctions: [], traffic: { rate: 0, speed: 50, seed: 1 } };
@@ -92,7 +93,7 @@ function run(variant: Variant, seed: number, tune: Record<string, number>, T = 9
 }
 
 if (process.env.RING_GEOM) {
-  for (const variant of ["S", "A"] as const) {
+  for (const variant of ["S", "A", "B"] as const) {
     const sim = new SketchSim(testRoundabout(variant, 0)) as unknown as { edges: Map<string, { kind: string; id: string; vmax: number; len: number; to?: { lane: { ring: boolean } }; from?: { lane: { ring: boolean } } }> };
     console.log(variant, [...sim.edges.values()].filter(e => e.kind === "conn").slice(0, 4).map(e => `${e.id} ${e.len.toFixed(1)} m ${e.vmax.toFixed(1)} m/s`).join(" | "), "| ring", [...sim.edges.values()].filter(e => e.kind === "lane" && (e.id === "O" || e.id === "I")).map(e => `${e.id} ${e.vmax.toFixed(1)}`).join(" "));
   }
@@ -103,9 +104,9 @@ const asked = Object.fromEntries(process.argv.slice(2).filter(a => a.includes("=
 if (Object.keys(asked).length) tunes.push(asked);
 const SEEDS = [1, 2];
 const med = (xs: number[]) => { const s = xs.filter(x => Number.isFinite(x)).sort((a, b) => a - b); return s.length ? s[s.length >> 1] : NaN; };
-for (const variant of ["S", "A"] as const) for (const tune of tunes) {
+for (const variant of ["S", "A", "B"] as const) for (const tune of tunes) {
   const rs = SEEDS.map(s => run(variant, s, tune));
-  const name = `${variant === "S" ? "one-lane ring" : "two-lane ring"}, ${Object.keys(tune).length ? Object.entries(tune).map(([k, v]) => `${k}=${v}`).join(" ") : "as things are"}`;
+  const name = `${variant === "S" ? "one-lane ring" : variant === "A" ? "two-lane ring, ways off the outer ring only (as J696)" : "two-lane ring, the inner ring with its own ways off"}, ${Object.keys(tune).length ? Object.entries(tune).map(([k, v]) => `${k}=${v}`).join(" ") : "as things are"}`;
   const n = rs.length, avg = (f: (r: Result) => number) => rs.reduce((a, r) => a + f(r), 0) / n;
   console.log(`\n${name} (seeds ${SEEDS.join(", ")}, 600 vehicles/h a lane in)`);
   for (const lane of ["one", "right", "left"] as const) {

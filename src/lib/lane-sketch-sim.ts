@@ -197,6 +197,8 @@ function timeTo(d: number, v: number, vmax: number, acc = A_MAX) {
  * Where two paths come close (cross, run side by side, or end at the same place): the closest point along
  * each, and how far before and after it each is within reach of the other (the zone to keep clear).
  */
+/** a roundabout: its rings (inner first), middle, which way round (+1: the angle grows), and its ways off with where they leave */
+interface RingGroup { rings: Edge[]; c: Pt; sign: 1 | -1; exits: { conn: Edge; ang: number }[] }
 /** a lane of the same road running beside this one the same way: along this one from `a0` to `a1`, and the place beside it there (every metre from `a0`) */
 interface Neighbor { lane: Edge; a0: number; a1: number; map: number[]; /** two rings round one middle (a two-lane roundabout): beside all the way round, places on both wrapping round */ round?: boolean }
 // (join: two connectors running together into the same place on a lane, see the zip in step)
@@ -327,7 +329,7 @@ const NO_PLACES: { w: SimVehicle; pos: number }[] = [];
 const NO_VEHICLES: SimVehicle[] = [];
 /** (no vehicles: a cell of the grid the collision check looks in, empty) */
 const NO_CARS: number[] = [];
-const LEN = 4.5, A_LAT = 2.5, LOOK = 120;
+const LEN = 4.5, A_LAT = 2.5, LOOK = 120, TAU = 2 * Math.PI;
 /** a truck's cab, and how far its trailer reaches under it (to the hitch) */
 const CAB = 4, HITCH = 1;
 /** how far past a crossing a truck's trailer may still sweep across it, cutting in on a bend: it is clear that much later */
@@ -540,6 +542,9 @@ export class SketchSim {
   private routes: RouteTable | null = null;
   /** lanes and connectors from which no way leads out of the sketch (a ring with no way off, a loop): driven onto, a car circles for ever (T166) */
   private trap = new Set<Edge>();
+  /** a roundabout's rings (one, or two-lane, rings beside each other all the way round; inner first), its middle, which way round
+   * cars go (+1: the angle grows), and its ways off with where they leave (the angle); by each way on (T172) */
+  private ringOn = new Map<Edge, RingGroup>();
   private exitWeights = new Map<string, number>();
   private nextId = 1;
   /** test cars (`sendTest`): numbered -1, -2… (the others' numbers, which settle who goes first, as without them), their own
@@ -799,6 +804,19 @@ export class SketchSim {
       for (const p of e.kind === "lane" ? [...e.ins.map(o => o.conn), ...(besideOf.get(e) ?? [])] : [e.from!.lane]) if (!out.has(p)) { out.add(p); todo.push(p); }
     }
     this.trap = new Set(all.filter(e => !out.has(e)));
+    // roundabouts: each ring with the rings beside it all the way round; their ways off, their ways on
+    this.ringOn = new Map();
+    const grouped = new Set<Edge>();
+    for (const R of all) {
+      if (R.kind !== "lane" || !R.ring || grouped.has(R)) continue;
+      const rings = [R, ...R.neighbors.filter(n => n.round).map(n => n.lane)].sort((a, b) => a.len - b.len);
+      rings.forEach(x => grouped.add(x));
+      const pts = Array.from({ length: 16 }, (_, i) => R.locate((R.len * i) / 16).p), c = { x: pts.reduce((a, p) => a + p.x, 0) / 16, y: pts.reduce((a, p) => a + p.y, 0) / 16 };
+      const ang = (p: Pt) => Math.atan2(p.y - c.y, p.x - c.x), a0 = ang(R.locate(0).p), a1 = ang(R.locate(1).p);
+      const G: RingGroup = { rings, c, sign: ((((a1 - a0 + Math.PI) % TAU) + TAU) % TAU) - Math.PI > 0 ? 1 : -1, exits: [] };
+      for (const x of rings) for (const o of x.outs) if (!o.conn.to!.lane.ring) G.exits.push({ conn: o.conn, ang: ang(x.locate(o.s).p) });
+      for (const x of rings) for (const o of x.ins) if (!o.conn.from!.lane.ring) this.ringOn.set(o.conn, G);
+    }
     for (const e of all) {
       const zs = e.conflicts.filter(k => !k.join).map(k => ({ s: k.at - k.before, e: k.at + k.after })).sort((p, q) => p.s - q.s);
       for (const z of zs) { const last = e.runs[e.runs.length - 1]; if (last && z.s <= last.e) last.e = Math.max(last.e, z.e); else e.runs.push({ ...z }); }
@@ -1164,6 +1182,11 @@ export class SketchSim {
         }
       }
     }
+    // (a two-lane roundabout ahead, lane by exit (`ringLanes`): only the ways onto the ring its exit asks for)
+    if (rt && dest && this.tuning.ringLanes >= 0.5) {
+      const want = this.ringByExit(v, goals, dest);
+      if (want) { const keep = goals.filter(g => !g.conn || !this.ringOn.has(g.conn) || g.conn.to!.lane === want); if (keep.some(g => g.conn && this.ringOn.has(g.conn) && rt.viaConnector(g.conn.id, dest!) < Infinity)) goals.splice(0, goals.length, ...keep); }
+    }
     if (rt && dest) {
       const cost = (g: (typeof goals)[number]) => g.d + (g.conn ? rt.viaConnector(g.conn.id, dest) : g.lane.id === dest ? 0 : Infinity);
       const best = goals.reduce((m, g) => Math.min(m, cost(g)), Infinity);
@@ -1184,6 +1207,29 @@ export class SketchSim {
     const all = [...where.values()], safe = all.filter(o => !o.conn || !this.trap.has(o.conn)), options = safe.length ? safe : all;
     v.goal = options.length ? options[Math.floor(rnd() * options.length)] : null;
     v.exit = v.goal?.lane === v.edge ? v.goal.conn : null;
+  }
+
+  /**
+   * Lane by exit at a two-lane roundabout (T172): of the ways onto it a car could take, the ring its exit asks for, as the rules
+   * do (Romania art. 107): the first exit from the outer ring, the third or later and U-turns from the inner one, the second
+   * (straight on) either, 45% of cars the inner. Its exit: the one on its shortest way to where it is going; exits counted round
+   * from where it joins, ways off within 0.35 rad of each other one arm's. Null: no such roundabout ahead, or no choice.
+   */
+  private ringByExit(v: SimVehicle, goals: { lane: Edge; conn: Edge | null; d: number }[], dest: string): Edge | null {
+    const ins = goals.filter(g => g.conn && this.ringOn.has(g.conn)).map(g => g.conn!);
+    if (!ins.length) return null;
+    const G = this.ringOn.get(ins[0])!;
+    if (G.rings.length < 2 || new Set(ins.filter(c => this.ringOn.get(c) === G).map(c => c.to!.lane)).size < 2) return null;
+    const ang = (p: Pt) => Math.atan2(p.y - G.c.y, p.x - G.c.x), round = (a: number, b: number) => ((((b - a) * G.sign) % TAU) + TAU) % TAU;
+    const aIn = ang(ins[0].to!.lane.locate(ins[0].to!.s).p), r = G.rings[G.rings.length - 1].len / TAU, rt = this.routes!;
+    const exits = G.exits.map(x => ({ ...x, d: round(aIn, x.ang) })).sort((a, b) => a.d - b.d);
+    let best: (typeof exits)[number] | null = null, bc = Infinity;
+    for (const x of exits) { const c = x.d * r + rt.viaConnector(x.conn.id, dest); if (c < bc) { bc = c; best = x; } }
+    if (!best) return null;
+    let arm = 0;
+    for (let i = 0; i < exits.length; i++) { if (i === 0 || exits[i].d - exits[i - 1].d > 0.35) arm++; if (exits[i] === best) break; }
+    const inner = G.rings[0], outer = G.rings[G.rings.length - 1];
+    return arm === 1 ? outer : arm >= 3 ? inner : (Math.imul(v.id, 2654435761) >>> 0) % 100 < 45 ? inner : outer;
   }
 
   /** the place on the neighbour beside `pos` (null: not beside it there) */
