@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useEditorKind, useUiPath } from "@/state/sketch-ui";
+import { sketchUi, useEditorKind, useUiPath } from "@/state/sketch-ui";
+import { useSubject } from "subjecto/react";
+import { sketchList } from "@/lib/sketch-list";
+import { laneSketch$ } from "@/state/store";
 import { Dices, RotateCcw, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -41,8 +44,14 @@ const fmt = (t: TuneInfo, v: number) => `${v.toFixed(digits(t.step))}${t.unit ? 
  * the map. Saved with the plan, applied to the running cars straight away; the seed when the cars restart.
  */
 export function SimSettingsButton({ params, setParams, readOnly }: { params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean }) {
-  // (open or not: the editor's, in the V2 UI store)
-  const [open, setOpen] = useUiPath<boolean>(`editors/${useEditorKind()}/dialogs/settings`);
+  // (open or not: the editor's, in the V2 UI store; one editor's at a time: the plan's and the Sketch window's would lie
+  // one on the other, alike, and the one under would show when the top one closes, as if its settings were the other's)
+  const kind = useEditorKind();
+  const [open, setOpenOwn] = useUiPath<boolean>(`editors/${kind}/dialogs/settings`);
+  const setOpen = (v: boolean) => {
+    if (v) for (const k of ["plan", "scratch", "whole"] as const) if (k !== kind && sketchUi.getValue().editors[k].dialogs.settings) sketchUi.getValue().editors[k].dialogs.settings = false;
+    setOpenOwn(v);
+  };
   const changed = Object.keys(params.tune ?? {}).length + (params.seed !== undefined && params.seed !== 1 ? 1 : 0);
   return (
     <>
@@ -52,14 +61,22 @@ export function SimSettingsButton({ params, setParams, readOnly }: { params: Sim
       <Dialog open={open} onOpenChange={setOpen} modal={false}>
         <DialogContent overlay={false} className="top-16 right-4 left-auto max-h-[calc(100vh-6rem)] translate-x-0 translate-y-0 overflow-y-auto sm:max-w-md"
           onInteractOutside={e => e.preventDefault()}>
-          <SimSettings params={params} setParams={setParams} readOnly={readOnly} />
+          <SimSettings params={params} setParams={setParams} readOnly={readOnly} kind={kind} />
         </DialogContent>
       </Dialog>
     </>
   );
 }
 
-function SimSettings({ params, setParams, readOnly }: { params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean }) {
+/** whose settings these are: the plan's, or the open sketch's (its name) */
+function Whose({ kind }: { kind: string }) {
+  useSubject(laneSketch$);
+  if (kind !== "scratch") return <>the plan</>;
+  const { list, open } = sketchList(laneSketch$.getValue());
+  return <>the sketch &ldquo;{list.find(x => x.id === open)?.name}&rdquo;</>;
+}
+
+function SimSettings({ params, setParams, readOnly, kind }: { params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean; kind: string }) {
   const T = resolveTuning(params.tune), changed = Object.keys(params.tune ?? {}).length;
   const set = (patch: Partial<Tuning>) => { const tune = sanitizeTuning({ ...T, ...patch }); const { tune: _, ...rest } = params; setParams(tune ? { ...rest, tune } : rest); };
   const [seedText, setSeedText] = useState(String(params.seed ?? 1));
@@ -67,8 +84,8 @@ function SimSettings({ params, setParams, readOnly }: { params: SimParams; setPa
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Simulation settings</DialogTitle>
-        <DialogDescription>Saved with the plan and applied to the running cars straight away. A new seed gives another run of the same traffic; it applies when the cars restart (↺).</DialogDescription>
+        <DialogTitle>Simulation settings · {kind === "scratch" ? "Sketch" : "Plan"}</DialogTitle>
+        <DialogDescription>For <Whose kind={kind} /> only{kind === "scratch" ? " (the plan and each sketch have their own)" : " (each sketch has its own)"}; saved with the plan and applied to the running cars straight away. A new seed gives another run of the same traffic; it applies when the cars restart (↺).</DialogDescription>
       </DialogHeader>
       <div className="flex items-end gap-2">
         <div className="grid flex-1 gap-1.5">
