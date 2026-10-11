@@ -583,6 +583,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     return () => clearTimeout(t);
   }, [sketch]);
   useEffect(() => { sim.current?.setParams(params); }, [params]);
+  // (the settings changed, in the UI store: the bridge's `ui` reads see them)
+  useEffect(() => {
+    const r = sketchUi.getValue().editors[ek].run, t = (params.tune ?? {}) as Record<string, number>;
+    if (JSON.stringify(r.tune) !== JSON.stringify(t)) r.tune = { ...t };
+  }, [params.tune, ek]);
   // the cars run in the worker, at the speed picked (it sends a frame after each go: see onSimFrame)
   useEffect(() => { sim.current?.run(running, simSpeed); }, [running, simSpeed]);
   // (an edit begins while they run live: they pause, and a toast offers to go on (T158). The sketch reaches

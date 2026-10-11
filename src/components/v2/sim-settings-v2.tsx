@@ -12,8 +12,21 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { resolveTuning, sanitizeTuning, TUNE_GROUPS, TUNING, type TuneInfo, type Tuning } from "@/lib/sketch-tuning";
 import type { SimParams } from "@/lib/lane-sketch-sim";
 
-/** Junction rules (T165): first come, first served (0, the default), or priority (1): Bob's tuning field, shown as a switch, not a slider */
-const JUNCTION_RULES_KEY: TuneInfo["key"] | null = "junctionRules";
+/**
+ * The simulation's behaviours chosen with a switch, not a slider (0 off, the default and as before; 1 on): Bob's tuning keys
+ * (T165, T172), each with its two choices, a short label and a one-line hint, in the group of the dialog it goes in
+ */
+interface TuneSwitch { key: TuneInfo["key"]; section: string; label: string; off: string; on: string; hint: string }
+const SWITCHES: TuneSwitch[] = [
+  { key: "junctionRules", section: "Junctions", label: "Junction rules", off: "First come", on: "Priority",
+    hint: "First come: whoever gets there first goes. Priority: by the rules of the road (the ring, give-way lines, the main road, the car from the right)." },
+  { key: "ringLanes", section: "Roundabouts", label: "Lane by exit", off: "Off", on: "On",
+    hint: "On a two-lane roundabout, cars take the lane for their exit before the ring: first exit outer, third or later inner, straight on either." },
+];
+const SWITCH_KEYS = new Set<string>(SWITCHES.map(x => x.key));
+/** the dialog's groups: the tuning's, and those only switches have (Roundabouts), after Junctions */
+const extra = [...new Set(SWITCHES.map(x => x.section).filter(x => !(TUNE_GROUPS as readonly string[]).includes(x)))];
+const SECTIONS: string[] = TUNE_GROUPS.flatMap(g => (g === "Junctions" ? [g, ...extra] : [g]));
 
 const digits = (step: number) => (step >= 1 ? 0 : step >= 0.1 ? 1 : 2);
 const fmt = (t: TuneInfo, v: number) => `${v.toFixed(digits(t.step))}${t.unit ? ` ${t.unit}` : ""}`;
@@ -65,26 +78,25 @@ function SimSettings({ params, setParams, readOnly }: { params: SimParams; setPa
         </Button>
       </div>
       <div className="grid gap-5 pt-1">
-        {TUNE_GROUPS.map(g => (
+        {SECTIONS.map(g => (
           <section key={g} className="grid gap-3">
             <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{g}</h3>
-            {g === "Junctions" && (
-              <div className="grid gap-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm" id="tune-junction-rules">Junction rules</span>
-                  <ToggleGroup type="single" aria-labelledby="tune-junction-rules" disabled={readOnly || !JUNCTION_RULES_KEY} className="h-7"
-                    value={JUNCTION_RULES_KEY && T[JUNCTION_RULES_KEY] ? "priority" : "first"}
-                    onValueChange={v => { if (v && JUNCTION_RULES_KEY) set({ [JUNCTION_RULES_KEY]: v === "priority" ? 1 : 0 }); }}>
-                    <ToggleGroupItem value="first" className="h-7 px-2 text-xs">First come</ToggleGroupItem>
-                    <ToggleGroupItem value="priority" className="h-7 px-2 text-xs">Priority</ToggleGroupItem>
-                  </ToggleGroup>
+            {SWITCHES.filter(x => x.section === g).map(x => {
+              const id = `tune-${x.key}`, on = !!T[x.key];
+              return (
+                <div key={x.key} className="grid gap-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm" id={id}>{x.label}</span>
+                    <ToggleGroup type="single" aria-labelledby={id} disabled={readOnly} className="h-7" value={on ? "on" : "off"} onValueChange={v => { if (v) set({ [x.key]: v === "on" ? 1 : 0 }); }}>
+                      <ToggleGroupItem value="off" className="h-7 px-2 text-xs">{x.off}</ToggleGroupItem>
+                      <ToggleGroupItem value="on" className="h-7 px-2 text-xs">{x.on}</ToggleGroupItem>
+                    </ToggleGroup>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{x.hint}</p>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  First come: where paths cross, whoever gets there first goes; a car kept waiting long is let go. Priority: by the rules of the road: a roundabout&apos;s ring goes first, then give-way lines, the main road going straight, left turns give way, then the car from the right; first come only where nothing else decides. Try it with the car&apos;s panel, which says which rule holds each car.
-                </p>
-              </div>
-            )}
-            {TUNING.filter(t => t.group === g && t.key !== JUNCTION_RULES_KEY).map(t => {
+              );
+            })}
+            {TUNING.filter(t => t.group === g && !SWITCH_KEYS.has(t.key)).map(t => {
               const v = T[t.key], isDef = v === t.def, id = `tune-${t.key}`;
               return (
                 <div key={t.key} className="grid gap-1.5">

@@ -78,7 +78,8 @@ Editor = { mode: "plan" | "3d",                  // the map from above or in 3D 
                                            // heading (° clockwise from north), tilt (° from straight down); at most 4 times a second.
                                            // Escape, with nothing else to do (no draft, nothing selected, no car picked), eases it back
                                            // to where it arrived on entering 3D (`key` { key: "Escape" })
-           run: { running, speed, t, replayT, playing, kept },   // t: at most 4 times a second
+           run: { running, speed, t, replayT, playing, kept, tune },   // t: at most 4 times a second; tune: the simulation
+                                           // settings changed from their defaults, as saved (e.g. { junctionRules: 1, ringLanes: 1 })
            dialogs: { search: { open, query }, console: { open, kind, text, clearedAt }, settings,
                       optimizer: { open, junction, chosen, effort, stage } },
            tables: { junctions: { by, flip, shown }, roads: { by, flip, shown } },   // the results tables' sort
