@@ -68,7 +68,8 @@ between them who goes first and tell Alice.
   says `railway` first. Reads are fine. Writes only to your own test cities and plans, or with Alice's or the user's say;
   never to the user's plans (Bistrița: never, see The user's plans) or to other accounts. Schema changes
   only through the migrations (`npm run db:migrate`).
-- **Admin repo (`/opt/project`).** No commit or deploy by Alex or Tom; the user does it, or Alice when the user asks.
+- **Admin repo (`/opt/project`).** No push or deploy by Alex or Tom (local commits are fine, see below); the user
+  does it, or Alice when the user asks.
   `/opt/project` follows `origin/main`. No worktrees for admin work (the user's decision, 2026-10-11): Alex and Tom
   edit `/opt/project/admin` directly. The admin preview (`admin-dev.service`, `/admin-dev`, port 3003) serves that
   tree and hot-reloads each save, so the work shows on admin-dev as it's made; the live `/admin` keeps its own build
