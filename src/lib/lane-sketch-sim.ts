@@ -31,7 +31,11 @@
  * when there is room on the other (neither it nor the car coming up behind there has to brake hard),
  * clear of crossings; if it can't, it waits where it has to change at the latest, and the next car
  * coming up on the other lane lets it in after a while. A car held up by a slower one changes to a
- * neighbour with clearly more room ahead, to overtake, and changes back once there is room again.
+ * neighbour with clearly more room ahead, to overtake, and changes back once there is room again. Two rings
+ * of a road beside each other all the way round (a two-lane roundabout) are neighbours too: a car on one
+ * changes to the other where it can (a crossing no one is in or coming up to no bar), missing its way off
+ * goes round again, never onto that one nearly full; a way onto either waits, before it crosses anything,
+ * while the other is nearly full.
  *
  * It keeps what happened, to copy and look into: a log of each car coming in, moving onto a lane or
  * connector and leaving; every car's state over the last 30 s; and "jumps", where a car is drawn
@@ -194,7 +198,7 @@ function timeTo(d: number, v: number, vmax: number, acc = A_MAX) {
  * each, and how far before and after it each is within reach of the other (the zone to keep clear).
  */
 /** a lane of the same road running beside this one the same way: along this one from `a0` to `a1`, and the place beside it there (every metre from `a0`) */
-interface Neighbor { lane: Edge; a0: number; a1: number; map: number[] }
+interface Neighbor { lane: Edge; a0: number; a1: number; map: number[]; /** two rings round one middle (a two-lane roundabout): beside all the way round, places on both wrapping round */ round?: boolean }
 // (join: two connectors running together into the same place on a lane, see the zip in step)
 interface Conflict {
   other: Edge; at: number; otherAt: number; before: number; after: number; otherBefore: number; otherAfter: number; join: boolean;
@@ -696,13 +700,24 @@ export class SketchSim {
       if (e.kind === "lane") { const id = e.id; e.z = pos => zAt(sk, id, pos); }
       else { const c = connectorById(sk, e.id), lv = c ? connectorLevel(sk, c) : 0; e.z = () => lv; }
     }
-    // lanes of a road beside each other the same way (about a lane's width apart): the longest stretch, at least 10 m
+    // lanes of a road beside each other the same way (about a lane's width apart): the longest stretch, at least 10 m; two rings
+    // of a road, beside each other all the way round (a two-lane roundabout's), the whole of them
     const width = new Map(sk.lanes.map(l => [`lane:${l.id}`, l.width ?? 3.5]));
     for (const road of sk.roads) {
-      const ls = road.lanes.map(id => edges.get(`lane:${id}`)).filter((e): e is Edge => !!e && !e.ring);
+      const ls = road.lanes.map(id => edges.get(`lane:${id}`)).filter((e): e is Edge => !!e);
       for (const A of ls) for (const B of ls) {
-        if (A === B) continue;
+        if (A === B || A.ring !== B.ring) continue;
         const pb = paths.get(B.key)!, cb = polyline(pb).cum, far = (width.get(A.key)! + width.get(B.key)!) / 2 + 0.75;
+        if (A.ring) {
+          const map: number[] = [];
+          for (let s = 0; s <= Math.ceil(A.len); s++) {
+            const a = A.locate(s), q = nearestOnPolyline(pb, cb, a.p), d = B.locate(q.s).d;
+            if (q.d <= 0.5 || q.d > far || a.d.x * d.x + a.d.y * d.y < 0.8) break;
+            map.push(q.s);
+          }
+          if (map.length > Math.ceil(A.len) && Math.abs(this.zOf(A, 0) - this.zOf(B, map[0])) < 0.5) A.neighbors.push({ lane: B, a0: 0, a1: A.len, map, round: true });
+          continue;
+        }
         let best: Neighbor | null = null, cur: Neighbor | null = null;
         for (let s = 0; s <= A.len; s++) {
           const a = A.locate(s), q = nearestOnPolyline(pb, cb, a.p), d = B.locate(q.s).d;
@@ -775,11 +790,13 @@ export class SketchSim {
       for (const o of F.outs) o.conn.joinBack = { len: F.len - (k.at - k.before), at: T.ring ? ((at % T.len) + T.len) % T.len : Math.max(0, at) };
     }
     this.junctionPriority(sk, all, paths);
-    // (what leads out of the sketch, back from the lanes nothing leaves: the rest is a trap)
+    // (what leads out of the sketch, back from the lanes nothing leaves, changing lane over to one counting: the rest is a trap)
+    const besideOf = new Map<Edge, Edge[]>();
+    for (const e of all) for (const n of e.neighbors) (besideOf.get(n.lane) ?? besideOf.set(n.lane, []).get(n.lane)!).push(e);
     const out = new Set<Edge>(all.filter(e => e.kind === "lane" && !e.ring && !e.outs.length)), todo = [...out];
     while (todo.length) {
       const e = todo.pop()!;
-      for (const p of e.kind === "lane" ? e.ins.map(o => o.conn) : [e.from!.lane]) if (!out.has(p)) { out.add(p); todo.push(p); }
+      for (const p of e.kind === "lane" ? [...e.ins.map(o => o.conn), ...(besideOf.get(e) ?? [])] : [e.from!.lane]) if (!out.has(p)) { out.add(p); todo.push(p); }
     }
     this.trap = new Set(all.filter(e => !out.has(e)));
     for (const e of all) {
@@ -1114,7 +1131,7 @@ export class SketchSim {
       if (ownLane) break;
       for (const n of lane.neighbors) {
         const there = Math.max(at, n.a0) + 20;
-        if (seen.has(n.lane) || there > n.a1) continue;
+        if (seen.has(n.lane) || (!n.round && there > n.a1)) continue;
         seen.add(n.lane);
         todo.push({ lane: n.lane, at: this.across(n, there)! });
       }
@@ -1171,6 +1188,12 @@ export class SketchSim {
 
   /** the place on the neighbour beside `pos` (null: not beside it there) */
   private across(n: Neighbor, pos: number) {
+    if (n.round) {
+      // (round two rings: from where it is round its own, to the place beside it round the other, over either's start)
+      const L = n.lane.len, p = ((pos % n.a1) + n.a1) % n.a1, k = Math.floor(p), a = n.map[k], d = n.map[k + 1] - a;
+      const x = a + (p - k) * (d > L / 2 ? d - L : d < -L / 2 ? d + L : d);
+      return ((x % L) + L) % L;
+    }
     if (pos < n.a0 - 0.01 || pos > n.a1 + 0.01) return null;
     const i = Math.max(0, Math.min(n.map.length - 1, pos - n.a0)), k = Math.floor(i), f = i - k;
     return k + 1 < n.map.length ? n.map[k] * (1 - f) + n.map[k + 1] * f : n.map[k];
@@ -1203,6 +1226,12 @@ export class SketchSim {
     const n = first.get(g.lane);
     if (!n) return null;
     const hops = depth.get(g.lane)!;
+    if (n.round) {
+      // (round a ring: 15 m before where it leaves, as beside this ring, 20 m more per ring over; past there, once more round)
+      let l = g.lane, s = g.conn ? this.exitS(g.conn) : 0;
+      while (l !== e) { const x = l.neighbors.find(x => x.round && depth.get(x.lane) === depth.get(l)! - 1); if (!x) break; s = this.across(x, s)!; l = x.lane; }
+      return { n, hops, by: (((s - 15 - 20 * (hops - 1)) % e.len) + e.len) % e.len };
+    }
     let by = n.a1 - 15 - 20 * (hops - 1);
     // (one change: before where it leaves, as beside this lane)
     if (hops === 1) {
@@ -1217,6 +1246,11 @@ export class SketchSim {
     if (!w.left || this.t - w.changedAt >= SHIFT_T) return null;
     const n = w.edge.neighbors.find(x => x.lane === w.left);
     return n ? this.across(n, w.pos) : null;
+  }
+
+  /** a two-lane roundabout's ring nearly full, with `more` metres more on it: its cars (each its length and a gap) over three quarters of where a car can stand on it (not in its crossings) */
+  private ringFull(L: Edge, byEdge: Map<Edge, SimVehicle[]>, more: number) {
+    return (byEdge.get(L) ?? NO_VEHICLES).reduce((a, w) => a + w.len + S0, more) > 0.75 * (L.len - L.runs.reduce((a, r) => a + r.e - r.s, 0));
   }
 
   /** the cars on a lane or beside it (turning off it, joining it, or just changed lane off it), and where along it */
@@ -1241,13 +1275,18 @@ export class SketchSim {
   private room(v: SimVehicle, n: Neighbor, byEdge: Map<Edge, SimVehicle[]>, ghosts: Map<Edge, { w: SimVehicle; pos: number }[]>) {
     const m = this.across(n, v.pos), L = n.lane, W = v.id === this.watchId;
     if (W) this.roomNo = null;
-    if (m === null || m < v.len || m > L.len - 1) return null;
-    for (const k of L.conflicts) if (k.at - k.before < m + 2 && k.at + k.after > m - v.len - 2) return null;
+    if (m === null || (!L.ring && (m < v.len || m > L.len - 1)) || (n.round && this.ringFull(L, byEdge, v.len + S0))) return null;
+    // (how far on from there: round a ring, ahead or behind whichever is nearer)
+    const rel = (s: number) => (L.ring ? ((((s - m) % L.len) + L.len * 1.5) % L.len) - L.len / 2 : s - m);
+    // (round two rings, a crossing no one is in or coming up to is no bar: else, on a busy two-lane roundabout, nowhere is)
+    const near = (k: Conflict, w: SimVehicle, pos: number) => pos - w.len < k.otherAt + k.otherAfter && pos > k.otherAt - k.otherBefore - (w.v > 0.5 ? 2 + 2 * w.v : 0);
+    const inUse = (k: Conflict) => !n.round || k.other.ring || (byEdge.get(k.other) ?? NO_VEHICLES).some(w => near(k, w, w.pos)) || (this.tails.get(k.other) ?? NO_PLACES).some(t => near(k, t.w, t.pos));
+    for (const k of L.conflicts) if (rel(k.at - k.before) < 2 && rel(k.at + k.after) > -v.len - 2 && inUse(k)) return null;
     // (each one there, as occupants() has them, looked at in place: whoever it is, any one too close is enough)
     let ahead = Infinity;
     const at = (w: SimVehicle, pos: number) => {
       if (w === v) return true;
-      const d = pos - m;
+      const d = rel(pos);
       if (d >= 0) {
         // (never onto a lane only to stop behind one broken down there)
         if (w.broken !== null && d < 60) return false;
@@ -1725,7 +1764,8 @@ export class SketchSim {
       }
       // changing lane: waiting where it has to have changed, if it can't before
       const hop = v.run >= v.len ? this.hop(v) : null;
-      if (hop) {
+      // (round a ring it doesn't stop to change: missing its way off, it goes round again)
+      if (hop && !hop.n.round) {
         // (beside one waiting to change onto its lane, the two of them in each other's way: the one with the lower number goes on, to make room)
         const swap = (waitIn.get(v.edge) ?? []).some(({ w, pos }) => w.edge === hop.n.lane && w.id > v.id && Math.abs(pos - v.pos) < v.len + w.len + 3);
         const by = swap ? hop.n.a1 - 2 : hop.by;
@@ -1734,7 +1774,7 @@ export class SketchSim {
       // (just changed lane: still partly over the one it left, the cars ahead there are in its way)
       const mine = this.ghostPos(v);
       if (mine !== null) for (const w of byEdge.get(v.left!) ?? []) {
-        const x = w.pos - mine;
+        const x = v.left!.ring ? ((((w.pos - mine) % v.left!.len) + v.left!.len * 1.5) % v.left!.len) - v.left!.len / 2 : w.pos - mine;
         if (x > 0 && x < 40) behind(x - w.len, w.v, w);
       }
       for (const r of route) {
@@ -1849,6 +1889,12 @@ export class SketchSim {
               // (how far back along the lane the joining stretch reaches)
               const laneZone = Math.max(0, this.diff(t.lane, this.beside(r.edge.onTo, r.edge.len - r.edge.mergeBefore), t.s), jb ? this.diff(t.lane, jb.at, t.s) : 0);
               if (!forced && t.lane.ring && onLane.reduce((a, w) => a + w.len + S0, 0) > 0.75 * t.lane.len) yields.push({ at: hold(z), why: `merge ${t.lane.key}: ring nearly full`, ...(W ? { info: { kind: "ring-full", edge: t.lane.key } } : {}) });
+              // (or, a two-lane roundabout's, the ring beside it, cars on this one having to get over to that one: waited for before
+              // the connector crosses anything (the other ring), not standing across it; once in there, on)
+              else if (!forced && t.lane.ring) {
+                const full = t.lane.neighbors.find(n => n.round && this.ringFull(n.lane, byEdge, 0))?.lane, r0 = r.edge.runs[0], at = hold(r0 ? Math.min(z, r.off + r0.s - r.a) : z);
+                if (full && at > 0.1 && canStopBefore(at)) yields.push({ at, why: `merge ${full.key}: ring nearly full`, ...(W ? { info: { kind: "ring-full", edge: full.key } } : {}) });
+              }
               for (const w of onLane) {
                 // (one holding back to let it in)
                 if (w === v || (w.v < 0.3 && w.why?.includes(`letting car ${v.id} in`))) continue;
@@ -2013,7 +2059,7 @@ export class SketchSim {
       if (e.kind !== "lane" || !e.neighbors.length || v.broken !== null || v.run < v.len || this.t - v.changedAt < SHIFT_T + 1) continue;
       const h = this.hop(v), { gap, lead } = held.get(v)!;
       if (h) {
-        if (v.pos > h.n.a1 - 1) { this.plan(v); continue; }
+        if (!h.n.round && v.pos > h.n.a1 - 1) { this.plan(v); continue; }
         // (kept waiting to change lane: somewhere else it can go from its own lane will do)
         if (v.still > 8 && v.why?.startsWith("changing to")) {
           const was = v.goal;
@@ -2030,13 +2076,13 @@ export class SketchSim {
           }
           this.watchNote("rejected gap", `no room to change to ${h.n.lane.key}: gap ${no.gap.toFixed(1)} m${no.car !== undefined ? ` to car ${no.car}` : ""}, needs ${no.need.toFixed(1)} m`, no.car);
         }
-        if (!q || (h.by - v.pos > 60 && q.ahead < Math.min(gap, 50) - 5)) continue;
+        if (!q || ((h.n.round ? this.along(e, v.pos, h.by) : h.by - v.pos) > 60 && q.ahead < Math.min(gap, 50) - 5)) continue;
         this.changeIn(byEdge, ghosts, v, h.n);
       } else {
         // (stopped behind one broken down in its lane: any lane beside with room will do, to get round it)
         const m = gap < 60 && v.v < 3 ? /^car (-?\d+)/.exec(v.why ?? "") : null, lw = m && byId().get(Number(m[1]));
         if (lw && lw.broken !== null && lw.edge === e) {
-          const n = e.neighbors.find(n => n.a1 - v.pos > 10 && this.room(v, n, byEdge, ghosts));
+          const n = e.neighbors.find(n => (n.round || n.a1 - v.pos > 10) && this.room(v, n, byEdge, ghosts));
           if (n) this.changeIn(byEdge, ghosts, v, n);
           continue;
         }
@@ -2046,7 +2092,7 @@ export class SketchSim {
         // (far enough from where it leaves to come back)
         if ((g.conn ? this.exitS(g.conn) : e.len) - v.pos < 80) continue;
         const best = e.neighbors
-          .filter(n => n.a1 - v.pos > 60)
+          .filter(n => !n.round && n.a1 - v.pos > 60)
           .map(n => ({ n, q: this.room(v, n, byEdge, ghosts) }))
           .filter(x => x.q && x.q.ahead > gap + OVERTAKE_ROOM)
           .sort((a, b) => b.q!.ahead - a.q!.ahead)[0];

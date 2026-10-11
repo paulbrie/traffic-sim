@@ -1921,12 +1921,13 @@ export class RouteTable {
       from.outs.push({ id: c.id, s: c.from.s });
       to.ins.push({ id: c.id, s: c.to.s });
     }
-    // (lanes side by side in a road, the same way: where on the other a place on one is beside)
+    // (lanes side by side in a road, the same way: where on the other a place on one is beside; two rings, a two-lane roundabout's)
     for (const r of sk.roads) for (const a of r.lanes) for (const b of r.lanes) {
       const A = this.lanes.get(a), Bl = this.lanes.get(b);
-      if (!A || !Bl || a === b || A.ring || Bl.ring) continue;
-      const m = pointAt(A.lane.shape, A.len / 2), q = nearestOn(Bl.lane.shape, m.p), d = pointAt(Bl.lane.shape, q.s).d;
-      if (q.d > (A.lane.width + Bl.lane.width) / 2 + 0.75 || m.d.x * d.x + m.d.y * d.y < 0.5) continue;
+      if (!A || !Bl || a === b || A.ring !== Bl.ring) continue;
+      // (rings: beside all the way round, as the simulation has them)
+      const near = (f: number) => { const m = pointAt(A.lane.shape, A.len * f), q = nearestOn(Bl.lane.shape, m.p), d = pointAt(Bl.lane.shape, q.s).d; return q.d <= (A.lane.width + Bl.lane.width) / 2 + 0.75 && m.d.x * d.x + m.d.y * d.y >= 0.5; };
+      if (!(A.ring ? [0, 1, 2, 3, 4, 5, 6, 7].every(k => near(k / 8)) : near(0.5))) continue;
       const map = (s: number) => nearestOn(Bl.lane.shape, pointAt(A.lane.shape, s).p).s;
       A.beside.push({ id: b, map });
       (this.besideOf.get(b) ?? this.besideOf.set(b, []).get(b)!).push({ from: a, map });

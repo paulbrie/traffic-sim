@@ -42,11 +42,18 @@ export function junctionWarnings(sk: Sketch): JunctionWarning[] {
 
   // a loop no way leaves (a ring with no way off): what can't get back to any lane that leaves the sketch, back from those lanes
   {
-    const ins = new Map<string, string[]>();
-    for (const c of sk.connectors) (ins.get(c.to.lane) ?? ins.set(c.to.lane, []).get(c.to.lane)!).push(c.from.lane);
+    const ins = new Map<string, string[]>(), into = (to: string, from: string) => (ins.get(to) ?? ins.set(to, []).get(to)!).push(from);
+    for (const c of sk.connectors) into(c.to.lane, c.from.lane);
+    // (two rings of one road round the same middle, the same way, a lane's width apart: a car changes from one to the other)
+    for (const r of sk.roads) for (const a of r.lanes) for (const b of r.lanes) {
+      const A = lanes.get(a), B = lanes.get(b), ra = A && ringOf(A), rb = B && ringOf(B);
+      if (a === b || !ra || !rb || Math.hypot(ra.c.x - rb.c.x, ra.c.y - rb.c.y) > 1) continue;
+      const sa = A.shape as { r: number; sweep: number }, sb = B.shape as { r: number; sweep: number }, gap = Math.abs(sa.r - sb.r);
+      if (Math.sign(sa.sweep) === Math.sign(sb.sweep) && gap > 0.5 && gap <= (A.width + B.width) / 2 + 0.75) into(b, a);
+    }
     const leaves = new Set(sk.connectors.map(c => c.from.lane)), reach = new Set(sk.lanes.filter(l => !leaves.has(l.id) && !ringIds.has(l.id)).map(l => l.id)), todo = [...reach];
     while (todo.length) for (const p of ins.get(todo.pop()!) ?? []) if (!reach.has(p)) { reach.add(p); todo.push(p); }
-    const caught = sk.lanes.filter(l => !reach.has(l.id) && (ins.get(l.id)?.length ?? 0) > 0).map(l => l.id);
+    const caught = sk.lanes.filter(l => !reach.has(l.id) && sk.connectors.some(c => c.to.lane === l.id)).map(l => l.id);
     const byJ = new Map<string | null, string[]>();
     for (const id of caught) { const j = onJ.get(id) ?? null; (byJ.get(j) ?? byJ.set(j, []).get(j)!).push(id); }
     for (const [j, ids] of byJ) {

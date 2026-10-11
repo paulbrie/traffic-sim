@@ -191,6 +191,30 @@ const RULES: Partial<Sketch> = { traffic: { rate: 0, speed: 50, seed: 1, tune: {
   report("moving followers", ok, `on the move: chain ${JSON.stringify(moving.chain)}, deadlock ${JSON.stringify(moving.deadlock)}; standing: deadlock ${JSON.stringify(standing.deadlock)}`);
 }
 
+// two rings round one middle in one road (a two-lane roundabout): neighbours all the way round; a car onto the inner ring for a way
+// off the outer changes over to it and gets there, its explanation with no "no route"
+{
+  const arc = (id: string, r: number): SketchLane => ({ id, width: 4, inRate: 0, shape: { kind: "arc", c: { x: 0, y: 0 }, r, a0: 0, sweep: -2 * Math.PI } as SketchLane["shape"] });
+  const outS = (7 * Math.PI / 4) * 11.5;
+  const sim = make(sketch([arc("I", 7), arc("O", 11.5), line("IN", [[-60, 0], [-16, 0]]), line("OUT", [[20, 20], [60, 60]])],
+    [conn("cIn", "IN", 44, "I", Math.PI * 7), conn("cOut", "O", outS, "OUT", 0)], { roads: [{ id: "r1", name: "Roundabout", lanes: ["I", "O"] }] }));
+  const E = (sim as unknown as { edges: Map<string, { neighbors: { lane: { key: string }; round?: boolean }[] }> }).edges;
+  const paired = E.get("lane:I")!.neighbors.some(n => n.lane.key === "lane:O" && n.round) && E.get("lane:O")!.neighbors.some(n => n.lane.key === "lane:I" && n.round);
+  const a = sim.sendTest("IN", "OUT");
+  let onInner = 0, noRoute: unknown = "never asked", out = false;
+  if (a !== null) {
+    sim.watch(a);
+    for (let i = 0; i < 600 && !out; i++) {
+      sim.step(0.1);
+      const car = sim.vehicles.find(v => v.id === a) as unknown as { edge: { key: string }; v: number } | undefined;
+      if (!car || car.edge.key === "lane:OUT" || car.edge.key === "conn:cOut") { out = true; break; }
+      if (car.edge.key === "lane:I") { onInner += car.v * 0.1; if (noRoute === "never asked") noRoute = sim.explain(a)!.noRoute ?? null; }
+    }
+  }
+  const ok = paired && a !== null && out && onInner > 0 && onInner < 7 * 2 * Math.PI && noRoute === null;
+  report("two-lane roundabout", ok, `rings neighbours ${paired}; a car IN to OUT ${a === null ? "not sent (no route)" : `on the inner ring ${onInner.toFixed(1)} m, then off the outer ${out}`}; no route ${JSON.stringify(noRoute)}`);
+}
+
 for (const r of results) console.log(r);
 console.log(allOk ? "explain check: all ok" : "explain check: FAILED");
 if (!allOk) process.exit(1);
