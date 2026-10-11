@@ -22,6 +22,8 @@ const SWITCHES: TuneSwitch[] = [
     hint: "First come: whoever gets there first goes. Priority: by the rules of the road (the ring, give-way lines, the main road, the car from the right)." },
   { key: "ringLanes", section: "Roundabouts", label: "Lane by exit", off: "Off", on: "On",
     hint: "On a two-lane roundabout, cars take the lane for their exit before the ring: first exit outer, third or later inner, straight on either." },
+  { key: "ringKeepLane", section: "Roundabouts", label: "Keep your lane", off: "Off", on: "On",
+    hint: "On a two-lane roundabout, cars keep their ring; from the inner ring they move out only just before their exit, else go round once more." },
 ];
 const SWITCH_KEYS = new Set<string>(SWITCHES.map(x => x.key));
 /** sliders shown in another group of the dialog than their tuning group (the roundabout-only ones with the roundabout switches; keys and values as they are) */
