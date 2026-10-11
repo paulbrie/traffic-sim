@@ -2064,7 +2064,7 @@ export class SketchSim {
         if (v.still > 8 && v.why?.startsWith("changing to")) {
           const was = v.goal;
           this.plan(v, true);
-          if (v.goal) { this.note({ what: "change", car: v.id, gaveUp: was?.conn?.key ?? null, goal: v.goal.conn?.key ?? `end of ${v.goal.lane.key}` }); continue; }
+          if (v.goal) { this.note({ what: "change", car: v.id, gaveUp: was?.conn?.key ?? null, to: h.n.lane.key, waited: r2(v.still), goal: v.goal.conn?.key ?? `end of ${v.goal.lane.key}` }); continue; }
           v.goal = was; v.exit = null;
         }
         const q = this.room(v, h.n, byEdge, ghosts);
@@ -2220,17 +2220,27 @@ export class SketchSim {
 
   /** an event of the car watched, in its log */
   private watchEvent(e: Omit<SimEvent, "t">) {
-    const x = e as Record<string, unknown>, me = this.watchId;
+    const n = this.eventLine(e, this.watchId!);
+    if (n) this.watchNote(n.what, n.text, n.car);
+  }
+  /** an event of car `me` as a line in its log (the same for the car watched and, from the event log, one asked about later) */
+  private eventLine(e: Omit<SimEvent, "t">, me: number): { what: string; text: string; car?: number } | null {
+    const x = e as Record<string, unknown>;
     switch (e.what) {
-      case "in": return this.watchNote("in", `came in on ${x.lane}`);
-      case "out": return this.watchNote("out", `left the map at ${x.lane}`);
-      case "onto": return this.watchNote("onto", `onto ${x.to}`);
-      case "change": return x.gaveUp !== undefined ? this.watchNote("lane change", `gave up its lane change: now ${x.goal}`) : this.watchNote("lane change", `changed from ${x.from} to ${x.to}`);
-      case "reroute": return this.watchNote("reroute", `rerouted from ${x.from} to ${x.to} after ${x.waited} s`);
-      case "deadlock": return this.watchNote("deadlock", `deadlock of ${(x.ring as number[]).length} (${(x.ring as number[]).join(", ")}) broken: car ${e.car} let go${e.car === me ? " (this one)" : ""}`, e.car === me ? undefined : (e.car as number));
-      case "collision": return this.watchNote("collision", `collision with car ${e.car === me ? x.with : e.car}`, (e.car === me ? x.with : e.car) as number);
-      case "breakdown": return this.watchNote("breakdown", `broke down on ${x.edge}`);
+      case "in": return { what: "in", text: `came in on ${x.lane}` };
+      case "out": return { what: "out", text: `left the map at ${x.lane}` };
+      case "onto": return { what: "onto", text: `onto ${x.to}` };
+      case "change": {
+        if (x.gaveUp === undefined) return { what: "lane change", text: `changed from ${x.from} to ${x.to}` };
+        const goal = String(x.goal), instead = goal.startsWith("end of ") ? `drives to the ${goal}` : `takes ${goal}`;
+        return { what: "lane change", text: x.to !== undefined ? `gave up changing to ${x.to} after ${x.waited} s without a gap: ${instead} from its own lane instead` : `gave up its lane change: now ${goal}` };
+      }
+      case "reroute": return { what: "reroute", text: `rerouted from ${x.from} to ${x.to} after ${x.waited} s` };
+      case "deadlock": return { what: "deadlock", text: `deadlock of ${(x.ring as number[]).length} (${(x.ring as number[]).join(", ")}) broken: car ${e.car} let go${e.car === me ? " (this one)" : ""}`, ...(e.car === me ? {} : { car: e.car as number }) };
+      case "collision": return { what: "collision", text: `collision with car ${e.car === me ? x.with : e.car}`, car: (e.car === me ? x.with : e.car) as number };
+      case "breakdown": return { what: "breakdown", text: `broke down on ${x.edge}` };
     }
+    return null;
   }
   /** the car watched's state after a step: a new rule or another car holding it is a line in its log */
   private watchStep() {
@@ -2645,6 +2655,15 @@ export class SketchSim {
       if (same && tag === now) since = f.t - fr[j].t; else same = false;
       if (tag !== last) { const w = this.tags[last] || null, rr = readWhy(w); log.unshift({ t: fr[j + 1].t, what: "state", text: w ? `${rr?.kind ?? "held"}: ${w}` : "free road", ...(rr?.car !== undefined ? { car: rr.car } : {}) }); last = tag; }
     }
+    // (and its own events from the event log over the same while: how a lane change ended, where it went onto, ...)
+    for (const e of this.log) {
+      if (e.t <= f.t - 120 || e.t > f.t + 0.05) continue;
+      if (e.car !== id && e.with !== id && !(Array.isArray(e.ring) && (e.ring as number[]).includes(id))) continue;
+      const n = this.eventLine(e, id);
+      if (n) log.push({ t: e.t, ...n });
+    }
+    // (an event before the state it led to, at the same time)
+    log.sort((a, b) => a.t - b.t || (a.what === "state" ? 1 : 0) - (b.what === "state" ? 1 : 0));
     const gap = f.aux[me * 2] !== 65535 ? f.aux[me * 2] / 10 : null;
     const speedOf = new Map<number, number>(); for (let i = 0; i < n; i++) speedOf.set(f.nums[i * 8], f.nums[i * 8 + 5]);
     const { chain, deadlock } = this.chainOf(id, (c: number) => readWhy(whyOf.get(c) ?? null)?.car ?? null, r?.car ?? null, (c: number) => (speedOf.get(c) ?? 0) < 1);

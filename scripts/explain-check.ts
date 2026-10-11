@@ -215,6 +215,27 @@ const RULES: Partial<Sketch> = { traffic: { rate: 0, speed: 50, seed: 1, tune: {
   report("two-lane roundabout", ok, `rings neighbours ${paired}; a car IN to OUT ${a === null ? "not sent (no route)" : `on the inner ring ${onInner.toFixed(1)} m, then off the outer ${out}`}; no route ${JSON.stringify(noRoute)}`);
 }
 
+// T170: how a lane change ended, for a car not watched, asked about a moment later: it gave up (the lane it wanted blocked by one
+// broken down beside where it had to change; its own lane leads there too, by Y), and its recent decisions say so, and what it took instead
+{
+  const sim = make(sketch([line("A", [[0, 0], [60, 0]]), line("B", [[0, 3.5], [60, 3.5]]), line("X", [[70, 3.5], [160, 3.5]]), line("Y", [[70, 0], [100, -20], [130, -20]])],
+    [conn("cAY", "A", 60, "Y", 0), conn("cBX", "B", 60, "X", 0), conn("cYX", "Y", 66.06, "X", 70)], { roads: [{ id: "r1", name: "Two lanes", lanes: ["A", "B"] }] }));
+  // (broken down on B where it stops, beside the last of A: no change onto B ahead of it, nor beside it)
+  const b = sim.sendTest("B", "X")!, posB = () => (sim.vehicles.find(v => v.id === b) as unknown as { pos: number; v: number } | undefined);
+  for (let i = 0; i < 300 && (posB()?.pos ?? 0) < 30; i++) sim.step(0.1);
+  sim.breakDown(b);
+  sim.watch(b);
+  for (let i = 0; i < 100 && (posB()?.v ?? 0) > 0; i++) sim.step(0.1);
+  const a = sim.sendTest("A", "X")!;
+  const gaveUp = () => (sim as unknown as { log: { t: number; what: string; car?: number; gaveUp?: unknown }[] }).log.find(e => e.car === a && e.what === "change" && e.gaveUp !== undefined);
+  for (let i = 0; i < 600 && !gaveUp(); i++) sim.step(0.1);
+  const at = gaveUp()?.t ?? -1;
+  for (let i = 0; i < 20; i++) sim.step(0.1);
+  const x = at >= 0 ? sim.explain(a, at + 1) : null, line1 = x?.log.find(l => l.what === "lane change")?.text ?? "";
+  const ok = !!x && !x.traced && /^gave up changing to lane:B after \d+(\.\d+)? s without a gap: takes conn:cAY from its own lane instead$/.test(line1);
+  report("lane change given up, not watched", ok, at < 0 ? "never gave up" : `car ${a} at ${(at + 1).toFixed(1)} s (traced ${x?.traced}): "${line1 || "no lane change line"}"`);
+}
+
 for (const r of results) console.log(r);
 console.log(allOk ? "explain check: all ok" : "explain check: FAILED");
 if (!allOk) process.exit(1);
