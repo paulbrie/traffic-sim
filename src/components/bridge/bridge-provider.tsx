@@ -14,8 +14,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { bridgeCanvas, bridgeState, bridgeToWorld } from "@/state/bridge-registry";
-import { bridgeAddAgent, bridgeAllowTabs, bridgeCloseTab, bridgeDenyRequest, bridgeDisconnect, bridgeFocusTab, bridgeHello, bridgeOpenRequest, bridgePair, bridgePauseTab, bridgeResume, bridgeRevoke, bridgeSend, bridgeStore, bridgeTakeOver, setBridgeNavigate } from "@/state/bridge-client";
+import { bridgeCanvas, bridgeEditScope, bridgeState, bridgeToWorld } from "@/state/bridge-registry";
+import { bridgeAddAgent, bridgeAllowEdits, bridgeAllowTabs, bridgeCloseTab, bridgeDenyRequest, bridgeDisconnect, bridgeFocusTab, bridgeHello, bridgeOpenRequest, bridgePair, bridgePauseTab, bridgeResume, bridgeRevoke, bridgeSend, bridgeStore, bridgeTakeOver, setBridgeNavigate } from "@/state/bridge-client";
 import { under } from "./a11y";
 
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -56,7 +56,7 @@ export function BridgeProvider() {
           {view.requests.length > 0 && <span className="ml-1 rounded-full bg-amber-500 px-1.5 text-white">{view.requests.length} to open</span>}
         </button>
       ) : null}
-      {view.phase === "attached" && view.cursor && <AgentCursor x={view.cursor.x} y={view.cursor.y} name={view.agent ?? "Claude"} color={view.agentColor ?? "#7c3aed"} />}
+      {view.phase === "attached" && view.cursor && <AgentCursor x={view.cursor.x} y={view.cursor.y} name={view.agent ?? "Claude"} color={view.agentColor ?? "#7c3aed"} note={view.note} />}
       {view.phase === "attached" && view.trace && <Trace text={view.trace.text} at={view.trace.at} />}
       {annotating && <Annotator onDone={() => setAnnotating(false)} />}
     </div>
@@ -128,11 +128,15 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
 }
 
 /** the agent's pointer: where it is about to act (it glides there) */
-function AgentCursor({ x, y, name, color }: { x: number; y: number; name: string; color: string }) {
+function AgentCursor({ x, y, name, color, note }: { x: number; y: number; name: string; color: string; note: { text: string; at: number } | null }) {
+  // (its last edit, T189: what it did, by the cursor, 4 s)
+  const [now, setNow] = useState(() => note?.at ?? 0);
+  useEffect(() => { if (!note) return; const t = setTimeout(() => setNow(Date.now()), 4100); return () => clearTimeout(t); }, [note]);
+  const shown = note && now - note.at < 4000 ? note.text : null;
   return (
     <div className="pointer-events-none fixed z-[70] transition-[left,top] duration-300 ease-out" style={{ left: x, top: y }} aria-hidden>
       <svg width="20" height="20" viewBox="0 0 20 20" className="drop-shadow"><path d="M2 2 L17 9 L10 11 L8 18 Z" fill={color} stroke="white" strokeWidth="1.5" /></svg>
-      <span className="ml-4 rounded px-1.5 py-0.5 text-[10px] font-medium text-white" style={{ background: color }}>{name}</span>
+      <span className="ml-4 rounded px-1.5 py-0.5 text-[10px] font-medium text-white" style={{ background: color }}>{name}{shown ? ` · ${shown}` : ""}</span>
     </div>
   );
 }
@@ -216,6 +220,32 @@ function crop(r: { x: number; y: number; w: number; h: number }): string | undef
 }
 
 /**
+ * Whether the agents may change the plan (T189: the bridge's edit actions, each one undo step, shown by the agent's cursor):
+ * not at all (by default), one sketch only (the one the Sketch window has open when it is chosen), or the plan and all its
+ * sketches. The server keeps it and refuses edits it doesn't cover.
+ */
+function AgentEditsRow() {
+  const view = useSyncExternalStore(bridgeStore.subscribe, bridgeStore.get, bridgeStore.get), p = view.allowEdits;
+  const choose = (mode: string) => {
+    if (mode === "sketch") {
+      const scope = bridgeEditScope();
+      if (!scope) { toast.error("Open a V2 plan first: its Sketch window's sketch is the one allowed"); return; }
+      void bridgeAllowEdits({ mode: "sketch", ...scope });
+    } else void bridgeAllowEdits(mode === "all" ? { mode: "all" } : { mode: "off" });
+  };
+  return (
+    <label className="flex items-center justify-between gap-2 text-xs">
+      <span title="Agents attached here may change the plan through the bridge (lanes, connectors, signs, junctions, sketches): each change one undo step, saved as yours would be, shown by the agent's cursor and in the log">Allow agent edits</span>
+      <select className="h-7 max-w-44 truncate rounded-md border bg-background px-1.5 text-xs" value={p.mode} onChange={e => choose(e.target.value)} aria-label="Allow agent edits">
+        <option value="off">Off</option>
+        <option value="sketch">{p.mode === "sketch" ? `Only “${p.name}”` : "This sketch only"}</option>
+        <option value="all">Plan and its sketches</option>
+      </select>
+    </label>
+  );
+}
+
+/**
  * The hub's agent tabs: whether agents may open tabs of their own here, a code for another agent, the agents attached
  * (revoke), every tab they have open (focus, take over, close), and the tabs asked for that the browser wouldn't open by
  * itself (pop-ups blocked: open with a click, or deny).
@@ -224,6 +254,7 @@ function AgentTabsSection() {
   const view = useSyncExternalStore(bridgeStore.subscribe, bridgeStore.get, bridgeStore.get);
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5 border-t pt-2">
+      <AgentEditsRow />
       <label className="flex items-center justify-between gap-2 text-xs">
         <span title="Agents attached here may open tabs of their own in this browser (this app's pages only), each marked as theirs; you can watch, take over or close them">Allow agent tabs</span>
         <Switch checked={view.allowTabs} onCheckedChange={on => void bridgeAllowTabs(on)} aria-label="Allow agent tabs" />

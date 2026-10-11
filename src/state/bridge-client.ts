@@ -10,7 +10,7 @@
  * shows whose it is, and can be taken over by the user.
  */
 import { basePath } from "@/lib/base-path";
-import { bridgeApp, bridgeCanvas, bridgeState, bridgeUi } from "@/state/bridge-registry";
+import { bridgeApp, bridgeCanvas, bridgeEdit, bridgeState, bridgeUi, type EditPermit } from "@/state/bridge-registry";
 import { describe, find, isBridgeUi, snapshot, type Target } from "@/components/bridge/a11y";
 
 export interface BridgeLogEntry { at: number; type: string; target: string; ok: boolean; error?: string }
@@ -32,7 +32,11 @@ export interface BridgeView {
   /** where the agent's cursor is (client px), and what it last did (shown a moment) */
   cursor: { x: number; y: number } | null;
   trace: { text: string; at: number } | null;
+  /** the agent's last edit (T189): a few words shown by its cursor a moment */
+  note: { text: string; at: number } | null;
   // the hub's
+  /** the user's leave for agent edits (T189), as the server keeps it */
+  allowEdits: EditPermit;
   allowTabs: boolean; agents: BridgeAgent[]; tabs: BridgeTab[]; requests: BridgeRequest[];
   /** a code for another agent (Add agent), while it lasts */
   agentCode: string | null;
@@ -43,7 +47,7 @@ interface Pairing { pageId: string; pageToken: string; code?: string; mode: "hub
 interface Command { id: string; type: string; args?: Record<string, unknown> }
 
 const KEY = "trafficsim:bridge";
-let view: BridgeView = { open: false, phase: "off", mode: "hub", code: null, agent: null, agentColor: null, log: [], error: null, cursor: null, trace: null, allowTabs: false, agents: [], tabs: [], requests: [], agentCode: null, tab: null };
+let view: BridgeView = { open: false, phase: "off", mode: "hub", code: null, agent: null, agentColor: null, log: [], error: null, cursor: null, trace: null, note: null, allowEdits: { mode: "off" }, allowTabs: false, agents: [], tabs: [], requests: [], agentCode: null, tab: null };
 const listeners = new Set<() => void>();
 const set = (patch: Partial<BridgeView>) => { view = { ...view, ...patch }; for (const f of listeners) f(); };
 export const bridgeStore = {
@@ -66,7 +70,7 @@ const post = (path: string, body: Record<string, unknown>) => fetch(api(path), {
   method: "POST", headers: { "Content-Type": "application/json", ...(pairing ? { "x-bridge-page": pairing.pageToken } : {}) }, body: JSON.stringify(pairing ? { pageId: pairing.pageId, ...body } : body),
 });
 const keep = () => { if (pairing) sessionStorage.setItem(KEY, JSON.stringify(pairing)); else sessionStorage.removeItem(KEY); };
-const gone = (phase: BridgeView["phase"]) => { unwatch(); stream?.close(); stream = null; pairing = null; keep(); set({ phase, code: null, agent: null, cursor: null, agents: [], tabs: [], requests: [], agentCode: null }); };
+const gone = (phase: BridgeView["phase"]) => { unwatch(); stream?.close(); stream = null; pairing = null; keep(); set({ phase, code: null, agent: null, cursor: null, note: null, allowEdits: { mode: "off" }, agents: [], tabs: [], requests: [], agentCode: null }); };
 
 // ---- the UI state the agent watches (a V2 plan's: see bridgeUi): its changes sent as "ui" events, at most 4 a second
 // (the page's own list, gone when the pairing ends or another agent takes it over)
@@ -166,6 +170,8 @@ export async function bridgeSend(event: Record<string, unknown>) {
 // ---- the hub's: agents and their tabs
 const openFor = (q: BridgeRequest) => window.open(`${basePath}${q.url}#bridge-ticket=${q.ticket}`, "_blank");
 export async function bridgeAllowTabs(on: boolean) { set({ allowTabs: on }); await post("allow-tabs", { on }); }
+/** the user's leave for agent edits (T189): none, one sketch only, or the plan and all its sketches */
+export async function bridgeAllowEdits(permit: EditPermit) { set({ allowEdits: permit }); await post("allow-edits", { permit }); }
 /** a code for another agent to attach (tabs only) */
 export async function bridgeAddAgent() {
   const r = await post("agent-code", {});
@@ -197,7 +203,7 @@ function listen() {
   stream.onopen = () => { failures = 0; bridgeHello(); };
   const on = <T,>(name: string, f: (d: T) => void) => stream!.addEventListener(name, e => f(JSON.parse((e as MessageEvent).data) as T));
   on<{ name: string; color?: string } | null>("agent", a => { if (pairing?.mode === "hub") { if ((a?.name ?? null) !== view.agent) unwatch(); set({ agent: a?.name ?? null, agentColor: a?.color ?? null, phase: a ? "attached" : "waiting" }); } });
-  on<{ allowTabs: boolean; agents: BridgeAgent[]; tabs: BridgeTab[] }>("hub", h => set({ allowTabs: h.allowTabs, agents: h.agents, tabs: h.tabs }));
+  on<{ allowTabs: boolean; allowEdits?: EditPermit; agents: BridgeAgent[]; tabs: BridgeTab[] }>("hub", h => set({ allowTabs: h.allowTabs, allowEdits: h.allowEdits ?? { mode: "off" }, agents: h.agents, tabs: h.tabs }));
   on<NonNullable<BridgeView["tab"]>>("tab", t => { if (t.left || t.agent !== view.agent) unwatch(); set({ tab: { ...t, closed: false }, agent: t.agent, agentColor: t.color, phase: t.left ? "lost" : "attached" }); });
   // (an agent asks for a tab: opened at once if the browser lets it, else the user is asked)
   on<BridgeRequest>("openTab", q => {
@@ -328,6 +334,18 @@ async function exec(type: string, a: Record<string, unknown>, said: (t: string) 
       return { url: u.href };
     }
     case "app": {
+      // (an edit, T189: with the leave the server sent along, and only that; the agent's cursor to where it was, with a few
+      // words, and "edited by <agent>" in the log)
+      const e = bridgeEdit.get(String(a.action ?? ""));
+      if (e) {
+        const permit = a.permit as EditPermit | undefined, who = view.tab?.agent ?? view.agent ?? "Claude";
+        if (!permit || permit.mode === "off") throw new Error("Agent edits are off: the user can allow them in the Claude panel (Allow agent edits)");
+        const r = await e((a.args ?? {}) as Record<string, unknown>, permit);
+        said(`edited by ${who}: ${r.said}`);
+        set({ ...(r.at ? { cursor: r.at } : {}), note: { text: r.said, at: Date.now() } });
+        trace(`${who} ${r.said}`);
+        return r.result ?? {};
+      }
       const f = bridgeApp.get(String(a.action ?? ""));
       if (!f) throw new Error(`"${a.action}" isn't offered here (offered: ${bridgeApp.names().join(", ") || "nothing"})`);
       const r = await f((a.args ?? {}) as Record<string, unknown>);

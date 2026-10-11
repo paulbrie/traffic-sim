@@ -51,7 +51,7 @@ process; a restart drops them: the page reconnects, the agent pairs again).
 | `type` | `{ role?, name?, selector?, text, submit?: boolean }` | `{ typed }` |
 | `key` | `{ key: string }` (e.g. `"Control+k"`, `"Escape"`) | `{}` |
 | `navigate` | `{ url }` (same origin) | `{ url }` |
-| `app` | `{ action, args }`: `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30…), `replay` `{ t }`, `restart`, `testCar` (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
+| `app` | `{ action, args }` (edits too, with the user's leave: see "Edits"): `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30…), `replay` `{ t }`, `restart`, `testCar` (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
 
 Targets by role and name follow Playwright's `getByRole` (name: case-insensitive substring unless `exact`).
 Every command is shown to the user in the activity log; `click` / `type` / `key` move the agent's cursor there first
@@ -118,6 +118,46 @@ argument, is an error saying what was expected, and nothing is changed.
   that isn't there is an error, and the list stays as it was.
 
 The plan's own data stays out (`sketch`, `sketchJson`), and so do the account menu and the bridge's own panel.
+
+## Edits (T189: an agent building in the user's page)
+
+Only with the user's leave: **Allow agent edits** in the hub's Claude panel, **Off** by default; **This sketch only** (the sketch
+the Sketch window has open when it is chosen: the plan's and the sketch's ids are kept, shown as `Only "<name>"`); or **Plan
+and its sketches**. The server keeps it (`POST /api/bridge/page/allow-edits { permit }`; in the `hub` event as `allowEdits`,
+in `bridge_status` too) and holds for the hub's agents' tabs as well. An edit action while it is off is refused by the server
+(403, "Agent edits are off…"); the leave is sent to the page with each edit (set by the server, never taken from the agent),
+and the page checks the editor and the sketch against it: with one sketch only, the plan's editor, another plan, or another
+sketch in the Sketch window are refused, and so is picking or making sketches.
+
+Each edit is an `app` action (args checked strictly, as the others: a number for a number, the lane or connector there, and
+an unknown key refused, so a typo isn't quietly ignored), applied to the editor's sketch through its store: **one undo step**,
+saved as the user's edit would be (Undo takes it back). The agent's cursor goes to where it was, with a few words by it
+("added connector c13 (l4 → l9)") and in the line saying what it did; the activity log says "edited by <agent>: …".
+`editor`: `plan` or `scratch` (the Sketch window); without it, the editor the user is at (with one sketch only: the Sketch
+window). Points are `{ x, y }` in metres, as the map's; `s`: metres along a lane from its start.
+
+| action | args | data |
+|---|---|---|
+| `addLane` | `{ points: [{x,y}, …] (2+), width? (2–6 m, 3.5), speed? (km/h), level?, curved? }` | `{ lane, length }` |
+| `deleteLanes` | `{ lanes: [id] }` (their connectors go; a road left with none goes) | `{ deleted, roadsGone }` |
+| `reshapeLane` | `{ lane, points }` (a line lane; its connectors kept within its new length) | `{ lane, length }` |
+| `movePoint` | `{ lane, i, x, y }` | `{ lane, i }` |
+| `addConnector` | `{ from: { lane, s? (its end) }, to: { lane, s? (its start) }, bends?: [{x,y}], straight? }` | `{ connector, from, to }` |
+| `deleteConnectors` | `{ connectors: [id] }` | `{ deleted }` |
+| `moveConnectorEnd` | `{ connector, end: "from" \| "to", s }` | `{ connector, [end] }` |
+| `setControl` | `{ lanes: [id], control: "yield" \| "stop" \| "none" \| "lights" }` (lights: on the junctions the lanes lead into, their signs taken off) | `{ lanes, control, junctions? }` |
+| `setLights` | `{ junction, on }` | `{ junction, lights }` |
+| `groupRoad` | `{ lanes: [id], name? }` (out of the roads they were in) | `{ road, name, lanes }` |
+| `addJunction` | `{ outline: [{x,y}, …] (3+), name? }` | `{ junction, name }` |
+| `deleteJunctions` | `{ junctions: [id] }` (their lanes and connectors kept) | `{ deleted }` |
+| `roundabout` | `{ x, y, r (8–80 m) }` (as the Roundabout tool: the roads it crosses cut and joined to its ring) | `{ junction, ring }` |
+| `batch` | `{ actions: [{ action, args }] }` (at most 50): one undo step, all or nothing (the first error says which and nothing is done); `"$k"` as an argument (a lane, a connector…): the id the k-th action made, e.g. `{ from: { lane: "$0" }, to: { lane: "l7" } }` | `{ results }` |
+| `openSketch` | `{ id }` (Plan and its sketches only) | `{ open, name, sketches }` |
+| `newSketch` | `{ name? }` (opened) | `{ open, name, made, sketches }` |
+| `duplicateSketch` | `{ id? (the one open), name? }` (opened) | `{ open, name, made, sketches }` |
+
+The edits themselves: `src/lib/bridge-edits.ts` (framework-free, checked by `npm run engine:check`); the page's side:
+`src/state/bridge-edits.ts` (the editors on the page offer themselves; the leave checked there).
 
 ## Events (page → agent)
 
@@ -186,4 +226,6 @@ Admins only; pairing by code shown in the page; a visible badge while attached, 
 arbitrary JavaScript; cookies and tokens never sent to the agent; every command logged in the page. No typing in or reading
 of password fields; the bridge's own UI (panel, tab bar) is out of the agent's reach; pages of this app only (never its API).
 Agent tabs: only with the user's leave (Allow agent tabs), each agent only in its own tabs, a tab taken over at any time;
+agent edits: only with the user's leave (Allow agent edits: one sketch, or the plan), kept and checked by the server, each
+one undo step and shown;
 an agent token can't drive the hub unless the user paired that agent with the hub's own code.

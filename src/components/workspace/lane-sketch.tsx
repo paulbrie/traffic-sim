@@ -52,6 +52,7 @@ import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from 
 import { REPLAY_STEP, SketchReplayBar } from "@/components/v2/sketch-replay-bar";
 import { CONSOLE_HEIGHT, ProblemConsole } from "@/components/v2/problem-console";
 import { argOf, bridgeApp, bridgeState, setBridgeCanvas, setBridgeToWorld } from "@/state/bridge-registry";
+import { offerEditorToBridge } from "@/state/bridge-edits";
 import { BackgroundPanel, drawBackground, type Background, type Calibration, type SatOptions } from "@/components/v2/background";
 import { underlayImg$ } from "@/state/underlay-image";
 import { stampRoundabout } from "@/lib/roundabout";
@@ -1040,6 +1041,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const offs = [
       setBridgeCanvas(() => (in3d && canvas3d.current ? canvas3d.current() : canvas.current)),
       setBridgeToWorld((x, y) => { const c = canvas.current, r = c?.getBoundingClientRect(); return c && r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? toWorld({ clientX: x, clientY: y }) : null; }),
+      // (this editor for the bridge's edit actions, T189: the plan's or the Sketch window's; each edit one undo step, as the user's)
+      ...(ek === "plan" || ek === "scratch" ? [offerEditorToBridge(ek, {
+        sketch: () => live.current.sketch,
+        edit: next => editSketch(() => next),
+        toClient: p => { const c = canvas.current, r = c?.getBoundingClientRect(), v = view.current; return r ? { x: r.left + r.width / 2 + (p.x - v.cx) * v.scale, y: r.top + r.height / 2 + (p.y - v.cy) * v.scale } : null; },
+        view: () => ({ ...view.current }),
+      })] : []),
       bridgeApp.register("select", a => { goTo(target(a)); }),
       bridgeApp.register("goTo", a => { goTo(target(a)); }),
       bridgeApp.register("view", a => {

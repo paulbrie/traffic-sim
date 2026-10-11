@@ -14,6 +14,7 @@ import { createContext, useCallback, useContext, useMemo, useSyncExternalStore }
 import { DeepSubject } from "subjecto";
 import type { Piece } from "@/lib/lane-sketch";
 import { argOf, bridgeApp, setBridgeUi } from "@/state/bridge-registry";
+import { offerEditsToBridge } from "@/state/bridge-edits";
 import { ui } from "@/state/store";
 import { SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
@@ -221,6 +222,8 @@ const editorFor = (a: Record<string, unknown>): EditorUi => {
 /** offered to the bridge while a V2 plan is open (the plan's editor): the state to read, and a few changes to it an agent may ask for (no others) */
 export function offerSketchUiToBridge() {
   const offs = [
+    // the edit actions (T189: only with the user's leave, checked by the server and against the editor and sketch here)
+    offerEditsToBridge(() => sketchUi.getValue().active),
     setBridgeUi({
       snapshot: sketchUiSnapshot,
       subscribe: (path, fn) => { const h = sketchUi.subscribe(path, v => fn(v), { skipInitialCall: true }); return () => h.unsubscribe(); },

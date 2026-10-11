@@ -26,6 +26,7 @@ import { CONNECTOR_KINK_LIMIT, connectorKinks, turnsAt, unkinkPts } from "../src
 import { tidySketch } from "../src/lib/sketch-tidy";
 import { deadEndTurnarounds } from "../src/lib/dead-ends";
 import { deleteLanes, takeOutOfRoad } from "../src/lib/road-lanes";
+import { applyEdit } from "../src/lib/bridge-edits";
 import { alignmentOf, laneLength, pointAt, settle as settleSketch, sliceRoad, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
 const net = sampleTown();
 const c = compile(net);
@@ -1510,5 +1511,33 @@ function alongKerb(input: any): any {
     && ol.roads[0].align?.ref === "b" && midY(ol, "b") === -3.5 && midY(ol, "c") === -7 && midY(ol, "a") === 0;
   const ok = middle && lead && last && out;
   console.log(`road lanes: the middle one deleted, the rest packed ${middle}, the lead deleted ${lead}, the last one (the road goes) ${last}, the middle one and the lead taken out, the rest where they were ${out} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// the Claude bridge's edit actions (T189, bridge-edits.ts): lanes, a connector, a give-way, a junction with lights, a road, in a
+// batch (all or nothing); and arguments checked strictly (a string for a number, an unknown key, a lane not there: refused)
+{
+  const empty: Sketch = { lanes: [], connectors: [], roads: [], junctions: [] };
+  const b = applyEdit(empty, "batch", { actions: [
+    { action: "addLane", args: { points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], speed: 50 } },
+    { action: "addLane", args: { points: [{ x: 110, y: 10 }, { x: 110, y: 100 }] } },
+    { action: "addConnector", args: { from: { lane: "$0" }, to: { lane: "$1" } } },
+    { action: "setControl", args: { lanes: ["$0"], control: "yield" } },
+    { action: "addJunction", args: { outline: [{ x: 95, y: -8 }, { x: 120, y: -8 }, { x: 120, y: 15 }, { x: 95, y: 15 }] } },
+    { action: "groupRoad", args: { lanes: ["l1"], name: "Main" } },
+  ] });
+  const k = settleSketch(b.sketch), c = k.connectors[0];
+  const built = k.lanes.length === 2 && c?.from.lane === "l1" && c.from.s === 100 && c.to.lane === "l2" && c.to.s === 0 && k.lanes[0].control === "yield" && k.lanes[0].speed === 50
+    && k.junctions.length === 1 && k.roads.some(r => r.name === "Main" && r.lanes.join() === "l1") && (b.result.results as unknown[]).length === 6;
+  const lit = applyEdit(k, "setControl", { lanes: ["l1"], control: "lights" }).sketch, lights = !!lit.junctions[0].lights && !lit.lanes[0].control;
+  const refused = (action: string, args: unknown) => { try { applyEdit(k, action, args); return false; } catch { return true; } };
+  const strict = refused("addLane", { points: [{ x: "0", y: 0 }, { x: 10, y: 0 }] }) && refused("addLane", { points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], widht: 3 })
+    && refused("addConnector", { from: { lane: "l9" }, to: { lane: "l2" } }) && refused("setControl", { lanes: ["l1"], control: "give way" })
+    && refused("moveConnectorEnd", { connector: "c1", end: "from", s: 500 }) && refused("setLights", { junction: "j1", on: "yes" }) && refused("nothing", {})
+    && refused("batch", { actions: [{ action: "deleteLanes", args: { lanes: ["l1"] } }, { action: "deleteLanes", args: { lanes: ["l1"] } }] });
+  const moved = applyEdit(k, "moveConnectorEnd", { connector: "c1", end: "from", s: 90 }).sketch.connectors[0].from.s === 90;
+  const gone = applyEdit(k, "deleteLanes", { lanes: ["l2"] }).sketch, deleted = gone.lanes.length === 1 && !gone.connectors.length;
+  const ok = built && lights && strict && moved && deleted;
+  console.log(`bridge edits: a batch built two lanes, a connector, a give-way, a junction, a road ${built}, lights ${lights}, bad arguments refused ${strict}, an end moved ${moved}, a lane deleted with its connector ${deleted} | ok ${ok}`);
   if (!ok) process.exit(1);
 }

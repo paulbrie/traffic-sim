@@ -13,6 +13,12 @@ import { randomBytes, randomInt, timingSafeEqual } from "crypto";
 export interface Command { id: string; type: string; args: Record<string, unknown> }
 export interface CommandResult { ok: boolean; data?: unknown; error?: string }
 export interface BridgeEvent { seq: number; at: number; kind: "annotation" | "message" | "ui"; pageId: string; [k: string]: unknown }
+/**
+ * Agent edits (T189): the user's leave for the agents to change a plan through the bridge's edit actions, given in the hub's
+ * panel: none (default), one sketch only (the plan's and the sketch's ids, as they were when the user chose it, and its
+ * name), or the plan and all its sketches. Kept by the hub; holds for its agents' tabs too.
+ */
+export type EditPermit = { mode: "off" } | { mode: "all" } | { mode: "sketch"; plan: string; sketch: string; name: string };
 /** an agent as a page shows it */
 export interface AgentView { id: string; name: string; color: string; hub: boolean }
 /** a tab as the hub and its agent see it */
@@ -24,7 +30,7 @@ type PageMessage =
   /** (to the hub) an agent asks for a tab: open `url` with the ticket in its hash */
   | { event: "openTab"; data: { ticket: string; url: string; label: string; task: string; agent: string; color: string } }
   /** (to the hub) the agents and their tabs, again (on every change) */
-  | { event: "hub"; data: { allowTabs: boolean; agents: AgentView[]; tabs: TabView[] } }
+  | { event: "hub"; data: { allowTabs: boolean; allowEdits: EditPermit; agents: AgentView[]; tabs: TabView[] } }
   /** (to a tab) whose it is and how it stands */
   | { event: "tab"; data: { agent: string; color: string; label: string; task: string; paused: boolean; left: boolean } };
 
@@ -50,6 +56,7 @@ interface Page {
     code: string | null; codeExpires: number;
     extraCodes: Map<string, number>;
     allowTabs: boolean;
+    allowEdits: EditPermit;
     agents: Map<string, Agent>;
     tickets: Map<string, { agentId: string; url: string; label: string; task: string; expires: number; done: (pageId: string | null) => void }>;
   };
@@ -93,7 +100,7 @@ function newPage(userId: string, kind: Page["kind"]): Page {
 export function pair(userId: string): { pageId: string; code: string; pageToken: string; expiresAt: number } {
   sweep();
   const p = newPage(userId, "hub"), code = newCode();
-  p.hub = { code, codeExpires: Date.now() + CODE_LIFE, extraCodes: new Map(), allowTabs: false, agents: new Map(), tickets: new Map() };
+  p.hub = { code, codeExpires: Date.now() + CODE_LIFE, extraCodes: new Map(), allowTabs: false, allowEdits: { mode: "off" }, agents: new Map(), tickets: new Map() };
   pages.set(p.pageId, p);
   return { pageId: p.pageId, code, pageToken: p.pageToken, expiresAt: p.hub.codeExpires };
 }
@@ -182,7 +189,7 @@ const tabsOf = (hubId: string) => [...pages.values()].filter(p => p.tab?.hubId =
 /** the hub told of its agents and their tabs, as they are now */
 function tellHub(hub: Page | undefined) {
   if (!hub?.hub) return;
-  broadcast(hub, { event: "hub", data: { allowTabs: hub.hub.allowTabs, agents: agentList(hub.hub), tabs: tabsOf(hub.pageId) } });
+  broadcast(hub, { event: "hub", data: { allowTabs: hub.hub.allowTabs, allowEdits: hub.hub.allowEdits, agents: agentList(hub.hub), tabs: tabsOf(hub.pageId) } });
   const driver = [...hub.hub.agents.values()].find(a => a.drivesHub);
   broadcast(hub, { event: "agent", data: driver ? { name: driver.name, color: driver.color } : null });
 }
@@ -194,7 +201,7 @@ export function subscribe(p: Page, send: (m: PageMessage) => void): () => void {
   if (p.hub) {
     const driver = [...p.hub.agents.values()].find(a => a.drivesHub);
     send({ event: "agent", data: driver ? { name: driver.name, color: driver.color } : null });
-    send({ event: "hub", data: { allowTabs: p.hub.allowTabs, agents: agentList(p.hub), tabs: tabsOf(p.pageId) } });
+    send({ event: "hub", data: { allowTabs: p.hub.allowTabs, allowEdits: p.hub.allowEdits, agents: agentList(p.hub), tabs: tabsOf(p.pageId) } });
     // (tabs asked for while it was away: asked again)
     for (const [ticket, t] of p.hub.tickets) { const a = agents.get(t.agentId); if (a) send({ event: "openTab", data: { ticket, url: t.url, label: t.label, task: t.task, agent: a.name, color: a.color } }); }
   } else if (p.tab) {
@@ -271,7 +278,7 @@ export function status(a: Agent) {
   return {
     agent: { id: a.id, name: a.name, drivesHub: a.drivesHub },
     page: a.drivesHub && hub?.page ? { ...hub.page, connected: hub.streams.size > 0, pageId: hub.pageId } : null,
-    allowTabs: !!hub?.hub?.allowTabs, tabs: tabsFor(a),
+    allowTabs: !!hub?.hub?.allowTabs, allowEdits: hub?.hub?.allowEdits ?? { mode: "off" }, tabs: tabsFor(a),
   };
 }
 export const tabsFor = (a: Agent) => [...a.tabs].flatMap(id => { const p = pages.get(id); return p ? [tabView(p)] : []; });
@@ -311,6 +318,20 @@ export function denyTab(hub: Page, ticket: string) {
 }
 /** the hub lets agents open tabs, or not */
 export function allowTabs(hub: Page, on: boolean) { if (hub.hub) { hub.hub.allowTabs = on; tellHub(hub); } }
+/** the user's leave for agent edits, as chosen in the hub's panel (anything not understood: none) */
+export function allowEdits(hub: Page, raw: unknown) {
+  if (!hub.hub) return;
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  hub.hub.allowEdits = r.mode === "all" ? { mode: "all" }
+    : r.mode === "sketch" && typeof r.plan === "string" && typeof r.sketch === "string" ? { mode: "sketch", plan: r.plan.slice(0, 64), sketch: r.sketch.slice(0, 64), name: String(r.name ?? "").slice(0, 80) }
+    : { mode: "off" };
+  tellHub(hub);
+}
+/** the leave for agent edits a page has: its hub's (a tab's is its hub's) */
+export function editPermit(p: Page): EditPermit {
+  const hub = p.hub ? p : p.tab ? pages.get(p.tab.hubId) : undefined;
+  return hub?.hub?.allowEdits ?? { mode: "off" };
+}
 /** a code for another agent to attach to the hub (tabs only) */
 export function agentCode(hub: Page): { code: string; expiresAt: number } | null {
   if (!hub.hub) return null;
