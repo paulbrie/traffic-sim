@@ -249,6 +249,8 @@ interface Edge {
   ins: { conn: Edge; s: number }[];
   /** lanes: the ones of its road beside it, going the same way (a car can change to them) */
   neighbors: Neighbor[];
+  /** connectors: a way off a two-lane roundabout's inner ring (across the outer one): it gives way to the outer ring (T179) */
+  innerOff?: boolean;
   /** where it crosses other lanes and connectors (or, connectors, ends where another does) */
   conflicts: Conflict[];
   /** connectors: stretches of it in reach of other paths (crossing zones overlapping one another as one; not joins): one in there is committed */
@@ -370,7 +372,10 @@ function applyTuning(t: Tuning) {
   PED_WALK = t.pedWalk; PED_YIELD = t.pedYield; PED_V = t.pedSpeed;
   TRUCK_A = t.truckAccel; TRUCK_HW = t.truckHeadway;
   LC_PAUSE = t.laneChangePause; OVERTAKE_ROOM = t.overtakeRoom; RING_GAP = t.ringGap;
+  VISION = t.visionCone >= 0.5;
 }
+/** drivers' field of view (`visionCone`, T179): crossing foes outside it aren't considered */
+let VISION = false;
 /** seconds a car takes to move over to the lane it changes to */
 const SHIFT_T = 2;
 /** how far past the place where two connectors meet on a lane the zone between them goes (m): a car's length and a metre */
@@ -542,6 +547,8 @@ export class SketchSim {
   private routes: RouteTable | null = null;
   /** lanes and connectors from which no way leads out of the sketch (a ring with no way off, a loop): driven onto, a car circles for ever (T166) */
   private trap = new Set<Edge>();
+  /** seconds each car has been giving way on a way off an inner ring (T180) */
+  private offWait = new Map<number, number>();
   /** a roundabout's rings (one, or two-lane, rings beside each other all the way round; inner first), its middle, which way round
    * cars go (+1: the angle grows), and its ways off with where they leave (the angle); by each way on (T172) */
   private ringOn = new Map<Edge, RingGroup>();
@@ -794,6 +801,8 @@ export class SketchSim {
       const at = k.otherAt - k.otherBefore;
       for (const o of F.outs) o.conn.joinBack = { len: F.len - (k.at - k.before), at: T.ring ? ((at % T.len) + T.len) % T.len : Math.max(0, at) };
     }
+    // (ways off an inner ring, a ring beside it all the way round further out: across that, giving way to it)
+    for (const e of all) if (e.kind === "conn" && e.from!.lane.ring && !e.to!.lane.ring && e.from!.lane.neighbors.some(n => n.round && n.lane.len > e.from!.lane.len)) e.innerOff = true;
     this.junctionPriority(sk, all, paths);
     // (what leads out of the sketch, back from the lanes nothing leaves, changing lane over to one counting: the rest is a trap)
     const besideOf = new Map<Edge, Edge[]>();
@@ -921,7 +930,7 @@ export class SketchSim {
 
   reset() {
     this.posed = null;
-    this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
+    this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0; this.offWait.clear();
     this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.problemList = []; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, { through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 }); for (const r of this.rTally) Object.assign(r, { through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0, lanes: {} }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
     this.watchTrace = null; this.watchState = null; this.watchLog = []; this.watchRejected = [];
     this.replay = []; this.replayBytes = 0; this.replayCapped = false; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
@@ -1566,7 +1575,8 @@ export class SketchSim {
       }
       return x;
     };
-    const role = (e: Edge) => (e.ring || e.from?.lane.ring ? 3 : across(e) ? 0 : e.to?.lane.ring ? 1 : 2);
+    // (a way off an inner ring crossing the outer one: after the ring, before the ways on)
+    const role = (e: Edge) => (e.innerOff ? 2.5 : e.ring || e.from?.lane.ring ? 3 : across(e) ? 0 : e.to?.lane.ring ? 1 : 2);
     // (the way a path comes in, and how it turns: clockwise on the map, y down, is to the right)
     const dirIn = (e: Edge) => (e.kind === "conn" ? e.from!.lane.locate(Math.min(e.from!.s, e.from!.lane.len)).d : e.locate(0).d);
     const turn = (e: Edge) => {
@@ -2022,6 +2032,10 @@ export class SketchSim {
             // (in among the zones, or set off through them: committed, still able to be stopped for in comfort by this one)
             const wIn = ws > 0 && ((w.edge === k.other && k.other.kind === "conn" && this.inRun(k.other, w.pos, k.otherAt - k.otherBefore))
               || (rules && commitWas.get(w)! > this.t && w.v > 1 && ws < 12 && (!(v.commitUntil > this.t) || w.id < v.id) && zs > (v.v * v.v) / (2 * B_COMF)));
+            // (drivers' field of view (`visionCone`): one on its way to the crossing, not in it, outside the driver's field (±100° at a
+            // ring crossing, ±60° elsewhere) or beyond its sight distance, isn't considered; but one giving way there looks for what it
+            // gives way to, wherever it comes from)
+            if (VISION && ws > 0 && !wIn && !r.edge.minor && !(r.edge.innerOff && k.other.ring) && !this.inView(v, w, r.edge.ring || k.other.ring)) continue;
             // (this one set off through them: it doesn't stop again for one not there yet that can still stop for it)
             if (rules && v.commitUntil > this.t && ws > 0 && !wIn && ws > (w.v * w.v) / (2 * B_COMF) + 1) continue;
             // (stopped short of the zone, waiting for this one as this one would for it: the one standing in another's way goes, that
@@ -2039,16 +2053,20 @@ export class SketchSim {
             // (this one in among them, the other able to stop short: it waits)
             if (meIn && !wIn && ws > 0 && ws >= (w.v * w.v) / 8) continue;
             // (one that can't stop any more for this one: past its line, or too close and fast)
-            const wMinor = !!k.other.minor, committed = w.edge === k.other && ws < Math.max(0.1, (w.v * w.v) / 8 - 1);
+            // (a way off an inner ring gives way where it crosses the outer ring, as at a line (art. 107(1¹)))
+            const wMinor = !!k.other.minor || (!!k.other.innerOff && r.edge.ring), committed = w.edge === k.other && ws < Math.max(0.1, (w.v * w.v) / 8 - 1);
+            const here = minor || (!!r.edge.innerOff && k.other.ring);
             // (who goes first by the junction's rules (junctionPriority): after the other, it goes when it would be through before the
             // other gets there, with time to spare, or once it has waited long and the other can still stop; before it, only one that
             // can't stop any more holds it; neither, first come, first served, with patience)
             const first = ws <= 0
-              || (!forced && !rules && (minor === wMinor ? this.yieldsTo(v, zs, r.edge.vmax, w, ws, k.other.vmax) : minor ? timeTo(ws, w.v, k.other.vmax, accOf(w)) < timeTo(dMe + k.after + reach(v), v.v, r.edge.vmax, accOf(v)) + GAP : committed))
+              || (!forced && !rules && (here === wMinor ? this.yieldsTo(v, zs, r.edge.vmax, w, ws, k.other.vmax) : here ? timeTo(ws, w.v, k.other.vmax, accOf(w)) < timeTo(dMe + k.after + reach(v), v.v, r.edge.vmax, accOf(v)) + GAP
+                // (a way off an inner ring kept waiting long for a gap in the outer ring: it goes once the one coming can still stop in comfort)
+                && !(r.edge.innerOff && (this.offWait.get(v.id) ?? 0) > GIVE_PATIENCE && ws > (w.v * w.v) / (2 * B_COMF) + 1) : committed))
               || (!forced && rules && (k.prio < 0
                 ? !(v.still > GIVE_PATIENCE && ws > (w.v * w.v) / (2 * B_COMF) + 1) && timeTo(ws, w.v, k.other.vmax, accOf(w)) < timeTo(dMe + k.after + reach(v), v.v, r.edge.vmax, accOf(v)) + GAP
                 : k.prio > 0 ? committed : this.yieldsTo(v, zs, r.edge.vmax, w, ws, k.other.vmax)));
-            if (first) { yields.push({ at: hold(zs), why: `zone ${k.other.key} for car ${w.id}`, ...(W ? { info: this.zoneWon(rules ? (ws <= 0 || k.prio > 0 ? "priority" : k.prio < 0 ? "give-way" : "zone") : ws <= 0 ? "priority" : minor && !wMinor ? "give-way" : "zone", k, r.edge, w, ws, dMe, v, rules) } : {}) }); break; }
+            if (first) { yields.push({ at: hold(zs), why: `zone ${k.other.key} for car ${w.id}`, ...(W ? { info: this.zoneWon(rules ? (ws <= 0 || k.prio > 0 ? "priority" : k.prio < 0 ? "give-way" : "zone") : ws <= 0 ? "priority" : here && !wMinor ? "give-way" : "zone", k, r.edge, w, ws, dMe, v, rules) } : {}) }); break; }
           }
         }
       }
@@ -2083,6 +2101,8 @@ export class SketchSim {
       // (stopped again for something else, a car ahead or no room where it joins: no longer on its way through)
       else if (v.commitUntil > this.t && v.v < 0.3 && why !== null && !/^(zone |keeping clear)/.test(why)) v.commitUntil = 0;
       v.why = gap < 30 ? why : null;
+      // (how long it has been held on a way off an inner ring, creeping up or not, until it gets going: for its patience there)
+      if (v.edge.innerOff && v.v < 2) this.offWait.set(v.id, (this.offWait.get(v.id) ?? 0) + dt); else this.offWait.delete(v.id);
       v.blocking = zones.some(q => q.s < -0.01 && q.e > -reach(v));
       // IDM
       const free = 1 - (v.v / Math.max(vmax, 0.1)) ** 4;
@@ -2782,7 +2802,7 @@ export class SketchSim {
       if (wE === other) { let d = other.ring ? this.along(other, posOn(other, wi), k.otherAt) : k.otherAt - posOn(other, wi); if (other.ring && d > other.len - Math.min(f.nums[wi * 8 + 7] + 1 + k.otherAfter, other.len / 2)) d -= other.len; ws = d - k.otherBefore; }
       else if (wE?.kind === "conn" && wE.to!.lane === other) { const d = (other.ring ? this.along(other, wE.to!.s, k.otherAt) : k.otherAt - wE.to!.s); if (d >= 0) ws = wE.len - posOn(wE, wi) + d - k.otherBefore; }
     }
-    const minor = mine.kind === "conn" && !!mine.minor, wMinor = !!other.minor;
+    const minor = (mine.kind === "conn" && !!mine.minor) || (!!mine.innerOff && other.ring), wMinor = !!other.minor || (!!other.innerOff && mine.ring);
     const kind: ExplainRule = ws !== null && ws <= 0 ? "priority" : rules ? (k.prio > 0 ? "priority" : k.prio < 0 ? "give-way" : "zone") : minor && !wMinor ? "give-way" : "zone";
     const detail = ws !== null && ws <= 0 ? "already in the zone" : rules ? k.prioWhy : undefined;
     const out: Won = { kind, car: r.car, edge: other.key, ...(detail ? { detail } : {}) };
@@ -2830,6 +2850,14 @@ export class SketchSim {
    * round tight corners). Sliding over to a lane it changed to: what is left of the way over, the cab turned
    * a little towards it.
    */
+  /** does car `v`'s driver see car `w`: within ±100° of straight ahead (`wide`; else ±60°) and its sight distance (25 m and 4 s at its speed) */
+  private inView(v: SimVehicle, w: SimVehicle, wide: boolean) {
+    const a = v.edge.locate(v.pos), b = w.edge.locate(w.pos).p, x = b.x - a.p.x, y = b.y - a.p.y, d = Math.hypot(x, y);
+    if (d > 25 + 4 * v.v) return false;
+    if (d < 0.1) return true;
+    return (a.d.x * x + a.d.y * y) / d >= Math.cos(((wide ? 100 : 60) * Math.PI) / 180);
+  }
+
   private poseOf(v: SimVehicle): Body & { trailer?: Body } {
     const front = v.edge.locate(v.pos), len = v.truck ? CAB : v.len, back = this.behindFront(v, len);
     const mid = (a: { p: Pt }, b: { p: Pt }, fb: Pt): { p: Pt; d: Pt } => {
