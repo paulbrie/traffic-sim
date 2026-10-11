@@ -1131,7 +1131,7 @@ export class SketchSim {
    * there; on its own lane or one it can change to (a neighbour, or one of its neighbours, with 20 m to
    * change in per lane over).
    */
-  private plan(v: SimVehicle, ownLane = false) {
+  private plan(v: SimVehicle, ownLane = false, ringIn = false): void {
     // (a test car with its own random numbers: the others' run as without it)
     const rnd = v.id < 0 ? this.testRnd : this.rnd;
     // (each with how far it is: along the lane, a lane change counting `CHANGE_COST`)
@@ -1143,6 +1143,7 @@ export class SketchSim {
       if (!lane.ring && from < lane.len - 0.01 && !lane.outs.some(o => o.s >= lane.len - EXIT_CLEAR)) goals.push({ lane, conn: null, d: extra + lane.len - from });
     };
     const seen = new Set([v.edge]), todo = [{ lane: v.edge, at: v.pos }];
+    let skippedIn = false;
     while (todo.length) {
       const { lane, at } = todo.shift()!;
       add(lane, at);
@@ -1150,6 +1151,8 @@ export class SketchSim {
       for (const n of lane.neighbors) {
         const there = Math.max(at, n.a0) + 20;
         if (seen.has(n.lane) || (!n.round && there > n.a1)) continue;
+        // (keeping its ring (`ringKeepLane`): not over from the outer ring to the inner, unless no other way leads there)
+        if (n.round && n.lane.len < lane.len && this.tuning.ringKeepLane >= 0.5 && !ringIn) { skippedIn = true; continue; }
         seen.add(n.lane);
         todo.push({ lane: n.lane, at: this.across(n, there)! });
       }
@@ -1190,6 +1193,7 @@ export class SketchSim {
     if (rt && dest) {
       const cost = (g: (typeof goals)[number]) => g.d + (g.conn ? rt.viaConnector(g.conn.id, dest) : g.lane.id === dest ? 0 : Infinity);
       const best = goals.reduce((m, g) => Math.min(m, cost(g)), Infinity);
+      if (best === Infinity && skippedIn) { this.plan(v, ownLane, true); return; }
       if (best < Infinity) {
         const near = goals.filter(g => cost(g) <= best + 5);
         const g = near[Math.floor(rnd() * near.length)];
@@ -1229,7 +1233,13 @@ export class SketchSim {
     let arm = 0;
     for (let i = 0; i < exits.length; i++) { if (i === 0 || exits[i].d - exits[i - 1].d > 0.35) arm++; if (exits[i] === best) break; }
     const inner = G.rings[0], outer = G.rings[G.rings.length - 1];
-    return arm === 1 ? outer : arm >= 3 ? inner : (Math.imul(v.id, 2654435761) >>> 0) % 100 < 45 ? inner : outer;
+    const want = arm === 1 ? outer : arm >= 3 ? inner : (Math.imul(v.id, 2654435761) >>> 0) % 100 < 45 ? inner : outer;
+    // (that arm's ways off all leaving the inner ring: from the inner ring, whatever the exit)
+    const i = exits.indexOf(best);
+    let a = i, b = i;
+    while (a > 0 && exits[a].d - exits[a - 1].d <= 0.35) a--;
+    while (b < exits.length - 1 && exits[b + 1].d - exits[b].d <= 0.35) b++;
+    return want === outer && exits.slice(a, b + 1).every(x => x.conn.from!.lane !== outer) ? inner : want;
   }
 
   /** the place on the neighbour beside `pos` (null: not beside it there) */
@@ -1321,7 +1331,9 @@ export class SketchSim {
   private room(v: SimVehicle, n: Neighbor, byEdge: Map<Edge, SimVehicle[]>, ghosts: Map<Edge, { w: SimVehicle; pos: number }[]>) {
     const m = this.across(n, v.pos), L = n.lane, W = v.id === this.watchId;
     if (W) this.roomNo = null;
-    if (m === null || (!L.ring && (m < v.len || m > L.len - 1)) || (n.round && this.ringFull(L, byEdge, v.len + S0))) return null;
+    // (onto a ring nearly full, no; but keeping its ring (`ringKeepLane`), moving out to its way off is as leaving: only the cars there count)
+    const out = n.round && this.tuning.ringKeepLane >= 0.5 && L.len > v.edge.len;
+    if (m === null || (!L.ring && (m < v.len || m > L.len - 1)) || (n.round && !out && this.ringFull(L, byEdge, v.len + S0))) return null;
     // (how far on from there: round a ring, ahead or behind whichever is nearer)
     const rel = (s: number) => (L.ring ? ((((s - m) % L.len) + L.len * 1.5) % L.len) - L.len / 2 : s - m);
     // (round two rings, a crossing no one is in or coming up to is no bar: else, on a busy two-lane roundabout, nowhere is)
@@ -2113,6 +2125,11 @@ export class SketchSim {
           this.plan(v, true);
           if (v.goal) { this.note({ what: "change", car: v.id, gaveUp: was?.conn?.key ?? null, to: h.n.lane.key, waited: r2(v.still), goal: v.goal.conn?.key ?? `end of ${v.goal.lane.key}` }); continue; }
           v.goal = was; v.exit = null;
+        }
+        // (keeping its ring (`ringKeepLane`): over to the outer ring only just before its way off; missing it, once more round)
+        if (h.n.round && this.tuning.ringKeepLane >= 0.5 && h.n.lane.len > e.len) {
+          const x = v.goal?.conn, m = this.across(h.n, v.pos);
+          if (x && m !== null && x.from!.lane === h.n.lane && this.along(h.n.lane, m, this.exitS(x)) > (1.6 * h.n.lane.len) / TAU) continue;
         }
         const q = this.room(v, h.n, byEdge, ghosts);
         if (v.id === this.watchId && !q && this.roomNo) {
