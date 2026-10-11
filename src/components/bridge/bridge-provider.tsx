@@ -8,10 +8,12 @@
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Bot, Hand, PenLine, Play, Send, Unplug, X } from "lucide-react";
+import { Bot, ClipboardCopy, FileText, Hand, PenLine, Play, Send, Unplug, X } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { reportText, type BridgeReport } from "@/lib/bridge-report";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { bridgeCanvas, bridgeEditScope, bridgeState, bridgeToWorld } from "@/state/bridge-registry";
@@ -59,6 +61,7 @@ export function BridgeProvider() {
       {view.phase === "attached" && view.cursor && <AgentCursor x={view.cursor.x} y={view.cursor.y} name={view.agent ?? "Claude"} color={view.agentColor ?? "#7c3aed"} note={view.note} />}
       {view.phase === "attached" && view.trace && <Trace text={view.trace.text} at={view.trace.at} />}
       {annotating && <Annotator onDone={() => setAnnotating(false)} />}
+      <ReportWindow report={view.reports.find(r => r.id === view.reportOpen) ?? null} />
     </div>
   );
 }
@@ -113,6 +116,17 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
               <Input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") void send(); }} placeholder="A message to the agent" aria-label="Message to the agent" className="h-8 text-xs" />
               <Button size="icon-sm" className="size-8" aria-label="Send the message" disabled={!text.trim()} onClick={() => void send()}><Send /></Button>
             </div>
+            {view.reports.length > 0 && (
+              <div className="grid gap-1" aria-label="Reports from the agents">
+                {view.reports.slice().reverse().map(r => (
+                  <button key={r.id} className="flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 text-left text-xs hover:bg-muted" onClick={() => bridgeStore.openReport(r.id)} title="Show the report">
+                    <FileText className="size-3.5 shrink-0 text-violet-600" />
+                    <span className="min-w-0 flex-1 truncate">{r.title}</span>
+                    <span className="shrink-0 text-muted-foreground">{r.by} · {clock(r.at)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             {view.mode === "hub" && <AgentTabsSection />}
           </>
         )}
@@ -130,6 +144,56 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** an agent's report (T196): its lines, its table (the rows it points out marked), its findings; copied as text */
+function ReportWindow({ report: r }: { report: BridgeReport | null }) {
+  const copy = async () => {
+    if (!r) return;
+    try { await navigator.clipboard.writeText(reportText(r)); toast.success("Copied the report"); } catch { toast.error("Couldn't copy"); }
+  };
+  return (
+    <Dialog open={!!r} onOpenChange={o => { if (!o) bridgeStore.openReport(null); }}>
+      {r && (
+        <DialogContent data-bridge-ui className="z-[75] flex max-h-[85vh] flex-col gap-3 sm:max-w-5xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><FileText className="size-4 text-violet-600" />{r.title}</DialogTitle>
+            <DialogDescription>From {r.by}, {clock(r.at)}</DialogDescription>
+          </DialogHeader>
+          <div className="grid min-h-0 gap-3 overflow-y-auto pr-1 text-sm">
+            {r.intro && <p className="whitespace-pre-line">{r.intro}</p>}
+            {r.table && (
+              <div className="grid gap-1">
+                <div className="overflow-x-auto rounded-md border">
+                  <table className="w-full text-xs tabular-nums">
+                    <thead className="bg-muted">
+                      <tr>{r.table.columns.map((c, i) => <th key={i} className={cn("px-2 py-1.5 font-medium whitespace-nowrap", i ? "text-right" : "text-left")}>{c}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {r.table.rows.map((row, i) => (
+                        <tr key={i} className={cn("border-t", r.table!.highlight?.includes(i) && "bg-emerald-50 font-medium dark:bg-emerald-950")}>
+                          {row.map((c, j) => <td key={j} className={cn("px-2 py-1", j ? "text-right whitespace-nowrap" : "text-left")}>{c ?? "—"}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {r.table.note && <p className="text-xs text-muted-foreground">{r.table.note}</p>}
+              </div>
+            )}
+            {r.findings && (
+              <ul className="grid list-disc gap-1 pl-5">
+                {r.findings.map((f, i) => <li key={i}>{f}</li>)}
+              </ul>
+            )}
+          </div>
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" onClick={() => void copy()}><ClipboardCopy /> Copy as text</Button>
+          </div>
+        </DialogContent>
+      )}
+    </Dialog>
   );
 }
 

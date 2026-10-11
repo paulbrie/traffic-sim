@@ -51,7 +51,8 @@ process; a restart drops them: the page reconnects, the agent pairs again).
 | `type` | `{ role?, name?, selector?, text, submit?: boolean }` | `{ typed }` |
 | `key` | `{ key: string }` (e.g. `"Control+k"`, `"Escape"`) | `{}` |
 | `navigate` | `{ url }` (same origin) | `{ url }` |
-| `app` | `{ action, args }` (edits too, with the user's leave: see "Edits"): `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30…), `replay` `{ t }`, `restart`, `testCar` (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
+| `app` | `{ action, args }` (edits too, with the user's leave: see "Edits"): `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30, 50, 100), `replay` `{ t }`, `restart`, `testCar` (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
+| `report` | `{ title, intro?, table?: { columns, rows, highlight?, note? }, findings?: string[] }` (T196, `bridge_report`: plain text and numbers, at most 14 columns, 60 rows, 24 findings) | `{ shown }`: the report in a window over the page, kept in the Claude panel (the last 10) to open again, copied as text from there |
 
 Targets by role and name follow Playwright's `getByRole` (name: case-insensitive substring unless `exact`).
 Every command is shown to the user in the activity log; `click` / `type` / `key` move the agent's cursor there first
@@ -105,7 +106,7 @@ Changes an agent may ask for (`app`; no others, nothing written by path):
 
 Every action's arguments are checked as they are given: `true` or `false` for a switch (not `"yes"`, `1` or `null`), a
 string for a name or text (not `42`), a number for a number; and within what the editor offers: `view` a scale from
-0.3 to 80 px a metre and x, y within 1,000 km of the plan's origin, `speed` 1, 3, 10 or 30, `select`/`goTo` something
+0.3 to 80 px a metre and x, y within 1,000 km of the plan's origin, `speed` 1, 3, 10, 30, 50 or 100, `select`/`goTo` something
 that is there (a car on the plan now), `panel` its `open` given. Anything else, an unknown panel or layer, or a missing
 argument, is an error saying what was expected, and nothing is changed.
 

@@ -4,7 +4,7 @@ import { isEditAction } from "@/lib/bridge-edits";
 
 // The agent's command to one of its pages: { type, args, pageId? } → the page's result, waited for (30 s at most). Without
 // pageId: the tab it opened last, or the hub if it drives it.
-const TYPES = new Set(["snapshot", "screenshot", "state", "click", "type", "key", "navigate", "app"]);
+const TYPES = new Set(["snapshot", "screenshot", "state", "click", "type", "key", "navigate", "app", "report"]);
 
 export async function POST(req: NextRequest) {
   const a = agentOf(req.headers.get("authorization"));

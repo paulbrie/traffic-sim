@@ -116,6 +116,18 @@ const TOOLS: Tool[] = [
     run: async a => text(await command("app", { action: s(a.action), args: obj(a.args) })),
   },
   {
+    name: "bridge_report", description: "Show the user a report in the page (a window over it, kept in the Claude panel): a title, an intro, a table of results (columns, rows of text or numbers, rows to highlight from 0, a note under it) and findings, one per line. Plain text only; at most 14 columns, 60 rows, 24 findings.",
+    inputSchema: {
+      type: "object", required: ["title"],
+      properties: {
+        ...page, title: { type: "string" }, intro: { type: "string" },
+        table: { type: "object", properties: { columns: { type: "array", items: { type: "string" } }, rows: { type: "array", items: { type: "array", items: { type: ["string", "number", "null"] } } }, highlight: { type: "array", items: { type: "number" } }, note: { type: "string" } }, required: ["columns", "rows"] },
+        findings: { type: "array", items: { type: "string" } },
+      },
+    },
+    run: async a => text(await command("report", a)),
+  },
+  {
     name: "bridge_wait_events", description: "The user's annotations and messages from the page since the last call, waiting up to `wait` seconds (25 max) for one. Annotations come with a note, a screenshot crop and what is under them. Also 'ui' events, { changed: { path: value } }, for the UI state paths you watch (bridge_state watch).",
     inputSchema: { type: "object", properties: { wait: { type: "number" } } },
     run: async a => {

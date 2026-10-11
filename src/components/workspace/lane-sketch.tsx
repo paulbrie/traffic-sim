@@ -1060,7 +1060,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       // (as the Run button: the cars made the first time, out of the replay; running already, left so)
       bridgeApp.register("run", () => { if (!running) play(); return { running: true }; }),
       bridgeApp.register("pause", () => { setRunning(false); return { running: false }; }),
-      bridgeApp.register("speed", a => { const v = argOf(a, "speed", "number", true)!; if (![1, 3, 10, 30].includes(v)) throw new Error("\"speed\": 1, 3, 10 or 30 (as the speed buttons)"); setSimSpeed(v); return { speed: v }; }),
+      bridgeApp.register("speed", a => { const v = argOf(a, "speed", "number", true)!; if (!SIM_SPEEDS.includes(v)) throw new Error(`"speed": ${SIM_SPEEDS.join(", ")} (as the speed buttons)`); setSimSpeed(v); return { speed: v }; }),
       bridgeApp.register("replay", a => {
         if (!sim.current || !replayRange) throw new Error("nothing kept to replay yet: run the cars first");
         const t = Math.max(replayRange.from, Math.min(replayRange.to, argOf(a, "t", "number", true)!));
@@ -2680,6 +2680,8 @@ function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; rea
   );
 }
 
+/** the simulation speeds offered (× real time); 50× and 100× for quick runs of a small sketch, as fast as the browser can go (T196) */
+const SIM_SPEEDS = [1, 3, 10, 30, 50, 100];
 function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpeed, stats, onCopy }: {
   sketch: Sketch; params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean; simSpeed: number; setSimSpeed: (n: number) => void; stats: SimStats | null; onCopy: () => void;
 }) {
@@ -2701,7 +2703,7 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
       </div>
       <SimSettingsButton params={params} setParams={setParams} readOnly={readOnly} />
       <ToggleGroup type="single" value={String(simSpeed)} onValueChange={v => v && setSimSpeed(Number(v))} aria-label="Simulation speed" className="w-full">
-        {[1, 3, 10, 30].map(n => <ToggleGroupItem key={n} value={String(n)} className="h-7 flex-1 text-xs">{n}×</ToggleGroupItem>)}
+        {SIM_SPEEDS.map(n => <ToggleGroupItem key={n} value={String(n)} className="h-7 flex-1 px-1 text-xs">{n}×</ToggleGroupItem>)}
       </ToggleGroup>
       <BySpeedSwitch />
       {stats && (

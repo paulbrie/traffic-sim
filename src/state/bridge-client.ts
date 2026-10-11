@@ -11,6 +11,7 @@
  */
 import { basePath } from "@/lib/base-path";
 import { bridgeApp, bridgeCanvas, bridgeEdit, bridgeState, bridgeUi, type EditPermit } from "@/state/bridge-registry";
+import { parseReport, type BridgeReport } from "@/lib/bridge-report";
 import { describe, find, isBridgeUi, snapshot, type Target } from "@/components/bridge/a11y";
 
 export interface BridgeLogEntry { at: number; type: string; target: string; ok: boolean; error?: string;
@@ -43,6 +44,9 @@ export interface BridgeView {
   allowTabs: boolean; agents: BridgeAgent[]; tabs: BridgeTab[]; requests: BridgeRequest[];
   /** a code for another agent (Add agent), while it lasts */
   agentCode: string | null;
+  /** the agents' reports (T196), the last few, and the one shown */
+  reports: BridgeReport[];
+  reportOpen: string | null;
   // an agent's tab's
   tab: { agent: string; color: string; label: string; task: string; paused: boolean; left: boolean; closed: boolean } | null;
 }
@@ -50,7 +54,7 @@ interface Pairing { pageId: string; pageToken: string; code?: string; mode: "hub
 interface Command { id: string; type: string; args?: Record<string, unknown> }
 
 const KEY = "trafficsim:bridge";
-let view: BridgeView = { open: false, phase: "off", mode: "hub", code: null, agent: null, agentColor: null, log: [], error: null, cursor: null, trace: null, note: null, allowEdits: { mode: "off" }, allowTabs: false, agents: [], tabs: [], requests: [], agentCode: null, tab: null };
+let view: BridgeView = { open: false, phase: "off", mode: "hub", code: null, agent: null, agentColor: null, log: [], error: null, cursor: null, trace: null, note: null, allowEdits: { mode: "off" }, allowTabs: false, agents: [], tabs: [], requests: [], agentCode: null, reports: [], reportOpen: null, tab: null };
 const listeners = new Set<() => void>();
 const set = (patch: Partial<BridgeView>) => { view = { ...view, ...patch }; for (const f of listeners) f(); };
 export const bridgeStore = {
@@ -58,6 +62,8 @@ export const bridgeStore = {
   get: () => view,
   /** the panel opened or closed (pairing stays as it is) */
   show: (open: boolean) => set({ open }),
+  /** an agent's report shown (its id), or none */
+  openReport: (id: string | null) => set({ reportOpen: id }),
 };
 
 let pairing: Pairing | null = null, stream: EventSource | null = null, failures = 0;
@@ -362,6 +368,13 @@ async function exec(type: string, a: Record<string, unknown>, said: (t: string) 
       const r = await f((a.args ?? {}) as Record<string, unknown>);
       trace(`${a.action}${a.args ? ` ${JSON.stringify(a.args)}` : ""}`);
       return r ?? {};
+    }
+    case "report": {
+      // (T196: plain data, checked; shown in a window over the page and kept in the panel)
+      const r = parseReport(a, view.tab?.agent ?? view.agent ?? "Claude", Math.random().toString(36).slice(2, 10), Date.now());
+      said(r.title);
+      set({ reports: [...view.reports.slice(-9), r], reportOpen: r.id });
+      return { shown: r.title };
     }
     default: throw new Error(`unknown command "${type}"`);
   }

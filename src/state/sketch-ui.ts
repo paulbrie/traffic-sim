@@ -44,7 +44,7 @@ export interface EditorUi {
   camera: { x: number; y: number; distance: number; heading: number; tilt: number } | null;
   run: {
     running: boolean;
-    /** the simulation speed (1, 3, 10, 30) */
+    /** the simulation speed (1, 3, 10, 30, 50, 100) */
     speed: number;
     /** the cars' clock (s), copied in at most 4 times a second */
     t: number;
