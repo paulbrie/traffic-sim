@@ -69,10 +69,16 @@ between them who goes first and tell Alice.
   never to the user's plans (Bistrița: never, see The user's plans) or to other accounts. Schema changes
   only through the migrations (`npm run db:migrate`).
 - **Admin repo (`/opt/project`).** No commit or deploy by Alex or Tom; the user does it, or Alice when the user asks.
-  Local `main` there has diverged from `origin/main`; admin work goes up from a clean worktree on `origin/main`.
-  The admin preview (`admin-dev.service`, `/admin-dev`, port 3003, `admin-ctl dev-start` / `dev-stop`) may run when
-  needed (the user's decision, 2026-10-10, after the 2xlarge): ask Alice first, stop it when done. It serves
-  `/opt/project/admin`'s tree. Admin work is coded, tested, linted and built (`next build`), then the user deploys it.
+  `/opt/project` follows `origin/main`. Agents build admin work in worktrees of their own on the live tree's HEAD,
+  never install packages in place (a hard-linked `node_modules`: `rm -rf` it, then `env -u NODE_ENV npm ci`), and
+  no npx-fetched tools.
+  The admin preview (`admin-dev.service`, `/admin-dev`, port 3003, `admin-ctl dev-start` / `dev-stop`) runs again
+  (the user's decision, 2026-10-11, memory allowing). It serves `/opt/project/admin`'s tree. Admin work is coded,
+  tested, linted and built (`next build`). As soon as it is DONE and checked, Alice ships it to admin-dev without
+  asking (the user's standing instruction, 2026-10-11): she fast-forwards `/opt/project` to the agent's commit (no
+  push). The live `/admin` keeps its build until the user says to push and deploy (`git push`, then
+  `sudo admin-ctl deploy`; `npm install` first in `/opt/project/admin` when dependencies changed, since deploy
+  doesn't install).
 - **Pushes.** If your push is denied, stop and tell Alice; nobody pushes it for you (the user does).
 - **Approvals** come from the user only. The user talks mainly to Alice (the user's decision, 2026-10-10), so an
   approval the user gives in Alice's session counts when Alice relays it in a line of its own:
