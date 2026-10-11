@@ -1828,7 +1828,7 @@ export class SketchSim {
         if (g < gap) { gap = g; lead = speed; why = typeof reason === "string" ? reason : `car ${reason.id}`; if (W) won = info ?? (typeof reason === "string" ? null : { kind: "follow", car: reason.id }); }
       };
       /** the zones ahead where its path meets another (not to stop in), and where those it gives way at start */
-      const zones: { s: number; e: number }[] = [], yields: { at: number; why: string; info?: Won }[] = [];
+      const zones: { s: number; e: number; clear?: boolean }[] = [], yields: { at: number; why: string; info?: Won }[] = [];
       // (a car stops 0.5 m short of a zone; one closer than 0.1 m, or too fast to stop before it, is committed)
       const canStopBefore = (d: number) => d >= Math.max(0.1, (v.v * v.v) / 8 - 1);
       const forced = v.forceUntil > this.t;
@@ -1981,7 +1981,7 @@ export class SketchSim {
           if ((t.lane.ring || t.s > 1) && dMerge < 40) {
             zones.push({ s: z, e: dMerge });
             // (roundabout driving: onto an inner ring across the outer one, the checks for joining it made before that crossing, not standing in it)
-            const xs = RING_DRIVE ? r.edge.conflicts.filter(k => !k.join && k.other.ring && k.other !== t.lane).map(k => r.off + k.at - k.before - r.a) : [], firstX = xs.length ? Math.min(...xs) : Infinity;
+            const xs = !RING_DRIVE ? [] : r.edge.conflicts.filter(k => !k.join && k.other.ring && k.other !== t.lane).map(k => r.off + k.at - k.before - r.a), firstX = xs.length ? Math.min(...xs) : Infinity;
             const mh = firstX < z - 0.1 && firstX > 0.1 && canStopBefore(hold(firstX)) ? hold(firstX) : hold(z);
             if (canStopBefore(mh)) {
               const arrive = tMe(dMerge), onLane = byEdge.get(t.lane) ?? [];
@@ -2061,7 +2061,7 @@ export class SketchSim {
           if (rel < -0.01 || rel > r.b - r.a + 0.01) continue;
           const dMe = r.off + rel, zs = dMe - k.before;
           if (zs > 60) continue;
-          zones.push({ s: zs, e: dMe + k.after });
+          zones.push({ s: zs, e: dMe + k.after, ...(k.other.innerOff && (byEdge.get(k.other) ?? NONE).some(w => (this.offWait.get(w.id) ?? 0) > GIVE_PATIENCE) ? { clear: true } : {}) });
           // (too late to stop: on it goes)
           if (!canStopBefore(hold(zs))) continue;
           // (already in among the zones this one is part of: it can't stop short of them any more, it goes through first)
@@ -2120,13 +2120,16 @@ export class SketchSim {
       // giving way or at a line: still moving, it is about to stop there, and one following it in would stop in the zone
       const ahead = /^car (-?\d+)$/.exec(why ?? ""), leadWhy = ahead ? whyWas.get(carById(Number(ahead[1]))!) : null;
       const leadHeld = !!leadWhy && /^(zone |merge |keeping clear|signal |stop |pedestrians)/.test(leadWhy);
-      if ((lead < 3 || leadHeld) && !forced) {
-        const runs: { s: number; e: number }[] = [];
+      // (and, the car ahead on the move or not, a crossing of a way off an inner ring: kept clear unless there's room past it, as a
+      // marked box (T190))
+      const slow = lead < 3 || leadHeld;
+      if ((slow || zones.some(z => z.clear)) && !forced) {
+        const runs: { s: number; e: number; clear?: boolean }[] = [];
         for (const z of [...zones].sort((p, q) => p.s - q.s)) {
           const last = runs[runs.length - 1];
-          if (last && z.s <= last.e) last.e = Math.max(last.e, z.e); else runs.push({ ...z });
+          if (last && z.s <= last.e) { last.e = Math.max(last.e, z.e); last.clear ||= z.clear; } else runs.push({ ...z });
         }
-        for (const z of runs) if (z.s > 0.1 && canStopBefore(z.s) && gap < z.e + reach(v) + 1) yields.push({ at: z.s, why: `keeping clear (${why})`, ...(W ? { info: { kind: "keep-clear" as const, ...(why ? { detail: why } : {}), ...((won as Won | null)?.car !== undefined ? { car: (won as Won | null)!.car } : {}), ...((won as Won | null)?.edge ? { edge: (won as Won | null)!.edge } : {}) } } : {}) });
+        for (const z of runs) if ((slow || z.clear) && z.s > 0.1 && canStopBefore(z.s) && gap < z.e + reach(v) + 1) yields.push({ at: z.s, why: `keeping clear (${why})`, ...(W ? { info: { kind: "keep-clear" as const, ...(why ? { detail: why } : {}), ...((won as Won | null)?.car !== undefined ? { car: (won as Won | null)!.car } : {}), ...((won as Won | null)?.edge ? { edge: (won as Won | null)!.edge } : {}) } } : {}) });
       }
       // giving way: stopping short of the zone, and of every other zone its body would block there
       for (const { at: x, why: reason, info } of yields) {
