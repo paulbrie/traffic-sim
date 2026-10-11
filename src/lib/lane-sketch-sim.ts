@@ -2009,6 +2009,21 @@ export class SketchSim {
                 if (forced && u >= laneZone + v.len + 1) continue;
                 if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v)) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, gap: r2(Math.max(0, u - laneZone - w.v * arrive)), need: r2(Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v, v.len + 1)) } } : {}) }); break; }
               }
+              // (roundabout driving: one on another way onto this ring, joining it upstream, counts as on it already: coming up to the line
+              // faster, this one would otherwise be past stopping once that one is on)
+              if (!forced && t.lane.ring && RING_DRIVE && !yields.length) for (const o of t.lane.ins) {
+                if (o.conn === r.edge || o.conn.from!.lane.ring) continue;
+                const up = this.along(t.lane, o.s, t.s);
+                if (up <= 0.05 || up > t.lane.len / 2) continue;
+                for (const w of byEdge.get(o.conn) ?? []) {
+                  // (only one on its way, near: one held on its connector isn't coming)
+                  if (w.v < 2) continue;
+                  const u = o.conn.len - w.pos + up;
+                  if (u > 25) continue;
+                  if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, RING_GAP * w.v)) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "joining it just before" } } : {}) }); break; }
+                }
+                if (yields.length) break;
+              }
               // (keeping lanes on a two-lane roundabout (`ringKeepLane`): one on the inner ring about to move out onto this ring, to its
               // way off, counts as on it already)
               if (!forced && t.lane.ring && this.tuning.ringKeepLane >= 0.5 && !yields.length) for (const n of t.lane.neighbors) {
