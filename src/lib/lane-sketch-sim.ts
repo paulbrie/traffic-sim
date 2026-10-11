@@ -1969,6 +1969,19 @@ export class SketchSim {
                 if (forced && u >= laneZone + v.len + 1) continue;
                 if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v)) { yields.push({ at: hold(z), why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, gap: r2(Math.max(0, u - laneZone - w.v * arrive)), need: r2(Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v, v.len + 1)) } } : {}) }); break; }
               }
+              // (keeping lanes on a two-lane roundabout (`ringKeepLane`): one on the inner ring about to move out onto this ring, to its
+              // way off, counts as on it already)
+              if (!forced && t.lane.ring && this.tuning.ringKeepLane >= 0.5 && !yields.length) for (const n of t.lane.neighbors) {
+                const back = n.round && n.lane.len < t.lane.len ? n.lane.neighbors.find(x => x.lane === t.lane && x.round) : undefined;
+                if (!back) continue;
+                for (const w of byEdge.get(n.lane) ?? []) {
+                  const x = w.goal?.conn;
+                  if (!x || w.goal!.lane !== t.lane) continue;
+                  const m = this.across(back, w.pos)!, u = this.along(t.lane, m, t.s);
+                  if (u > 70 || this.along(t.lane, m, this.exitS(x)) > (1.6 * t.lane.len) / TAU || this.along(t.lane, m, this.exitS(x)) < u) continue;
+                  if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, RING_GAP * w.v)) { yields.push({ at: hold(z), why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "moving out from the inner ring" } } : {}) }); break; }
+                }
+              }
             }
           }
         }
