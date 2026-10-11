@@ -265,6 +265,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (the plan's editor takes the keys: on opening the page, and when the sketch window over it closes)
   const [sketchOpen] = useDeepSubject(ui, "sketch");
   useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
+  // (the Sketch window, a modal (T184): the focus in it as it opens)
+  useEffect(() => { if (store.kind === "scratch" && !panel.current?.contains(document.activeElement)) panel.current?.focus({ preventScroll: true }); }, [store.kind, panel]);
   // (the plan's editor has its keys wherever the focus is, unless they belong there: a text field, an open menu or
   // dialog, a control's own Enter / Space / arrows (editor-keys.ts); the editor's own keydown handles the rest)
   const keys = useRef<{ down: (e: KeyLike) => void; up: (e: KeyLike) => void } | null>(null);
@@ -1533,9 +1535,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "escape") {
       // (a menu or dialog took it already)
       if (e.defaultPrevented) return;
+      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.zones?.length && live.current.selCar === null;
       if (d) draft.current = null;
+      // (the Sketch window, a modal (T184), one thing a press: the selection, then a drawing tool (back to Select), then
+      // the window closed)
+      else if (store.kind === "scratch" && nothing && tool !== "select") changeTool("select");
+      else if (store.kind === "scratch" && nothing) { ui.getValue().sketch = false; return; }
       // (in 3D, with nothing to let go: the camera back where it arrived)
-      else if (in3d && !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.zones?.length && live.current.selCar === null) api3d.current?.home();
+      else if (in3d && nothing) api3d.current?.home();
       else { setSel(NO_SEL); setSelCar(null); }
       redraw();
       return;
@@ -1623,10 +1630,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
 
   return (
     <EditorKindContext.Provider value={ek}>
-    <div ref={panel} style={page ? undefined : style} role={page ? "region" : "dialog"} aria-label={page ? "Plan editor" : "Lane sketch"} tabIndex={-1} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
+    <div ref={panel} style={page ? undefined : style} role={page ? "region" : "dialog"} aria-modal={store.kind === "scratch" || undefined} aria-label={page ? "Plan editor" : "Lane sketch"} tabIndex={-1} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
       className={page
         ? "relative flex size-full flex-col overflow-hidden bg-background outline-none"
-        : cn("absolute z-30 flex flex-col overflow-hidden rounded-lg border bg-background shadow-xl outline-none", !placed && "top-3 right-3 h-[min(640px,calc(100%-1.5rem))] w-[min(1280px,calc(100%-1.5rem))]")}>
+        : cn("absolute z-30 flex flex-col overflow-hidden rounded-lg border bg-background shadow-xl outline-none", !placed && (store.kind === "scratch" ? "inset-3" : "top-3 right-3 h-[min(640px,calc(100%-1.5rem))] w-[min(1280px,calc(100%-1.5rem))]"))}>
       {!page && <ResizeEdges start={start} />}
       <div className={cn("flex items-center gap-2 border-b px-3 py-1.5 select-none", !page && "cursor-move touch-none")} title={page ? undefined : "Drag to move · double-click to put back"}
         onPointerDown={e => { if (!page && !(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!page && !(e.target as HTMLElement).closest("button")) reset(); }}>

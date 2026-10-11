@@ -31,6 +31,8 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
   // the last one is still up, and loading then put the new sketch under the old plan's header and updated
   // the old editor from this render.)
   const [loaded, setLoaded] = useState(false);
+  // (the Sketch window is a modal (T184): the plan behind it, its header and its editor, take nothing while it's open)
+  const [sketchOpen] = useDeepSubject(ui, "sketch");
   useLayoutEffect(() => {
     loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read", plan.sketch);
     startUnderlayImage();
@@ -44,7 +46,7 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
   return (
     <TooltipProvider>
       <div className="flex h-dvh flex-col overflow-hidden">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background px-2">
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background px-2" inert={sketchOpen}>
           <Button variant="ghost" size="sm" asChild>
             <Link href={`/cities/${plan.cityId}`} aria-label={`Back to ${plan.cityName}`}><ArrowLeft /> <span className="max-w-40 truncate">{plan.cityName}</span></Link>
           </Button>
@@ -67,9 +69,12 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
           </div>
         </header>
         <main className="relative min-h-0 flex-1">
-          <SketchStoreContext.Provider value={planSketch}>
-            <LaneSketch page />
-          </SketchStoreContext.Provider>
+          {/* (its own stacking context: nothing in the plan's editor rises over the Sketch's backdrop) */}
+          <div className="absolute inset-0 isolate" inert={sketchOpen}>
+            <SketchStoreContext.Provider value={planSketch}>
+              <LaneSketch page />
+            </SketchStoreContext.Provider>
+          </div>
           <SketchWindow />
         </main>
       </div>
@@ -99,13 +104,20 @@ function SketchButton() {
   );
 }
 
-/** the sketch window over the plan, on the ideas sketched apart */
+/**
+ * the sketch window over the plan, on the ideas sketched apart: a modal (T184), over a dimmed backdrop that takes the
+ * pointer and the wheel from the plan; a click on it keeps the focus in the window and doesn't close it (no work lost
+ * by a stray click). Closed by its X or Esc (lane-sketch.tsx).
+ */
 function SketchWindow() {
   const [open] = useDeepSubject(ui, "sketch");
   if (!open) return null;
   return (
-    <SketchStoreContext.Provider value={scratchSketch}>
-      <LaneSketch />
-    </SketchStoreContext.Provider>
+    <>
+      <div aria-hidden className="fixed inset-0 z-20 bg-black/40" onPointerDown={e => e.preventDefault()} onContextMenu={e => e.preventDefault()} />
+      <SketchStoreContext.Provider value={scratchSketch}>
+        <LaneSketch />
+      </SketchStoreContext.Provider>
+    </>
   );
 }
