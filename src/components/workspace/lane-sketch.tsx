@@ -863,7 +863,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const sk = live.current.sketch, s = live.current.sel;
     if (s.lanes.length || s.junctions.length || s.zones?.length) place(copyPart(sk, s), 4, 4);
   };
-  const fit = () => { const sk = live.current.sketch; zoomTo({ lanes: sk.lanes.map(l => l.id), connectors: [], junctions: sk.junctions.map(j => j.id) }); };
+  const fit = () => { const sk = live.current.sketch; zoomTo({ lanes: sk.lanes.map(l => l.id), connectors: [], junctions: sk.junctions.map(j => j.id), zones: sk.zones?.map(z => z.id) ?? [] }); };
+  /** fitted if there is something to fit (an empty sketch: the view left as it is) */
+  const fitContent = () => { const sk = live.current.sketch; if (sk.lanes.length || sk.junctions.length || sk.zones?.length) fit(); };
   /** zoomed in (f > 1) or out about the middle of the view, within the wheel's limits */
   const zoomBy = (f: number) => { const v = view.current; view.current = { ...v, scale: Math.min(80, Math.max(0.3, v.scale * f)) }; redraw(); };
   /** the view fitted round a piece of the sketch */
@@ -1468,18 +1470,19 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // (the Sketch window: a piece put in it is shown fitted, nothing selected, its cars run if asked)
-  const onFocusPiece = useRef<() => void>(() => {});
+  // (the Sketch window: a piece put in it is shown fitted, nothing selected, its cars run if asked; opened, or another
+  // saved sketch picked, the sketch fitted (T183))
+  const onFocusPiece = useRef<(opening?: boolean) => void>(() => {});
   useEffect(() => {
-    onFocusPiece.current = () => {
+    onFocusPiece.current = (opening = false) => {
       const f = takeScratchFocus();
-      if (!f) return;
+      if (!f) { if (opening) fitContent(); return; }
       setSel(NO_SEL); setSelCar(null);
-      // (another saved sketch opened: the cars of the one before let go, only the open one's kept; its view as it was left)
+      // (another saved sketch opened: the cars of the one before let go, only the open one's kept)
       if (f.fresh) {
         sim.current?.terminate(); sim.current = null; store.setSim(null);
         setRunning(false); setStats(null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null);
-        if (f.view) { view.current = { ...f.view }; redraw(); } else fit();
+        fitContent();
         return;
       }
       // (new cars for the piece: the cars before, reset, would still have the last sketch for a quarter of a second,
@@ -1498,10 +1501,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   });
   useEffect(() => {
     if (store.kind !== "scratch") return;
-    // (after the render showing the piece)
-    const take = () => requestAnimationFrame(() => onFocusPiece.current());
-    take();
-    return onScratchFocus(take);
+    // (after the render showing the piece; the window just opened, the first time)
+    const take = (opening = false) => requestAnimationFrame(() => onFocusPiece.current(opening));
+    take(true);
+    return onScratchFocus(() => take());
   }, [store.kind]);
 
   // ------------------------------------------------------------ keys (kept from the plan's shortcuts while the window has focus)

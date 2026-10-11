@@ -153,7 +153,7 @@ export const scratchSketch = makeStore("scratch", scratchView$, sk => {
 
 /**
  * The saved sketches changed (one opened, made, copied, renamed, deleted: sketch-list.ts): the plan's sketch made so;
- * another one open: the window's undo history and cars let go, and its view put back where that sketch was left
+ * another one open: the window's undo history and cars let go, and the view fitted to that sketch (T183)
  */
 export function changeSketches(f: (k: Sketch) => Sketch) {
   const cur = laneSketch$.getValue(), next = f(cur);
@@ -162,8 +162,7 @@ export function changeSketches(f: (k: Sketch) => Sketch) {
   laneSketch$.next(next);
   if (sketchList(next).open !== was) {
     scratchSketch.forget();
-    const view = sketchList(next).list.find(x => x.id === sketchList(next).open)?.view;
-    requestScratchFocus({ run: false, fresh: true, ...(view ? { view } : {}) });
+    requestScratchFocus({ run: false, fresh: true });
   }
 }
 
@@ -202,7 +201,7 @@ export function readClipText(text: string): SketchClip | null {
 
 /** what the Sketch window does when it next shows a piece put in it ("Test in Sketch"): the view fitted to it, nothing selected, the cars run if `run` */
 export interface ScratchFocus { run: boolean; /** added beside what was there: the view fitted to this only */ piece?: Piece;
-  /** another saved sketch opened: its cars made afresh, the view put where it was left (none: fitted) */ fresh?: boolean; view?: { cx: number; cy: number; scale: number } }
+  /** another saved sketch opened: its cars made afresh, the view fitted to it */ fresh?: boolean }
 let scratchFocus: ScratchFocus | null = null;
 const scratchFocusWaiting = new Set<() => void>();
 export function requestScratchFocus(f: ScratchFocus) { scratchFocus = f; scratchFocusWaiting.forEach(g => g()); }
