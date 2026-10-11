@@ -25,6 +25,15 @@ process; a restart drops them: the page reconnects, the agent pairs again).
    replaces the old; the page shows who is attached). The page can disconnect: `POST /api/bridge/page/close`.
 3. Pairings end after 8 h idle.
 
+**How it stands, in the panel (T193).** The hub's code counts down (`expiresAt`); expired unused, the panel says so and
+offers a new code; used, it says by whom and when (the `hub` event's `codesUsed`: the last 8 codes claimed, the hub's own
+and Add agent's). Each agent in the `hub` event carries `pairedAt` and `lastSeen` (its last bridge call; the hub is told
+at most every 15 s, the page counts the time since): "seen 20 s ago", or "quiet 5 min" with what that means (an agent acts
+only while its session works). A message still "sent" after 20 s gets a line on why (who fetches it, when it last looked).
+When the stream drops the page asks the server (`hello`) whether the pairing still stands: 404, the server no longer knows
+it (a restart, or it ended): "Pairing lost", with why and "Pair again"; 401/403, signed out, the same; the server out of
+reach, "reconnecting…" and the pairing kept.
+
 ## Page side
 
 - `GET /api/bridge/page/stream?pageId=…` (SSE, cookie + `x-bridge-page` as query `t=` since EventSource can't

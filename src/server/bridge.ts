@@ -19,8 +19,10 @@ export interface BridgeEvent { seq: number; at: number; kind: "annotation" | "me
  * name), or the plan and all its sketches. Kept by the hub; holds for its agents' tabs too.
  */
 export type EditPermit = { mode: "off" } | { mode: "all" } | { mode: "sketch"; plan: string; sketch: string; name: string };
-/** an agent as a page shows it */
-export interface AgentView { id: string; name: string; color: string; hub: boolean }
+/** an agent as a page shows it: when it paired, and when it last called the bridge (T193: a quiet one is told apart) */
+export interface AgentView { id: string; name: string; color: string; hub: boolean; pairedAt: number; lastSeen: number }
+/** a code of the hub's that an agent used: which, by whom, when (T193) */
+export interface CodeUse { code: string; by: string; at: number }
 /** a tab as the hub and its agent see it */
 export interface TabView { pageId: string; /** the ticket it was opened with (the hub knows its window by it) */ ticket: string; agent: string; agentName: string; color: string; label: string; task: string; url: string; title: string; connected: boolean; paused: boolean; left: boolean }
 type PageMessage =
@@ -30,14 +32,18 @@ type PageMessage =
   /** (to the hub) an agent asks for a tab: open `url` with the ticket in its hash */
   | { event: "openTab"; data: { ticket: string; url: string; label: string; task: string; agent: string; color: string } }
   /** (to the hub) the agents and their tabs, again (on every change) */
-  | { event: "hub"; data: { allowTabs: boolean; allowEdits: EditPermit; agents: AgentView[]; tabs: TabView[] } }
+  | { event: "hub"; data: HubData }
   /** (to a tab) whose it is and how it stands */
   | { event: "tab"; data: { agent: string; color: string; label: string; task: string; paused: boolean; left: boolean } }
   /** (to the page a message or annotation came from) an agent has fetched it (T191) */
   | { event: "delivered"; data: { msgId: string; agent: string; at: number } };
 
+/** what the hub's page is told of its agents, tabs and codes */
+type HubData = { allowTabs: boolean; allowEdits: EditPermit; agents: AgentView[]; tabs: TabView[]; codesUsed: CodeUse[] };
 interface Agent {
   id: string; token: string; name: string; color: string; hubId: string;
+  /** when it paired; when it last called the bridge, and when the hub was last told so (T193) */
+  pairedAt: number; lastSeen: number; toldAt: number;
   /** paired with the hub's own code: drives the hub's page too (an added agent works only in its tabs) */
   drivesHub: boolean;
   tabs: Set<string>; lastTab: string | null;
@@ -57,6 +63,8 @@ interface Page {
     /** the code for the agent that drives the hub; codes for agents added for tabs */
     code: string | null; codeExpires: number;
     extraCodes: Map<string, number>;
+    /** the codes used, the hub's own and added agents', the last few (T193) */
+    codesUsed: CodeUse[];
     allowTabs: boolean;
     allowEdits: EditPermit;
     agents: Map<string, Agent>;
@@ -66,6 +74,8 @@ interface Page {
   tab?: { hubId: string; ticket: string; agentId: string; agentName: string; color: string; label: string; task: string; paused: boolean; left: boolean };
 }
 
+/** an agent's calls tell the hub it was seen at most this often (ms; the page counts the time since itself) */
+const SEEN_EVERY = 15_000;
 const IDLE = 8 * 3600_000, CODE_LIFE = 10 * 60_000, TICKET_LIFE = 60_000, KEEP_EVENTS = 200;
 /** "ui" events (watched UI state that changed) kept at most, apart from the others: they never push out the user's annotations and messages */
 const KEEP_UI = 50;
@@ -102,7 +112,7 @@ function newPage(userId: string, kind: Page["kind"]): Page {
 export function pair(userId: string): { pageId: string; code: string; pageToken: string; expiresAt: number } {
   sweep();
   const p = newPage(userId, "hub"), code = newCode();
-  p.hub = { code, codeExpires: Date.now() + CODE_LIFE, extraCodes: new Map(), allowTabs: false, allowEdits: { mode: "off" }, agents: new Map(), tickets: new Map() };
+  p.hub = { code, codeExpires: Date.now() + CODE_LIFE, extraCodes: new Map(), codesUsed: [], allowTabs: false, allowEdits: { mode: "off" }, agents: new Map(), tickets: new Map() };
   pages.set(p.pageId, p);
   return { pageId: p.pageId, code, pageToken: p.pageToken, expiresAt: p.hub.codeExpires };
 }
@@ -147,12 +157,16 @@ export function claim(code: string, name: string): { agentToken: string; pageId:
     // (the hub's own agent replaced by a new claim of its code, as before: one drives the hub)
     if (main) for (const a of [...h.agents.values()]) if (a.drivesHub) revoke(hub, a.id);
     const used = new Set([...h.agents.values()].map(a => a.color));
+    const now = Date.now();
     const a: Agent = {
       id: token().slice(0, 12), token: token(), name: name.slice(0, 40) || "Claude", color: COLORS.find(c => !used.has(c)) ?? COLORS[h.agents.size % COLORS.length], hubId: hub.pageId,
+      pairedAt: now, lastSeen: now, toldAt: now,
       drivesHub: main, tabs: new Set(), lastTab: null, events: [], seq: 0, eventWaiters: new Set(),
     };
     h.agents.set(a.id, a); agents.set(a.id, a);
-    hub.lastSeen = Date.now();
+    // (a hub paired before T193, kept through a reload in development, has no list yet)
+    h.codesUsed = [...(h.codesUsed ?? []), { code, by: a.name, at: now }].slice(-8);
+    hub.lastSeen = now;
     tellHub(hub);
     return { agentToken: a.token, pageId: hub.pageId, agentId: a.id, drivesHub: main };
   }
@@ -163,7 +177,14 @@ export function claim(code: string, name: string): { agentToken: string; pageId:
 export function agentOf(authorization: string | null): Agent | null {
   const t = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
   if (!t) return null;
-  for (const a of agents.values()) if (same(a.token, t)) { const hub = pages.get(a.hubId); if (hub) hub.lastSeen = Date.now(); return a; }
+  for (const a of agents.values()) if (same(a.token, t)) {
+    const hub = pages.get(a.hubId), now = Date.now();
+    if (hub) hub.lastSeen = now;
+    // (seen: the hub told now and then, not on every call)
+    a.lastSeen = now;
+    if (now - (a.toldAt ?? 0) > SEEN_EVERY) { a.toldAt = now; tellHub(hub); }
+    return a;
+  }
   return null;
 }
 
@@ -182,7 +203,8 @@ export function targetOf(a: Agent, pageId?: string): Page | { error: string } {
 }
 
 function broadcast(p: Page, m: PageMessage) { for (const s of p.streams) s(m); }
-const agentList = (h: NonNullable<Page["hub"]>): AgentView[] => [...h.agents.values()].map(a => ({ id: a.id, name: a.name, color: a.color, hub: a.drivesHub }));
+const agentList = (h: NonNullable<Page["hub"]>): AgentView[] => [...h.agents.values()].map(a => ({ id: a.id, name: a.name, color: a.color, hub: a.drivesHub, pairedAt: a.pairedAt ?? a.lastSeen ?? Date.now(), lastSeen: a.lastSeen ?? Date.now() }));
+const hubData = (hub: Page): HubData => ({ allowTabs: hub.hub!.allowTabs, allowEdits: hub.hub!.allowEdits, agents: agentList(hub.hub!), tabs: tabsOf(hub.pageId), codesUsed: hub.hub!.codesUsed ?? [] });
 function tabView(p: Page): TabView {
   const t = p.tab!;
   return { pageId: p.pageId, ticket: t.ticket, agent: t.agentId, agentName: t.agentName, color: t.color, label: t.label, task: t.task, url: p.page?.url ?? "", title: p.page?.title ?? "", connected: p.streams.size > 0, paused: t.paused, left: t.left };
@@ -191,7 +213,7 @@ const tabsOf = (hubId: string) => [...pages.values()].filter(p => p.tab?.hubId =
 /** the hub told of its agents and their tabs, as they are now */
 function tellHub(hub: Page | undefined) {
   if (!hub?.hub) return;
-  broadcast(hub, { event: "hub", data: { allowTabs: hub.hub.allowTabs, allowEdits: hub.hub.allowEdits, agents: agentList(hub.hub), tabs: tabsOf(hub.pageId) } });
+  broadcast(hub, { event: "hub", data: hubData(hub) });
   const driver = [...hub.hub.agents.values()].find(a => a.drivesHub);
   broadcast(hub, { event: "agent", data: driver ? { name: driver.name, color: driver.color } : null });
 }
@@ -203,7 +225,7 @@ export function subscribe(p: Page, send: (m: PageMessage) => void): () => void {
   if (p.hub) {
     const driver = [...p.hub.agents.values()].find(a => a.drivesHub);
     send({ event: "agent", data: driver ? { name: driver.name, color: driver.color } : null });
-    send({ event: "hub", data: { allowTabs: p.hub.allowTabs, allowEdits: p.hub.allowEdits, agents: agentList(p.hub), tabs: tabsOf(p.pageId) } });
+    send({ event: "hub", data: hubData(p) });
     // (tabs asked for while it was away: asked again)
     for (const [ticket, t] of p.hub.tickets) { const a = agents.get(t.agentId); if (a) send({ event: "openTab", data: { ticket, url: t.url, label: t.label, task: t.task, agent: a.name, color: a.color } }); }
   } else if (p.tab) {

@@ -17,10 +17,29 @@ import { reportText, type BridgeReport } from "@/lib/bridge-report";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { bridgeCanvas, bridgeEditScope, bridgeState, bridgeToWorld } from "@/state/bridge-registry";
-import { bridgeAddAgent, bridgeAllowEdits, bridgeAllowTabs, bridgeCloseTab, bridgeDenyRequest, bridgeDisconnect, bridgeFocusTab, bridgeHello, bridgeOpenRequest, bridgePair, bridgePauseTab, bridgeResume, bridgeRevoke, bridgeSend, bridgeStore, bridgeTakeOver, setBridgeNavigate } from "@/state/bridge-client";
+import { type BridgeView, bridgeAddAgent, bridgeAllowEdits, bridgeAllowTabs, bridgeCloseTab, bridgeDenyRequest, bridgeDisconnect, bridgeFocusTab, bridgeHello, bridgeOpenRequest, bridgePair, bridgePauseTab, bridgeResume, bridgeRevoke, bridgeSend, bridgeStore, bridgeTakeOver, setBridgeNavigate } from "@/state/bridge-client";
 import { under } from "./a11y";
 
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const hm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** a time left as m:ss */
+const left = (ms: number) => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+/** how long ago, in a few words */
+const ago = (ms: number) => (ms < 10_000 ? "just now" : ms < 60_000 ? `${Math.floor(ms / 1000)} s ago` : ms < 3600_000 ? `${Math.floor(ms / 60_000)} min ago` : `${Math.floor(ms / 3600_000)} h ago`);
+/** an agent quiet this long is said to be (it acts only while its session is working) */
+const QUIET = 120_000;
+/** a message still "sent" this long gets a word on why */
+const SENT_HINT = 20_000;
+/** the time now, again every `every` ms while `on` (for countdowns and "seen … ago") */
+function useNow(every: number, on = true) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!on) return;
+    const tick = () => setNow(Date.now()), first = setTimeout(tick, 0), t = setInterval(tick, every);
+    return () => { clearTimeout(first); clearInterval(t); };
+  }, [every, on]);
+  return now;
+}
 
 export function BridgeProvider() {
   const view = useSyncExternalStore(bridgeStore.subscribe, bridgeStore.get, bridgeStore.get);
@@ -53,7 +72,8 @@ export function BridgeProvider() {
           view.phase === "attached" ? "border-violet-400 bg-violet-50 text-violet-900 dark:bg-violet-950 dark:text-violet-100" : "bg-background text-muted-foreground")}
           onClick={() => bridgeStore.show(true)}>
           <Bot className="size-3.5" />
-          {view.phase === "attached" ? `${view.agent} is working here` : view.phase === "lost" ? "Claude disconnected" : `Waiting for Claude · ${view.code}`}
+          {view.phase === "attached" ? `${view.agent} is working here` : view.phase === "lost" ? "Claude pairing lost · pair again" : `Waiting for Claude · ${view.code}`}
+          {view.reconnecting && " · reconnecting…"}
           {view.tabs.filter(t => !t.left).length > 0 && ` · ${view.tabs.filter(t => !t.left).length} agent tab${view.tabs.filter(t => !t.left).length === 1 ? "" : "s"}`}
           {view.requests.length > 0 && <span className="ml-1 rounded-full bg-amber-500 px-1.5 text-white">{view.requests.length} to open</span>}
         </button>
@@ -82,13 +102,16 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
   };
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => { list.current?.scrollTo({ top: list.current.scrollHeight }); }, [view.log.length]);
+  // (a message still "sent" a while: said why, under the log (T193))
+  const anySent = view.log.some(e => e.status === "sent"), now = useNow(5000, anySent);
+  const waiting = anySent ? view.log.filter(e => e.status === "sent" && now - e.at > SENT_HINT).pop() : undefined;
   return (
     <div className="fixed right-3 bottom-3 z-[60] flex max-h-[70vh] w-96 flex-col rounded-lg border bg-background shadow-xl" role="dialog" aria-label="Claude bridge">
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <Bot className="size-4 text-violet-600" />
         <span className="text-sm font-medium">Claude bridge</span>
         <span className="ml-auto text-xs text-muted-foreground">
-          {view.phase === "attached" ? `${view.agent} attached` : view.phase === "waiting" ? "waiting for the agent" : view.phase === "pairing" ? "pairing…" : view.phase === "lost" ? "disconnected" : "not connected"}
+          {view.reconnecting ? "reconnecting…" : view.phase === "attached" ? `${view.agent} attached` : view.phase === "waiting" ? "waiting for the agent" : view.phase === "pairing" ? "pairing…" : view.phase === "lost" ? "pairing lost" : "not connected"}
         </span>
         <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Close the panel" onClick={() => bridgeStore.show(false)}><X /></Button>
       </div>
@@ -96,18 +119,20 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
         {!paired ? (
           <>
             {view.mode === "tab" && view.error && <p className="text-xs text-red-600">This tab was opened for an agent, but couldn&apos;t pair: {view.error}</p>}
+            {view.phase === "lost" && (
+              <p className="rounded-md border border-amber-400 bg-amber-50 p-2 text-xs dark:bg-amber-950" role="alert">
+                <b>Pairing lost.</b> {view.lostWhy ?? "The connection to the server ended."}
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">An agent (a Claude session with the bridge) can read this page, act in it — you see its cursor and every command — and get your notes. Pair, then give it the code.</p>
             {view.error && <p className="text-xs text-red-600">{view.error}</p>}
-            <Button size="sm" onClick={() => void bridgePair()} disabled={view.phase === "pairing"}>Pair this page</Button>
+            <Button size="sm" onClick={() => void bridgePair()} disabled={view.phase === "pairing"}>{view.phase === "lost" ? "Pair again" : "Pair this page"}</Button>
           </>
         ) : (
           <>
-            {view.phase === "waiting" && (
-              <div className="grid gap-1 rounded-md bg-muted p-2 text-center">
-                <span className="text-[11px] text-muted-foreground">Give the agent this code (valid 10 minutes)</span>
-                <span className="font-mono text-2xl tracking-[0.3em] tabular-nums">{view.code}</span>
-              </div>
-            )}
+            {view.phase === "waiting" && view.mode === "hub" && <HubCode />}
+            {view.phase === "attached" && view.mode === "hub" && <CodeUsed />}
+            {view.reconnecting && <p className="text-[11px] text-muted-foreground">The connection dropped: reconnecting. The pairing stands unless the server no longer knows it.</p>}
             <div className="flex min-w-0 gap-1.5">
               <Button size="sm" variant="outline" className="min-w-0 flex-1" onClick={onAnnotate} title="Draw a rectangle (or click a spot) and write a note for the agent (A)"><PenLine /> Annotate</Button>
               <Button size="sm" variant="outline" onClick={() => void bridgeDisconnect()} title="End the pairing: the agent can't act here any more"><Unplug /> Disconnect</Button>
@@ -138,13 +163,71 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
               <span className="text-muted-foreground tabular-nums">{clock(e.at)}</span>
               <span className={cn("w-16 shrink-0", e.ok ? "text-foreground" : "text-red-600")}>{e.type}</span>
               <span className="min-w-0 flex-1 truncate">{e.target}{e.error ? ` — ${e.error}` : ""}</span>
-              {e.status && <span className={cn("shrink-0", e.status === "delivered" ? "text-emerald-600" : e.status === "nobody" ? "text-red-600" : "text-muted-foreground")}>{e.status === "delivered" ? `delivered to ${e.by}` : e.status === "nobody" ? "no agent" : "sent"}</span>}
+              {e.status && <span className={cn("shrink-0", e.status === "delivered" ? "text-emerald-600" : e.status === "nobody" ? "text-red-600" : "text-muted-foreground")} title={e.status === "sent" ? sentWhy(view, e.at) : undefined}>{e.status === "delivered" ? `delivered to ${e.by}` : e.status === "nobody" ? "no agent" : now - e.at > SENT_HINT ? "sent · waiting" : "sent"}</span>}
             </div>
           ))}
         </div>
       )}
+      {waiting && <p className="border-t px-3 py-1.5 text-[11px] text-muted-foreground" role="status">{sentWhy(view, waiting.at, now)}</p>}
     </div>
   );
+}
+
+/** the hub's own code while no agent has used it: how long it holds, then that it has expired, and a new one (T193) */
+function HubCode() {
+  const view = useSyncExternalStore(bridgeStore.subscribe, bridgeStore.get, bridgeStore.get);
+  const now = useNow(1000), rest = view.codeExpires === null ? null : view.codeExpires - now;
+  if (rest !== null && rest <= 0) return (
+    <div className="grid gap-1.5 rounded-md border border-amber-400 bg-amber-50 p-2 text-xs dark:bg-amber-950" role="alert">
+      <span>The code <span className="font-mono line-through">{view.code}</span> has expired (a code holds 10 minutes) and no agent used it.</span>
+      <Button size="sm" className="h-7 text-xs" onClick={() => void bridgeDisconnect().then(() => bridgePair())}>New code</Button>
+    </div>
+  );
+  return (
+    <div className="grid gap-1 rounded-md bg-muted p-2 text-center">
+      <span className="text-[11px] text-muted-foreground">Give the agent this code{rest !== null ? <> · valid <span className="tabular-nums">{left(rest)}</span> more</> : " (valid 10 minutes)"}</span>
+      <span className="font-mono text-2xl tracking-[0.3em] tabular-nums">{view.code}</span>
+    </div>
+  );
+}
+/** (the hub, an agent attached) who used its code, and when */
+function CodeUsed() {
+  const view = useSyncExternalStore(bridgeStore.subscribe, bridgeStore.get, bridgeStore.get);
+  const use = view.codesUsed.find(u => u.code === view.code) ?? view.codesUsed.filter(u => u.by === view.agent).pop();
+  return use ? <p className="text-[11px] text-muted-foreground">Code {use.code} used by {use.by} at {hm(use.at)}: it can&apos;t be used again.</p> : null;
+}
+/** a code for another agent: how long it holds, that it has expired, or who used it (T193) */
+function AgentCode({ code }: { code: { code: string; expiresAt: number } }) {
+  const view = useSyncExternalStore(bridgeStore.subscribe, bridgeStore.get, bridgeStore.get);
+  const use = view.codesUsed.find(u => u.code === code.code), now = useNow(1000, !use), rest = code.expiresAt - now;
+  if (use) return <span className="text-[11px] text-muted-foreground">{code.code} used by {use.by} at {hm(use.at)}</span>;
+  if (rest <= 0) return <span className="text-[11px] text-amber-700 dark:text-amber-400"><span className="font-mono line-through">{code.code}</span> expired: Add agent for a new one</span>;
+  return (
+    <span className="flex items-baseline gap-1.5" title="Give this code to the other agent (valid 10 minutes, once)">
+      <span className="font-mono text-sm tracking-[0.2em] tabular-nums">{code.code}</span>
+      <span className="text-[11px] text-muted-foreground tabular-nums">valid {left(rest)}</span>
+    </span>
+  );
+}
+/** when an agent last called the bridge; quiet a while, a word on what that means (T193) */
+function Seen({ agent }: { agent: { name: string; lastSeen: number } }) {
+  const now = useNow(5000), quiet = now - agent.lastSeen > QUIET;
+  return (
+    <span className={cn("shrink-0 text-[10px]", quiet ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}
+      title={quiet ? `No word from ${agent.name} since ${hm(agent.lastSeen)}: an agent acts only while its Claude session is working on something. It may be thinking, waiting for its user, or its session may have ended. Your messages wait for it: it gets them at its next step.` : `${agent.name} last called the bridge at ${clock(agent.lastSeen)}`}>
+      {quiet ? `quiet ${ago(now - agent.lastSeen).replace(" ago", "")}` : `seen ${ago(now - agent.lastSeen)}`}
+    </span>
+  );
+}
+/** why a message is still "sent": who is to fetch it, and when it last looked */
+function sentWhy(view: BridgeView, at: number, now = Date.now()) {
+  const a = view.mode === "tab" ? null : view.agents.find(x => x.hub);
+  const name = a?.name ?? view.agent ?? "The agent";
+  if (!a) return `Sent ${ago(now - at)}, not fetched yet: ${name} gets messages at its next step (any bridge call).`;
+  const quiet = now - a.lastSeen;
+  return quiet > QUIET
+    ? `Sent ${ago(now - at)}, not fetched yet: ${name} hasn't called the bridge since ${hm(a.lastSeen)}. An agent acts only while its Claude session is working; it gets the message at its next step, or ask its user to nudge it.`
+    : `Sent ${ago(now - at)}, not fetched yet: ${name} was seen ${ago(quiet)} and gets messages at its next step (any bridge call).`;
 }
 
 /** an agent's report (T196): its lines, its table (the rows it points out marked), its findings; copied as text */
@@ -331,7 +414,7 @@ function AgentTabsSection() {
       </label>
       <div className="flex items-center gap-1.5">
         <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void bridgeAddAgent().catch(e => toast.error(e instanceof Error ? e.message : "No code"))} title="A code for another agent: it attaches here and works in tabs of its own">Add agent</Button>
-        {view.agentCode && <span className="font-mono text-sm tracking-[0.2em] tabular-nums" title="Give this code to the other agent (valid 10 minutes)">{view.agentCode}</span>}
+        {view.agentCode && <AgentCode code={view.agentCode} />}
       </div>
       {view.requests.map(q => (
         <div key={q.ticket} className="grid gap-1 rounded-md border border-amber-400 bg-amber-50 p-2 text-xs dark:bg-amber-950" role="alert">
@@ -350,6 +433,7 @@ function AgentTabsSection() {
             <div key={a.id} className="flex items-center gap-1.5 text-xs">
               <span className="size-2.5 shrink-0 rounded-full" style={{ background: a.color }} />
               <span className="min-w-0 flex-1 truncate">{a.name}{a.hub ? " (this page)" : " (its tabs)"}</span>
+              <Seen agent={a} />
               <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => void bridgeRevoke(a.id)} title="Let it go: its pairing ends; its tabs stay open, marked as left">Revoke</Button>
             </div>
           ))}

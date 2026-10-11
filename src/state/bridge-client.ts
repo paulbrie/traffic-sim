@@ -18,7 +18,10 @@ export interface BridgeLogEntry { at: number; type: string; target: string; ok: 
   /** a message or note the user sent (T191): its id, and whether an agent has it yet ("sent": queued, waiting to be fetched;
    * "delivered": fetched by `by`; "nobody": no agent was connected to take it) */
   msgId?: string; status?: "sent" | "delivered" | "nobody"; by?: string }
-export interface BridgeAgent { id: string; name: string; color: string; hub: boolean }
+/** an agent attached to the hub: when it paired, and when it last called the bridge (T193) */
+export interface BridgeAgent { id: string; name: string; color: string; hub: boolean; pairedAt: number; lastSeen: number }
+/** a code an agent used: which, by whom, when (T193) */
+export interface BridgeCodeUse { code: string; by: string; at: number }
 export interface BridgeTab { pageId: string; ticket: string; agent: string; agentName: string; color: string; label: string; task: string; url: string; title: string; connected: boolean; paused: boolean; left: boolean }
 /** a tab an agent asked for that the browser wouldn't open by itself (pop-ups blocked): the user opens it, or not */
 export interface BridgeRequest { ticket: string; url: string; label: string; task: string; agent: string; color: string }
@@ -42,19 +45,26 @@ export interface BridgeView {
   /** the user's leave for agent edits (T189), as the server keeps it */
   allowEdits: EditPermit;
   allowTabs: boolean; agents: BridgeAgent[]; tabs: BridgeTab[]; requests: BridgeRequest[];
-  /** a code for another agent (Add agent), while it lasts */
-  agentCode: string | null;
+  /** a code for another agent (Add agent), and until when it holds */
+  agentCode: { code: string; expiresAt: number } | null;
+  /** (the hub's) until when its own code holds; the codes agents used (T193) */
+  codeExpires: number | null;
+  codesUsed: BridgeCodeUse[];
+  /** the stream dropped, trying again (the pairing kept: lost only if the server no longer knows it) (T193) */
+  reconnecting: boolean;
+  /** why the pairing was lost, in plain words */
+  lostWhy: string | null;
   /** the agents' reports (T196), the last few, and the one shown */
   reports: BridgeReport[];
   reportOpen: string | null;
   // an agent's tab's
   tab: { agent: string; color: string; label: string; task: string; paused: boolean; left: boolean; closed: boolean } | null;
 }
-interface Pairing { pageId: string; pageToken: string; code?: string; mode: "hub" | "tab" }
+interface Pairing { pageId: string; pageToken: string; code?: string; expiresAt?: number; mode: "hub" | "tab" }
 interface Command { id: string; type: string; args?: Record<string, unknown> }
 
 const KEY = "trafficsim:bridge";
-let view: BridgeView = { open: false, phase: "off", mode: "hub", code: null, agent: null, agentColor: null, log: [], error: null, cursor: null, trace: null, note: null, allowEdits: { mode: "off" }, allowTabs: false, agents: [], tabs: [], requests: [], agentCode: null, reports: [], reportOpen: null, tab: null };
+let view: BridgeView = { open: false, phase: "off", mode: "hub", code: null, agent: null, agentColor: null, log: [], error: null, cursor: null, trace: null, note: null, allowEdits: { mode: "off" }, allowTabs: false, agents: [], tabs: [], requests: [], agentCode: null, codeExpires: null, codesUsed: [], reconnecting: false, lostWhy: null, reports: [], reportOpen: null, tab: null };
 const listeners = new Set<() => void>();
 const set = (patch: Partial<BridgeView>) => { view = { ...view, ...patch }; for (const f of listeners) f(); };
 export const bridgeStore = {
@@ -79,7 +89,7 @@ const post = (path: string, body: Record<string, unknown>) => fetch(api(path), {
   method: "POST", headers: { "Content-Type": "application/json", ...(pairing ? { "x-bridge-page": pairing.pageToken } : {}) }, body: JSON.stringify(pairing ? { pageId: pairing.pageId, ...body } : body),
 });
 const keep = () => { if (pairing) sessionStorage.setItem(KEY, JSON.stringify(pairing)); else sessionStorage.removeItem(KEY); };
-const gone = (phase: BridgeView["phase"]) => { unwatch(); stream?.close(); stream = null; pairing = null; keep(); set({ phase, code: null, agent: null, cursor: null, note: null, allowEdits: { mode: "off" }, agents: [], tabs: [], requests: [], agentCode: null }); };
+const gone = (phase: BridgeView["phase"], lostWhy: string | null = null) => { unwatch(); stream?.close(); stream = null; pairing = null; keep(); set({ phase, lostWhy, reconnecting: false, code: null, codeExpires: null, codesUsed: [], agent: null, cursor: null, note: null, allowEdits: { mode: "off" }, agents: [], tabs: [], requests: [], agentCode: null }); };
 
 // ---- the UI state the agent watches (a V2 plan's: see bridgeUi): its changes sent as "ui" events, at most 4 a second
 // (the page's own list, gone when the pairing ends or another agent takes it over)
@@ -120,7 +130,7 @@ export async function bridgePair() {
     if (!r.ok) throw new Error(r.status === 403 ? "Only admins can connect Claude." : `Pairing failed (${r.status})`);
     pairing = { ...(await r.json() as Omit<Pairing, "mode">), mode: "hub" };
     keep();
-    set({ phase: "waiting", mode: "hub", code: pairing.code ?? null, agent: null, tab: null });
+    set({ phase: "waiting", mode: "hub", code: pairing.code ?? null, codeExpires: pairing.expiresAt ?? null, lostWhy: null, agent: null, tab: null });
     listen();
   } catch (e) { set({ phase: "off", error: e instanceof Error ? e.message : String(e) }); }
 }
@@ -152,7 +162,7 @@ export async function bridgeResume() {
   try {
     pairing = JSON.parse(raw) as Pairing;
     pairing.mode ??= "hub";
-    set({ mode: pairing.mode, phase: pairing.mode === "tab" ? "attached" : "waiting", code: pairing.code ?? null });
+    set({ mode: pairing.mode, phase: pairing.mode === "tab" ? "attached" : "waiting", code: pairing.code ?? null, codeExpires: pairing.expiresAt ?? null });
     listen();
   } catch { sessionStorage.removeItem(KEY); }
 }
@@ -191,8 +201,8 @@ export async function bridgeAllowEdits(permit: EditPermit) { set({ allowEdits: p
 export async function bridgeAddAgent() {
   const r = await post("agent-code", {});
   if (!r.ok) throw new Error(`No code (${r.status})`);
-  const c = await r.json() as { code: string };
-  set({ agentCode: c.code });
+  const c = await r.json() as { code: string; expiresAt: number };
+  set({ agentCode: { code: c.code, expiresAt: c.expiresAt } });
 }
 export const bridgeRevoke = (agentId: string) => post("revoke", { agentId });
 export const bridgePauseTab = (tabId: string, paused: boolean) => post("pause", { tabId, paused });
@@ -223,10 +233,10 @@ function listen() {
   stream?.close();
   if (shared.stream !== stream) shared.stream?.close();
   stream = new EventSource(`${api("stream")}?pageId=${encodeURIComponent(pairing.pageId)}&t=${encodeURIComponent(pairing.pageToken)}`);
-  stream.onopen = () => { failures = 0; bridgeHello(); };
+  stream.onopen = () => { failures = 0; set({ reconnecting: false }); bridgeHello(); };
   const on = <T,>(name: string, f: (d: T) => void) => stream!.addEventListener(name, e => f(JSON.parse((e as MessageEvent).data) as T));
   on<{ name: string; color?: string } | null>("agent", a => { if (pairing?.mode === "hub") { if ((a?.name ?? null) !== view.agent) unwatch(); set({ agent: a?.name ?? null, agentColor: a?.color ?? null, phase: a ? "attached" : "waiting" }); } });
-  on<{ allowTabs: boolean; allowEdits?: EditPermit; agents: BridgeAgent[]; tabs: BridgeTab[] }>("hub", h => set({ allowTabs: h.allowTabs, allowEdits: h.allowEdits ?? { mode: "off" }, agents: h.agents, tabs: h.tabs }));
+  on<{ allowTabs: boolean; allowEdits?: EditPermit; agents: BridgeAgent[]; tabs: BridgeTab[]; codesUsed?: BridgeCodeUse[] }>("hub", h => set({ allowTabs: h.allowTabs, allowEdits: h.allowEdits ?? { mode: "off" }, agents: h.agents, tabs: h.tabs, codesUsed: h.codesUsed ?? [] }));
   on<NonNullable<BridgeView["tab"]>>("tab", t => { if (t.left || t.agent !== view.agent) unwatch(); set({ tab: { ...t, closed: false }, agent: t.agent, agentColor: t.color, phase: t.left ? "lost" : "attached" }); });
   // (an agent asks for a tab: opened at once if the browser lets it, else the user is asked)
   on<BridgeRequest>("openTab", q => {
@@ -240,8 +250,21 @@ function listen() {
   on<{ msgId: string; agent: string }>("delivered", d => set({ log: view.log.map(e => (e.msgId === d.msgId ? { ...e, status: "delivered" as const, by: d.agent } : e)) }));
   // (the pairing ended on the server: by the user, the agent, or idle too long; a tab closes itself if it can)
   on("closed", () => { const tab = pairing?.mode === "tab"; gone("off"); if (tab) { set({ tab: view.tab ? { ...view.tab, closed: true } : null }); window.close(); } });
-  // (gone for good, the pairing with it, after a few tries: the server restarted, or the pairing ended)
-  stream.onerror = () => { if (++failures >= 4) gone("lost"); };
+  // (the stream dropped: the browser tries again by itself. Whether the pairing still stands is asked of the server (T193): not
+  // known there any more (it restarted, or the pairing ended), it is lost, said so; signed out, the same; the server out of
+  // reach, the pairing kept and tried again, however long it takes)
+  const own = stream;
+  stream.onerror = () => {
+    if (stream !== own) return;
+    set({ reconnecting: true });
+    if (++failures % 3 !== 1 && own.readyState !== EventSource.CLOSED) return;
+    void post("hello", { url: location.href, title: document.title }).then(r => {
+      if (stream !== own) return;
+      if (r.status === 404) gone("lost", "The server no longer knows this pairing: it was restarted, or the pairing ended. Pair again, then give the agent the new code (it has to pair again too).");
+      else if (r.status === 401 || r.status === 403) gone("lost", "You were signed out, so the pairing ended. Sign in, pair again, and give the agent the new code.");
+      else if (own.readyState === EventSource.CLOSED) setTimeout(() => { if (stream === own) listen(); }, 3000);
+    }, () => { if (stream === own && own.readyState === EventSource.CLOSED) setTimeout(() => { if (stream === own) listen(); }, 5000); });
+  };
 }
 
 const logged = (e: BridgeLogEntry) => set({ log: [...view.log.slice(-199), e] });
