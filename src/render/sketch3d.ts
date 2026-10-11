@@ -2,7 +2,7 @@
  * The V2 plan (a lane sketch) in 3D: three.js meshes made from what the plan view draws (lane-sketch.ts's pure
  * functions): the road surfaces (each lane's band, with its kerb) and the junctions' (drawn outlines, smoothed loops or
  * bands, and the ground they shut in), the links between road ends, the markings, the turn arrows, the stop and yield
- * lines and the zebras; each at its height (bridges and underpasses: `zAt` levels of LEVEL_H metres, as V1), bridges with
+ * lines and the zebras; each at its height (bridges and underpasses: `shownZ` levels of LEVEL_H metres, as V1), bridges with
  * their sides and pillars. A few merged meshes, made again only when the sketch changes. x east, y up, z the plan's y.
  */
 import * as THREE from "three";
@@ -14,7 +14,7 @@ import { junctionSurfaceHoles, nestLoops } from "@/lib/junction-fill";
 import { circlePts, deadEndTurnarounds } from "@/lib/dead-ends";
 import {
   bandPolygon, crossingFrame, isFullCircle, junctionBands, junctionLevel, laneLevel, laneLength, linkGeometry,
-  outlinePath, pointAt, roadMarkings, samples, smoothJunction, turnArrows, zAt,
+  outlinePath, densePoints, hasLevels, pointAt, roadMarkings, samples, shownZ, smoothJunction, turnArrows,
   type JunctionContents, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
 
@@ -87,25 +87,25 @@ export function simplify(pts: Pt[], tol: number, keep?: (i: number) => boolean):
 }
 /** a lane's points (every `step` metres, those it needs), with their heights */
 function laneLine(sk: Sketch, id: string, shape: Parameters<typeof samples>[0], step: number) {
-  const all = samples(shape, step), ha: number[] = [];
-  let s = 0;
-  for (let i = 0; i < all.length; i++) { if (i) s += Math.hypot(all[i].x - all[i - 1].x, all[i].y - all[i - 1].y); ha.push(zAt(sk, id, s) * LEVEL_H); }
+  // (with levels, a straight run cut up too, so a ramp on it is one; else its points as they are, all at 0)
+  const dense = hasLevels(sk) ? densePoints(shape, step) : samples(shape, step).map(p => ({ p, s: 0 }));
+  const all = dense.map(x => x.p), ha = dense.map(x => shownZ(sk, id, x.s) * LEVEL_H);
   // (where its height changes, every point kept: a ramp stays a ramp)
   const keep = (i: number) => i > 0 && i < all.length - 1 && Math.abs(ha[i + 1] - 2 * ha[i] + ha[i - 1]) > 1e-4;
   const kept = simplify(all.map((p, i) => ({ ...p, i })), TOL, keep) as (Pt & { i: number })[];
   return { pts: kept.map(p => ({ x: p.x, y: p.y })), hs: kept.map(p => ha[p.i]) };
 }
-/** dashes along a polyline: `on` metres drawn, `off` left */
-function dashes(pts: Pt[], on: number, off: number): Pt[][] {
-  const out: Pt[][] = [];
-  let cur: Pt[] = [], phase = 0, drawing = true;
+/** dashes along a polyline: `on` metres drawn, `off` left (its points' heights `h`, if they have them, carried along) */
+function dashes<P extends Pt & { h?: number }>(pts: P[], on: number, off: number): P[][] {
+  const out: P[][] = [];
+  let cur: P[] = [], phase = 0, drawing = true;
   for (let i = 1; i < pts.length; i++) {
     let a = pts[i - 1];
     const b = pts[i];
     let left = Math.hypot(b.x - a.x, b.y - a.y);
     while (left > 1e-6) {
       const room = (drawing ? on : off) - phase, step = Math.min(room, left), t = step / left;
-      const q = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      const q = { ...a, x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, ...(a.h !== undefined ? { h: a.h + (b.h! - a.h) * t } : {}) };
       if (drawing) { if (!cur.length) cur.push(a); cur.push(q); }
       phase += step; left -= step; a = q;
       if (phase >= (drawing ? on : off) - 1e-9) { if (drawing && cur.length > 1) out.push(cur); cur = []; drawing = !drawing; phase = 0; }
@@ -192,8 +192,14 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
   if (layers.surfaces && layers.markings) {
     // the lines between lanes (dashed or not), the centre line in its yellow
     for (const m of roadMarkings(sk)) {
-      const h = (m.level ?? 0) * LEVEL_H, to = m.kind === "center" ? yellow : paint;
-      const line = simplify(m.pts, TOL);
+      const to = m.kind === "center" ? yellow : paint;
+      // (beside a lane off the ground: at its height point by point, down its ramps)
+      if (m.lane && m.at) {
+        const hs = m.at.map(s => shownZ(sk, m.lane!, s) * LEVEL_H), line = m.pts.map((p, i) => ({ ...p, h: hs[i] }));
+        for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(p => p.h), PAINT_W, Y.paint);
+        continue;
+      }
+      const h = (m.level ?? 0) * LEVEL_H, line = simplify(m.pts, TOL);
       for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(() => h), PAINT_W, Y.paint);
     }
     for (const a of turnArrows(sk)) for (const line of arrowLines(a.p, a.d, a.turns)) paint.ribbon(line, line.map(() => a.level * LEVEL_H), 0.18, Y.paint);
@@ -210,7 +216,7 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
     // a stop line across a lane's end, a yield its row of triangles
     for (const l of sk.lanes) {
       if (!l.control || isFullCircle(l.shape)) continue;
-      const L = laneLength(l.shape), { p, d } = pointAt(l.shape, L), n = { x: -d.y, y: d.x }, hw = l.width / 2, h = zAt(sk, l.id, L) * LEVEL_H + Y.paint;
+      const L = laneLength(l.shape), { p, d } = pointAt(l.shape, L), n = { x: -d.y, y: d.x }, hw = l.width / 2, h = shownZ(sk, l.id, L) * LEVEL_H + Y.paint;
       if (l.control === "stop") {
         const A = { x: p.x - d.x * 0.5, y: p.y - d.y * 0.5 };
         paint.polygon([{ x: A.x + n.x * hw, y: A.y + n.y * hw }, { x: p.x + n.x * hw, y: p.y + n.y * hw }, { x: p.x - n.x * hw, y: p.y - n.y * hw }, { x: A.x - n.x * hw, y: A.y - n.y * hw }], [], h);
@@ -234,5 +240,5 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
 }
 
 /** a lane's height (m) at `s` metres along it */
-export const laneHeight = (sk: Sketch, lane: string, s: number) => zAt(sk, lane, s) * LEVEL_H;
+export const laneHeight = (sk: Sketch, lane: string, s: number) => shownZ(sk, lane, s) * LEVEL_H;
 export { laneLevel };

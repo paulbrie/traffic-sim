@@ -303,6 +303,18 @@ export function samples(sh: LaneShape, step = 1): Pt[] {
   return Array.from({ length: n + 1 }, (_, i) => pointAt(sh, (laneLength(sh) * i) / n).p);
 }
 
+/** a lane's points at most `step` metres apart (a line's corners kept, its straight runs cut up), each with how far along it is */
+export function densePoints(sh: LaneShape, step: number): { p: Pt; s: number }[] {
+  const pts = samples(sh, step), out = [{ p: pts[0], s: 0 }];
+  let s = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], d = dist(a, b), n = Math.max(1, Math.ceil(d / step));
+    for (let k = 1; k <= n; k++) out.push({ p: { x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n }, s: s + (d * k) / n });
+    s += d;
+  }
+  return out;
+}
+
 /** the place on the lane nearest to `p`, and how far `p` is from it */
 export function nearestOn(sh: LaneShape, p: Pt): { s: number; d: number } {
   if (sh.kind === "arc") {
@@ -1788,7 +1800,11 @@ function holesOf(sk: Sketch, c: JunctionContents, roadLanes: SketchLane[]): Pt[]
  * has a lane each way, a double solid line where it has more). Found where a lane has another of its
  * road beside it on its left, edge to edge (within half a metre).
  */
-export interface Marking { pts: Pt[]; kind: "lane" | "center"; dashed: boolean; /** the level of the lane it runs beside (drawn with it) */ level?: number }
+export interface Marking {
+  pts: Pt[]; kind: "lane" | "center"; dashed: boolean; /** the level of the lane it runs beside (drawn with it) */ level?: number;
+  /** that lane, and how far along it (m) each point is: its height there (`shownZ`), on a ramp */
+  lane?: string; at?: number[];
+}
 const markings = new LastFew<Sketch, Marking[]>();
 /** a polyline moved `o` metres to its left (each point along the normal there) */
 function offsetPolyline(pts: Pt[], o: number): Pt[] {
@@ -1811,15 +1827,15 @@ export function roadMarkings(sk: Sketch): Marking[] {
     roadMarks.set(road, { lanes, out });
     for (const a of lanes) {
       const L = laneLength(a.shape), n = Math.max(2, Math.ceil(L / 0.5));
-      let run: Pt[] = [], runWith: { b: SketchLane; same: boolean } | null = null;
+      let run: Pt[] = [], at: number[] = [], runWith: { b: SketchLane; same: boolean } | null = null;
       const flush = () => {
         if (runWith && run.length >= 2) {
-          const lv = a.level ? { level: a.level } : {};
+          const lv = a.level ? { level: a.level, lane: a.id, at } : {};
           if (runWith.same) out.push({ pts: run, kind: "lane", dashed: true, ...lv });
           else if (lanes.length <= 2) out.push({ pts: run, kind: "center", dashed: true, ...lv });
           else for (const o of [-0.15, 0.15]) out.push({ pts: offsetPolyline(run, o), kind: "center", dashed: false, ...lv });
         }
-        run = []; runWith = null;
+        run = []; at = []; runWith = null;
       };
       for (let i = 0; i <= n; i++) {
         const { p, d } = pointAt(a.shape, (L * i) / n), left = { x: d.y, y: -d.x };
@@ -1835,7 +1851,7 @@ export function roadMarkings(sk: Sketch): Marking[] {
           break;
         }
         if (!hit || (runWith && (runWith.b !== hit.b || runWith.same !== hit.same))) flush();
-        if (hit) { runWith = hit; run.push({ x: p.x + left.x * (a.width / 2), y: p.y + left.y * (a.width / 2) }); }
+        if (hit) { runWith = hit; run.push({ x: p.x + left.x * (a.width / 2), y: p.y + left.y * (a.width / 2) }); at.push((L * i) / n); }
       }
       flush();
     }
@@ -2267,20 +2283,21 @@ export function setLevel(sk: Sketch, ids: Iterable<string>, level: number): Sket
 
 /**
  * Each lane's levels: its own, and at its start and its end the lowest of its own and those of the lanes its
- * connectors join there (as v1's junctions: at the lowest level of the roads meeting there). Kept per sketch.
+ * connectors join there (as v1's junctions: at the lowest level of the roads meeting there); and which ends have
+ * nothing joined (`fa`, `fb`). Kept per sketch.
  */
-const levelsKept = new LastFew<Sketch, Map<string, { L: number; a: number; b: number; len: number }>>();
+const levelsKept = new LastFew<Sketch, Map<string, { L: number; a: number; b: number; len: number; fa: boolean; fb: boolean }>>();
 function levelsOf(sk: Sketch) {
   let m = levelsKept.get(sk);
   if (m) return m;
   m = new Map();
-  for (const l of sk.lanes) { const L = laneLevel(l); m.set(l.id, { L, a: L, b: L, len: laneLength(l.shape) }); }
+  for (const l of sk.lanes) { const L = laneLevel(l); m.set(l.id, { L, a: L, b: L, len: laneLength(l.shape), fa: true, fb: true }); }
   if (hasLevels(sk)) for (const c of sk.connectors) {
     const f = m.get(c.from.lane), t = m.get(c.to.lane);
     if (!f || !t) continue;
     // (a connector leaving near a lane's end, or joining near the next one's start: they meet there)
-    if (f.len - c.from.s < 1) f.b = Math.min(f.b, t.L);
-    if (c.to.s < 1) t.a = Math.min(t.a, f.L);
+    if (f.len - c.from.s < 1) { f.b = Math.min(f.b, t.L); f.fb = false; }
+    if (c.to.s < 1) { t.a = Math.min(t.a, f.L); t.fa = false; }
   }
   levelsKept.set(sk, m);
   return m;
@@ -2293,8 +2310,41 @@ function levelsOf(sk: Sketch) {
  */
 export function zAt(sk: Sketch, lane: string, s: number): number {
   const x = levelsOf(sk).get(lane);
-  if (!x) return 0;
-  const { L, a, b, len } = x;
+  return x ? rampZ(x.L, x.a, x.b, x.len, s) : 0;
+}
+/**
+ * The height (in levels) a lane is drawn at, `s` metres along it: as `zAt`, but an end with nothing joined there comes
+ * down to the ground (as v1's roads, whose free ends are at ground level), so a bridge ends in ramps. Drawing only:
+ * the cars' levels, and what meets what, are `zAt`'s.
+ */
+export function shownZ(sk: Sketch, lane: string, s: number): number {
+  const x = levelsOf(sk).get(lane);
+  return x ? rampZ(x.L, x.fa ? 0 : x.a, x.fb ? 0 : x.b, x.len, s) : 0;
+}
+/** the lanes whose drawn height differs from zAt's: off the ground, with an end with nothing joined */
+const rampsKept = new LastFew<Sketch, SketchLane[]>();
+function freeRamps(sk: Sketch) {
+  let r = rampsKept.get(sk);
+  if (r) return r;
+  const m = levelsOf(sk);
+  r = hasLevels(sk) ? sk.lanes.filter(l => { const x = m.get(l.id)!; return x.L !== 0 && ((x.fa && x.a !== 0) || (x.fb && x.b !== 0)); }) : [];
+  rampsKept.set(sk, r);
+  return r;
+}
+/**
+ * The height (levels) a car at `p` is drawn at, the sim's level for it `z`: on a ramp down to a lane's free end, the
+ * ramp's (`shownZ`); else `z`
+ */
+export function shownCarZ(sk: Sketch, p: Pt, z: number): number {
+  if (!z) return z;
+  for (const l of freeRamps(sk)) {
+    const q = nearestOn(l.shape, p);
+    if (q.d <= l.width / 2 + 0.5 && Math.abs(zAt(sk, l.id, q.s) - z) < 0.05) return shownZ(sk, l.id, q.s);
+  }
+  return z;
+}
+/** a lane `len` long at level L, from level a at its start to b at its end: its level `s` metres along */
+function rampZ(L: number, a: number, b: number, len: number, s: number): number {
   if (a === L && b === L) return L;
   const d = Math.min(len, Math.max(0, s)), sm = (u: number) => u * u * (3 - 2 * u);
   const ra = Math.min(0.45 * len, RAMP_PER_LEVEL * Math.abs(L - a)), rb = Math.min(0.45 * len, RAMP_PER_LEVEL * Math.abs(L - b));

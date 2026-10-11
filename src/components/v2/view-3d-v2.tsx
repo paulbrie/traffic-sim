@@ -12,7 +12,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { connectorPts, junctionLevel, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
+import { connectorPts, junctionLevel, shownCarZ, shownZ, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
 import { LEVEL_H } from "@/engine/compile";
 import { speedColor } from "@/render/palette";
 import { buildSketch3D, type Sketch3D } from "@/render/sketch3d";
@@ -236,7 +236,7 @@ export function View3DV2(props: View3DProps) {
       let nb = 0, ng = 0, nl = 0;
       for (const c of cars) {
         if (nb + 2 > MAXV) break;
-        const y = (c.z ?? 0) * LEVEL_H + 0.06, yaw = -Math.atan2(c.d.y, c.d.x), truck = !!c.trailer;
+        const y = shownCarZ(p.sketch, c.p, c.z ?? 0) * LEVEL_H + 0.06, yaw = -Math.atan2(c.d.y, c.d.x), truck = !!c.trailer;
         const col = p.bySpeed ? speedColor(pal, Math.round(Math.min(1, c.share) * 15) / 15) : truck ? pal.truck : pal.car;
         put(bodies, nb, c.p.x, y + 0.25, c.p.y, yaw, c.len, truck ? TRUCK_H : CAR_H, truck ? TRUCK_W : CAR_W); bodies.setColorAt(nb++, colorOf(col));
         if (c.trailer) { const t = c.trailer; put(bodies, nb, t.p.x, y + 0.5, t.p.y, -Math.atan2(t.d.y, t.d.x), t.len, TRAILER_H, TRUCK_W); bodies.setColorAt(nb++, colorOf("#e9e6dd")); }
@@ -274,7 +274,7 @@ export function View3DV2(props: View3DProps) {
           for (const [lane, conns] of held) {
             const l = laneById(sk, lane);
             if (!l || n >= 2000) continue;
-            const L = laneLength(l.shape), e = pointAt(l.shape, L), r = { x: e.d.y, y: -e.d.x }, o = l.width / 2 + 0.6, h = zAt(sk, lane, L) * LEVEL_H;
+            const L = laneLength(l.shape), e = pointAt(l.shape, L), r = { x: e.d.y, y: -e.d.x }, o = l.width / 2 + 0.6, h = shownZ(sk, lane, L) * LEVEL_H;
             const x = e.p.x + r.x * o, z = e.p.y + r.y * o;
             P.set(x, h, z); S.set(1, 4.2, 1); M.compose(P, Q.identity(), S); poles.setMatrixAt(n, M);
             put(heads, n, x, h + 4.2, z, -Math.atan2(e.d.y, e.d.x), 0.35, 0.9, 0.35);
@@ -343,7 +343,7 @@ export function View3DV2(props: View3DProps) {
         const l = laneById(sk, id);
         if (!l) continue;
         const L = laneLength(l.shape), pts: Pt[] = [], hs: number[] = [];
-        for (let s2 = 0; s2 <= L + 1e-6; s2 += Math.max(0.5, Math.min(2, L / 40))) { pts.push(pointAt(l.shape, Math.min(s2, L)).p); hs.push(zAt(sk, id, Math.min(s2, L)) * LEVEL_H); }
+        for (let s2 = 0; s2 <= L + 1e-6; s2 += Math.max(0.5, Math.min(2, L / 40))) { pts.push(pointAt(l.shape, Math.min(s2, L)).p); hs.push(shownZ(sk, id, Math.min(s2, L)) * LEVEL_H); }
         ribbon(pts, hs, l.width);
       }
       for (const id of sel.connectors) {
@@ -373,7 +373,7 @@ export function View3DV2(props: View3DProps) {
       const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === id);
       if (!c) return;
       const s2 = Math.max(3.2, c.len * 0.8);
-      ring.position.set(c.p.x, (c.z ?? 0) * LEVEL_H + 0.2, c.p.y); ring.scale.set(s2, s2, s2); ring.visible = true;
+      ring.position.set(c.p.x, shownCarZ(live.current.sketch, c.p, c.z ?? 0) * LEVEL_H + 0.2, c.p.y); ring.scale.set(s2, s2, s2); ring.visible = true;
     };
     // the car picked: its way on to the end of its trip, a ribbon on the road in the selection's colour (made again at most 4 times a second)
     // (the blue the map draws it in, the selection's there: the 3D view's own green is lost on the asphalt)
@@ -388,7 +388,7 @@ export function View3DV2(props: View3DProps) {
       const p = live.current, pts = p.car !== null ? p.carWay?.() ?? null : null;
       wayLine.visible = !!pts && pts.length > 1;
       if (!wayLine.visible) return;
-      const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car), y = (c?.z ?? 0) * LEVEL_H + 0.3;
+      const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car), y = (c ? shownCarZ(p.sketch, c.p, c.z ?? 0) : 0) * LEVEL_H + 0.3;
       setRibbon(wayLine, pts!, y, 1.2);
     };
     /** `mesh` made a ribbon `hw` either side of `pts` at height `y`: a quad a piece */
@@ -417,7 +417,7 @@ export function View3DV2(props: View3DProps) {
       if (now - whyAt < 250) return;
       whyAt = now;
       const p = live.current, w = p.car !== null ? p.carWhy?.() ?? null : null;
-      const c = w ? (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car) : null, y = (c?.z ?? 0) * LEVEL_H + 0.35;
+      const c = w ? (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car) : null, y = (c ? shownCarZ(p.sketch, c.p, c.z ?? 0) : 0) * LEVEL_H + 0.35;
       // (a zone shorter than the 1 m its points are apart: a small square where it is)
       const zone = (pts: Pt[] | undefined) => (!pts?.length ? null : pts.length > 1 ? pts : [{ x: pts[0].x - 1.6, y: pts[0].y }, { x: pts[0].x + 1.6, y: pts[0].y }]);
       const lines: [Pt[] | null, number][] = [[zone(w?.zone?.mine), 1.6], [zone(w?.zone?.theirs), 1.6], [c && w?.leader ? [c.p, w.leader] : null, 0.15], [c && w?.blocker ? [c.p, w.blocker] : null, 0.3]];
