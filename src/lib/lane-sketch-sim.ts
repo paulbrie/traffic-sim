@@ -355,6 +355,10 @@ const hwOf = (v: SimVehicle) => (v.truck ? TRUCK_HW : atRing(v) ? Math.min(T_HEA
 let PATIENCE = 6;
 /** a car giving way (its path ranked after the other's) that has waited this long goes before one that can still stop for it (s) */
 const GIVE_PATIENCE = 10;
+/** a car kept this long waiting to change lane, with no way from its own lane to where it is going, gives that up (s; T194) */
+const LANE_STUCK = 30;
+/** a deadlock none of whose cars has moved for this long, letting them go or not: one of them is taken off the road (s; T195) */
+const LOCK_CLEAR = 60;
 /** how long a car let go from waiting at a zone stays committed to going through (s) */
 const COMMIT = 3;
 /** seconds kept waiting where it turns off before a car looks for another way */
@@ -560,6 +564,9 @@ export class SketchSim {
    * cars go (+1: the angle grows), and its ways off with where they leave (the angle); by each way on (T172) */
   private ringOn = new Map<Edge, RingGroup>();
   private exitWeights = new Map<string, number>();
+  /** an exit lane's way out: it and the lanes of its road ending beside it (as the Demand panel groups them). A car going to
+   * one leaves by whichever it is on: no changing lane at the sketch's edge for nothing (T194) */
+  private outWay = new Map<string, string[]>();
   private nextId = 1;
   /** test cars (`sendTest`): numbered -1, -2… (the others' numbers, which settle who goes first, as without them), their own
    * random numbers; the last one's trip, and where one drove off the end of a lane last step */
@@ -870,6 +877,7 @@ export class SketchSim {
     this.exitWeights = new Map(sk.lanes.map(l => [l.id, laneOutWeight(l)]));
     // journeys: their ways' lanes (as the Demand panel groups them); their counts kept, the next arrival drawn again if the rate changed
     const ways = demandWays(sk), oldJ = new Map(this.journeys.map(j => [j.def.id, j]));
+    this.outWay = new Map(ways.exits.flatMap(w => w.lanes.map(l => [l, w.lanes])));
     this.journeys = (sk.journeys ?? []).map(def => {
       const was = oldJ.get(def.id), from = ways.entries.find(w => w.lanes.includes(def.from))?.lanes ?? [], to = ways.exits.find(w => w.lanes.includes(def.to))?.lanes ?? [];
       return { def, from, to, next: was && was.def.rate === def.rate ? was.next : this.t + this.jGap(def.rate), sent: was?.sent ?? 0, arrived: was?.arrived ?? 0, tripSum: was?.tripSum ?? 0, noRoute: was?.noRoute ?? 0 };
@@ -1085,7 +1093,7 @@ export class SketchSim {
     this.testOut = null;
     if (!T || T.state !== "driving") return;
     const v = this.vehicles.find(x => x.id === T.id);
-    if (!v) { T.state = out?.id === T.id && out.lane === T.to ? "arrived" : "gone"; T.t1 = this.t; return; }
+    if (!v) { T.state = out?.id === T.id && this.outsOf(T.to).includes(out.lane) ? "arrived" : "gone"; T.t1 = this.t; return; }
     if (T.path[T.path.length - 1] !== v.edge.key) T.path.push(v.edge.key);
     const still = v.still >= 2;
     if (still && !T.still) T.stops++;
@@ -1127,6 +1135,30 @@ export class SketchSim {
     for (const ex of opts) { r -= this.exitWeights.get(ex) ?? 1; if (r <= 0) return ex; }
     return opts[opts.length - 1] ?? null;
   }
+  /**
+   * Car `v`, stuck waiting to change to `to`, goes where its own lane leads instead: out at its end if that is a way out, else on by
+   * one of the ways that leave it, to an exit that way drawn by the exits' shares. Counted as a deadlock broken (T194).
+   */
+  private missTurn(v: SimVehicle, to: Edge): boolean {
+    const rt = this.routes, was = v.dest, goal = v.goal, exit = v.exit;
+    if (!rt) return false;
+    v.dest = null;
+    this.plan(v, true);
+    const g = v.goal;
+    if (!g) { v.dest = was; v.goal = goal; v.exit = exit; return false; }
+    if (!g.conn) v.dest = g.lane.id;
+    else {
+      const opts = rt.exits.filter(ex => (this.exitWeights.get(ex) ?? 1) > 0 && rt.viaConnector(g.conn!.id, ex) < Infinity);
+      let r = (v.id < 0 ? this.testRnd : this.rnd)() * opts.reduce((a, ex) => a + (this.exitWeights.get(ex) ?? 1), 0);
+      v.dest = opts.find(ex => (r -= this.exitWeights.get(ex) ?? 1) <= 0) ?? opts[opts.length - 1] ?? null;
+    }
+    this.deadlocks++;
+    this.note({ what: "change", car: v.id, gaveUp: was, to: to.key, waited: r2(v.still), goal: g.conn?.key ?? `end of ${g.lane.key}` });
+    this.problem("deadlock", v, `stuck ${Math.round(v.still)} s changing to ${to.key}, no gap: gave up going to lane:${was} and went ${g.conn ? `by ${g.conn.key}` : `out at the end of ${g.lane.key}`} instead`);
+    return true;
+  }
+  /** the lanes a car going to exit `dest` may leave by (T194) */
+  private outsOf(dest: string) { return this.outWay.get(dest) ?? [dest]; }
 
   /** metres from `a` to `b` along a lane (round a ring) */
   /** an edge's elevation `pos` metres along it (in levels) */
@@ -1208,11 +1240,13 @@ export class SketchSim {
       if (want) { const keep = goals.filter(g => !g.conn || !this.ringOn.has(g.conn) || g.conn.to!.lane === want); if (keep.some(g => g.conn && this.ringOn.has(g.conn) && rt.viaConnector(g.conn.id, dest!) < Infinity)) goals.splice(0, goals.length, ...keep); }
     }
     if (rt && dest) {
-      const cost = (g: (typeof goals)[number]) => g.d + (g.conn ? rt.viaConnector(g.conn.id, dest) : g.lane.id === dest ? 0 : Infinity);
+      const outs = this.outsOf(dest), cost = (g: (typeof goals)[number]) => g.d + (g.conn ? rt.viaConnector(g.conn.id, dest) : outs.includes(g.lane.id) ? 0 : Infinity);
       const best = goals.reduce((m, g) => Math.min(m, cost(g)), Infinity);
       if (best === Infinity && skippedIn) { this.plan(v, ownLane, true); return; }
       if (best < Infinity) {
-        const near = goals.filter(g => cost(g) <= best + 5);
+        // (its own lane leaving by the way out too: no change to another lane of it for nothing (T194))
+        const ownOut = goals.some(g => !g.conn && g.lane === v.edge && cost(g) < Infinity);
+        const near = goals.filter(g => cost(g) <= best + 5 && !(ownOut && !g.conn && g.lane !== v.edge));
         const g = near[Math.floor(rnd() * near.length)];
         v.goal = { lane: g.lane, conn: g.conn };
         v.exit = v.goal.lane === v.edge ? v.goal.conn : null;
@@ -1539,6 +1573,17 @@ export class SketchSim {
       if (!c || !at.has(c.id)) continue;
       const ring = path.slice(at.get(c.id)!);
       if (ring.some(x => x.forceUntil > this.t)) continue;
+      // (still all standing LOCK_CLEAR s on, letting them go again and again no help, or none of them only giving way: a lock of
+      // bodies in each other's way, which no driver can undo. As a warden clearing a blocked box would: the one standing across
+      // another's path (else the one stuck longest) is taken off the road, and the console says so (T195))
+      if (ring.every(x => x.still >= LOCK_CLEAR)) {
+        const across = ring.filter(x => x.blocking), out = (across.length ? across : ring).reduce((a, b) => (b.still > a.still ? b : a));
+        this.vehicles = this.vehicles.filter(x => x !== out); this.offWait.delete(out.id);
+        this.deadlocks++;
+        this.note({ what: "deadlock", car: out.id, ring: ring.map(x => x.id), why: out.why, cleared: true });
+        this.problem("deadlock", out, `deadlock of ${ring.length} that letting cars go didn't end (none moved for ${Math.round(Math.min(...ring.map(x => x.still)))} s): taken off the road${out.blocking ? ", standing across another's path" : ""}`);
+        continue;
+      }
       const soft = ring.filter(x => /^(zone |keeping clear|merge \S+ for car)/.test(x.why ?? ""));
       if (!soft.length) continue;
       const pick = soft.reduce((a, b) => (b.forced < a.forced || (b.forced === a.forced && b.still > a.still) ? b : a));
@@ -2047,8 +2092,13 @@ export class SketchSim {
           if (k.join) {
             const O = k.other, mine = r.off + r.edge.len - r.a;
             if (mine > 80) continue;
+            // (one nearly standing well back from the join is no car to keep a gap to yet: up to where the two run together, and waiting
+            // there, not stopping short anywhere on the way, maybe in another's path (T195); told to go, it doesn't wait)
+            const hold = r.off + ahead(k.at - k.before) - 0.5;
             const zip = (w: SimVehicle, theirs: number) => {
-              if (w !== v && (theirs < mine || (theirs === mine && w.id < v.id))) behind(mine - theirs - w.len, w.v, w, W ? { kind: "merge", detail: "zip", car: w.id, edge: O.to!.lane.key } : null);
+              if (w === v || forced || !(theirs < mine || (theirs === mine && w.id < v.id))) return;
+              const g = mine - theirs - w.len;
+              behind(w.v < 1 && v.blocking ? Math.max(g, hold) : g, w.v, `merge ${O.to!.lane.key} for car ${w.id}`, W ? { kind: "merge", detail: "zip", car: w.id, edge: O.to!.lane.key } : null);
             };
             for (const w of byEdge.get(O) ?? []) zip(w, O.len - w.pos);
             // (and one about to take it, still on the lane into it)
@@ -2206,6 +2256,9 @@ export class SketchSim {
           this.plan(v, true);
           if (v.goal) { this.note({ what: "change", car: v.id, gaveUp: was?.conn?.key ?? null, to: h.n.lane.key, waited: r2(v.still), goal: v.goal.conn?.key ?? `end of ${v.goal.lane.key}` }); continue; }
           v.goal = was; v.exit = null;
+          // (and still none after LANE_STUCK s, nowhere to go but the lane beside, the car there stuck as it is: it gives up where it was
+          // going, as a driver who misses a turn does, and goes where its own lane leads; out, if its end is a way out (T194))
+          if (v.still > LANE_STUCK && this.missTurn(v, h.n.lane)) continue;
         }
         // (keeping its ring (`ringKeepLane`): over to the outer ring only just before its way off; missing it, once more round)
         if (h.n.round && this.tuning.ringKeepLane >= 0.5 && h.n.lane.len > e.len) {
@@ -2381,7 +2434,7 @@ export class SketchSim {
         return { what: "lane change", text: x.to !== undefined ? `gave up changing to ${x.to} after ${x.waited} s without a gap: ${instead} from its own lane instead` : `gave up its lane change: now ${goal}` };
       }
       case "reroute": return { what: "reroute", text: `rerouted from ${x.from} to ${x.to} after ${x.waited} s` };
-      case "deadlock": return { what: "deadlock", text: `deadlock of ${(x.ring as number[]).length} (${(x.ring as number[]).join(", ")}) broken: car ${e.car} let go${e.car === me ? " (this one)" : ""}`, ...(e.car === me ? {} : { car: e.car as number }) };
+      case "deadlock": return { what: "deadlock", text: `deadlock of ${(x.ring as number[]).length} (${(x.ring as number[]).join(", ")}) broken: car ${e.car} ${x.cleared ? "taken off the road" : "let go"}${e.car === me ? " (this one)" : ""}`, ...(e.car === me ? {} : { car: e.car as number }) };
       case "collision": return { what: "collision", text: `collision with car ${e.car === me ? x.with : e.car}`, car: (e.car === me ? x.with : e.car) as number };
       case "breakdown": return { what: "breakdown", text: `broke down on ${x.edge}` };
     }
@@ -2771,9 +2824,9 @@ export class SketchSim {
   private noRouteOf(v: SimVehicle): CarExplain["noRoute"] {
     const rt = this.routes, dest = v.dest;
     if (!rt || !dest) return null;
-    const via = (c: Edge) => rt.viaConnector(c.id, dest) < Infinity;
-    const ok = v.edge.kind === "conn" ? via(v.edge) || v.edge.to!.lane.id === dest
-      : v.edge.id === dest || v.edge.outs.some(o => via(o.conn)) || v.edge.neighbors.some(n => n.lane.id === dest || n.lane.outs.some(o => via(o.conn)));
+    const via = (c: Edge) => rt.viaConnector(c.id, dest) < Infinity, outs = this.outsOf(dest);
+    const ok = v.edge.kind === "conn" ? via(v.edge) || outs.includes(v.edge.to!.lane.id)
+      : outs.includes(v.edge.id) || v.edge.outs.some(o => via(o.conn)) || v.edge.neighbors.some(n => outs.includes(n.lane.id) || n.lane.outs.some(o => via(o.conn)));
     if (ok) return null;
     return { dest: `lane:${dest}`, at: v.edge.key, why: this.trap.has(v.edge) ? "it is on a loop that no way leaves" : "no way from here leads there" };
   }
