@@ -3,7 +3,7 @@
 import { ClipboardCopy, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { edgeName, explainText, headline, movingLoop, noRouteText, patienceNote, RULE_WORDS, tagWords, type CarExplain } from "@/lib/car-explain";
+import { crossingWords, edgeName, explainText, headline, movingLoop, noRouteText, patienceNote, RULE_WORDS, tagWords, type CarExplain } from "@/lib/car-explain";
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const one = (x: number) => x.toFixed(1);
@@ -48,11 +48,11 @@ export function CarWhy({ x, live, patience: firstCome, onPick }: {
       {x.rule && row("Rule", <>{RULE_WORDS[x.rule.kind]}{x.rule.edge ? ` · ${edgeName(x.rule.edge)}` : ""}{x.rule.detail ? ` (${x.rule.detail})` : ""} <span className="font-mono text-muted-foreground tabular">{one(x.since)} s</span></>)}
       {x.blocker && row("Held by", (
         <>car {car(x.blocker.car)} on <span className="font-mono">{edgeName(x.blocker.edge)}</span>
-          {(x.blocker.gap !== undefined || x.blocker.theirSec !== undefined) && (
-            <span className="block font-mono text-muted-foreground tabular">
-              {[x.blocker.gap !== undefined ? `gap ${one(x.blocker.gap)} m` : "", x.blocker.needGap !== undefined ? `needs ${one(x.blocker.needGap)} m` : "", x.blocker.theirSec !== undefined ? `it's there in ${one(x.blocker.theirSec)} s` : "", x.blocker.mySec !== undefined ? `clearing takes ${one(x.blocker.mySec)} s` : ""].filter(Boolean).join(" · ")}
-            </span>
-          )}
+          {(() => {
+            const b = x.blocker, cw = crossingWords(b);
+            const parts = [b.gap !== undefined ? `gap ${one(b.gap)} m` : "", b.needGap !== undefined ? `needs ${one(b.needGap)} m` : "", ...cw.where, cw.need ? `needs ${cw.need}` : ""].filter(Boolean);
+            return parts.length > 0 && <span className="block font-mono text-muted-foreground tabular">{parts.join(" · ")}</span>;
+          })()}
         </>
       ))}
       {x.stopAt && row("Stops in", <span><span className="font-mono tabular">{one(x.stopAt.dist)} m</span> <span className="text-muted-foreground">({tagWords(x.stopAt.why)})</span></span>)}

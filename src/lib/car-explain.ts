@@ -95,6 +95,16 @@ export const movingLoop = (x: CarExplain) => {
 /** a car with no way to where it is going (T166), in words; null when it has one */
 export const noRouteText = (x: CarExplain) => (x.noRoute ? `No way to its destination (${edgeName(x.noRoute.dest)}) from ${edgeName(x.noRoute.at)}: ${x.noRoute.why}` : null);
 
+/**
+ * A crossing's numbers in words (T171b): how far round the ring the other car is, its seconds to the crossing, and
+ * this car's need: the seconds to clear it, and at a give-way the time to spare it wants on top. Empty parts left out.
+ */
+export function crossingWords(b: NonNullable<CarExplain["blocker"]>): { where: string[]; need: string | null } {
+  const where = [b.round !== undefined ? `${b.round.toFixed(0)} m round the ring` : "", b.theirSec !== undefined ? `${s1(b.theirSec)} from the crossing` : ""].filter(Boolean);
+  const need = b.mySec !== undefined ? `${s1(b.mySec)}${b.wantSec ? ` + ${s1(b.wantSec)} to spare` : ""}` : null;
+  return { where, need };
+}
+
 /** the explanation's headline in plain words, with the car it is about (to link); no route leads it unless something else holds the car */
 export function headline(x: CarExplain): { text: string; car?: number } {
   const r = x.rule?.kind, b = x.blocker, on = (e?: string) => (e ? ` on ${edgeName(e)}` : "");
@@ -114,6 +124,10 @@ export function headline(x: CarExplain): { text: string; car?: number } {
   }
   if (b && (r === "give-way" || r === "priority" || r === "zone")) {
     const d = x.rule?.detail, why = d ? REASON_WORDS[d] ?? d : RULE_WORDS[r];
+    // (a give-way with the numbers: where the other is, round a ring or not, and what this car needs)
+    const cw = crossingWords(b);
+    if (r === "give-way" && (cw.where.length || cw.need))
+      return { text: `Giving way to car ${b.car}${on(b.edge)}${cw.where.map((w) => `, ${w}`).join("")}${cw.need ? `; needs ${cw.need}` : ""} (${d ? `${why}, ` : ""}${s1(x.since)})`, car: b.car };
     return { text: `Waiting for car ${b.car} crossing its path${on(b.edge)} (${why}, ${s1(x.since)})`, car: b.car };
   }
   if (b && (r === "keep-clear" || r === "ring-full"))
@@ -139,7 +153,7 @@ export function explainText(x: CarExplain, clock: (t: number) => string, firstCo
   if (x.speed) out.push(`Speed: ${kmh(x.speed.kmh)} km/h now, ${kmh(x.speed.desiredKmh)} desired, ${kmh(x.speed.targetKmh)} target (${x.speed.accel.toFixed(1)} m/s²)`);
   if (x.leader) out.push(`Leader: car ${x.leader.car}, ${m1(x.leader.gap)} ahead at ${kmh(x.leader.kmh)} km/h`);
   if (x.blocker) {
-    const b = x.blocker, extra = [b.gap !== undefined ? `gap ${m1(b.gap)}` : "", b.needGap !== undefined ? `needs ${m1(b.needGap)}` : "", b.theirSec !== undefined ? `it reaches the zone in ${s1(b.theirSec)}` : "", b.mySec !== undefined ? `this one clears it in ${s1(b.mySec)}` : ""].filter(Boolean);
+    const b = x.blocker, cw = crossingWords(b), extra = [b.gap !== undefined ? `gap ${m1(b.gap)}` : "", b.needGap !== undefined ? `needs ${m1(b.needGap)}` : "", ...cw.where, cw.need ? `this one needs ${cw.need}` : ""].filter(Boolean);
     out.push(`Held by: car ${b.car} on ${edgeName(b.edge)}${extra.length ? ` (${extra.join(", ")})` : ""}`);
   }
   if (x.stopAt) out.push(`Holding for: ${tagWords(x.stopAt.why)}, ${m1(x.stopAt.dist)} ahead (${edgeName(x.stopAt.edge)} at ${m1(x.stopAt.s)})`);

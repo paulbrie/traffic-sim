@@ -22,7 +22,7 @@ t("text: every part that is known, the chain with the ring, the log", () => {
   const x: CarExplain = { ...base, rule: { kind: "give-way", edge: "conn:c5268" }, blocker: { car: 147, edge: "lane:l3254", theirSec: 1.4, mySec: 2.6 }, since: 3.2, stopAt: { edge: "conn:c5268", s: 2, dist: 4.5, why: "give way to lane l3254" }, chain: [147, 344, 147], deadlock: [147, 344],
     plan: { next: "conn:c5268", goal: null, dest: "lane:l9", laneChange: null, rejected: [{ t: 120, edge: "lane:l3254", gap: 5.1, need: 9 }] }, log: [{ t: 121, what: "state", text: "give way to car 147", car: 147 }] };
   const s = explainText(x, clock);
-  for (const bit of ["Car 200 at 2:05", "Held by: car 147 on lane l3254 (it reaches the zone in 1.4 s, this one clears it in 2.6 s)", "Blocking chain: 200 → 147 → 344 → 147  DEADLOCK ring: 147, 344", "turned down at 2:00: lane l3254, gap 5.1 m < 9.0 m", "2:01 state: give way to car 147"])
+  for (const bit of ["Car 200 at 2:05", "Held by: car 147 on lane l3254 (1.4 s from the crossing, this one needs 2.6 s)", "Blocking chain: 200 → 147 → 344 → 147  DEADLOCK ring: 147, 344", "turned down at 2:00: lane l3254, gap 5.1 m < 9.0 m", "2:01 state: give way to car 147"])
     assert.ok(s.includes(bit), `missing "${bit}" in\n${s}`);
   assert.match(explainText({ ...base, traced: false, speed: null }, clock), /from the recording/);
 });
@@ -63,6 +63,16 @@ t("no route (T166): leads the headline when nothing else holds the car (or it on
   assert.ok(!/deadlock/i.test(headline(loop).text) && !/DEADLOCK/.test(explainText(loop, clock)));
   assert.ok(explainText(loop, clock).includes("Blocking chain: 26 → 33 → 26  (a loop, still moving: not a deadlock)"));
   assert.equal(noRouteText({ ...base, noRoute: null }), null);
+});
+
+t("a give-way's numbers (T171b): round the ring, seconds to the crossing, what it needs; off a ring without the ring", () => {
+  const gw = (b: Partial<NonNullable<CarExplain["blocker"]>>, detail?: string) => ({ ...base, rule: { kind: "give-way" as const, ...(detail ? { detail } : {}) }, blocker: { car: 128, edge: "lane:l3257", ...b }, since: 2.1 });
+  assert.equal(headline(gw({ round: 23, theirSec: 4.5, mySec: 3.3, wantSec: 1.5 })).text, "Giving way to car 128 on lane l3257, 23 m round the ring, 4.5 s from the crossing; needs 3.3 s + 1.5 s to spare (2.1 s)");
+  assert.equal(headline(gw({ theirSec: 4.5, mySec: 3.3, wantSec: 1.5 }, "give-way line")).text, "Giving way to car 128 on lane l3257, 4.5 s from the crossing; needs 3.3 s + 1.5 s to spare (you have a give-way line, 2.1 s)");
+  assert.equal(headline(gw({ theirSec: 4.5, mySec: 3.3 })).text, "Giving way to car 128 on lane l3257, 4.5 s from the crossing; needs 3.3 s (2.1 s)");
+  // (no numbers: as before)
+  assert.equal(headline(gw({})).text, "Waiting for car 128 crossing its path on lane l3257 (give way, 2.1 s)");
+  assert.ok(explainText(gw({ round: 23, theirSec: 4.5, mySec: 3.3, wantSec: 1.5 }), clock).includes("Held by: car 128 on lane l3257 (23 m round the ring, 4.5 s from the crossing, this one needs 3.3 s + 1.5 s to spare)"));
 });
 
 console.log(`car-explain: ${ok} checks passed`);
