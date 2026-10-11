@@ -7,6 +7,22 @@ export interface Palette {
   sans: string; mono: string; sky: string; building: string; buildingEdge: string;
 }
 
+/**
+ * The page in its dark (night) colours: the system's preference (globals.css switches on prefers-color-scheme), or a
+ * `dark` class on the page, should one ever be set. Canvases pick their own colours by it, so they match the CSS ones.
+ */
+export function isDark(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.documentElement.classList.contains("dark") || (typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches);
+}
+/** `f` called when the page changes between day and night colours; the function to stop it */
+export function onThemeChange(f: () => void): () => void {
+  if (typeof matchMedia !== "function") return () => {};
+  const m = matchMedia("(prefers-color-scheme: dark)");
+  m.addEventListener("change", f);
+  return () => m.removeEventListener("change", f);
+}
+
 export function readPalette(el: Element = document.documentElement): Palette {
   const cs = getComputedStyle(el);
   const g = (n: string, d: string) => cs.getPropertyValue(n).trim() || d;

@@ -19,7 +19,7 @@ import { buildSketch3D, type Sketch3D } from "@/render/sketch3d";
 import { buildZones3D, type Zones3D } from "@/render/zones3d";
 import type { SketchLayers } from "@/state/sketch-layers";
 import type { Underlay } from "@/lib/underlay";
-import { readPalette } from "@/render/palette";
+import { isDark, onThemeChange, readPalette } from "@/render/palette";
 import { satelliteMosaic, type SatSource } from "@/render/satellite";
 import type { SatOptions } from "@/state/sat-options";
 import type { EditorUi } from "@/state/sketch-ui";
@@ -377,7 +377,7 @@ export function View3DV2(props: View3DProps) {
     };
     // the car picked: its way on to the end of its trip, a ribbon on the road in the selection's colour (made again at most 4 times a second)
     // (the blue the map draws it in, the selection's there: the 3D view's own green is lost on the asphalt)
-    const wayBlue = () => (document.documentElement.classList.contains("dark") ? "#60a5fa" : "#2563eb");
+    const wayBlue = () => (isDark() ? "#60a5fa" : "#2563eb");
     const wayMat = new THREE.MeshBasicMaterial({ color: wayBlue(), transparent: true, opacity: 0.9, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -10, polygonOffsetUnits: -10, side: THREE.DoubleSide });
     const wayLine = new THREE.Mesh(new THREE.BufferGeometry(), wayMat);
     wayLine.renderOrder = 5; wayLine.frustumCulled = false; wayLine.visible = false; scene.add(wayLine);
@@ -469,6 +469,8 @@ export function View3DV2(props: View3DProps) {
     const onTheme = () => { pal = readPalette(); builtFor = []; selMat.color.set(pal.select); (ring.material as THREE.MeshBasicMaterial).color.set(pal.select); wayMat.color.set(wayBlue()); scene.background = new THREE.Color(pal.sky); (scene.fog as THREE.Fog).color.set(pal.sky); (ground.material as THREE.MeshLambertMaterial).color.set(pal.ground); };
     const mo = new MutationObserver(onTheme);
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    // (and the system switching between day and night: the colours read again)
+    const offTheme = onThemeChange(onTheme);
     frame = requestAnimationFrame(tick);
     // (the bridge's screenshot: a frame drawn just before it is read)
     live.current.canvasRef.current = () => { if (disposed) return null; draw(); return renderer.domElement; };
@@ -477,7 +479,7 @@ export function View3DV2(props: View3DProps) {
       disposed = true;
       cancelAnimationFrame(frame);
       document.removeEventListener("visibilitychange", onVisible);
-      ro.disconnect(); mo.disconnect();
+      ro.disconnect(); mo.disconnect(); offTheme();
       renderer.domElement.removeEventListener("pointerdown", onDown); renderer.domElement.removeEventListener("pointerup", onUp);
       controls.removeEventListener("start", onStart); controls.removeEventListener("change", onChange);
       // (the plan view to where the 3D view looks: its middle, and a zoom showing as much across)

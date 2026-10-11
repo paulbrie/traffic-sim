@@ -26,7 +26,7 @@ import { EditorKindContext, editorBack, NO_SEL, offerSketchUiToBridge, resetEdit
 import { changeSketches, clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
 import { testPiece } from "@/lib/test-piece";
 import { offRoute } from "@/lib/route-trace";
-import { readPalette, speedColor } from "@/render/palette";
+import { isDark, onThemeChange, readPalette, speedColor } from "@/render/palette";
 import { arrowGlyph } from "@/render/draw2d";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField, Stepper } from "./fields";
@@ -1457,7 +1457,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     c.addEventListener("wheel", onWheel, { passive: false });
     const ro = new ResizeObserver(() => redraw());
     ro.observe(c);
-    return () => { c.removeEventListener("wheel", onWheel); ro.disconnect(); cancelAnimationFrame(frame.current); frame.current = 0; };
+    // (the system switching between day and night: drawn again in the other colours)
+    const offTheme = onThemeChange(() => redraw(true));
+    return () => { c.removeEventListener("wheel", onWheel); ro.disconnect(); offTheme(); cancelAnimationFrame(frame.current); frame.current = 0; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -3037,7 +3039,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
   const ctx = c.getContext("2d")!, v = st.view, px = 1 / v.scale, tool = st.tool, placeOn = st.placeOn;
   const { sketch: sk, sel: s } = st;
-  const dark = document.documentElement.classList.contains("dark"), pal = readPalette();
+  // (night colours: the system's, as the CSS has them; not a `dark` class, which nothing sets)
+  const dark = isDark(), pal = readPalette();
   // the plan's map colours: its ground and grid, connectors in its connector yellow, lanes in green
   // (selection in blue: the plan's selection green would be lost on green lanes)
   const col = {
