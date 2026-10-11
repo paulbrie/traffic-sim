@@ -222,7 +222,10 @@ export function command(p: Page, type: string, args: Record<string, unknown>): P
   return new Promise(resolve => {
     const timer = setTimeout(() => { p.waiting.delete(c.id); p.queue = p.queue.filter(x => x.id !== c.id); resolve({ ok: false, error: "The page didn't answer in time (is it open and connected?)" }); }, COMMAND_TIMEOUT);
     p.waiting.set(c.id, { resolve, timer });
-    if (p.streams.size) broadcast(p, { event: "command", data: c }); else p.queue.push(c);
+    // (to one stream only, the newest: a page open twice with the same pairing (a tab duplicated, a stream left over by a hot
+    // reload) must not run a command twice, answering with the second run's error after the first applied it, T199)
+    const to = [...p.streams].pop();
+    if (to) to({ event: "command", data: c }); else p.queue.push(c);
   });
 }
 

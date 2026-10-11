@@ -1537,7 +1537,12 @@ function alongKerb(input: any): any {
     && refused("batch", { actions: [{ action: "deleteLanes", args: { lanes: ["l1"] } }, { action: "deleteLanes", args: { lanes: ["l1"] } }] });
   const moved = applyEdit(k, "moveConnectorEnd", { connector: "c1", end: "from", s: 90 }).sketch.connectors[0].from.s === 90;
   const gone = applyEdit(k, "deleteLanes", { lanes: ["l2"] }).sketch, deleted = gone.lanes.length === 1 && !gone.connectors.length;
-  const ok = built && lights && strict && moved && deleted;
-  console.log(`bridge edits: a batch built two lanes, a connector, a give-way, a junction, a road ${built}, lights ${lights}, bad arguments refused ${strict}, an end moved ${moved}, a lane deleted with its connector ${deleted} | ok ${ok}`);
+  // (T199: a batch starting with addConnector answers ok, and adds one connector; run a second time on what it left it is
+  // refused, as nothing must run a command twice: the page runs each command id once, the server sends it to one stream)
+  const one = { actions: [{ action: "addConnector", args: { from: { lane: "l2" }, to: { lane: "l1", s: 10 } } }] };
+  const first = applyEdit(k, "batch", one), once = first.sketch.connectors.length === k.connectors.length + 1 && (first.result.results as { connector: string }[])[0].connector === "c2" && refused2(first.sketch);
+  function refused2(after: Sketch) { try { applyEdit(after, "batch", one); return false; } catch (e) { return String(e).includes("already joined"); } }
+  const ok = built && lights && strict && moved && deleted && once;
+  console.log(`bridge edits: a batch built two lanes, a connector, a give-way, a junction, a road ${built}, lights ${lights}, bad arguments refused ${strict}, an end moved ${moved}, a lane deleted with its connector ${deleted}, a batch addConnector answered ok and applied once ${once} | ok ${ok}`);
   if (!ok) process.exit(1);
 }

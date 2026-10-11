@@ -211,9 +211,17 @@ export async function bridgeDenyRequest(q: BridgeRequest) { set({ requests: view
 // ---- an agent's tab's: the user takes over (the agent's commands refused) or gives it back
 export async function bridgeTakeOver(paused: boolean) { set({ tab: view.tab ? { ...view.tab, paused } : null }); await post("pause", { paused }); }
 
+/**
+ * What every copy of this module in the page shares (T199): a hot reload in development evaluates it again while the copy
+ * before still has its stream open, and both ran each command (an edit applied once, answered with the second run's
+ * error). The stream open now, closed when another opens; and the commands already run, by id, run only once.
+ */
+const shared = (globalThis as { __trafficsimBridge?: { stream: EventSource | null; ran: Set<string> } }).__trafficsimBridge ??= { stream: null, ran: new Set() };
+
 function listen() {
   if (!pairing) return;
   stream?.close();
+  if (shared.stream !== stream) shared.stream?.close();
   stream = new EventSource(`${api("stream")}?pageId=${encodeURIComponent(pairing.pageId)}&t=${encodeURIComponent(pairing.pageToken)}`);
   stream.onopen = () => { failures = 0; bridgeHello(); };
   const on = <T,>(name: string, f: (d: T) => void) => stream!.addEventListener(name, e => f(JSON.parse((e as MessageEvent).data) as T));
@@ -227,6 +235,7 @@ function listen() {
     if (w) windows.set(q.ticket, w); else set({ requests: [...view.requests, q], open: true });
   });
   on<Command>("command", c => { void run(c); });
+  shared.stream = stream;
   // (an agent has fetched a message or note the user sent)
   on<{ msgId: string; agent: string }>("delivered", d => set({ log: view.log.map(e => (e.msgId === d.msgId ? { ...e, status: "delivered" as const, by: d.agent } : e)) }));
   // (the pairing ended on the server: by the user, the agent, or idle too long; a tab closes itself if it can)
@@ -250,6 +259,10 @@ const targetOf = (a: Record<string, unknown>): Target => ({ role: a.role as stri
 const targetText = (a: Record<string, unknown>) => a.role ? `${a.role}${a.name ? ` "${a.name}"` : ""}` : a.selector ? String(a.selector) : a.text ? `text "${a.text}"` : "";
 
 async function run(c: Command) {
+  // (once each, whichever copy of this module or stream it came by)
+  if (shared.ran.has(c.id)) return;
+  shared.ran.add(c.id);
+  if (shared.ran.size > 500) shared.ran.delete(shared.ran.values().next().value!);
   const args = c.args ?? {};
   let target = c.type === "app" ? String(args.action ?? "") : c.type === "state" ? (Array.isArray(args.keys) ? args.keys.join(", ") : "all") : c.type === "navigate" ? String(args.url ?? "") : c.type === "key" ? String(args.key ?? "") : targetText(args);
   try {
