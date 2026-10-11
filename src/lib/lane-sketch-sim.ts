@@ -1531,13 +1531,14 @@ export class SketchSim {
    * past it, its body maybe still over it); null if it isn't going there (as far as it knows). Round a
    * ring, up to `past` metres past it counts as past (its body over what reaches that far past it).
    */
-  private toPlace(w: SimVehicle, e: Edge, at: number, past = w.len + 1): number | null {
+  private toPlace(w: SimVehicle, e: Edge, at: number, past = w.len + 1, before = 0): number | null {
     const rel = (lane: Edge, from: number) => (lane.ring ? this.along(lane, from, at) : at - from);
     if (w.edge === e) {
       let d = rel(e, w.pos);
       if (e.ring && d > e.len - Math.min(past, e.len / 2)) d -= e.len;
-      // (it turns off before getting there)
-      if (d > 0 && e.kind === "lane" && w.exit && this.along(e, w.pos, this.exitS(w.exit)) < d) return null;
+      // (it turns off before getting there: before `before` metres short of it, where a zone round it begins; turning off inside
+      // the zone, its front still sweeps through it (T206))
+      if (d > 0 && e.kind === "lane" && w.exit && this.along(e, w.pos, this.exitS(w.exit)) < d - before) return null;
       return d;
     }
     // (just left it, its back still on it; or one before that, across edges shorter than it)
@@ -2119,7 +2120,7 @@ export class SketchSim {
           for (const w of toward.get(k.other) ?? NONE) {
             // (nor one following this one, behind it in its lane or held up by it: it can't get there first)
             if (w === v || (w.edge === v.edge && !v.edge.ring && w.pos < v.pos) || whyWas.get(w) === `car ${v.id}`) continue;
-            const dW = this.toPlace(w, k.other, k.otherAt, reach(w) + 1 + k.otherAfter);
+            const dW = this.toPlace(w, k.other, k.otherAt, reach(w) + 1 + k.otherAfter, k.otherBefore);
             if (dW === null) continue;
             const ws = dW - k.otherBefore;
             // (gone through, its back clear of the zone; or far off)
