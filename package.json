@@ -18,6 +18,7 @@
     "engine:check": "tsx scripts/engine-check.ts",
     "explain:check": "tsx scripts/explain-check.ts",
     "ring:check": "tsx scripts/ring-check.ts",
+    "warnings:check": "tsx scripts/junction-warnings-check.ts",
     "explain-text:check": "tsx scripts/car-explain-check.ts",
     "keys:check": "tsx scripts/editor-keys-check.ts",
     "osm:check": "tsx scripts/osm-check.ts",

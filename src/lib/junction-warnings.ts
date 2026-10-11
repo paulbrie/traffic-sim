@@ -2,13 +2,17 @@
  * What in a sketch's drawing makes its junctions work badly (T161), for the editor to show: a lane or connector across a
  * roundabout's middle, a way onto a ring with no give-way line, a two-lane way onto a ring whose lanes join it at different
  * places, a connector (or a lane in no road) crossing three paths or more, a lane on a junction with no way in or no way out (cars
- * appear or vanish there). Framework-free.
+ * appear or vanish there); a way on joining a lane (a ring, say) within a car length after a way off leaves it, the two
+ * connectors running through each other (T177). Framework-free.
  */
 import { connectorPts, contentsOf, laneLength, samples, type Pt, type Sketch, type SketchLane } from "./lane-sketch";
 
-export type JunctionWarningKind = "loop-no-way-out" | "across-ring" | "entry-no-give-way" | "entry-two-places" | "crosses-many" | "no-way-in" | "no-way-out";
+export type JunctionWarningKind = "loop-no-way-out" | "on-after-off" | "across-ring" | "entry-no-give-way" | "entry-two-places" | "crosses-many" | "no-way-in" | "no-way-out";
 /** one warning: what kind, on which junction (null: on none), the lanes and connectors it is about (ids), the words */
 export interface JunctionWarning { kind: JunctionWarningKind; junction: string | null; items: string[]; text: string }
+
+/** metres after a way off within which a way on onto the same lane overlaps it (a car's length and a little) */
+const ON_AFTER_OFF = 5;
 
 /** a lane drawn as a whole circle (a roundabout's ring): its middle, and how far out a path is in among it (its outer edge, less 1 m) */
 function ringOf(l: SketchLane): { c: Pt; inner: number } | null {
@@ -61,6 +65,34 @@ export function junctionWarnings(sk: Sketch): JunctionWarning[] {
       const text = rs.length === ids.length ? `${one ? "the roundabout ring" : "the roundabout rings"} ${rs.join(", ")} ${one ? "has" : "have"} no way off: cars that drive onto ${one ? "it" : "them"} circle for ever`
         : `lanes ${ids.join(", ")} form a loop that no way leaves: cars that drive onto it circle for ever`;
       out.push({ kind: "loop-no-way-out", junction: j, items: ids, text });
+    }
+  }
+  // a way on joining a lane within a car length after a way off leaves it: the two connectors run through each other where they
+  // meet the lane, and a car turning off there swings into one coming on (T177)
+  {
+    const lens = new Map(sk.lanes.map(l => [l.id, laneLength(l.shape)]));
+    const offs = new Map<string, typeof sk.connectors>(), ons = new Map<string, typeof sk.connectors>();
+    for (const c of sk.connectors) { (offs.get(c.from.lane) ?? offs.set(c.from.lane, []).get(c.from.lane)!).push(c); (ons.get(c.to.lane) ?? ons.set(c.to.lane, []).get(c.to.lane)!).push(c); }
+    for (const [lane, list] of ons) {
+      const L = lanes.get(lane), len = lens.get(lane);
+      if (!L || !len) continue;
+      const ring = ringIds.has(lane);
+      for (const on of list) for (const off of offs.get(lane) ?? []) {
+        // (a lane carried on into another, or a way off and on the same lane's: not that)
+        if (on.from.lane === off.to.lane || off.to.lane === lane || on.from.lane === lane) continue;
+        const gap = ring ? (((on.to.s - off.from.s) % len) + len) % len : on.to.s - off.from.s;
+        if (gap <= 0.05 || gap > ON_AFTER_OFF) continue;
+        // (and their paths in reach of each other back from the lane: the way on, 2.5 m or more before it joins, within 2 m of the
+        // way off's first 8 m; ways on and off that only touch the lane close together don't cross)
+        const P = pathOf.get(on.id), Q = pathOf.get(off.id);
+        if (!P || !Q) continue;
+        const along = (pts: Pt[]) => { const d = [0]; for (let i = 1; i < pts.length; i++) d.push(d[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)); return d; };
+        const dp = along(P), dq = along(Q), endP = dp[dp.length - 1];
+        const near = P.some((p, i) => endP - dp[i] >= 2.5 && Q.some((q, k) => dq[k] <= 8 && Math.hypot(p.x - q.x, p.y - q.y) < 2));
+        if (!near) continue;
+        out.push({ kind: "on-after-off", junction: onJ.get(on.id) ?? onJ.get(off.id) ?? null, items: [on.id, off.id, lane],
+          text: `connector ${on.id} joins ${name(lane)} ${gap.toFixed(1)} m after connector ${off.id} leaves it: the two run through each other there, and a car turning off swings into one coming on (join it further on, a car length or more after the way off)` });
+      }
     }
   }
   // across a roundabout's middle: in among a ring (inside its outer edge by a metre), joined by neither end to it or to a ring
@@ -121,6 +153,6 @@ export function junctionWarnings(sk: Sketch): JunctionWarning[] {
     if (!ins.has(l.id)) out.push({ kind: "no-way-in", junction: j, items: [l.id], text: `lane ${l.id} on the junction has no way in: cars appear on it out of nowhere` });
     if (!outs.has(l.id)) out.push({ kind: "no-way-out", junction: j, items: [l.id], text: `lane ${l.id} on the junction has no way out: cars on it vanish at its end` });
   }
-  const rank: Record<JunctionWarningKind, number> = { "loop-no-way-out": -1, "across-ring": 0, "no-way-in": 1, "no-way-out": 1, "crosses-many": 2, "entry-two-places": 3, "entry-no-give-way": 4 };
+  const rank: Record<JunctionWarningKind, number> = { "loop-no-way-out": -1, "on-after-off": -0.5, "across-ring": 0, "no-way-in": 1, "no-way-out": 1, "crosses-many": 2, "entry-two-places": 3, "entry-no-give-way": 4 };
   return out.sort((a, b) => rank[a.kind] - rank[b.kind] || (a.junction ?? "").localeCompare(b.junction ?? ""));
 }
