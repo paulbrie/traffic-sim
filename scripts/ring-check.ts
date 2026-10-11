@@ -4,7 +4,8 @@
  * vehicles/h a lane). Per way on: cars onto the ring an hour, the flow circulating past where it joins, the time between queued
  * cars going on (follow-up), and HCM 7's capacity for that lane at that flow (c = A·e^(−B·v_c)). Then: how many go onto the inner
  * ring, missed exits (going more than half a lap past the way off), collisions and deadlocks. As things are, and with each setting
- * given (key=value, as `sketch.traffic.tune`). RING_DEBUG=1 lists every way on.   npm run ring:check [-- key=value …]
+ * given (key=value, as `sketch.traffic.tune`). RING_DEBUG=1 lists every way on; RING_GEOM=1 only prints the ways on and off's lengths
+ * and speeds (RING_NEAR, RING_D try other arms).   npm run ring:check [-- key=value …]
  */
 import { SketchSim } from "../src/lib/lane-sketch-sim";
 import type { Sketch, SketchConnector, SketchLane } from "../src/lib/lane-sketch";
@@ -12,9 +13,11 @@ import type { Sketch, SketchConnector, SketchLane } from "../src/lib/lane-sketch
 type Variant = "S" | "A";
 const TAU = 2 * Math.PI, r2 = (v: number) => Math.round(v * 100) / 100;
 
-/** the test roundabout: 4 arms (at 0.4 rad and every quarter turn), 69 m of each; ways in give way */
-function testRoundabout(variant: Variant, rate: number): Sketch {
-  const C = { x: 0, y: 0 }, FAR = 90, NEAR = 21, D = 0.32;
+/** the test roundabout: 4 arms (at 0.4 rad and every quarter turn), 50 m of each, ending 40 m from the middle; the ways on joining
+ * the ring 0.55 rad after the arm (the ways off leaving as far before it), driven at 4.5–5 m/s (J696's at 4–11), none crossing; ways
+ * in give way */
+export function testRoundabout(variant: Variant, rate: number, NEAR = Number(process.env.RING_NEAR ?? 40), D = Number(process.env.RING_D ?? 0.55)): Sketch {
+  const C = { x: 0, y: 0 }, FAR = 90;
   const rings = variant === "S" ? [{ id: "O", r: 14, width: 5 }] : [{ id: "I", r: 12, width: 4 }, { id: "O", r: 16, width: 4 }];
   const ringR = new Map(rings.map(g => [g.id, g.r]));
   const ringS = (id: string, a: number) => r2(((((0 - a) % TAU) + TAU) % TAU) * ringR.get(id)!);
@@ -88,6 +91,13 @@ function run(variant: Variant, seed: number, tune: Record<string, number>, T = 9
   return { entries, total: entries.reduce((a, x) => a + x.perHour, 0), hcmTotal: entries.reduce((a, x) => a + x.hcm, 0), inner: inner / H, missed, onRing, collisions: sim.collisions, deadlocks: sim.deadlocks, out: sim.finished };
 }
 
+if (process.env.RING_GEOM) {
+  for (const variant of ["S", "A"] as const) {
+    const sim = new SketchSim(testRoundabout(variant, 0)) as unknown as { edges: Map<string, { kind: string; id: string; vmax: number; len: number; to?: { lane: { ring: boolean } }; from?: { lane: { ring: boolean } } }> };
+    console.log(variant, [...sim.edges.values()].filter(e => e.kind === "conn").slice(0, 4).map(e => `${e.id} ${e.len.toFixed(1)} m ${e.vmax.toFixed(1)} m/s`).join(" | "), "| ring", [...sim.edges.values()].filter(e => e.kind === "lane" && (e.id === "O" || e.id === "I")).map(e => `${e.id} ${e.vmax.toFixed(1)}`).join(" "));
+  }
+  process.exit(0);
+}
 const tunes: Record<string, number>[] = [{}];
 const asked = Object.fromEntries(process.argv.slice(2).filter(a => a.includes("=")).map(a => { const [k, v] = a.split("="); return [k, Number(v)]; }));
 if (Object.keys(asked).length) tunes.push(asked);
