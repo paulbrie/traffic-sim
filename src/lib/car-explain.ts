@@ -21,7 +21,7 @@ export interface CarExplain {
   /** the car ahead on its path: bumper gap (m) and its speed (km/h) */
   leader: null | { car: number; gap: number; kmh: number };
   /** the car holding it (give way, merge, zone…): the gap seen and needed (m), seconds to the zone (theirs) and to clear it (mine), the conflict zone on both paths */
-  blocker: null | { car: number; edge: string; gap?: number; needGap?: number; theirSec?: number; mySec?: number; zone?: { mine: Pt[]; theirs: Pt[] } };
+  blocker: null | { car: number; edge: string; gap?: number; needGap?: number; theirSec?: number; mySec?: number; /** giving way: the time to spare it wants on top of `mySec` (s) */ wantSec?: number; /** the other on a ring: metres round it to the zone */ round?: number; zone?: { mine: Pt[]; theirs: Pt[] } };
   /** the point it holds for: on `edge` at `s`, `dist` m ahead of its front */
   stopAt: null | { edge: string; s: number; dist: number; why: string };
   /** seconds with the same rule and blocker */

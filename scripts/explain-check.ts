@@ -215,6 +215,35 @@ const RULES: Partial<Sketch> = { traffic: { rate: 0, speed: 50, seed: 1, tune: {
   report("two-lane roundabout", ok, `rings neighbours ${paired}; a car IN to OUT ${a === null ? "not sent (no route)" : `on the inner ring ${onInner.toFixed(1)} m, then off the outer ${out}`}; no route ${JSON.stringify(noRoute)}`);
 }
 
+// T171a: a car for the inner ring, its way in crossing the outer ring, waiting at that crossing for a car coming round on the outer
+// ring: asked about from the recording (not watched), it reads as the step decided it when watched (give-way, not first come), with
+// the other's seconds to the crossing, its own to clear it, the time to spare it wants and how far round the ring the other is.
+// (Two runs of the same seed: one watching the car, one not)
+{
+  const arc = (id: string, r: number): SketchLane => ({ id, width: 4, inRate: 0, shape: { kind: "arc", c: { x: 0, y: 0 }, r, a0: 0, sweep: -2 * Math.PI } as SketchLane["shape"] });
+  const run = (watch: boolean) => {
+    const sim = make(sketch([arc("I", 7), arc("O", 11.5), line("IN", [[-60, 0], [-16, 0]], { control: "yield" }), line("FEED", [[0, -60], [0, -16]], { inRate: 1500, control: "yield" }), line("OUT", [[20, 20], [60, 60]])],
+      [conn("cIn", "IN", 44, "I", Math.PI * 7), conn("cFeed", "FEED", 44, "O", (Math.PI / 2) * 11.5), conn("cOut", "O", (7 * Math.PI / 4) * 11.5, "OUT", 0)],
+      { roads: [{ id: "r1", name: "Roundabout", lanes: ["I", "O"] }] }));
+    for (let i = 0; i < 150; i++) sim.step(0.1);
+    const a = sim.sendTest("IN", "OUT")!;
+    if (watch) sim.watch(a);
+    return { sim, a };
+  };
+  const live = run(true), rec = run(false);
+  // (a moment the car, watched, waits at the crossing giving way, and has for a second: the recording's frame then)
+  let at = -1, since = -1;
+  for (let i = 0; i < 600 && at < 0; i++) {
+    live.sim.step(0.1); rec.sim.step(0.1);
+    const lx = live.sim.explain(live.a);
+    if (lx?.rule?.kind === "give-way" && lx.why?.startsWith("zone lane:O")) { if (since < 0) since = live.sim.t; else if (live.sim.t - since >= 1) at = live.sim.t - 0.5; } else since = -1;
+  }
+  for (let i = 0; i < 10; i++) rec.sim.step(0.1);
+  const x = at >= 0 ? rec.sim.explain(rec.a, at) : null, b = x?.blocker;
+  const ok = !!x && !x.traced && x.rule?.kind === "give-way" && b?.theirSec !== undefined && b.mySec !== undefined && b.wantSec === 1.5 && b.round !== undefined && b.round > 0;
+  report("crossing the outer ring, not watched", ok, at < 0 ? "never gave way at the crossing" : `car ${rec.a} at ${at.toFixed(1)} s (traced ${x?.traced}): ${x?.rule?.kind} for car ${b?.car}, ${b?.round} m round the ring, ${b?.theirSec} s from the crossing; needs ${b?.mySec} s + ${b?.wantSec} s`);
+}
+
 // T170: how a lane change ended, for a car not watched, asked about a moment later: it gave up (the lane it wanted blocked by one
 // broken down beside where it had to change; its own lane leads there too, by Y), and its recent decisions say so, and what it took instead
 {
