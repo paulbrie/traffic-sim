@@ -34,7 +34,7 @@ Every line of a message between sessions that means something starts with a tag:
 | `DONE: Tnn …` | the owner | finished, with evidence (checks run, numbers, screenshots) |
 | `CANCELLED: Tnn [why]` | Alice | dropped |
 | `CLAIM: <paths>` | anyone | before editing files others might touch |
-| `RELEASE: <paths>` | anyone | done with them |
+| `RELEASE: <paths>` | anyone | done with them; always with your DONE (Agents City draws open claims as red curves) |
 | `COMMIT: <hash>` / `PUSHED: <hash>` | anyone | what went into git |
 
 Untagged text is a note. Sessions report to Alice and take tasks only from her; two owners of the same file agree
