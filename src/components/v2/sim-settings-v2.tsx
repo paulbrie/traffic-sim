@@ -27,6 +27,10 @@ const SWITCHES: TuneSwitch[] = [
     hint: "On a two-lane roundabout, cars take the lane for their exit before the ring: first exit outer, third or later inner, straight on either." },
   { key: "ringKeepLane", section: "Roundabouts", label: "Keep your lane", off: "Off", on: "On",
     hint: "On a two-lane roundabout, cars keep their ring; from the inner ring they move out only just before their exit, else go round once more." },
+  { key: "ringDriving", section: "Roundabouts", label: "Roundabout driving", off: "Off", on: "On",
+    hint: "At roundabouts, cars pull away and follow more briskly, approach the give-way line faster and take the ring's bends quicker, as drivers do there." },
+  { key: "visionCone", section: "Junctions", label: "Vision cone", off: "Off", on: "On",
+    hint: "A car with right of way only reacts to crossing cars it could see ahead (±100° at ring crossings, ±60° elsewhere); cars that give way still look everywhere." },
 ];
 const SWITCH_KEYS = new Set<string>(SWITCHES.map(x => x.key));
 /** sliders shown in another group of the dialog than their tuning group (the roundabout-only ones with the roundabout switches; keys and values as they are) */
