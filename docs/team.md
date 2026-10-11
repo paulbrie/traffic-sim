@@ -69,16 +69,18 @@ between them who goes first and tell Alice.
   never to the user's plans (Bistrița: never, see The user's plans) or to other accounts. Schema changes
   only through the migrations (`npm run db:migrate`).
 - **Admin repo (`/opt/project`).** No commit or deploy by Alex or Tom; the user does it, or Alice when the user asks.
-  `/opt/project` follows `origin/main`. Agents build admin work in worktrees of their own on the live tree's HEAD,
-  never install packages in place (a hard-linked `node_modules`: `rm -rf` it, then `env -u NODE_ENV npm ci`), and
-  no npx-fetched tools.
-  The admin preview (`admin-dev.service`, `/admin-dev`, port 3003, `admin-ctl dev-start` / `dev-stop`) runs again
-  (the user's decision, 2026-10-11, memory allowing). It serves `/opt/project/admin`'s tree. Admin work is coded,
-  tested, linted and built (`next build`). As soon as it is DONE and checked, Alice ships it to admin-dev without
-  asking (the user's standing instruction, 2026-10-11): she fast-forwards `/opt/project` to the agent's commit (no
-  push). The live `/admin` keeps its build until the user says to push and deploy (`git push`, then
-  `sudo admin-ctl deploy`; `npm install` first in `/opt/project/admin` when dependencies changed, since deploy
-  doesn't install).
+  `/opt/project` follows `origin/main`. No worktrees for admin work (the user's decision, 2026-10-11): Alex and Tom
+  edit `/opt/project/admin` directly. The admin preview (`admin-dev.service`, `/admin-dev`, port 3003) serves that
+  tree and hot-reloads each save, so the work shows on admin-dev as it's made; the live `/admin` keeps its own build
+  (`.next-prod`) until a deploy. So:
+  - CLAIM the files before editing (both work in one tree), and RELEASE after.
+  - Commit locally in `/opt/project` when a task is DONE (one commit per task, `admin: …`); no push, no deploy.
+  - Never `npm install` there without asking Alice: it changes the live admin's `node_modules`. No npx-fetched tools.
+  - No `next build` there: it writes `.next`, which the running preview uses. Checks are tests, `tsc` and lint
+    (`node_modules/.bin/…`); the full build is the deploy's (`admin-ctl deploy` builds `.next-prod`).
+  Push and deploy only on the user's word (`git push origin main`, then `sudo admin-ctl deploy`; `npm install`
+  first when dependencies changed, since deploy doesn't install). The preview runs again (the user's decision,
+  2026-10-11, memory allowing).
 - **Pushes.** If your push is denied, stop and tell Alice; nobody pushes it for you (the user does).
 - **Approvals** come from the user only. The user talks mainly to Alice (the user's decision, 2026-10-10), so an
   approval the user gives in Alice's session counts when Alice relays it in a line of its own:
