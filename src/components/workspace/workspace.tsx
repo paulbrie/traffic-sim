@@ -22,7 +22,8 @@ import { basePath } from "@/lib/base-path";
 import { MAX_LANES, type Network, type PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 import type { Sketch } from "@/lib/lane-sketch";
-import { allLayersOn, applyRemote, commit, edits, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, markSynced, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll, laneSketch$ } from "@/state/store";
+import { nothingIn } from "@/lib/sketch-list";
+import { allLayersOn, applyRemote, commit, edits, LAYER_HIGHLIGHT_MAX, LAYERS, lastSynced, loadPlan, markSynced, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll, laneSketch$ } from "@/state/store";
 import { DELETABLE, deleteSelected } from "@/state/bulk";
 import { simController } from "@/state/sim-controller";
 import { heliKeys$ } from "@/state/heli-keys";
@@ -600,8 +601,33 @@ const SAVE_EVERY = 10, MAX_WAIT = 120_000;
 /** `edits.n` when the last save started */
 let editsAtSave = 0;
 
+/** a network with nothing in it */
+const noNetwork = (n: Network) => !n.nodes.length && !n.links.length && !n.stops.length && !n.lines.length && !n.buildings?.length;
+/**
+ * Would this save empty the plan, the network or the sketch, where what was loaded or last saved had something
+ * (T185)? Never sent: an empty store (a hot reload in development started one over, or anything else gone wrong)
+ * must not overwrite a plan. An error shown and logged instead.
+ */
+function emptiesPlan(net: Network, sketch: Sketch): string | null {
+  const was = lastSynced();
+  if (noNetwork(net) && !noNetwork(was.network)) return "the road network";
+  if (nothingIn(sketch) && !nothingIn(was.sketch)) return "the sketch";
+  return null;
+}
+
 async function doSave(planId: string, force = false) {
   if (saving) { again = true; return; }
+  {
+    const what = emptiesPlan(network$.getValue(), laneSketch$.getValue());
+    if (what) {
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      const s = ui.getValue().save;
+      s.status = "error"; s.message = `Not saved: ${what} would be empty`;
+      console.error(`[save] refused for plan ${planId}: ${what} is empty here but was not when loaded or last saved`);
+      toast.error(`Not saved: ${what} would be empty`, { description: "The plan was loaded with something in it, and this save would have emptied it. Reload the page to get the saved plan back (History keeps every version).", duration: 20_000 });
+      return;
+    }
+  }
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   saving = true; dirtySince = 0; editsAtSave = edits.n;
   const s = ui.getValue().save;

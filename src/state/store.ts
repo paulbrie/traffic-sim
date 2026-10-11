@@ -115,56 +115,80 @@ export interface UiState {
   warMode: boolean;
 }
 
-export const ui = new DeepSubject<UiState>(
-  {
-    planId: "",
-    tool: "select",
-    selection: null,
-    view: "2d",
-    snap: { grid: false, step: 5, angle: true },
-    draft: { lanesF: 1, lanesB: 1, busF: false, busB: false, speed: 50, curved: false },
-    trace: { from: null, to: null, lane: null },
-    multi: [],
-    extra: [],
-    pickExit: null,
-    display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85, satSource: "esri", perf: false },
-    sim: { running: false, speed: 3, epoch: 0 },
-    save: { status: "saved", revision: 1, savedAt: null, message: "" },
-    cursor: { x: 0, y: 0, inside: false },
-    panel: "inspect",
-    segScope: "segment",
-    eventLog: { all: false, nodes: [], links: [], vehicles: [] },
-    calib: { active: false, a: null, b: null },
-    history: { canUndo: false, canRedo: false },
-    layers: LAYERS.map(l => l.id),
-    tableLayer: "roads",
-    dataview: false,
-    console: false,
-    search: false,
-    sketch: false,
-    groupEdit: null,
-    placing: null,
-    busy: null,
-    busyLabel: "",
-    readOnly: false,
-    shape: { edit: null, paint: null },
-    connectFrom: null,
-    record: true,
-    warMode: false,
-  },
-  { name: "ui" },
-);
+/**
+ * What the stores hold that a hot reload in development must not lose (as ./lane-sketch's since T158b'). A pull on
+ * the dev server touching this module, or one it imports (lib/lane-sketch), evaluates it again; without this every
+ * open page's plan started over empty under the same plan id, and its next edit or save would send that (T185).
+ * Kept on globalThis, what the evaluation before had hooked up undone. Not in production (no hot reloads there).
+ */
+interface Carried {
+  ui: DeepSubject<UiState>; network$: Subject<Network>; settings$: Subject<PlanSettings>; stats$: Subject<Stats | null>;
+  laneSketch$: Subject<Sketch>; underlay$: Subject<Underlay | null>; past: Network[]; future: Network[]; edits: { n: number };
+  held: { synced: Synced }; sketchReplaced: Set<(why: "load" | "merge") => void>; dispose: (() => void)[];
+}
+type Synced = { network: Network; settings: PlanSettings; underlay: Underlay | null; sketch: Sketch };
+// (in the browser only: on the server the stores are never filled, and nothing there must outlive a page)
+const carried: Partial<Carried> | null = process.env.NODE_ENV === "production" || typeof window === "undefined" ? null : (() => {
+  const g = globalThis as { __trafficsimStore?: Partial<Carried> };
+  const c = (g.__trafficsimStore ??= {});
+  c.dispose?.forEach(f => f());
+  c.dispose = [];
+  return c;
+})();
+/** `off` run when this module is evaluated again (development) */
+const onDispose = (off: () => void) => { carried?.dispose?.push(off); };
 
-export const network$ = new Subject<Network>(emptyNetwork(), { name: "network", updateIfStrictlyEqual: false });
-export const settings$ = new Subject<PlanSettings>(DEFAULT_SETTINGS, { name: "settings", updateIfStrictlyEqual: false });
-export const stats$ = new Subject<Stats | null>(null, { name: "stats" });
+const UI_DEFAULTS: UiState = {
+  planId: "",
+  tool: "select",
+  selection: null,
+  view: "2d",
+  snap: { grid: false, step: 5, angle: true },
+  draft: { lanesF: 1, lanesB: 1, busF: false, busB: false, speed: 50, curved: false },
+  trace: { from: null, to: null, lane: null },
+  multi: [],
+  extra: [],
+  pickExit: null,
+  display: { bySpeed: false, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85, satSource: "esri", perf: false },
+  sim: { running: false, speed: 3, epoch: 0 },
+  save: { status: "saved", revision: 1, savedAt: null, message: "" },
+  cursor: { x: 0, y: 0, inside: false },
+  panel: "inspect",
+  segScope: "segment",
+  eventLog: { all: false, nodes: [], links: [], vehicles: [] },
+  calib: { active: false, a: null, b: null },
+  history: { canUndo: false, canRedo: false },
+  layers: LAYERS.map(l => l.id),
+  tableLayer: "roads",
+  dataview: false,
+  console: false,
+  search: false,
+  sketch: false,
+  groupEdit: null,
+  placing: null,
+  busy: null,
+  busyLabel: "",
+  readOnly: false,
+  shape: { edit: null, paint: null },
+  connectFrom: null,
+  record: true,
+  warMode: false,
+  };
+export const ui: DeepSubject<UiState> = carried?.ui ?? new DeepSubject<UiState>(UI_DEFAULTS, { name: "ui" });
+// (kept from before: what this code has that it hadn't, added)
+if (carried?.ui) { const u = ui.getValue() as unknown as Record<string, unknown>; for (const [k, v] of Object.entries(UI_DEFAULTS)) if (!(k in u)) u[k] = v; }
+
+
+export const network$ = carried?.network$ ?? new Subject<Network>(emptyNetwork(), { name: "network", updateIfStrictlyEqual: false });
+export const settings$ = carried?.settings$ ?? new Subject<PlanSettings>(DEFAULT_SETTINGS, { name: "settings", updateIfStrictlyEqual: false });
+export const stats$ = carried?.stats$ ?? new Subject<Stats | null>(null, { name: "stats" });
 /** the lane sketch: lanes, connectors and roads drawn freely in their own window; in memory only (never saved) */
-export const laneSketch$ = new Subject<Sketch>(emptySketch(), { name: "laneSketch", updateIfStrictlyEqual: false });
-export const underlay$ = new Subject<Underlay | null>(null, { name: "underlay", updateIfStrictlyEqual: false });
+export const laneSketch$ = carried?.laneSketch$ ?? new Subject<Sketch>(emptySketch(), { name: "laneSketch", updateIfStrictlyEqual: false });
+export const underlay$ = carried?.underlay$ ?? new Subject<Underlay | null>(null, { name: "underlay", updateIfStrictlyEqual: false });
 
 // ---------------------------------------------------------------- history
-const past: Network[] = [];
-const future: Network[] = [];
+const past: Network[] = carried?.past ?? [];
+const future: Network[] = carried?.future ?? [];
 let coalesceKey: string | null = null;
 let coalesceAt = 0;
 const MAX_HISTORY = 200;
@@ -186,7 +210,7 @@ function markDirty() {
  * Actions taken since the plan was last saved (an undo step each: a drag or a typed value counts once; undo and
  * redo count too). The plan saves after a few (see useAutosave).
  */
-export const edits = { n: 0 };
+export const edits = carried?.edits ?? { n: 0 };
 
 /**
  * Apply a change to the network. Edits sharing a `key` within 800 ms (e.g. a
@@ -252,24 +276,28 @@ export function setUnderlay(next: Underlay | null | ((cur: Underlay) => Underlay
 
 // ---------------------------------------------------------------- live updates
 /** the plan as last loaded or saved here: what this page and the server both started from (for merging) */
-let synced: { network: Network; settings: PlanSettings; underlay: Underlay | null; sketch: Sketch } = { network: emptyNetwork(), settings: DEFAULT_SETTINGS, underlay: null, sketch: laneSketch$.getValue() };
+const held: { synced: Synced } = carried?.held ?? { synced: { network: emptyNetwork(), settings: DEFAULT_SETTINGS, underlay: null, sketch: laneSketch$.getValue() } };
+/** the plan as last loaded or saved here (what a save must not empty, T185) */
+export const lastSynced = (): Readonly<Synced> => held.synced;
 /** what was just saved is now what the server has */
-export function markSynced(network: Network, settings: PlanSettings, underlay: Underlay | null, sketch: Sketch) { synced = { network, settings, underlay, sketch }; }
+export function markSynced(network: Network, settings: PlanSettings, underlay: Underlay | null, sketch: Sketch) { held.synced = { network, settings, underlay, sketch }; }
 // (the lane sketch saves with the plan: any change to it but the one just loaded or merged in is unsaved)
 // (and undone back to what was saved, it is saved again: the sketch shown as saved is kept when a change is made to it,
 // and undo gives back the very pieces it had, so each is compared as it is, cheaply, even on a city; the plan saved only
 // if nothing else differs either)
 const sameSketch = (a: Sketch, b: Sketch) => a === b || (Object.keys({ ...a, ...b }) as (keyof Sketch)[]).every(k => a[k] === b[k]);
 let shownSketch = laneSketch$.getValue(), savedSketch: Sketch | null = null;
-laneSketch$.subscribe(k => {
+const sketchSub = laneSketch$.subscribe(k => {
   const s = ui.getValue().save;
   if (s.status === "saved") savedSketch = shownSketch;
   shownSketch = k;
-  if (!sameSketch(k, synced.sketch) && !(savedSketch && sameSketch(k, savedSketch))) { markDirty(); return; }
-  if (s.status === "dirty" && network$.getValue() === synced.network && settings$.getValue() === synced.settings && underlay$.getValue() === synced.underlay) s.status = "saved";
+  if (!sameSketch(k, held.synced.sketch) && !(savedSketch && sameSketch(k, savedSketch))) { markDirty(); return; }
+  if (s.status === "dirty" && network$.getValue() === held.synced.network && settings$.getValue() === held.synced.settings && underlay$.getValue() === held.synced.underlay) s.status = "saved";
 });
 /** listeners told when the sketch is replaced by one loaded or merged in (its own undo history no longer applies) */
-export const sketchReplaced = new Set<(why: "load" | "merge") => void>();
+export const sketchReplaced = carried?.sketchReplaced ?? new Set<(why: "load" | "merge") => void>();
+onDispose(() => sketchSub.unsubscribe());
+if (carried) Object.assign(carried, { ui, network$, settings$, stats$, laneSketch$, underlay$, past, future, edits, held, sketchReplaced });
 
 /**
  * A newer version saved elsewhere (another person, tab or window, or written to the database): taken in,
@@ -277,13 +305,13 @@ export const sketchReplaced = new Set<(why: "load" | "merge") => void>();
  * still undoes only this page's own edits. Unsaved changes stay unsaved (the merged plan saves next).
  */
 export function applyRemote(revision: number, savedAt: string, remote: { network: Network; settings: PlanSettings; underlay: Underlay | null; sketch: Sketch | null }) {
-  const b = synced, mineN = network$.getValue(), mineS = settings$.getValue(), mineU = underlay$.getValue(), mineK = laneSketch$.getValue();
+  const b = held.synced, mineN = network$.getValue(), mineS = settings$.getValue(), mineU = underlay$.getValue(), mineK = laneSketch$.getValue();
   const mineChanged = mineN !== b.network || mineS !== b.settings || mineU !== b.underlay || mineK !== b.sketch;
   const theirs = { ...remote, sketch: remote.sketch ?? emptySketch() };
   const net = mergeNetworks(b.network, mineN, theirs.network);
   for (let i = 0; i < past.length; i++) past[i] = mergeNetworks(b.network, past[i], theirs.network);
   for (let i = 0; i < future.length; i++) future[i] = mergeNetworks(b.network, future[i], theirs.network);
-  synced = theirs;
+  held.synced = theirs;
   const s = ui.getValue().save;
   batch(() => {
     s.revision = revision; s.savedAt = savedAt; s.message = "";
@@ -317,7 +345,7 @@ export function loadPlan(planId: string, network: Network, settings: PlanSetting
     u.calib.active = false; u.calib.a = null; u.calib.b = null;
   });
   const k = sketch ?? emptySketch();
-  synced = { network, settings, underlay, sketch: k };
+  held.synced = { network, settings, underlay, sketch: k };
   network$.next(network);
   settings$.next(settings);
   underlay$.next(underlay);
