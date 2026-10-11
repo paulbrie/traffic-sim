@@ -16,7 +16,6 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
 | T193 | Claude bridge panel: code countdown / expired / used; each agent's last seen and a quiet hint; why a message stays 'sent'; 'pairing lost' after a server loss | Bob | 2026-10-11 | 273bea7 pushed; live check in the user's page pending |
-| T207 | Agents City Ops view: the agent cards below the isometric map; no page scroll at laptop height | Alex | 2026-10-11 | the user's ask |
 | T208 | Comms parser: CLAIM/RELEASE took only the first word of each item (a leading task id became the 'path'), so claims never cleared; skip task ids and filler, take every path-like token; bare names only when unambiguous | Alex | 2026-10-11 | after T207 |
 | T206 | Sketch 1 copy rev 338: 5 collisions per 4 seeds with keep your lane + roundabout driving; find and fix | Bob | 2026-10-11 | after T193 |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | patch #5 (Sketch-window piece) applied by the user at rev 244; c5258 gone in the full T148 layout. The user has since redrawn J696 themselves (rev 274): waits on the user, whether to redo the main-plan patch on their drawing |
@@ -38,6 +37,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Done | Commits / result |
 |---|---|---|---|---|
+| T207 | Agents City Ops view: agent cards in one slim row under the map (scrolls sideways if too many); chips and timeline stay on top; no page scroll at 1440×900 | Alex | 2026-10-11 | admin 0c59ea0 (on admin-dev) |
 | T205d | Ops view bubbles readable: near-black 12 px sans on the pale bubble (~17:1), thoughts wrapped on 2 lines within 280 px (140 chars kept), hover card with the whole thoughts; a bubble that can't fit is left out | Alex | 2026-10-11 | admin de40675 (on admin-dev) |
 | T205b | Ops view bubbles: only thinking lines (the italic ones); no thinking in 2 min, no bubble (today: Bob often, Tatiana sometimes, others rarely or never) | Alex | 2026-10-11 | admin be46e62 (on admin-dev); T205c 9360d98: tool steps back as data (acts: kind, at, len; no text) for T204g |
 | T205 | Agents City Ops view: bubbles over each agent with its last 3 steps in 2 min (tools in plain words, first lines of text and thinking; redacted like the panes plus the secrets patterns; 60 chars), thought style when thinking, no overlaps, hidden zoomed out | Alex | 2026-10-11 | admin e2b72c5 in /opt/project (on admin-dev); push on the user's word |
