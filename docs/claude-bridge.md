@@ -173,6 +173,14 @@ Events go to the agents of that page: a tab's own agent, the hub's to the agent 
 200 annotations and messages, and apart from them its last 50 `ui` events, so watching never pushes out what the user
 sent.
 
+**Delivery (T191).** The agent side fetches events in `bridge_wait_events`, and also, without waiting, after every other
+bridge tool call: what came meanwhile follows that tool's answer ("Meanwhile, from the page…"). So an agent at work in the
+page sees a message at its next bridge call. An agent not using the bridge at all can't be woken by the MCP server: it
+sees them when it next calls a bridge tool. Each message and note carries a `msgId` from the page. The first time an
+agent fetches it, the server tells the page (`event: delivered { msgId, agent, at }`), and the panel's log shows it as
+"sent", then "delivered to <agent>"; "no agent" if no agent was connected to take it (the page's post answers `{ to }`,
+how many agents it went to).
+
 ## Agent tabs (several agents, tabs of their own)
 
 The page the user pairs with "Connect Claude" is the **hub**. The agent that claims the hub's own code drives the hub (as

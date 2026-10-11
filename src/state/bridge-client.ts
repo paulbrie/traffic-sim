@@ -13,7 +13,10 @@ import { basePath } from "@/lib/base-path";
 import { bridgeApp, bridgeCanvas, bridgeEdit, bridgeState, bridgeUi, type EditPermit } from "@/state/bridge-registry";
 import { describe, find, isBridgeUi, snapshot, type Target } from "@/components/bridge/a11y";
 
-export interface BridgeLogEntry { at: number; type: string; target: string; ok: boolean; error?: string }
+export interface BridgeLogEntry { at: number; type: string; target: string; ok: boolean; error?: string;
+  /** a message or note the user sent (T191): its id, and whether an agent has it yet ("sent": queued, waiting to be fetched;
+   * "delivered": fetched by `by`; "nobody": no agent was connected to take it) */
+  msgId?: string; status?: "sent" | "delivered" | "nobody"; by?: string }
 export interface BridgeAgent { id: string; name: string; color: string; hub: boolean }
 export interface BridgeTab { pageId: string; ticket: string; agent: string; agentName: string; color: string; label: string; task: string; url: string; title: string; connected: boolean; paused: boolean; left: boolean }
 /** a tab an agent asked for that the browser wouldn't open by itself (pop-ups blocked): the user opens it, or not */
@@ -161,10 +164,16 @@ export function bridgeHello() {
   if (pairing) void post("hello", { url: location.href, title: document.title }).catch(() => {});
 }
 /** the user to the agent: an annotation or a message */
-export async function bridgeSend(event: Record<string, unknown>) {
+/** the user's message or note to the agents here: logged with how it stands (sent, delivered, or no agent to take it); how many agents it went to */
+export async function bridgeSend(event: Record<string, unknown>): Promise<number> {
   if (!pairing) throw new Error("Not connected");
-  const r = await post("event", event);
+  const msgId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const r = await post("event", { ...event, msgId });
   if (!r.ok) throw new Error(`Not sent (${r.status})`);
+  const to = Number(((await r.json().catch(() => ({}))) as { to?: number }).to ?? 0);
+  const what = typeof event.text === "string" ? event.text : typeof event.note === "string" ? event.note : String(event.kind ?? "");
+  logged({ at: Date.now(), type: event.kind === "annotation" ? "you: note" : "you", target: what, ok: to > 0, msgId, status: to > 0 ? "sent" : "nobody" });
+  return to;
 }
 
 // ---- the hub's: agents and their tabs
@@ -212,6 +221,8 @@ function listen() {
     if (w) windows.set(q.ticket, w); else set({ requests: [...view.requests, q], open: true });
   });
   on<Command>("command", c => { void run(c); });
+  // (an agent has fetched a message or note the user sent)
+  on<{ msgId: string; agent: string }>("delivered", d => set({ log: view.log.map(e => (e.msgId === d.msgId ? { ...e, status: "delivered" as const, by: d.agent } : e)) }));
   // (the pairing ended on the server: by the user, the agent, or idle too long; a tab closes itself if it can)
   on("closed", () => { const tab = pairing?.mode === "tab"; gone("off"); if (tab) { set({ tab: view.tab ? { ...view.tab, closed: true } : null }); window.close(); } });
   // (gone for good, the pairing with it, after a few tries: the server restarted, or the pairing ended)

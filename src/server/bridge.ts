@@ -32,7 +32,9 @@ type PageMessage =
   /** (to the hub) the agents and their tabs, again (on every change) */
   | { event: "hub"; data: { allowTabs: boolean; allowEdits: EditPermit; agents: AgentView[]; tabs: TabView[] } }
   /** (to a tab) whose it is and how it stands */
-  | { event: "tab"; data: { agent: string; color: string; label: string; task: string; paused: boolean; left: boolean } };
+  | { event: "tab"; data: { agent: string; color: string; label: string; task: string; paused: boolean; left: boolean } }
+  /** (to the page a message or annotation came from) an agent has fetched it (T191) */
+  | { event: "delivered"; data: { msgId: string; agent: string; at: number } };
 
 interface Agent {
   id: string; token: string; name: string; color: string; hubId: string;
@@ -264,7 +266,14 @@ export async function events(a: Agent, after: number, waitMs: number, signal?: A
       signal?.addEventListener("abort", done);
     });
   }
-  return { events: now(), seq: a.seq };
+  const out = now();
+  // (the page told each message or annotation it sent has reached this agent, once)
+  for (const e of out) if (e.kind !== "ui" && typeof e.msgId === "string" && !e.delivered) {
+    e.delivered = true;
+    const p = pages.get(e.pageId);
+    if (p) broadcast(p, { event: "delivered", data: { msgId: e.msgId, agent: a.name, at: Date.now() } });
+  }
+  return { events: out, seq: a.seq };
 }
 
 export function hello(p: Page, page: { url: string; title: string }) {

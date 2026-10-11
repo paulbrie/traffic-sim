@@ -70,7 +70,12 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
   const send = async () => {
     const t = text.trim();
     if (!t) return;
-    try { await bridgeSend({ kind: "message", text: t }); setText(""); toast.success("Sent to the agent"); } catch (e) { toast.error(e instanceof Error ? e.message : "Not sent"); }
+    try {
+      const to = await bridgeSend({ kind: "message", text: t });
+      setText("");
+      if (to > 0) toast.success("Sent: it shows as delivered once the agent has it");
+      else toast.warning("No agent is connected to take it");
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Not sent"); }
   };
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => { list.current?.scrollTo({ top: list.current.scrollHeight }); }, [view.log.length]);
@@ -119,6 +124,7 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
               <span className="text-muted-foreground tabular-nums">{clock(e.at)}</span>
               <span className={cn("w-16 shrink-0", e.ok ? "text-foreground" : "text-red-600")}>{e.type}</span>
               <span className="min-w-0 flex-1 truncate">{e.target}{e.error ? ` — ${e.error}` : ""}</span>
+              {e.status && <span className={cn("shrink-0", e.status === "delivered" ? "text-emerald-600" : e.status === "nobody" ? "text-red-600" : "text-muted-foreground")}>{e.status === "delivered" ? `delivered to ${e.by}` : e.status === "nobody" ? "no agent" : "sent"}</span>}
             </div>
           ))}
         </div>
