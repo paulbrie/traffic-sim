@@ -7,6 +7,8 @@ import { restoreFromFile, restoreNote, type RestoreFileDeps } from "../src/serve
 import { sanitizeSketch, type Sketch } from "../src/lib/lane-sketch";
 import { contentOf, deleteSketch, duplicateSketch, freeName, newSketch, openSketch, renameSketch, sketchList } from "../src/lib/sketch-list";
 import type { SaveResult } from "../src/server/data/plans";
+import { emptiesPlan } from "../src/lib/plan-empty";
+import { emptyNetwork, type Network } from "../src/engine/types";
 
 const line = (id: string, x0: number, x1: number, y = 0) => ({ id, shape: { kind: "line", pts: [{ x: x0, y }, { x: x1, y }] }, width: 3.5 });
 const base = {
@@ -373,6 +375,22 @@ async function main() {
     // (the main plan never touched)
     const main = (k: Sketch) => JSON.stringify({ ...k, scratch: undefined, sketches: undefined, sketchOpen: undefined });
     assert.equal(main(sk), main(sanitizeSketch(base)!));
+  });
+
+  // ---- an ordinary save never empties a plan that has something (T186, the server's guard in plans.savePlan)
+  await t("save guard: empty over full refused (network, sketch, a saved sketch); full over full and empty over empty fine", () => {
+    const net0 = emptyNetwork(), net1: Network = { ...emptyNetwork(), nodes: [{ id: "n1", x: 0, y: 0 } as Network["nodes"][number]] };
+    const sk1 = sanitizeSketch({ lanes: [{ id: "a", shape: { kind: "line", pts: [{ x: 0, y: 0 }, { x: 50, y: 0 }] }, width: 3.5 }], connectors: [], roads: [], junctions: [] })!;
+    const sk0: Sketch = { lanes: [], connectors: [], roads: [], junctions: [] };
+    // (only a saved sketch holds something: the plan's own lanes empty)
+    const skSaved: Sketch = { ...sk0, sketches: [{ id: "s1", name: "Sketch 1", created: 0, updated: 0 }, { id: "s2", name: "Idea", created: 0, updated: 0, sketch: sk1 }], sketchOpen: "s1" };
+    assert.equal(emptiesPlan({ network: net1, sketch: null }, { network: net0, sketch: null }), "the road network");
+    assert.equal(emptiesPlan({ network: net0, sketch: sk1 }, { network: net0, sketch: sk0 }), "the sketch");
+    assert.equal(emptiesPlan({ network: net0, sketch: sk1 }, { network: net0, sketch: null }), "the sketch");
+    assert.equal(emptiesPlan({ network: net0, sketch: skSaved }, { network: net0, sketch: sk0 }), "the sketch", "a saved sketch counts");
+    assert.equal(emptiesPlan({ network: net1, sketch: sk1 }, { network: net1, sketch: sk1 }), null);
+    assert.equal(emptiesPlan({ network: net0, sketch: sk0 }, { network: net0, sketch: null }), null);
+    assert.equal(emptiesPlan({ network: net0, sketch: null }, { network: net0, sketch: sk1 }), null, "filling an empty plan");
   });
 
   console.log(`restore-file: ${ok} checks passed`);

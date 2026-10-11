@@ -647,6 +647,10 @@ async function doSave(planId: string, force = false) {
       s.status = again || network$.getValue() !== net || settings$.getValue() !== settings || underlay$.getValue() !== underlay || laneSketch$.getValue() !== sketch ? "dirty" : "saved";
     } else if (res.reason === "forbidden") {
       s.status = "error"; s.message = "You no longer have edit access";
+    } else if (res.reason === "empty") {
+      // (the server's guard, T186: as the page's own, T185)
+      s.status = "error"; s.message = `Not saved: ${res.what} would be empty`;
+      toast.error(`Not saved: ${res.what} would be empty`, { description: "The saved plan has something there, and this save would have emptied it. Reload the page to get the saved plan back (History keeps every version).", duration: 20_000 });
     } else if (res.reason === "conflict" && mergeTries < 3) {
       // saved elsewhere meanwhile: take that in (merged with these changes) and save the result
       mergeTries++;
