@@ -72,6 +72,8 @@ between them who goes first and tell Alice.
   drizzle-kit / Next don't override it, so any tool reading `DATABASE_URL` hits the admin's database. A new project uses
   its own variable name (e.g. `CHETANI_DATABASE_URL`), or passes the URL explicitly, and every migrate script refuses
   unless `current_database()` is the project's own (2026-10-12: a Chetani migration landed in `admin_dashboard`).
+  Next dev servers also inherit `NODE_ENV=production`, `__NEXT_PROCESSED_ENV` and `TURBOPACK` from the admin's shell,
+  which make Next skip `.env`: start them with `env -u NODE_ENV -u DATABASE_URL -u __NEXT_PROCESSED_ENV -u TURBOPACK …`.
 - **Admin repo (`/opt/project`).** No push or deploy by Alex or Tom (local commits are fine, see below); the user
   does it, or Alice when the user asks.
   `/opt/project` follows `origin/main`. No worktrees for admin work (the user's decision, 2026-10-11): Alex and Tom
