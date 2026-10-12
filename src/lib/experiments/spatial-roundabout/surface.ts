@@ -178,5 +178,6 @@ function senseOf(sk: Sketch, c: { connectors: string[] }, ctr: Pt): 1 | -1 {
   // (the island on the circulating car's same side: for a car going round with the angle growing, the middle is on the side of
   // sign +1 in this cross product)
   void ctr;
-  return votes >= 0 ? 1 : -1;
+  // (no two-way road to tell by: driving on the right, as the sketches are drawn (y down the screen), round anticlockwise on it)
+  return votes > 0 ? 1 : -1;
 }

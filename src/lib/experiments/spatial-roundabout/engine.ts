@@ -22,6 +22,11 @@ const PATH_STEP = 0.5;
 const KERB = 0.4;
 /** its line steered away from a kerb nearer than this (m) */
 const KERB_NEAR = 1.6;
+/** the sampling planner: curvatures tried (from full left to full right), the time rolled out and its step (s), how often it plans
+ * (s), the room it keeps from others (m) */
+/** turning out: its way out's start no more than this off the ring's heading (rad) */
+const EXIT_TURN = 0.87;
+const SAMPLE_K = 9, SAMPLE_H = 2.5, SAMPLE_DT = 0.25, SAMPLE_EVERY = 0.3, SAMPLE_MARGIN = 0.3;
 /** standing at a kerb this long (s), it backs up this far (m), at this speed (m/s), the front swinging toward its way */
 const KERB_WAIT = 3, BACK_UP = 1.5, BACK_V = 0.7;
 /** a tracked car's speed believed at most (m/s): the points its rays hit slide along it as both move */
@@ -35,7 +40,7 @@ const STUCK = 60, CLEAR = 60;
 
 export interface SpatialParams { speed: number; rate: number; seed: number; gap: number; opts?: SpatialOpts }
 /** the experiment's own choices, to compare (not the main engine's settings) */
-export interface SpatialOpts { exitLine?: boolean; noBlockBox?: boolean; uturnAfterRound?: boolean }
+export interface SpatialOpts { exitLine?: boolean; noBlockBox?: boolean; uturnAfterRound?: boolean; /** the sampling planner (T213 step 3) instead of pure pursuit and braking */ sampling?: boolean }
 interface PathPos { lane: SketchLane; s: number; len: number }
 export interface SpatialCar {
   id: number; len: number; truck: boolean; v: number; still: number; born: number; dest: string; journey: string | null;
@@ -58,6 +63,8 @@ export interface SpatialCar {
   pathPts?: Pt[]; limit?: string;
   /** backing up from a kerb it can't turn away from: metres still to go back; since when the kerb has held it */
   backing?: number; kerbSince?: number;
+  /** the sampling planner's last choice (acceleration, curvature), when made, and since when nothing ahead was safe */
+  plan?: { a: number; k: number; at: number }; blockedSince?: number;
 }
 export interface SpatialStats {
   t: number; vehicles: number; spawned: number; finished: number; heldBack: number; collisions: number; deadlocks: number; missed: number;
@@ -317,13 +324,20 @@ export class SpatialSim {
     // (its way out about abreast, a little ahead: out to the lane's start, then along it (no cutting across what lies between))
     // (its way out about abreast, a little ahead: onto its lane's line, aiming a little down it from where it would join it)
     const o = this.params.opts ?? {};
-    if ((toGo < 0.4 && dGoal < 16) || (toGo > 6 && dGoal < 6 && (!o.uturnAfterRound || v.round > Math.PI))) {
+    // (its way out ahead within a gentle turn: its lane's start no more than 50° off the ring's way from here (or nearly abreast))
+    if (this.exitNow(v, p, toGo) || (toGo > 6 && dGoal < 6 && (!o.uturnAfterRound || v.round > Math.PI))) {
       if (!o.exitLine) return { aim: dGoal > 5 ? g.p : { x: g.p.x + g.d.x * 8, y: g.p.y + g.d.y * 8 }, toGo };
       const along = (p.x - g.p.x) * g.d.x + (p.y - g.p.y) * g.d.y, sAim = Math.max(3, Math.min(15, along + 5));
       return { aim: pointAt(g.lane.shape, Math.min(sAim, laneLength(g.lane.shape))).p, toGo };
     }
     const rT = rIn + W * (toGo < 1.5 ? 0.78 : v.lane!), ahead = Math.min(0.7, 5 / Math.max(r, rT)), b = alpha + rb.sense * ahead;
     return { aim: { x: rb.c.x + rT * Math.cos(b), y: rb.c.y + rT * Math.sin(b) }, toGo };
+  }
+  /** time to turn out: its way out's lane start ahead the ring's way (within 1.2 rad round) and no more than 50° off the ring's
+   * heading from here, so a gentle turn takes it there; or nearly abreast of it (T213: exits far out down a road as near ones) */
+  private exitNow(v: SpatialCar, p: Pt, toGo: number) {
+    const rb = v.rb!, g = v.goal!, a = Math.atan2(p.y - rb.c.y, p.x - rb.c.x), tan = Math.atan2(rb.sense * Math.cos(a), -rb.sense * Math.sin(a));
+    return toGo < 0.25 || (toGo < 1.2 && Math.abs(angDiff(Math.atan2(g.p.y - p.y, g.p.x - p.x), tan)) < EXIT_TURN);
   }
   /** its path ahead, as it would drive it (turning no tighter than it can): points every PATH_STEP m, up to `len` m */
   private pathAhead(v: SpatialCar, len: number): Pt[] {
@@ -415,6 +429,7 @@ export class SpatialSim {
       const sJoin = kJoin < 0 ? 0 : kJoin * PATH_STEP, needIn = Math.min(path.length * PATH_STEP - 1, sJoin + v.len + 6);
       if (free < needIn) return this.stopAt(v, 0.3);
     }
+    if (this.params.opts?.sampling) return this.sampled(v, rays, path, dt);
     // (steering: pure pursuit on its path, 3 m ahead; standing, it can't turn)
     const tgt = path[Math.min(path.length - 1, Math.round(3 / PATH_STEP))], want = Math.atan2(tgt.y - v.p.y, tgt.x - v.p.x);
     const wMax = v.v / R_MIN, w = Math.max(-wMax, Math.min(wMax, 2.5 * angDiff(want, v.h)));
@@ -424,6 +439,112 @@ export class SpatialSim {
     const sStar = 1 + Math.max(0, v.v * 0.9 + (v.v * (v.v - leadV)) / (2 * Math.sqrt(A_MAX * B_COMF)));
     return Math.max(-B_MAX, A_MAX * (1 - (v.v / V_RING) ** 4 - (sStar / gapM) ** 2));
   }
+  /**
+   * The sampling planner (a dynamic window, as robots thread gaps): short manoeuvres tried, each a curvature held and an
+   * acceleration, rolled out SAMPLE_H s; one that keeps its corners on the paving and its body clear of what its rays show of
+   * others (moved on by how they were tracked moving; one still outside the ring, which gives way to it, not moved on) is safe;
+   * of the safe ones the best by progress along its guidance line, lining up with it, room kept and a steady wheel; none safe, the
+   * one that meets trouble latest; and standing with none safe a while, a back-up tried as one of them. Planned every
+   * SAMPLE_EVERY s, the choice held between.
+   */
+  private sampled(v: SpatialCar, rays: { d: number; car: number }[], path: Pt[], dt: number) {
+    if (!v.plan || this.t - v.plan.at >= SAMPLE_EVERY - 1e-6) v.plan = { ...this.choose(v, rays, path), at: this.t };
+    const { a, k } = v.plan;
+    if (a < -50) { v.backing = BACK_UP; v.plan = undefined; return 0; }
+    v.h += v.v * k * dt;
+    return a;
+  }
+  private choose(v: SpatialCar, rays: { d: number; car: number }[], path: Pt[]) {
+    const s = this.surface!, rb = v.rb!, going = v.entering && v.entered < 0.5;
+    const onRing = (q: Pt) => { const a = Math.atan2(q.y - rb.c.y, q.x - rb.c.x), d = ((Math.round((a * 180) / Math.PI) % 360) + 360) % 360; return Math.hypot(q.x - rb.c.x, q.y - rb.c.y) <= rb.rIn[d] + rb.width + 0.5; };
+    // (what its rays show of other cars: the points hit, each with how its car was tracked moving)
+    const pts: { x: number; y: number; vx: number; vy: number }[] = [];
+    rays.forEach((x, i) => {
+      if (x.car < 0 || x.d > 25) return;
+      const a = this.rayAngle(v, i), o = v.tracks?.get(x.car), moves = o && o.n >= 4 && Math.hypot(o.vx, o.vy) >= 0.5 && (going || onRing(o.p));
+      pts.push({ x: v.p.x + Math.cos(a) * x.d, y: v.p.y + Math.sin(a) * x.d, vx: moves ? o!.vx : 0, vy: moves ? o!.vy : 0 });
+    });
+    const kMax = 1 / R_MIN, prevK = v.plan?.k ?? 0;
+    // (circling: not going in, not yet turning out to its way out)
+    const { toGo } = this.aimFor(v, v.p);
+    const circling = !v.entering && !this.exitNow(v, v.p, toGo) && toGo <= 6;
+    const a0 = Math.atan2(v.p.y - rb.c.y, v.p.x - rb.c.x), deg0 = ((Math.round((a0 * 180) / Math.PI) % 360) + 360) % 360;
+    const rT = rb.rIn[deg0] + Math.max(2.5, Math.min(rb.width, rb.rOut[deg0] - rb.rIn[deg0])) * (toGo < 1.5 ? 0.78 : v.lane ?? 0.5);
+    let best = { a: -B_MAX, k: 0 }, bestScore = -Infinity, anySafe = false, anyMoves = false;
+    const accs = [-B_MAX, -B_COMF, 0, A_MAX];
+    for (let ki = 0; ki <= SAMPLE_K; ki++) for (const a of accs) {
+      // (the last: following its guidance line, the wheel turned afresh at each step of the roll-out, as a lattice planner's
+      // path-following candidates do; the others a curvature held)
+      const k = ki === SAMPLE_K ? NaN : -kMax + (2 * kMax * ki) / (SAMPLE_K - 1);
+      const r = this.rollout(v, a, k, pts, s, path);
+      let score: number;
+      if (r.hit === Infinity) {
+        anySafe = true;
+        if (Math.hypot(r.end.x - v.p.x, r.end.y - v.p.y) > 1) anyMoves = true;
+        if (circling) {
+          // (round the ring: progress is the way round it made, at whatever distance out, a little held to its own distance and the
+          // ring's heading: a gap round a stopped car beats waiting behind it)
+          const a1 = Math.atan2(r.end.y - rb.c.y, r.end.x - rb.c.x), r1 = Math.hypot(r.end.x - rb.c.x, r.end.y - rb.c.y);
+          const made = angDiff(a1, a0) * rb.sense * r1, tan1 = Math.atan2(rb.sense * Math.cos(a1), -rb.sense * Math.sin(a1));
+          score = 100 + 1.0 * made - 0.3 * Math.abs(r1 - rT) - 1.0 * Math.abs(angDiff(r.endH, tan1)) + 0.3 * Math.min(r.room, 3) - 0.4 * Math.abs(k - prevK) * R_MIN;
+        } else {
+          // (going in or out: progress along its guidance line, the end's distance off it and heading off it, room kept, a steady wheel)
+          const g = guideAt(path, r.end);
+          score = 100 + 1.0 * g.along - 1.5 * g.off - 2.0 * Math.abs(angDiff(r.endH, g.h)) + 0.3 * Math.min(r.room, 3) - 0.4 * Math.abs(k - prevK) * R_MIN;
+        }
+      } else score = 10 * r.hit - (a > 0 ? 1 : 0);
+      if (score > bestScore) { bestScore = score; best = { a, k: Number.isNaN(k) ? r.k0 : k }; }
+    }
+    // (standing, nothing that gets it anywhere safe for a while (standing still always is): a careful back-up, if there is room
+    // behind and nothing coming from there)
+    if ((!anySafe || !anyMoves) && v.v < 0.1 && !going) {
+      v.blockedSince ??= this.t;
+      if (this.t - v.blockedSince > KERB_WAIT && this.clearBehind(v, rays)) { v.blockedSince = undefined; return { a: -100, k: 0 }; }
+    } else v.blockedSince = undefined;
+    return best;
+  }
+  /** a manoeuvre rolled out: when it first meets the kerb or another car (Infinity: not within SAMPLE_H s), where it ends, the least room */
+  private rollout(v: SpatialCar, a: number, k0: number, pts: { x: number; y: number; vx: number; vy: number }[], s: Surface, path: Pt[]) {
+    // (following the guidance line: pure pursuit on it, 3 m ahead of the nearest point, at each step)
+    const follow = Number.isNaN(k0), pursue = (x: number, y: number, h: number) => {
+      const g = guideAt(path, { x, y }), t = path[Math.min(path.length - 1, Math.round(g.along / PATH_STEP) + Math.round(3 / PATH_STEP))];
+      const al = angDiff(Math.atan2(t.y - y, t.x - x), h), d = Math.max(1, Math.hypot(t.x - x, t.y - y));
+      return Math.max(-1 / R_MIN, Math.min(1 / R_MIN, (2 * Math.sin(al)) / d));
+    };
+    let k = follow ? pursue(v.p.x, v.p.y, v.h) : k0;
+    const kFirst = k;
+    let x = v.p.x, y = v.p.y, h = v.h, sp = v.v, room = Infinity;
+    const n = Math.round(SAMPLE_H / SAMPLE_DT);
+    // (as things stand: the room to each point now, and which corners are on the paving: a manoeuvre is judged by not making
+    // things worse than they are, so one standing close to another, or a corner just over a kerb, can still move)
+    const dx0 = Math.cos(h), dy0 = Math.sin(h), cx0 = x - dx0 * (v.len / 2), cy0 = y - dy0 * (v.len / 2);
+    const gap0 = pts.map(q => { const qx = q.x - cx0, qy = q.y - cy0; return Math.max(Math.abs(qx * dx0 + qy * dy0) - v.len / 2, Math.abs(-qx * dy0 + qy * dx0) - WIDTH / 2); });
+    const cornerOk0 = ([[0, 1], [0, -1], [-v.len, 1], [-v.len, -1]] as const).map(([f, l]) => drivable(s, { x: x + dx0 * f - dy0 * l * (WIDTH / 2), y: y + dy0 * f + dx0 * l * (WIDTH / 2) }));
+    for (let j = 1; j <= n; j++) {
+      const tau = j * SAMPLE_DT;
+      sp = Math.max(0, Math.min(V_RING, sp + a * SAMPLE_DT));
+      if (follow && j > 1) k = pursue(x, y, h);
+      h += sp * k * SAMPLE_DT;
+      x += Math.cos(h) * sp * SAMPLE_DT; y += Math.sin(h) * sp * SAMPLE_DT;
+      const dx = Math.cos(h), dy = Math.sin(h), lx = -dy, ly = dx;
+      // (its corners on the paving)
+      const corners = [[0, 1], [0, -1], [-v.len, 1], [-v.len, -1]] as const;
+      for (let c = 0; c < 4; c++) {
+        const [f, l] = corners[c], q = { x: x + dx * f + lx * l * (WIDTH / 2), y: y + dy * f + ly * l * (WIDTH / 2) };
+        if (cornerOk0[c] && !drivable(s, q)) return { hit: tau, end: { x, y }, endH: h, room: 0, what: "kerb", k0: kFirst };
+      }
+      // (clear of the others, as they will be by then)
+      const cx = x - dx * (v.len / 2), cy = y - dy * (v.len / 2);
+      for (let i = 0; i < pts.length; i++) {
+        const q = pts[i], qx = q.x + q.vx * tau - cx, qy = q.y + q.vy * tau - cy, al = Math.abs(qx * dx + qy * dy) - v.len / 2, lt = Math.abs(qx * lx + qy * ly) - WIDTH / 2;
+        const gap = Math.max(al, lt);
+        if (gap < Math.min(SAMPLE_MARGIN, gap0[i] - 0.02)) return { hit: tau, end: { x, y }, endH: h, room: 0, what: `car (point ${i}, moving ${Math.hypot(q.vx, q.vy).toFixed(1)})`, k0: kFirst };
+        if (gap < room) room = gap;
+      }
+    }
+    return { hit: Infinity, end: { x, y }, endH: h, room, what: "", k0: kFirst };
+  }
+
   /** room to back up: the rays within 30° of straight back free past its own length by the back-up and a metre, and no car seen
    * behind moving toward it */
   private clearBehind(v: SpatialCar, rays: { d: number; car: number }[]) {
@@ -514,6 +635,14 @@ export class SpatialSim {
         ...(v.goal ? { goal: v.goal.p } : {}) };
     });
   }
+}
+
+/** a point against a guidance line: how far along it its nearest point is (m), how far off it, and the line's heading there */
+function guideAt(path: Pt[], p: Pt) {
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < path.length; i++) { const d = Math.hypot(path[i].x - p.x, path[i].y - p.y); if (d < bd) { bd = d; bi = i; } }
+  const a = path[Math.max(0, bi - 1)], b = path[Math.min(path.length - 1, bi + 1)];
+  return { along: bi * PATH_STEP, off: bd, h: Math.atan2(b.y - a.y, b.x - a.x) };
 }
 
 /** where a ray from `o` along (ux, uy) first meets a box (centre, direction, length, width), or null */
