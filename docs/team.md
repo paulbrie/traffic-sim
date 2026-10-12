@@ -122,6 +122,11 @@ between them who goes first and tell Alice.
   `http://localhost:<port>/projects/trafficsim`: the same Railway dev database and test logins. Start it only for a
   check and stop it right after (about 1–2 GB each; Alice paces memory). The final check, after Alice has pulled the
   push, is on the shared dev instance (port 7000), which stays the reference; Ramona's tests run there.
+- **Testing behind nginx (every project).** Hosted apps sit behind nginx under a base path
+  (`https://paul.cloud.teleporthq.ai/projects/<name>`). A feature isn't done until it's checked there: test locally
+  with the same base path, and once Alice has updated the served tree, retest on the hosted URL. nginx returns 502 for
+  response headers over ~4 KB (2026-10-12: Access's ask mode sent its citations in a header), so large data goes in the
+  body, never in headers.
 - **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser work with Vercel's
   agent-browser (`/usr/bin/agent-browser`), not Playwright scripts, so the admin's /chrome page can show it; close
   its sessions after a run. If something can't be done with it, ask Alice before using anything else.
