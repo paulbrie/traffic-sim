@@ -68,6 +68,10 @@ between them who goes first and tell Alice.
   says `railway` first. Reads are fine. Writes only to your own test cities and plans, or with Alice's or the user's say;
   never to the user's plans (Bistrița: never, see The user's plans) or to other accounts. Schema changes
   only through the migrations (`npm run db:migrate`).
+  In every project (Access, Chetani, new ones): the shell's `DATABASE_URL` points at `admin_dashboard`, and dotenv /
+  drizzle-kit / Next don't override it, so any tool reading `DATABASE_URL` hits the admin's database. A new project uses
+  its own variable name (e.g. `CHETANI_DATABASE_URL`), or passes the URL explicitly, and every migrate script refuses
+  unless `current_database()` is the project's own (2026-10-12: a Chetani migration landed in `admin_dashboard`).
 - **Admin repo (`/opt/project`).** No push or deploy by Alex or Tom (local commits are fine, see below); the user
   does it, or Alice when the user asks.
   `/opt/project` follows `origin/main`. No worktrees for admin work (the user's decision, 2026-10-11): Alex and Tom
