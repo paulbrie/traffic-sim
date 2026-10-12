@@ -11,9 +11,9 @@ import { buildSurface, drivable, edgeDist, type Roundabout, type Surface } from 
 
 // drivers (as the main engine's defaults)
 const A_MAX = 1.5, B_COMF = 2, B_MAX = 6, T_HEAD = 1.2, S0 = 2, CAR_LEN = 4.5, TRUCK_LEN = 12, WIDTH = 1.8;
-/** spatial driving: rays, their spread (°), range (m) */
-export const RAYS = 37;
-const FAN = 180, RANGE0 = 15, RANGE_PER_MS = 3, RANGE_MAX = 45;
+/** spatial driving: rays all the way round (the user's choice, 2026-10-12: as a self-driving car's sensors), every 5°; range (m) */
+export const RAYS = 72;
+const RANGE0 = 15, RANGE_PER_MS = 3, RANGE_MAX = 45;
 /** top speed inside a roundabout (m/s), the tightest turn (m), the corridor's spare width (m) */
 const V_RING = 7, R_MIN = 5, MARGIN = 0.35;
 /** its path ahead, a point every this many metres */
@@ -22,6 +22,8 @@ const PATH_STEP = 0.5;
 const KERB = 0.4;
 /** its line steered away from a kerb nearer than this (m) */
 const KERB_NEAR = 1.6;
+/** standing at a kerb this long (s), it backs up this far (m), at this speed (m/s), the front swinging toward its way */
+const KERB_WAIT = 3, BACK_UP = 1.5, BACK_V = 0.7;
 /** a tracked car's speed believed at most (m/s): the points its rays hit slide along it as both move */
 const TRACK_MAX = 10;
 /** speed at a roundabout's line (m/s) */
@@ -54,6 +56,8 @@ export interface SpatialCar {
   lane?: number;
   /** its path ahead last step (for the drawing), and what limited it (for looking into it) */
   pathPts?: Pt[]; limit?: string;
+  /** backing up from a kerb it can't turn away from: metres still to go back; since when the kerb has held it */
+  backing?: number; kerbSince?: number;
 }
 export interface SpatialStats {
   t: number; vehicles: number; spawned: number; finished: number; heldBack: number; collisions: number; deadlocks: number; missed: number;
@@ -216,7 +220,7 @@ export class SpatialSim {
 
   // ---------------------------------------------------------------- inside: sensing and planning
 
-  /** the fan: from its front, the 180° ahead, each ray to the surface's edge or another car's body (nothing else known) */
+  /** the rays: from its front, all round, each to the surface's edge or another car's body (nothing else known; its own body not seen) */
   private sense(v: SpatialCar) {
     const s = this.surface!, range = Math.min(RANGE_MAX, RANGE0 + RANGE_PER_MS * v.v), out: { d: number; car: number }[] = [];
     const others = this.vehicles.filter(w => w !== v && Math.hypot(this.front(w).x - v.p.x, this.front(w).y - v.p.y) < range + w.len + 2);
@@ -265,7 +269,8 @@ export class SpatialSim {
     }
     for (const [id, o] of tr) if (this.t - o.at > 0.5) tr.delete(id);
   }
-  private rayAngle(v: SpatialCar, i: number) { return v.h + ((-FAN / 2 + (FAN * i) / (RAYS - 1)) * Math.PI) / 180; }
+  /** ray `i`'s direction: straight ahead first, round the full circle */
+  private rayAngle(v: SpatialCar, i: number) { return v.h + (2 * Math.PI * i) / RAYS; }
 
   /**
    * The free distance along heading `a`: to the first thing within the car's corridor (its width and a margin) that its rays
@@ -364,14 +369,19 @@ export class SpatialSim {
         leadV = o ? Math.max(0, o.vx * d.x + o.vy * d.y) : 0;
       }
     });
+    // (one going to cross its path: who goes first, from where they are, as the rules have it. Going in, it gives way to all that
+    // come round within the gap; on the ring, not to one still outside it (that one gives way), else to one there first)
+    const rb = v.rb!, onRing = (q: Pt) => { const a = Math.atan2(q.y - rb.c.y, q.x - rb.c.x), d = ((Math.round((a * 180) / Math.PI) % 360) + 360) % 360; return Math.hypot(q.x - rb.c.x, q.y - rb.c.y) <= rb.rIn[d] + rb.width + 0.5; };
+    const going = v.entering && v.entered < 0.5;
     for (const o of v.tracks?.values() ?? []) {
       if (o.n < 4 || Math.hypot(o.vx, o.vy) < 0.5) continue;
+      if (!going && !onRing(o.p)) continue;
       for (let tau = 0.25; tau <= H; tau += 0.25) {
         const q = { x: o.p.x + o.vx * tau, y: o.p.y + o.vy * tau }, k = reachK(q, WIDTH + MARGIN);
         if (k < 0) continue;
-        // (it will be across the path k steps on at tau: this one there by then, or soon after: it stops short of it)
-        const s = k * PATH_STEP, mine = Math.max(v.v, 2) * tau;
-        if (mine + 4 > s && s - 4 < free) { free = Math.max(0, s - 4); limit = "coming"; const d = this.dirAt(path, k); leadV = Math.max(0, o.vx * d.x + o.vy * d.y); }
+        // (it will be across the path k steps on at tau: this one gives way if that one gets there first (going in: within the gap))
+        const s = k * PATH_STEP, mine = s / Math.max(v.v, 1.5);
+        if ((going || tau < mine + 0.5) && s - 4 < free) { free = Math.max(0, s - 4); limit = "coming"; const d = this.dirAt(path, k); leadV = Math.max(0, o.vx * d.x + o.vy * d.y); }
         break;
       }
     }
@@ -390,6 +400,12 @@ export class SpatialSim {
     const patient = this.t - v.waitSince > 10, H = v.entering ? (patient ? 1.5 : this.params.gap + 2) : 3;
     const { free, leadV, limit } = this.pathFree(v, rays, path, H);
     v.pathPts = path; v.limit = `${limit} at ${free.toFixed(1)} m`;
+    // (standing at a kerb it can't turn away from: a short, slow back-up, only with room behind and nothing coming from there)
+    if (v.backing && v.backing > 0) return 0;
+    if (limit === "kerb" && free < 2 && v.v < 0.1 && !(v.entering && v.entered < 0.5)) {
+      v.kerbSince ??= this.t;
+      if (this.t - v.kerbSince > KERB_WAIT && this.clearBehind(v, rays)) { v.backing = BACK_UP; v.kerbSince = undefined; return 0; }
+    } else v.kerbSince = undefined;
     // (not into the ring unless it can get clear in it: room along its path past where it joins the carriageway round the island,
     // its own length and more, as a driver doesn't stop across the ring (no blocking the box))
     if (v.entering && v.entered < 0.5 && !(this.params.opts?.noBlockBox ?? true)) {
@@ -408,10 +424,32 @@ export class SpatialSim {
     const sStar = 1 + Math.max(0, v.v * 0.9 + (v.v * (v.v - leadV)) / (2 * Math.sqrt(A_MAX * B_COMF)));
     return Math.max(-B_MAX, A_MAX * (1 - (v.v / V_RING) ** 4 - (sStar / gapM) ** 2));
   }
+  /** room to back up: the rays within 30° of straight back free past its own length by the back-up and a metre, and no car seen
+   * behind moving toward it */
+  private clearBehind(v: SpatialCar, rays: { d: number; car: number }[]) {
+    for (let i = 0; i < RAYS; i++) {
+      const a = angDiff(this.rayAngle(v, i), v.h + Math.PI);
+      if (Math.abs(a) < Math.PI / 6 && rays[i].d < v.len + BACK_UP + 1) return false;
+    }
+    const back = dirOf(v.h + Math.PI);
+    for (const o of v.tracks?.values() ?? []) {
+      const rx = o.p.x - v.p.x, ry = o.p.y - v.p.y, behind = rx * back.x + ry * back.y;
+      if (behind > 0 && behind < v.len + 10 && -(o.vx * back.x + o.vy * back.y) > 0.5) return false;
+    }
+    return true;
+  }
   /** brake to stand where it is, about `d` metres on at most */
   private stopAt(v: SpatialCar, d: number) { return v.v < 0.05 ? -v.v / 0.1 : -Math.min(B_MAX, (v.v * v.v) / (2 * Math.max(0.1, d))); }
 
   private spatialMove(v: SpatialCar, dt: number) {
+    if (v.backing && v.backing > 0) {
+      const tgt = v.pathPts?.[Math.min((v.pathPts?.length ?? 1) - 1, 6)], want = tgt ? Math.atan2(tgt.y - v.p.y, tgt.x - v.p.x) : v.h;
+      v.h -= Math.sign(angDiff(want, v.h)) * (BACK_V / R_MIN) * dt;
+      const b = dirOf(v.h), step = Math.min(v.backing, BACK_V * dt);
+      v.p = { x: v.p.x - b.x * step, y: v.p.y - b.y * step };
+      v.backing -= step; v.v = 0; v.still = 0;
+      return;
+    }
     const d = dirOf(v.h);
     v.p = { x: v.p.x + d.x * v.v * dt, y: v.p.y + d.y * v.v * dt };
     if (v.entering) { v.entered += v.v * dt; if (v.entered > v.len + 1) v.entering = false; }
@@ -472,7 +510,7 @@ export class SpatialSim {
     return this.vehicles.map(v => {
       const b = this.body(v);
       return { id: v.id, p: b.c, d: b.d, len: v.len, share: v.v / Math.max(1, this.vmax()), spatial: v.mode === "spatial",
-        ...(v.mode === "spatial" && v.rays ? { from: v.p, rays: v.rays.map((x, i) => { const a = v.h + ((-FAN / 2 + (FAN * i) / (RAYS - 1)) * Math.PI) / 180; return { x: v.p.x + Math.cos(a) * x.d, y: v.p.y + Math.sin(a) * x.d, car: x.car >= 0 }; }) } : {}),
+        ...(v.mode === "spatial" && v.rays ? { from: v.p, rays: v.rays.map((x, i) => { const a = this.rayAngle(v, i); return { x: v.p.x + Math.cos(a) * x.d, y: v.p.y + Math.sin(a) * x.d, car: x.car >= 0 }; }) } : {}),
         ...(v.goal ? { goal: v.goal.p } : {}) };
     });
   }
