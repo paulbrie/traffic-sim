@@ -54,6 +54,10 @@ export interface EditorUi {
     kept: { from: number; to: number; frames: number; bytes: number } | null;
     /** the simulation settings changed from their defaults (as saved with the plan: sketch-tuning.ts's keys; the switches 0 / 1) */
     tune: Record<string, number>;
+    /** (the Sketch window) an experimental engine run instead of the main one (T213: "spatial", cars driving roundabouts by
+     * sensing space), and its cars' sensor rays shown; per window, off on opening, never saved with the plan */
+    experiment: "spatial" | null;
+    rays: boolean;
   };
   /** its dialogs and what is open under the map */
   dialogs: {
@@ -101,7 +105,7 @@ export interface SketchUiState {
 
 const editor = (tool: Tool): EditorUi => ({
   mode: "plan", tool, selection: NO_SEL, point: null, car: null, follow: false, view: { cx: 0, cy: 0, scale: 6 }, camera: null,
-  run: { running: false, speed: 1, t: 0, replayT: null, playing: false, kept: null, tune: {} },
+  run: { running: false, speed: 1, t: 0, replayT: null, playing: false, kept: null, tune: {}, experiment: null, rays: true },
   dialogs: { search: { open: false, query: "" }, console: { open: false, kind: "all", text: "", clearedAt: -1 }, settings: false, optimizer: { open: false, junction: null, chosen: [], effort: "quick", stage: "setup" } },
   tables: { junctions: { by: "delay", flip: false, shown: 12 }, roads: { by: "delay", flip: false, shown: 12 } },
   route: { from: null, to: null, result: null, test: null },

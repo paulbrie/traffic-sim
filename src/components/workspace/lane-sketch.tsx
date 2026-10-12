@@ -255,6 +255,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const sim = useRef<SketchSimClient | null>(sketchSim());
   const [running, setRunning] = useEditorState(ek, "run/running");
   const [simSpeed, setSimSpeed] = useEditorState(ek, "run/speed");
+  // (the experiment (T213): another engine run instead of the main one, Sketch window only; its client loaded when first wanted)
+  const [experiment, setExperiment] = useEditorState(ek, "run/experiment"), [showRays, setShowRays] = useEditorState(ek, "run/rays");
+  const expOn = ek === "scratch" && experiment === "spatial";
+  const exp = useRef<import("@/state/spatial-sim-client").SpatialSimClient | null>(null);
+  const expUi = useRef({ on: false, rays: true });
+  useEffect(() => { expUi.current = { on: expOn, rays: showRays !== false }; });
+  const [expStats, setExpStats] = useState<import("@/lib/experiments/spatial-roundabout/engine").SpatialStats | null>(null);
+  const [expRoundabout, setExpRoundabout] = useState(true);
   /** the problem console open, under the map (the replay bar above it) */
   const [consoleOpen, setConsoleOpen] = useUiPath<boolean>(`editors/${ek}/dialogs/console/open`);
   // (saved with the sketch: changing them isn't an undo step)
@@ -427,7 +435,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the cars to draw, and the one picked: as they are, or as they were at the moment replayed */
   const carsShown = () => {
     const s = sim.current, t = live.current.replayT, id = live.current.selCar;
-    if (!s) return { cars: null, car: null, peds: null, why: null };
+    if (!s || expUi.current.on) return { cars: null, car: null, peds: null, why: null };
     // (the picked car's leader, blocker and conflict zone, where they are drawn now: T157)
     const marks = (cars: { id: number; p: Pt }[], x: CarExplain | null) => explainMarks(x, c => cars.find(q => q.id === c)?.p ?? null);
     if (t === null) { const cars = s.poses(), car = id !== null ? s.inspect(id) : null; return { cars, car, peds: s.peds(), why: marks(cars, explainOf(car)) }; }
@@ -540,6 +548,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(k.canvas, 0, 0);
       paint(c, st, "dynamic", undefined, k.upper);
+      if (expUi.current.on && exp.current) exp.current.draw(ctx, v, w, h, expUi.current.rays);
     });
   };
   // (a render: the kept image drawn again only if something it shows changed, not for the cars' stats)
@@ -592,7 +601,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (JSON.stringify(r.tune) !== JSON.stringify(t)) r.tune = { ...t };
   }, [params.tune, ek]);
   // the cars run in the worker, at the speed picked (it sends a frame after each go: see onSimFrame)
-  useEffect(() => { sim.current?.run(running, simSpeed); }, [running, simSpeed]);
+  useEffect(() => { sim.current?.run(running && !expOn, simSpeed); exp.current?.run(running && expOn, simSpeed); }, [running, simSpeed, expOn]);
+  useEffect(() => () => { exp.current?.terminate(); exp.current = null; }, []);
   // (opened again with "running" kept from before, no cars made yet: not running, so Run (and the bridge's run) starts them)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (running && !sim.current) setRunning(false); }, []);
@@ -652,7 +662,23 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     setSel(NO_SEL); setSelCar(id); setFollow(true); setRunning(true);
     return id;
   };
+  /** the experiment's settings from the sketch's: its speed limit and rate, the seed, the roundabout gap accepted */
+  const expParams = () => { const tr = live.current.sketch.traffic ?? DEFAULT_SIM; return { speed: tr.speed, rate: tr.rate, seed: tr.seed ?? 1, gap: Number((tr.tune as Record<string, number> | undefined)?.ringGap ?? 2) }; };
   const play = () => {
+    if (expOn) {
+      // (its client and worker loaded now, the first time: the normal Run never loads them)
+      if (exp.current) { setRunning(r => !r); return; }
+      void import("@/state/spatial-sim-client").then(({ SpatialSimClient }) => {
+        let shown = 0;
+        exp.current ??= new SpatialSimClient(live.current.sketch, { ...expParams(), opts: { exitLine: true, noBlockBox: true, uturnAfterRound: true } }, () => {
+          const now = performance.now();
+          if (now - shown > 250) { shown = now; setExpStats(exp.current?.stats() ?? null); setExpRoundabout(exp.current?.hasRoundabout() ?? true); }
+          redraw(false);
+        });
+        setRunning(true);
+      });
+      return;
+    }
     if (!sim.current) { sim.current = new SketchSimClient(live.current.sketch, params, onSimFrame); store.setSim(sim.current); }
     // (running carries on from now: out of the replay)
     if (live.current.replayT !== null) goLive();
@@ -689,7 +715,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     try { await navigator.clipboard.writeText(text); toast.success("Replay data copied", { description: `${Math.round(text.length / 1024)} kB: paste it into the conversation.` }); }
     catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
   };
-  const resetCars = () => { sim.current?.reset(); setStats(sim.current?.stats() ?? null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null); redraw(); };
+  const resetCars = () => { exp.current?.reset(live.current.sketch, { ...expParams(), opts: { exitLine: true, noBlockBox: true, uturnAfterRound: true } }); setExpStats(null); sim.current?.reset(); setStats(sim.current?.stats() ?? null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null); redraw(); };
   // "Test in Sketch": the selection taken into the Sketch window, cut off with short ways in and out, to run on its own
   // (its options: in the V2 UI store, kept in the browser)
   const [tis, setTis] = useUiPath<TestOptions>("sketchWindow/test");
@@ -1828,7 +1854,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           )}
           {canTest && hasSel(sel) && <TestInSketchPanel options={tis} setOptions={setTis} onTest={() => testInSketch()} />}
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
-          <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun} />
+          <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun}
+            experiment={ek === "scratch" ? { on: expOn, rays: showRays !== false, stats: expStats, roundabout: expRoundabout,
+              set: on => { setRunning(false); exp.current?.terminate(); exp.current = null; setExpStats(null); setExperiment(on ? "spatial" : null); redraw(false); },
+              setRays: on => { setShowRays(on); redraw(false); } } : null} />
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
           {stats ? <RoadResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "road", id })} /> : null}
@@ -2683,10 +2712,48 @@ function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; rea
   );
 }
 
+/** (the Sketch window) the experiment's switch, and while on its rays' switch and its own results, marked as the experiment's (T213) */
+function ExperimentRow({ x }: { x: NonNullable<Parameters<typeof TrafficPanel>[0]["experiment"]> }) {
+  const st = x.stats, rate = st && st.t > 0 ? Math.round((st.finished * 3600) / st.t) : 0;
+  const row = (label: string, value: React.ReactNode) => <div className="flex justify-between gap-2 text-xs"><span className="text-muted-foreground">{label}</span><span className="font-mono tabular">{value}</span></div>;
+  return (
+    <div className={cn("grid gap-1 rounded-md border p-2", x.on && "border-amber-400 bg-amber-50/60 dark:bg-amber-950/40")}>
+      <label className="flex items-center justify-between gap-2 text-xs" title="Run an experimental engine instead of the main one: in a roundabout, cars drive by sensing space (rays over the 180° in front: kerbs, the island, other cars' bodies), not by lanes and connectors, which only tell them their way out. Off: the main engine, as always. Takes effect on the next Run or restart; nothing is saved with the plan.">
+        <span>Experiment: spatial roundabout</span>
+        <Switch checked={x.on} onCheckedChange={x.set} aria-label="Experiment: spatial roundabout" />
+      </label>
+      {x.on && (
+        <>
+          <label className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-muted-foreground">Show sensor rays</span>
+            <Switch checked={x.rays} onCheckedChange={x.setRays} aria-label="Show sensor rays" />
+          </label>
+          {!x.roundabout && <p className="text-[11px] text-amber-700 dark:text-amber-400">No roundabout here (a junction round an island): the experiment has nothing to drive.</p>}
+          <p className="text-[11px] text-muted-foreground">Results of the experimental engine, not to be compared with the main one&apos;s below as the same thing.</p>
+          {st && (
+            <div className="grid gap-0.5">
+              {row("Time", clock(st.t))}
+              {row("Cars on the sketch (sensing)", `${st.vehicles} (${st.spatialNow})`)}
+              {row("Came in / drove off", `${st.spawned} / ${st.finished}`)}
+              {row("Through", `${rate} veh/h`)}
+              {row("Mean trip", `${Math.round(st.meanTrip)} s`)}
+              {row("Collisions", st.collisions)}
+              {row("Stuck 60 s+", st.stuck)}
+              {row("Locks cleared (a car taken off)", st.deadlocks)}
+              {row("Missed their way out", st.missed)}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 /** the simulation speeds offered (× real time); 50× and 100× for quick runs of a small sketch, as fast as the browser can go (T196) */
 const SIM_SPEEDS = [1, 3, 10, 30, 50, 100];
-function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpeed, stats, onCopy }: {
+function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpeed, stats, onCopy, experiment }: {
   sketch: Sketch; params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean; simSpeed: number; setSimSpeed: (n: number) => void; stats: SimStats | null; onCopy: () => void;
+  /** (the Sketch window) the experimental engine's switch, its rays' switch, and its results (T213) */
+  experiment: { on: boolean; rays: boolean; stats: import("@/lib/experiments/spatial-roundabout/engine").SpatialStats | null; roundabout: boolean; set: (on: boolean) => void; setRays: (on: boolean) => void } | null;
 }) {
   // where cars come in
   const entries = entryLanes(sketch).length;
@@ -2708,6 +2775,7 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
       <ToggleGroup type="single" value={String(simSpeed)} onValueChange={v => v && setSimSpeed(Number(v))} aria-label="Simulation speed" className="w-full">
         {SIM_SPEEDS.map(n => <ToggleGroupItem key={n} value={String(n)} className="h-7 flex-1 px-1 text-xs">{n}×</ToggleGroupItem>)}
       </ToggleGroup>
+      {experiment && <ExperimentRow x={experiment} />}
       <BySpeedSwitch />
       {stats && (
         <div className="grid gap-0.5">
