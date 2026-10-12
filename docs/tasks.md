@@ -57,6 +57,8 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 | T225 | Access /home1: answer engine | Tatiana | 2026-10-12 | after T224 |
 | T226 | Access /home3: guided entry (all personas, need chips, deterministic navigator, free text to AI) | Tom | 2026-10-12 | |
 | T227 | Access /home2: instant grouped search (cmdk, ask-the-assistant row, /search page) | Alex | 2026-10-12 | after T222, T223 |
+| T228 | Chetani tender: unpack the 37 documents and extract each to markdown (tables kept), plus an inventory | Ramona | 2026-10-12 | /opt/project/projects/chetani/analysis |
+| T229 | Chetani tender response app (Evozon): Next.js latest, shadcn, Drizzle, local Postgres, subjecto; requirements of the caiet de sarcini, Evozon's modules from Info pachete, a coverage matrix, and the technical proposal as an inline-editable document (Romanian) | Bob | 2026-10-12 | deadline 19.10.2026; T213 paused for it; app on :7301 |
 | T206 | Collisions at entries crossing the outer ring: a ring car counts for a crossing unless it turns off before the crossing begins (base, the user's go); rev 338 16 runs: collisions 17 → 9, out/h −2% | Bob | 2026-10-11 | 97c6071 |
 | T205f | Ops view: bubbles kept the map layer's last child (a source-order test guards it); thinking dots pulse in turn (CSS, paused when hidden, still under Low power) | Alex | 2026-10-12 | admin 649dc86 (on admin-dev) |
 | T205e | Ops view: bubbles in their own top svg layer over everything on the map (moves with gestures); legend, zoom buttons, hover cards and code windows above | Alex | 2026-10-11 | admin a4c4170 (on admin-dev) |
