@@ -15,6 +15,7 @@ Commits are in this repo unless marked `admin:` (`/opt/project`). "admin-dev" = 
 
 | Id | Task | Owner | Since | Notes |
 |---|---|---|---|---|
+| T219c | genie: after the push, the project member still sees no ⋮ / restart on fluentech-taz: not deployed, or the roster rule (project_members) excludes a team-level member; find out, fix | Alex | 2026-10-13 | alice-scratch/t219c-still-no-menu.png |
 | T239 | Access: the search-first home work pushed to production main (24 commits, 3c269ab..20da582, the user's uncommitted edits left out; migration 0054 to run in vercel-build); no Vercel deployment registered on GitHub after 20 min | Alice | 2026-10-12 | the user's go; check the Vercel dashboard |
 | T193 | Claude bridge panel: code countdown / expired / used; each agent's last seen and a quiet hint; why a message stays 'sent'; 'pairing lost' after a server loss | Bob | 2026-10-11 | 273bea7 pushed; live check in the user's page pending |
 | T148 | Bistrița J696 (Drumul Sigmirului × Petru Maior): the roundabout drawn precisely from the imagery and OSM, as an agent patch; plus the merge starvation at c5258 Ramona found (l3179 held by l3178's stream) | Bob | 2026-10-10 | patch #5 (Sketch-window piece) applied by the user at rev 244; c5258 gone in the full T148 layout. The user has since redrawn J696 themselves (rev 274): waits on the user, whether to redo the main-plan patch on their drawing |
