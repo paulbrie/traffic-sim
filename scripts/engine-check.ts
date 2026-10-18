@@ -20,12 +20,13 @@ import { canJoin, createJunction, deleteJunction, setJunctionControl } from "../
 import { junctionRefs } from "../src/engine/refs";
 import { bayOutline, rowEnds } from "../src/engine/parking";
 import { mergeNetworks, mergeSettings } from "../src/state/merge";
-import { addNode, deleteLink, updateLink } from "../src/state/ops";
+import { addNode, coordinate, deleteLink, updateLink } from "../src/state/ops";
 import { mergeLanes as mergeSketchLanes, mergeRoads as mergeSketchRoads } from "../src/lib/sketch-merge";
 import { CONNECTOR_KINK_LIMIT, connectorKinks, turnsAt, unkinkPts } from "../src/lib/connector-kinks";
 import { tidySketch } from "../src/lib/sketch-tidy";
 import { deadEndTurnarounds } from "../src/lib/dead-ends";
 import { deleteLanes, takeOutOfRoad } from "../src/lib/road-lanes";
+import { applyEdit } from "../src/lib/bridge-edits";
 import { alignmentOf, laneLength, pointAt, settle as settleSketch, sliceRoad, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
 const net = sampleTown();
 const c = compile(net);
@@ -1510,5 +1511,95 @@ function alongKerb(input: any): any {
     && ol.roads[0].align?.ref === "b" && midY(ol, "b") === -3.5 && midY(ol, "c") === -7 && midY(ol, "a") === 0;
   const ok = middle && lead && last && out;
   console.log(`road lanes: the middle one deleted, the rest packed ${middle}, the lead deleted ${lead}, the last one (the road goes) ${last}, the middle one and the lead taken out, the rest where they were ${out} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// the Claude bridge's edit actions (T189, bridge-edits.ts): lanes, a connector, a give-way, a junction with lights, a road, in a
+// batch (all or nothing); and arguments checked strictly (a string for a number, an unknown key, a lane not there: refused)
+{
+  const empty: Sketch = { lanes: [], connectors: [], roads: [], junctions: [] };
+  const b = applyEdit(empty, "batch", { actions: [
+    { action: "addLane", args: { points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], speed: 50 } },
+    { action: "addLane", args: { points: [{ x: 110, y: 10 }, { x: 110, y: 100 }] } },
+    { action: "addConnector", args: { from: { lane: "$0" }, to: { lane: "$1" } } },
+    { action: "setControl", args: { lanes: ["$0"], control: "yield" } },
+    { action: "addJunction", args: { outline: [{ x: 95, y: -8 }, { x: 120, y: -8 }, { x: 120, y: 15 }, { x: 95, y: 15 }] } },
+    { action: "groupRoad", args: { lanes: ["l1"], name: "Main" } },
+  ] });
+  const k = settleSketch(b.sketch), c = k.connectors[0];
+  const built = k.lanes.length === 2 && c?.from.lane === "l1" && c.from.s === 100 && c.to.lane === "l2" && c.to.s === 0 && k.lanes[0].control === "yield" && k.lanes[0].speed === 50
+    && k.junctions.length === 1 && k.roads.some(r => r.name === "Main" && r.lanes.join() === "l1") && (b.result.results as unknown[]).length === 6;
+  const lit = applyEdit(k, "setControl", { lanes: ["l1"], control: "lights" }).sketch, lights = !!lit.junctions[0].lights && !lit.lanes[0].control;
+  const refused = (action: string, args: unknown) => { try { applyEdit(k, action, args); return false; } catch { return true; } };
+  const strict = refused("addLane", { points: [{ x: "0", y: 0 }, { x: 10, y: 0 }] }) && refused("addLane", { points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], widht: 3 })
+    && refused("addConnector", { from: { lane: "l9" }, to: { lane: "l2" } }) && refused("setControl", { lanes: ["l1"], control: "give way" })
+    && refused("moveConnectorEnd", { connector: "c1", end: "from", s: 500 }) && refused("setLights", { junction: "j1", on: "yes" }) && refused("nothing", {})
+    && refused("batch", { actions: [{ action: "deleteLanes", args: { lanes: ["l1"] } }, { action: "deleteLanes", args: { lanes: ["l1"] } }] });
+  const moved = applyEdit(k, "moveConnectorEnd", { connector: "c1", end: "from", s: 90 }).sketch.connectors[0].from.s === 90;
+  const gone = applyEdit(k, "deleteLanes", { lanes: ["l2"] }).sketch, deleted = gone.lanes.length === 1 && !gone.connectors.length;
+  // (T199: a batch starting with addConnector answers ok, and adds one connector; run a second time on what it left it is
+  // refused, as nothing must run a command twice: the page runs each command id once, the server sends it to one stream)
+  const one = { actions: [{ action: "addConnector", args: { from: { lane: "l2" }, to: { lane: "l1", s: 10 } } }] };
+  const first = applyEdit(k, "batch", one), once = first.sketch.connectors.length === k.connectors.length + 1 && (first.result.results as { connector: string }[])[0].connector === "c2" && refused2(first.sketch);
+  function refused2(after: Sketch) { try { applyEdit(after, "batch", one); return false; } catch (e) { return String(e).includes("already joined"); } }
+  const ok = built && lights && strict && moved && deleted && once;
+  console.log(`bridge edits: a batch built two lanes, a connector, a give-way, a junction, a road ${built}, lights ${lights}, bad arguments refused ${strict}, an end moved ${moved}, a lane deleted with its connector ${deleted}, a batch addConnector answered ok and applied once ${once} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+// ticket #24: a junction made of road ends only (none with two roads), joined by lane connectors, set to lights: one
+// controller over all its points (each end alone has a single road, so none got phases of its own: no lights at all,
+// traffic sorted out by its paths alone); its approaches facing each other share a phase, the lights shown on the map
+{
+  const W = makeNode(-200, 0), A = makeNode(-8, 0, "lights", false), B = makeNode(8, 0, "lights", false), E = makeNode(200, 0);
+  const N = makeNode(0, -200), C = makeNode(0, -8, "lights", false), D = makeNode(0, 8, "lights", false), S = makeNode(0, 200);
+  const wa = makeLink(W, A, 1, 0), be = makeLink(B, E, 1, 0), nc = makeLink(N, C, 1, 0), ds = makeLink(D, S, 1, 0);
+  A.connectors = [{ in: `${wa.id}:1`, a: 0, out: `${be.id}:1`, b: 0 }, { in: `${wa.id}:1`, a: 0, out: `${ds.id}:1`, b: 0 }];
+  C.connectors = [{ in: `${nc.id}:1`, a: 0, out: `${ds.id}:1`, b: 0 }, { in: `${nc.id}:1`, a: 0, out: `${be.id}:1`, b: 0 }];
+  const net: Network = { version: 1, nodes: [W, A, B, E, N, C, D, S], links: [wa, be, nc, ds], stops: [], lines: [] };
+  const c = compile(net), a = c.nodeById.get(A.id)!, cc = c.nodeById.get(C.id)!;
+  const one = a.cluster.length === 4 && a.cluster.every(k => k.signals === a);
+  const phases = a.phases.length === 2 && JSON.stringify(a.phases.map(p => p.length)) === JSON.stringify(cc.phases.map(p => 1 - p.length));
+  const heads = buildRoadGeo(c, net).signals.filter(s => s.kind === "lights" && (s.nodeIdx === a.idx || s.nodeIdx === cc.idx)).length === 2;
+  const sim = new Sim(c, { cars: 0, trucks: 0, seed: 1 });
+  const aspects = new Set<string>();
+  for (let t = 0; t < 1200; t++) { sim.step(); aspects.add(`${sim.signalFor(a.idx, 0)}/${sim.signalFor(cc.idx, 0)}`); }
+  const cycles = aspects.has("green/red") && aspects.has("red/green") && !aspects.has("green/green");
+  const ok = one && phases && heads && cycles;
+  console.log(`lights over a junction of road ends: one controller ${one}, its two approaches in turn ${phases}, heads on the map ${heads}, cycling (never both green) ${cycles} [${[...aspects].join(" ")}] | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+// ticket #25: two junctions with lights put in one signal group from a selection: one cycle, offsets 0, so they switch
+// together (on their own, with different greens, they drift apart); a junction over several points (#24) goes in once,
+// by the point its lights run from
+{
+  const cross = (x: number, green: number) => {
+    const J = { ...makeNode(x, 0, "lights", false), signal: { ...makeNode(0, 0).signal, green, actuated: false } };
+    const arms = [makeNode(x - 60, 0), makeNode(x + 60, 0), makeNode(x, -150), makeNode(x, 150)];
+    return { J, nodes: [J, ...arms], links: arms.map(a => makeLink(a, J)) };
+  };
+  const a = cross(0, 20), b = cross(200, 35);
+  const net: Network = { version: 1, nodes: [...a.nodes, ...b.nodes], links: [...a.links, ...b.links], stops: [], lines: [] };
+  const inStep = (n: Network) => {
+    const c = compile(n), sim = new Sim(c, { cars: 0, trucks: 0, seed: 1 }), ia = c.nodeById.get(a.J.id)!.idx, ib = c.nodeById.get(b.J.id)!.idx;
+    let same = 0;
+    for (let t = 0; t < 3000; t++) { sim.step(); const x = sim.nodeState(ia), y = sim.nodeState(ib); if (x.phase === y.phase && x.stage === y.stage) same++; }
+    return same / 3000;
+  };
+  const alone = inStep(net), r = coordinate(net, compile(net), [a.J.id, b.J.id]);
+  const g = r?.net.signalGroups?.find(x => x.id === r.group);
+  const grouped = !!g && g.members.length === 2 && g.members.every(m => m.offset === 0), together = r ? inStep(r.net) : 0;
+  // (with the road-end junction of #24: its four points selected, one member)
+  const W = makeNode(-200, 400), A = makeNode(-8, 400, "lights", false), B = makeNode(8, 400, "lights", false), E = makeNode(200, 400);
+  const N = makeNode(0, 200, "lights"), C = makeNode(0, 392, "lights", false), D = makeNode(0, 408, "lights", false), S = makeNode(0, 600);
+  const wa = makeLink(W, A, 1, 0), be = makeLink(B, E, 1, 0), nc = makeLink(N, C, 1, 0), ds = makeLink(D, S, 1, 0);
+  A.connectors = [{ in: `${wa.id}:1`, a: 0, out: `${be.id}:1`, b: 0 }, { in: `${wa.id}:1`, a: 0, out: `${ds.id}:1`, b: 0 }];
+  C.connectors = [{ in: `${nc.id}:1`, a: 0, out: `${ds.id}:1`, b: 0 }, { in: `${nc.id}:1`, a: 0, out: `${be.id}:1`, b: 0 }];
+  N.gateway = true; N.control = "priority";
+  const net2: Network = { ...net, nodes: [...net.nodes, W, A, B, E, N, C, D, S], links: [...net.links, wa, be, nc, ds] };
+  const r2 = coordinate(net2, compile(net2), [a.J.id, A.id, B.id, C.id, D.id]);
+  const ends = !!r2 && r2.junctions.length === 2 && r2.junctions.includes(a.J.id) && r2.net.signalGroups!.find(x => x.id === r2.group)!.members.length === 2;
+  const one = coordinate(net, compile(net), [a.J.id]) === null;
+  const ok = alone < 0.9 && grouped && together === 1 && ends && one;
+  console.log(`coordinate junctions: in step on their own ${(alone * 100).toFixed(0)}%, grouped (offsets 0) ${grouped}, in step together ${(together * 100).toFixed(0)}%, a road-end junction in once ${ends}, one junction refused ${one} | ok ${ok}`);
   if (!ok) process.exit(1);
 }

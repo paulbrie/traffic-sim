@@ -34,7 +34,7 @@ Every line of a message between sessions that means something starts with a tag:
 | `DONE: Tnn …` | the owner | finished, with evidence (checks run, numbers, screenshots) |
 | `CANCELLED: Tnn [why]` | Alice | dropped |
 | `CLAIM: <paths>` | anyone | before editing files others might touch |
-| `RELEASE: <paths>` | anyone | done with them |
+| `RELEASE: <paths>` | anyone | done with them; always with your DONE (Agents City draws open claims as red curves). Format for both: full paths, comma-separated, nothing before the first path (no task id); notes after the last |
 | `COMMIT: <hash>` / `PUSHED: <hash>` | anyone | what went into git |
 
 Untagged text is a note. Sessions report to Alice and take tasks only from her; two owners of the same file agree
@@ -68,11 +68,26 @@ between them who goes first and tell Alice.
   says `railway` first. Reads are fine. Writes only to your own test cities and plans, or with Alice's or the user's say;
   never to the user's plans (Bistrița: never, see The user's plans) or to other accounts. Schema changes
   only through the migrations (`npm run db:migrate`).
-- **Admin repo (`/opt/project`).** No commit or deploy by Alex or Tom; the user does it, or Alice when the user asks.
-  Local `main` there has diverged from `origin/main`; admin work goes up from a clean worktree on `origin/main`.
-  The admin preview (`admin-dev.service`, `/admin-dev`, port 3003, `admin-ctl dev-start` / `dev-stop`) may run when
-  needed (the user's decision, 2026-10-10, after the 2xlarge): ask Alice first, stop it when done. It serves
-  `/opt/project/admin`'s tree. Admin work is coded, tested, linted and built (`next build`), then the user deploys it.
+  In every project (Access, Chetani, new ones): the shell's `DATABASE_URL` points at `admin_dashboard`, and dotenv /
+  drizzle-kit / Next don't override it, so any tool reading `DATABASE_URL` hits the admin's database. A new project uses
+  its own variable name (e.g. `CHETANI_DATABASE_URL`), or passes the URL explicitly, and every migrate script refuses
+  unless `current_database()` is the project's own (2026-10-12: a Chetani migration landed in `admin_dashboard`).
+  Next dev servers also inherit `NODE_ENV=production`, `__NEXT_PROCESSED_ENV` and `TURBOPACK` from the admin's shell,
+  which make Next skip `.env`: start them with `env -u NODE_ENV -u DATABASE_URL -u __NEXT_PROCESSED_ENV -u TURBOPACK -u NEXT_PUBLIC_BASE_PATH -u NEXT_DEPLOYMENT_ID …` (the base path would otherwise leak the admin's prefix).
+- **Admin repo (`/opt/project`).** No push or deploy by Alex or Tom (local commits are fine, see below); the user
+  does it, or Alice when the user asks.
+  `/opt/project` follows `origin/main`. No worktrees for admin work (the user's decision, 2026-10-11): Alex and Tom
+  edit `/opt/project/admin` directly. The admin preview (`admin-dev.service`, `/admin-dev`, port 3003) serves that
+  tree and hot-reloads each save, so the work shows on admin-dev as it's made; the live `/admin` keeps its own build
+  (`.next-prod`) until a deploy. So:
+  - CLAIM the files before editing (both work in one tree), and RELEASE after.
+  - Commit locally in `/opt/project` when a task is DONE (one commit per task, `admin: …`); no push, no deploy.
+  - Never `npm install` there without asking Alice: it changes the live admin's `node_modules`. No npx-fetched tools.
+  - No `next build` there: it writes `.next`, which the running preview uses. Checks are tests, `tsc` and lint
+    (`node_modules/.bin/…`); the full build is the deploy's (`admin-ctl deploy` builds `.next-prod`).
+  Push and deploy only on the user's word (`git push origin main`, then `sudo admin-ctl deploy`; `npm install`
+  first when dependencies changed, since deploy doesn't install). The preview runs again (the user's decision,
+  2026-10-11, memory allowing).
 - **Pushes.** If your push is denied, stop and tell Alice; nobody pushes it for you (the user does).
 - **Approvals** come from the user only. The user talks mainly to Alice (the user's decision, 2026-10-10), so an
   approval the user gives in Alice's session counts when Alice relays it in a line of its own:
@@ -107,6 +122,11 @@ between them who goes first and tell Alice.
   `http://localhost:<port>/projects/trafficsim`: the same Railway dev database and test logins. Start it only for a
   check and stop it right after (about 1–2 GB each; Alice paces memory). The final check, after Alice has pulled the
   push, is on the shared dev instance (port 7000), which stays the reference; Ramona's tests run there.
+- **Testing behind nginx (every project).** Hosted apps sit behind nginx under a base path
+  (`https://paul.cloud.teleporthq.ai/projects/<name>`). A feature isn't done until it's checked there: test locally
+  with the same base path, and once Alice has updated the served tree, retest on the hosted URL. nginx returns 502 for
+  response headers over ~4 KB (2026-10-12: Access's ask mode sent its citations in a header), so large data goes in the
+  body, never in headers.
 - **Tools and style.** No prettier or npx-fetched tools; keep each file's style. Browser work with Vercel's
   agent-browser (`/usr/bin/agent-browser`), not Playwright scripts, so the admin's /chrome page can show it; close
   its sessions after a run. If something can't be done with it, ask Alice before using anything else.

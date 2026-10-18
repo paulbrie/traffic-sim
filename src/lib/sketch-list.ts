@@ -20,6 +20,10 @@ const inner = (k: Sketch | undefined): Sketch | undefined => {
 /** nothing drawn in it */
 export const emptyContent = (k: Sketch | undefined) => !k || (!k.lanes.length && !k.junctions.length && !k.connectors.length && !k.crossings?.length && !k.zones?.length);
 
+/** nothing at all in it: its own content, its links, the Sketch window's sketch and the saved ones all empty (T185) */
+export const nothingIn = (k: Sketch | undefined) =>
+  emptyContent(k) && !k?.links?.length && emptyContent(k?.scratch) && !k?.sketches?.some(x => !emptyContent(x.sketch));
+
 /** the saved sketches (the first, "Sketch 1", if none is), and which is open */
 export function sketchList(sk: Sketch): { list: SavedSketch[]; open: string } {
   if (sk.sketches?.length) return { list: sk.sketches, open: sk.sketches.some(x => x.id === sk.sketchOpen) ? sk.sketchOpen! : sk.sketches[0].id };

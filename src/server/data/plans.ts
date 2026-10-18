@@ -10,6 +10,7 @@ import { DEFAULT_SETTINGS, emptyNetwork, type Network, type PlanSettings } from 
 import { sanitizeNetwork, sanitizeSettings } from "@/engine/validate";
 import { sanitizeUnderlay } from "@/lib/underlay";
 import { sanitizeSketch, type Sketch } from "@/lib/lane-sketch";
+import { emptiesPlan } from "@/lib/plan-empty";
 import type { CityId, PlanId, VersionId, ViewerId } from "@/lib/ids";
 import type { CanEditCity, CanEditPlan, CanOwnPlan, CanViewPlan } from "../proofs/policy";
 import type { VersionOfPlan } from "../proofs/version-of-plan";
@@ -139,7 +140,11 @@ export async function planState<U, P>(plan: Named<P, PlanId>, _proof: CanViewPla
   };
 }
 
-export type SaveResult = { ok: true; revision: number; savedAt: string } | { ok: false; reason: "conflict" | "missing" | "forbidden"; revision?: number };
+export type SaveResult =
+  | { ok: true; revision: number; savedAt: string }
+  | { ok: false; reason: "conflict" | "missing" | "forbidden"; revision?: number }
+  /** refused: it would empty `what` ("the road network", "the sketch"), which the stored revision has (T186) */
+  | { ok: false; reason: "empty"; what: string; revision: number };
 
 /**
  * Saves the plan if nobody else saved in between (optimistic concurrency on `revision`, unless `force`), and
@@ -165,7 +170,14 @@ export async function savePlan<U, P>(
   const network = sanitizeNetwork(raw), settings = sanitizeSettings(input.settings), underlay = sanitizeUnderlay(input.underlay), sketch = sanitizeSketch(input.sketch);
   const now = new Date();
   const where = input.force ? eq(schema.plans.id, id) : and(eq(schema.plans.id, id), eq(schema.plans.revision, input.revision));
-  const row = await db.transaction(async tx => {
+  type Refused = { empty: string; revision: number };
+  const row = await db.transaction(async (tx): Promise<{ revision: number; cityId: string } | Refused | null> => {
+    // (an ordinary save never empties a plan that has something: T186; restores (History, a file, an agent patch) pass `restore`)
+    if (!input.restore) {
+      const [cur] = await tx.select({ network: schema.plans.network, sketch: schema.plans.sketch, revision: schema.plans.revision }).from(schema.plans).where(where).for("update");
+      const what = cur ? emptiesPlan({ network: sanitizeNetwork(cur.network), sketch: sanitizeSketch(cur.sketch) }, { network, sketch }) : null;
+      if (cur && what) return { empty: what, revision: cur.revision };
+    }
     const [r] = await tx
       .update(schema.plans)
       .set({ network, settings, underlay, sketch, revision: sql`${schema.plans.revision} + 1`, updatedAt: now })
@@ -177,6 +189,10 @@ export async function savePlan<U, P>(
     await tx.update(schema.cities).set({ updatedAt: now }).where(eq(schema.cities.id, r.cityId));
     return r;
   });
+  if (row && "empty" in row) {
+    console.error(`[save] refused for plan ${id}: it would empty ${row.empty}, which revision ${row.revision} has`);
+    return { ok: false, reason: "empty", what: row.empty, revision: row.revision };
+  }
   if (row) return { ok: true, revision: row.revision, savedAt: now.toISOString() };
   const [cur] = await db.select({ revision: schema.plans.revision }).from(schema.plans).where(eq(schema.plans.id, id));
   return cur ? { ok: false, reason: "conflict", revision: cur.revision } : { ok: false, reason: "missing" };

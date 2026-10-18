@@ -5,12 +5,16 @@
  * itself knows nothing about the editor.
  */
 type Fn = (args: Record<string, unknown>) => unknown;
+/** the user's leave for agent edits (T189), as the server sets it on each edit command (see src/server/bridge.ts) */
+export type EditPermit = { mode: "off" } | { mode: "all" } | { mode: "sketch"; plan: string; sketch: string; name: string };
+/** an edit done: the answer to the agent, where on the page it was (client px, the agent's cursor goes there), a few words for the user */
+export interface EditOutcome { result: unknown; at: { x: number; y: number } | null; said: string }
 
-function registry() {
-  const fns = new Map<string, Fn>();
+function registry<F = Fn>() {
+  const fns = new Map<string, F>();
   return {
     /** offer `name` (until the function returned is called) */
-    register(name: string, fn: Fn) {
+    register(name: string, fn: F) {
       fns.set(name, fn);
       return () => { if (fns.get(name) === fn) fns.delete(name); };
     },
@@ -21,6 +25,15 @@ function registry() {
 
 /** actions an agent can ask for (`app` commands) */
 export const bridgeApp = registry();
+/**
+ * Edit actions (T189: `app` commands that change the plan, only with the user's leave): each given the leave the server
+ * sent with it, to check the editor and sketch it changes against
+ */
+export const bridgeEdit = registry<(args: Record<string, unknown>, permit: Exclude<EditPermit, { mode: "off" }>) => EditOutcome | Promise<EditOutcome>>();
+/** the plan and sketch an agent may be allowed to edit alone ("this sketch only"): the one the Sketch window has open, if a V2 plan is */
+let editScope: (() => { plan: string; sketch: string; name: string } | null) | null = null;
+export const setBridgeEditScope = (f: NonNullable<typeof editScope>) => { editScope = f; return () => { if (editScope === f) editScope = null; }; };
+export const bridgeEditScope = () => editScope?.() ?? null;
 /** state an agent can read (`state` commands), and what is at a point of the map (`hitTest`, for annotations) */
 export const bridgeState = registry();
 

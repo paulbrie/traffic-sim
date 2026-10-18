@@ -2,7 +2,7 @@
  * The Claude bridge's agent side (docs/claude-bridge.md): an MCP server over stdio giving a Claude session tools
  * to work in a page of the app the user paired with it (the code shown in the page's bridge panel): read the page
  * (accessibility tree, screenshot, the app's state), act in it (click, type, keys, navigate, app actions) and wait
- * for the user's annotations and messages. With the user's leave ("Allow agent tabs" in the hub's panel), it can also open
+ * for the user's annotations and messages (which also come with any tool's answer, T191). With the user's leave ("Allow agent tabs" in the hub's panel), it can also open
  * tabs of its own in the user's browser (bridge_open_tab), each marked as the agent's, and work in them (any page tool's
  * `pageId`; by default the tab it opened last, else the hub). No dependencies: MCP's JSON-RPC by hand.
  *
@@ -36,6 +36,21 @@ async function command(type: string, args: Json = {}): Promise<unknown> {
   const r = await call("/agent/command", { body: { type, args: rest, ...(s(pageId) ? { pageId } : {}) } });
   if (r.ok !== true) throw new Error(s(r.error) ?? "The page couldn't do it");
   return r.data;
+}
+
+/** the user's messages, annotations and watched UI changes since the last look, waiting up to `wait` seconds for one (T191:
+ * every tool call looks too, without waiting, so an agent at work sees them at its next call, not only in bridge_wait_events) */
+async function pending(wait: number): Promise<Content[]> {
+  const r = await call(`/agent/events?after=${after}&wait=${wait}`);
+  const evs = Array.isArray(r.events) ? r.events.map(obj) : [];
+  after = Number(r.seq ?? after);
+  const out: Content[] = [];
+  for (const e of evs) {
+    const { screenshot, ...rest } = e, m = s(screenshot)?.match(/^data:([^;]+);base64,(.*)$/);
+    out.push(...text(rest));
+    if (m) out.push({ type: "image", mimeType: m[1], data: m[2] });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- tools
@@ -96,25 +111,28 @@ const TOOLS: Tool[] = [
   { name: "bridge_key", description: "Press a key or chord, e.g. 'Escape', 'Control+k', 'p'.", inputSchema: { type: "object", properties: { ...page, key: { type: "string" } }, required: ["key"] }, run: async a => text(await command("key", a)) },
   { name: "bridge_navigate", description: "Go to another page of the app (same origin).", inputSchema: { type: "object", properties: { ...page, url: { type: "string" } }, required: ["url"] }, run: async a => text(await command("navigate", a)) },
   {
-    name: "bridge_app", description: "An action of the editor: select {kind,id}, goTo {kind,id} (kind: road, lane, connector, junction, link, crossing, car), view {x,y,scale?}, run, pause, speed {speed}, replay {t}, restart. On a V2 plan also: panel {id, open} (fold an inspector panel), console {open?, kind?, text?, editor?} (kind: all, stuck, collision, jump, deadlock, breakdown, towed), search {open, query?, editor?}, layers {set: {id: bool}}, sort {table: junctions|roads, by, flip?, editor?}, sketchWindow {open?} (the Sketch window, as its button), mode {mode: plan|3d} (the plan's map from above or in 3D), route {from, to} or {clear: true} (the route the cars would take from a lane to an exit lane: read editors.<editor>.route.result); editor: plan or scratch (the Sketch window), default the one the user is at.",
+    name: "bridge_app", description: "An action of the editor: select {kind,id}, goTo {kind,id} (kind: road, lane, connector, junction, link, crossing, car), view {x,y,scale?}, run, pause, speed {speed}, replay {t}, restart. On a V2 plan also: panel {id, open} (fold an inspector panel), console {open?, kind?, text?, editor?} (kind: all, stuck, collision, jump, deadlock, breakdown, towed), search {open, query?, editor?}, layers {set: {id: bool}}, sort {table: junctions|roads, by, flip?, editor?}, sketchWindow {open?} (the Sketch window, as its button), mode {mode: plan|3d} (the plan's map from above or in 3D), route {from, to} or {clear: true} (the route the cars would take from a lane to an exit lane: read editors.<editor>.route.result); editor: plan or scratch (the Sketch window), default the one the user is at. Edits (only if the user allows agent edits in the Claude panel; each one undo step; args strict, unknown keys refused): addLane {points:[{x,y}…], width?, speed?, level?, curved?}, deleteLanes {lanes}, reshapeLane {lane, points}, movePoint {lane, i, x, y}, addConnector {from:{lane, s?}, to:{lane, s?}, bends?, straight?}, deleteConnectors {connectors}, moveConnectorEnd {connector, end: from|to, s}, setControl {lanes, control: yield|stop|lights|none}, setLights {junction, on}, groupRoad {lanes, name?}, addJunction {outline, name?}, deleteJunctions {junctions}, roundabout {x, y, r}, batch {actions:[{action, args}]} (one undo step, all or nothing); each takes editor?; and the plan's sketches: openSketch {id}, newSketch {name?}, duplicateSketch {id?, name?}. See docs/claude-bridge.md.",
     inputSchema: { type: "object", properties: { ...page, action: { type: "string" }, args: { type: "object" } }, required: ["action"] },
     run: async a => text(await command("app", { action: s(a.action), args: obj(a.args) })),
+  },
+  {
+    name: "bridge_report", description: "Show the user a report in the page (a window over it, kept in the Claude panel): a title, an intro, a table of results (columns, rows of text or numbers, rows to highlight from 0, a note under it) and findings, one per line. Plain text only; at most 14 columns, 60 rows, 24 findings.",
+    inputSchema: {
+      type: "object", required: ["title"],
+      properties: {
+        ...page, title: { type: "string" }, intro: { type: "string" },
+        table: { type: "object", properties: { columns: { type: "array", items: { type: "string" } }, rows: { type: "array", items: { type: "array", items: { type: ["string", "number", "null"] } } }, highlight: { type: "array", items: { type: "number" } }, note: { type: "string" } }, required: ["columns", "rows"] },
+        findings: { type: "array", items: { type: "string" } },
+      },
+    },
+    run: async a => text(await command("report", a)),
   },
   {
     name: "bridge_wait_events", description: "The user's annotations and messages from the page since the last call, waiting up to `wait` seconds (25 max) for one. Annotations come with a note, a screenshot crop and what is under them. Also 'ui' events, { changed: { path: value } }, for the UI state paths you watch (bridge_state watch).",
     inputSchema: { type: "object", properties: { wait: { type: "number" } } },
     run: async a => {
-      const r = await call(`/agent/events?after=${after}&wait=${Math.min(25, Math.max(0, Number(a.wait ?? 20)))}`);
-      const evs = Array.isArray(r.events) ? r.events.map(obj) : [];
-      after = Number(r.seq ?? after);
-      if (!evs.length) return text("No annotation, message or UI change yet.");
-      const out: Content[] = [];
-      for (const e of evs) {
-        const { screenshot, ...rest } = e, m = s(screenshot)?.match(/^data:([^;]+);base64,(.*)$/);
-        out.push(...text(rest));
-        if (m) out.push({ type: "image", mimeType: m[1], data: m[2] });
-      }
-      return out;
+      const out = await pending(Math.min(25, Math.max(0, Number(a.wait ?? 20))));
+      return out.length ? out : text("No annotation, message or UI change yet.");
     },
   },
 ];
@@ -134,7 +152,15 @@ createInterface({ input: process.stdin }).on("line", async line => {
     if (method === "tools/call") {
       const tool = TOOLS.find(t => t.name === s(params.name));
       if (!tool) return send({ id, error: { code: -32602, message: `Unknown tool ${s(params.name)}` } });
-      try { return send({ id, result: { content: await tool.run(obj(params.arguments)) } }); }
+      try {
+        const content = await tool.run(obj(params.arguments));
+        // (what the user sent from the page meanwhile, with any tool's answer: not only when the agent waits for it)
+        if (token && tool.name !== "bridge_wait_events") {
+          const extra = await pending(0).catch(() => [] as Content[]);
+          if (extra.length) content.push(...text("Meanwhile, from the page (the user's messages and notes, or UI changes you watch):"), ...extra);
+        }
+        return send({ id, result: { content } });
+      }
       catch (e) { return send({ id, result: { content: text(e instanceof Error ? e.message : String(e)), isError: true } }); }
     }
     send({ id, error: { code: -32601, message: `Method not found: ${method}` } });

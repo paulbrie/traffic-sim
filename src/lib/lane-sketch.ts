@@ -35,6 +35,10 @@ export interface SketchLane {
   level?: number;
   /** a lane in no road: its speed limit (km/h; default: its road's, else the sketch's traffic speed) */
   speed?: number;
+  /** a bus lane: closed to ordinary cars, at the road's border or in the middle */
+  bus?: true;
+  /** a bike lane (ticket #20): drawn and kept with the plan, no vehicle on it for now (the simulation leaves it out, see `drivable`) */
+  bike?: true;
 }
 /** a place on a lane, `s` metres from its start */
 export interface LaneAt { lane: string; s: number }
@@ -91,6 +95,10 @@ export interface Sketch {
   crossings?: SketchCrossing[];
   /** journeys between a particular way in and way out (see `SketchJourney`) */
   journeys?: SketchJourney[];
+  /** bus stops, a point on a lane (see `SketchStop`) */
+  stops?: SketchStop[];
+  /** bus lines, each a loop of stops (see `SketchBusLine`) */
+  busLines?: SketchBusLine[];
   /** junctions' lights run together (see `SketchSignalGroup`) */
   signalGroups?: SketchSignalGroup[];
   /** areas drawn and labelled (neighbourhoods, zones; see sketch-zones.ts): for reading the plan, the cars don't see them */
@@ -129,6 +137,46 @@ export function deleteJourney(sk: Sketch, id: string): Sketch {
   const rest = (sk.journeys ?? []).filter(x => x.id !== id);
   const { journeys: _, ...out } = sk;
   return rest.length ? { ...out, journeys: rest } : out;
+}
+/** a bus stop: a point on a lane, `s` metres from its start */
+export interface SketchStop { id: string; name: string; lane: string; s: number }
+/** a bus line: a loop of stops (back to the first after the last), its colour on the map, and `buses` running on it at once */
+export interface SketchBusLine { id: string; name: string; color: string; stops: string[]; buses: number }
+export const BUS_LINE_COLORS = ["#d99800", "#2f6fb5", "#9a4a40", "#3f8f5f", "#8a4fae", "#c0527a"];
+/** a new stop on `lane`, `s` metres along it (the next free id) */
+export function addStop(sk: Sketch, lane: string, s: number): [Sketch, SketchStop] {
+  const used = new Set((sk.stops ?? []).map(x => x.id));
+  let n = used.size + 1;
+  while (used.has(`stop${n}`)) n++;
+  const stop: SketchStop = { id: `stop${n}`, name: `Stop ${n}`, lane, s };
+  return [{ ...sk, stops: [...(sk.stops ?? []), stop] }, stop];
+}
+export function updateStop(sk: Sketch, id: string, patch: Partial<Omit<SketchStop, "id">>): Sketch {
+  return { ...sk, stops: (sk.stops ?? []).map(x => (x.id === id ? { ...x, ...patch } : x)) };
+}
+export function deleteStop(sk: Sketch, id: string): Sketch {
+  const stops = (sk.stops ?? []).filter(x => x.id !== id);
+  const busLines = (sk.busLines ?? []).map(l => (l.stops.includes(id) ? { ...l, stops: l.stops.filter(x => x !== id) } : l));
+  const { stops: _s, busLines: _b, ...out } = sk;
+  return { ...out, ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}) };
+}
+/** a new bus line, empty of stops (the next free id, the next unused preset colour) */
+export function addBusLine(sk: Sketch): [Sketch, SketchBusLine] {
+  const used = new Set((sk.busLines ?? []).map(x => x.id));
+  let n = used.size + 1;
+  while (used.has(`line${n}`)) n++;
+  const usedColors = new Set((sk.busLines ?? []).map(x => x.color));
+  const color = BUS_LINE_COLORS.find(c => !usedColors.has(c)) ?? BUS_LINE_COLORS[n % BUS_LINE_COLORS.length];
+  const line: SketchBusLine = { id: `line${n}`, name: `Line ${n}`, color, stops: [], buses: 2 };
+  return [{ ...sk, busLines: [...(sk.busLines ?? []), line] }, line];
+}
+export function updateBusLine(sk: Sketch, id: string, patch: Partial<Omit<SketchBusLine, "id">>): Sketch {
+  return { ...sk, busLines: (sk.busLines ?? []).map(x => (x.id === id ? { ...x, ...patch } : x)) };
+}
+export function deleteBusLine(sk: Sketch, id: string): Sketch {
+  const rest = (sk.busLines ?? []).filter(x => x.id !== id);
+  const { busLines: _, ...out } = sk;
+  return rest.length ? { ...out, busLines: rest } : out;
 }
 /**
  * A zebra crossing, as V1's: from one kerb `a` to the other `b`, `width` metres along the traffic, `peds`
@@ -301,6 +349,18 @@ export function samples(sh: LaneShape, step = 1): Pt[] {
   if (sh.kind === "line") return linePath(sh);
   const n = Math.max(8, Math.ceil(laneLength(sh) / step));
   return Array.from({ length: n + 1 }, (_, i) => pointAt(sh, (laneLength(sh) * i) / n).p);
+}
+
+/** a lane's points at most `step` metres apart (a line's corners kept, its straight runs cut up), each with how far along it is */
+export function densePoints(sh: LaneShape, step: number): { p: Pt; s: number }[] {
+  const pts = samples(sh, step), out = [{ p: pts[0], s: 0 }];
+  let s = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], d = dist(a, b), n = Math.max(1, Math.ceil(d / step));
+    for (let k = 1; k <= n; k++) out.push({ p: { x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n }, s: s + (d * k) / n });
+    s += d;
+  }
+  return out;
 }
 
 /** the place on the lane nearest to `p`, and how far `p` is from it */
@@ -930,6 +990,48 @@ export function unlink(sk: Sketch, id: string): Sketch {
 /** a stop or yield line put at a lane's end, or taken away (null) */
 export function setControl(sk: Sketch, id: string, control: LaneControl | null): Sketch {
   return { ...sk, lanes: sk.lanes.map(l => { if (l.id !== id) return l; const next = { ...l }; if (control) next.control = control; else delete next.control; return next; }) };
+}
+
+/** a lane made (or no longer) a bus lane: closed to ordinary cars */
+export function setBusLane(sk: Sketch, id: string, bus: boolean): Sketch {
+  return setLaneUse(sk, id, bus ? "bus" : "car");
+}
+
+/** what a lane is for: cars (and trucks), buses only, or bikes (ticket #20) */
+export type LaneUse = "car" | "bus" | "bike";
+export const laneUse = (l: SketchLane): LaneUse => (l.bike ? "bike" : l.bus ? "bus" : "car");
+/** a bike lane's width when one is drawn, or a lane of the usual width made one (m) */
+export const BIKE_LANE_WIDTH = 2;
+/**
+ * A lane made for cars, buses or bikes (one at a time). Made a bike lane, a lane of the usual car width is narrowed to
+ * a bike lane's; made a car or bus lane again, a bike lane's width goes back to the usual.
+ */
+export function setLaneUse(sk: Sketch, id: string, use: LaneUse): Sketch {
+  return {
+    ...sk,
+    lanes: sk.lanes.map(l => {
+      if (l.id !== id || laneUse(l) === use) return l;
+      const next = { ...l };
+      delete next.bus; delete next.bike;
+      if (use === "bus") next.bus = true;
+      if (use === "bike") { next.bike = true; if (l.width === LANE_WIDTH) next.width = BIKE_LANE_WIDTH; }
+      else if (l.bike && l.width === BIKE_LANE_WIDTH) next.width = LANE_WIDTH;
+      return next;
+    }),
+  };
+}
+
+/**
+ * The sketch as the vehicles see it (ticket #20): without its bike lanes, nor the connectors to and from them (no
+ * vehicle simulation on a bike lane for now). The simulation, the routes and the ways in and out (Demand) all use it;
+ * a sketch without bike lanes is itself. Kept per sketch.
+ */
+const drivables = new LastFew<Sketch, Sketch>();
+export function drivable(sk: Sketch): Sketch {
+  if (!sk.lanes.some(l => l.bike)) return sk;
+  let x = drivables.get(sk);
+  if (!x) drivables.set(sk, (x = remove(sk, { lanes: sk.lanes.filter(l => l.bike).map(l => l.id) })));
+  return x;
 }
 
 /**
@@ -1788,7 +1890,11 @@ function holesOf(sk: Sketch, c: JunctionContents, roadLanes: SketchLane[]): Pt[]
  * has a lane each way, a double solid line where it has more). Found where a lane has another of its
  * road beside it on its left, edge to edge (within half a metre).
  */
-export interface Marking { pts: Pt[]; kind: "lane" | "center"; dashed: boolean; /** the level of the lane it runs beside (drawn with it) */ level?: number }
+export interface Marking {
+  pts: Pt[]; kind: "lane" | "center"; dashed: boolean; /** the level of the lane it runs beside (drawn with it) */ level?: number;
+  /** that lane, and how far along it (m) each point is: its height there (`shownZ`), on a ramp */
+  lane?: string; at?: number[];
+}
 const markings = new LastFew<Sketch, Marking[]>();
 /** a polyline moved `o` metres to its left (each point along the normal there) */
 function offsetPolyline(pts: Pt[], o: number): Pt[] {
@@ -1809,17 +1915,20 @@ export function roadMarkings(sk: Sketch): Marking[] {
     if (kept && kept.lanes.length === lanes.length && kept.lanes.every((l, i) => l === lanes[i])) { all.push(...kept.out); continue; }
     const out: Marking[] = [];
     roadMarks.set(road, { lanes, out });
+    const cars = lanes.filter(l => !l.bike).length;
     for (const a of lanes) {
       const L = laneLength(a.shape), n = Math.max(2, Math.ceil(L / 0.5));
-      let run: Pt[] = [], runWith: { b: SketchLane; same: boolean } | null = null;
+      let run: Pt[] = [], at: number[] = [], runWith: { b: SketchLane; same: boolean } | null = null;
       const flush = () => {
         if (runWith && run.length >= 2) {
-          const lv = a.level ? { level: a.level } : {};
-          if (runWith.same) out.push({ pts: run, kind: "lane", dashed: true, ...lv });
-          else if (lanes.length <= 2) out.push({ pts: run, kind: "center", dashed: true, ...lv });
+          const lv = a.level ? { level: a.level, lane: a.id, at } : {};
+          // (a bike lane beside the cars' lanes: kept apart by a solid line, whichever way either runs)
+          if (!!a.bike !== !!runWith.b.bike) out.push({ pts: run, kind: "lane", dashed: false, ...lv });
+          else if (runWith.same) out.push({ pts: run, kind: "lane", dashed: true, ...lv });
+          else if (a.bike || cars <= 2) out.push({ pts: run, kind: "center", dashed: true, ...lv });
           else for (const o of [-0.15, 0.15]) out.push({ pts: offsetPolyline(run, o), kind: "center", dashed: false, ...lv });
         }
-        run = []; runWith = null;
+        run = []; at = []; runWith = null;
       };
       for (let i = 0; i <= n; i++) {
         const { p, d } = pointAt(a.shape, (L * i) / n), left = { x: d.y, y: -d.x };
@@ -1835,7 +1944,7 @@ export function roadMarkings(sk: Sketch): Marking[] {
           break;
         }
         if (!hit || (runWith && (runWith.b !== hit.b || runWith.same !== hit.same))) flush();
-        if (hit) { runWith = hit; run.push({ x: p.x + left.x * (a.width / 2), y: p.y + left.y * (a.width / 2) }); }
+        if (hit) { runWith = hit; run.push({ x: p.x + left.x * (a.width / 2), y: p.y + left.y * (a.width / 2) }); at.push((L * i) / n); }
       }
       flush();
     }
@@ -1873,21 +1982,27 @@ export const ENTRY_CLEAR = 10;
 export const EXIT_CLEAR = 10;
 const entries = new LastFew<Sketch, SketchLane[]>(), exits = new LastFew<Sketch, SketchLane[]>();
 export function entryLanes(sk: Sketch): SketchLane[] {
+  // (bike lanes left out, and connectors from them: a lane fed only from a bike lane is a way in for cars)
+  sk = drivable(sk);
   let x = entries.get(sk);
   if (x) return x;
   const fed = new Set(sk.connectors.filter(c => c.to.s < ENTRY_CLEAR).map(c => c.to.lane));
-  entries.set(sk, (x = sk.lanes.filter(l => !isFullCircle(l.shape) && !fed.has(l.id))));
+  // (a bus lane: closed to ordinary cars, no ordinary traffic starts there)
+  entries.set(sk, (x = sk.lanes.filter(l => !isFullCircle(l.shape) && !fed.has(l.id) && !l.bus)));
   return x;
 }
 
 /** the lanes cars leave the sketch by: those (not rings) that nothing leaves within their last `EXIT_CLEAR` metres */
 export function exitLanes(sk: Sketch): SketchLane[] {
+  // (bike lanes left out, and connectors onto them: a lane leading only onto a bike lane is a way out for cars)
+  sk = drivable(sk);
   let x = exits.get(sk);
   if (x) return x;
   // (the furthest any connector leaves each lane)
   const last = new Map<string, number>();
   for (const c of sk.connectors) last.set(c.from.lane, Math.max(last.get(c.from.lane) ?? -Infinity, c.from.s));
-  exits.set(sk, (x = sk.lanes.filter(l => !isFullCircle(l.shape) && !((last.get(l.id) ?? -Infinity) > laneLength(l.shape) - EXIT_CLEAR))));
+  // (a bus lane: closed to ordinary cars, no ordinary trip ends there)
+  exits.set(sk, (x = sk.lanes.filter(l => !isFullCircle(l.shape) && !((last.get(l.id) ?? -Infinity) > laneLength(l.shape) - EXIT_CLEAR) && !l.bus)));
   return x;
 }
 
@@ -1910,7 +2025,10 @@ export class RouteTable {
   /** per lane: the lanes it is beside of, and how a place on those maps onto it */
   private besideOf = new Map<string, { from: string; map: (s: number) => number }[]>();
 
-  constructor(sk: Sketch) {
+  /** `bus`: buses may route onto and change onto a `bus` lane too (ordinary cars never can) */
+  constructor(sk: Sketch, private bus = false) {
+    // (no vehicle on a bike lane, ticket #20: they and their connectors are no part of any route)
+    sk = drivable(sk);
     for (const l of sk.lanes) this.lanes.set(l.id, { lane: l, len: laneLength(l.shape), ring: isFullCircle(l.shape), outs: [], ins: [], beside: [] });
     for (const c of sk.connectors) {
       const p = connectorPts(sk, c), from = this.lanes.get(c.from.lane), to = this.lanes.get(c.to.lane);
@@ -1921,12 +2039,14 @@ export class RouteTable {
       from.outs.push({ id: c.id, s: c.from.s });
       to.ins.push({ id: c.id, s: c.to.s });
     }
-    // (lanes side by side in a road, the same way: where on the other a place on one is beside)
+    // (lanes side by side in a road, the same way: where on the other a place on one is beside; two rings, a two-lane roundabout's)
     for (const r of sk.roads) for (const a of r.lanes) for (const b of r.lanes) {
       const A = this.lanes.get(a), Bl = this.lanes.get(b);
-      if (!A || !Bl || a === b || A.ring || Bl.ring) continue;
-      const m = pointAt(A.lane.shape, A.len / 2), q = nearestOn(Bl.lane.shape, m.p), d = pointAt(Bl.lane.shape, q.s).d;
-      if (q.d > (A.lane.width + Bl.lane.width) / 2 + 0.75 || m.d.x * d.x + m.d.y * d.y < 0.5) continue;
+      // (a bus lane is no lane for an ordinary car's route to change into; leaving one is fine; a bus may change into one)
+      if (!A || !Bl || a === b || A.ring !== Bl.ring || (Bl.lane.bus && !A.lane.bus && !this.bus)) continue;
+      // (rings: beside all the way round, as the simulation has them)
+      const near = (f: number) => { const m = pointAt(A.lane.shape, A.len * f), q = nearestOn(Bl.lane.shape, m.p), d = pointAt(Bl.lane.shape, q.s).d; return q.d <= (A.lane.width + Bl.lane.width) / 2 + 0.75 && m.d.x * d.x + m.d.y * d.y >= 0.5; };
+      if (!(A.ring ? [0, 1, 2, 3, 4, 5, 6, 7].every(k => near(k / 8)) : near(0.5))) continue;
       const map = (s: number) => nearestOn(Bl.lane.shape, pointAt(A.lane.shape, s).p).s;
       A.beside.push({ id: b, map });
       (this.besideOf.get(b) ?? this.besideOf.set(b, []).get(b)!).push({ from: a, map });
@@ -1963,6 +2083,8 @@ export class RouteTable {
     /** the connectors that come onto lane `lane` (or, with a change, onto a lane beside it) before `s`, with what they would cost from there */
     const back = (laneId: string, s: number, onward: number) => {
       const L = this.lanes.get(laneId)!;
+      // (a bus lane: no ordinary car's route drives on it, not even in passing; a bus's route may)
+      if (L.lane.bus && !this.bus) return;
       for (const i of L.ins) { const a = this.reach(L, i.s, s); if (a !== null) push(this.connLen.get(i.id)! + a + onward, i.id); }
       // (from a lane beside it: coming onto that one, then changing over)
       for (const b of this.besideOf.get(laneId) ?? []) {
@@ -2156,7 +2278,9 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
       ...(num(l.inRate) && l.inRate >= 0 ? { inRate: Math.min(5000, l.inRate) } : {}), ...(num(l.outWeight) && l.outWeight >= 0 ? { outWeight: Math.min(100, l.outWeight) } : {}),
       ...(num(l.level) && Math.round(l.level) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(l.level))) } : {}),
       // (its own speed limit, km/h, as the traffic's speed is kept)
-      ...(num(l.speed) ? { speed: Math.min(130, Math.max(10, l.speed)) } : {}) });
+      ...(num(l.speed) ? { speed: Math.min(130, Math.max(10, l.speed)) } : {}),
+      ...(l.bus === true && l.bike !== true ? { bus: true as const } : {}),
+      ...(l.bike === true ? { bike: true as const } : {}) });
   }
   const ids = new Set(lanes.map(l => l.id));
   // (a place a hair before a lane's start, from rounding, is its start)
@@ -2209,6 +2333,18 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const trucks = num(j.trucks) ? Math.round(Math.min(100, Math.max(0, j.trucks))) : 0;
     journeys.push({ id: j.id, from: j.from, to: j.to, rate: Math.round(Math.min(5000, Math.max(0, j.rate))), ...(trucks ? { trucks } : {}) });
   }
+  const stops: SketchStop[] = [];
+  for (const x of Array.isArray(o.stops) ? o.stops : []) {
+    const l = str(x?.lane) ? lanes.find(y => y.id === x.lane) : undefined;
+    if (!str(x?.id) || !l || !num(x?.s) || stops.some(y => y.id === x.id)) continue;
+    stops.push({ id: x.id, name: typeof x.name === "string" && x.name.trim() ? x.name.trim().slice(0, 80) : x.id, lane: l.id, s: Math.max(0, Math.min(laneLength(l.shape), x.s)) });
+  }
+  const busLines: SketchBusLine[] = [];
+  for (const x of Array.isArray(o.busLines) ? o.busLines : []) {
+    if (!str(x?.id) || busLines.some(y => y.id === x.id)) continue;
+    const lineStops = (Array.isArray(x.stops) ? x.stops : []).filter((s: unknown): s is string => typeof s === "string" && stops.some(y => y.id === s));
+    busLines.push({ id: x.id, name: typeof x.name === "string" && x.name.trim() ? x.name.trim().slice(0, 80) : x.id, color: typeof x.color === "string" && /^#[0-9a-f]{6}$/i.test(x.color) ? x.color.toLowerCase() : BUS_LINE_COLORS[0], stops: lineStops, buses: num(x.buses) ? Math.round(Math.min(30, Math.max(0, x.buses))) : 0 });
+  }
   const signalGroups: SketchSignalGroup[] = [], grouped = new Set<string>();
   for (const g of Array.isArray(o.signalGroups) ? o.signalGroups : []) {
     if (!str(g?.id) || signalGroups.some(y => y.id === g.id) || !Array.isArray(g.members)) continue;
@@ -2239,7 +2375,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const zones = sanitizeZones(o.zones);
   const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.zones?.length) ? sc : null;
   if (!lanes.length && !junctions.length && !geo && !crossings.length && !zones.length && !scratch && !sketches.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
 }
 
 // ---------------------------------------------------------------- elevation (as v1's)
@@ -2266,20 +2402,21 @@ export function setLevel(sk: Sketch, ids: Iterable<string>, level: number): Sket
 
 /**
  * Each lane's levels: its own, and at its start and its end the lowest of its own and those of the lanes its
- * connectors join there (as v1's junctions: at the lowest level of the roads meeting there). Kept per sketch.
+ * connectors join there (as v1's junctions: at the lowest level of the roads meeting there); and which ends have
+ * nothing joined (`fa`, `fb`). Kept per sketch.
  */
-const levelsKept = new LastFew<Sketch, Map<string, { L: number; a: number; b: number; len: number }>>();
+const levelsKept = new LastFew<Sketch, Map<string, { L: number; a: number; b: number; len: number; fa: boolean; fb: boolean }>>();
 function levelsOf(sk: Sketch) {
   let m = levelsKept.get(sk);
   if (m) return m;
   m = new Map();
-  for (const l of sk.lanes) { const L = laneLevel(l); m.set(l.id, { L, a: L, b: L, len: laneLength(l.shape) }); }
+  for (const l of sk.lanes) { const L = laneLevel(l); m.set(l.id, { L, a: L, b: L, len: laneLength(l.shape), fa: true, fb: true }); }
   if (hasLevels(sk)) for (const c of sk.connectors) {
     const f = m.get(c.from.lane), t = m.get(c.to.lane);
     if (!f || !t) continue;
     // (a connector leaving near a lane's end, or joining near the next one's start: they meet there)
-    if (f.len - c.from.s < 1) f.b = Math.min(f.b, t.L);
-    if (c.to.s < 1) t.a = Math.min(t.a, f.L);
+    if (f.len - c.from.s < 1) { f.b = Math.min(f.b, t.L); f.fb = false; }
+    if (c.to.s < 1) { t.a = Math.min(t.a, f.L); t.fa = false; }
   }
   levelsKept.set(sk, m);
   return m;
@@ -2292,8 +2429,41 @@ function levelsOf(sk: Sketch) {
  */
 export function zAt(sk: Sketch, lane: string, s: number): number {
   const x = levelsOf(sk).get(lane);
-  if (!x) return 0;
-  const { L, a, b, len } = x;
+  return x ? rampZ(x.L, x.a, x.b, x.len, s) : 0;
+}
+/**
+ * The height (in levels) a lane is drawn at, `s` metres along it: as `zAt`, but an end with nothing joined there comes
+ * down to the ground (as v1's roads, whose free ends are at ground level), so a bridge ends in ramps. Drawing only:
+ * the cars' levels, and what meets what, are `zAt`'s.
+ */
+export function shownZ(sk: Sketch, lane: string, s: number): number {
+  const x = levelsOf(sk).get(lane);
+  return x ? rampZ(x.L, x.fa ? 0 : x.a, x.fb ? 0 : x.b, x.len, s) : 0;
+}
+/** the lanes whose drawn height differs from zAt's: off the ground, with an end with nothing joined */
+const rampsKept = new LastFew<Sketch, SketchLane[]>();
+function freeRamps(sk: Sketch) {
+  let r = rampsKept.get(sk);
+  if (r) return r;
+  const m = levelsOf(sk);
+  r = hasLevels(sk) ? sk.lanes.filter(l => { const x = m.get(l.id)!; return x.L !== 0 && ((x.fa && x.a !== 0) || (x.fb && x.b !== 0)); }) : [];
+  rampsKept.set(sk, r);
+  return r;
+}
+/**
+ * The height (levels) a car at `p` is drawn at, the sim's level for it `z`: on a ramp down to a lane's free end, the
+ * ramp's (`shownZ`); else `z`
+ */
+export function shownCarZ(sk: Sketch, p: Pt, z: number): number {
+  if (!z) return z;
+  for (const l of freeRamps(sk)) {
+    const q = nearestOn(l.shape, p);
+    if (q.d <= l.width / 2 + 0.5 && Math.abs(zAt(sk, l.id, q.s) - z) < 0.05) return shownZ(sk, l.id, q.s);
+  }
+  return z;
+}
+/** a lane `len` long at level L, from level a at its start to b at its end: its level `s` metres along */
+function rampZ(L: number, a: number, b: number, len: number, s: number): number {
   if (a === L && b === L) return L;
   const d = Math.min(len, Math.max(0, s)), sm = (u: number) => u * u * (3 - 2 * u);
   const ra = Math.min(0.45 * len, RAMP_PER_LEVEL * Math.abs(L - a)), rb = Math.min(0.45 * len, RAMP_PER_LEVEL * Math.abs(L - b));

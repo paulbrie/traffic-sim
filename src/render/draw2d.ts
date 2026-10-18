@@ -9,9 +9,11 @@ import { outlineCurve, type BuildingDef, type BuildingUse, type LinkDef, type Ne
 import { laneSign, type LaneSign, type RoadGeo, type Strip } from "./geometry";
 import { buildingColor, speedColor, type Palette } from "./palette";
 import { underlayCorners, type Underlay } from "@/lib/underlay";
-import { junctionRefs } from "@/engine/refs";
+import { isRoadJoint, junctionRefs } from "@/engine/refs";
 import { drawSatellite, type SatSource } from "./satellite";
 
+/** below this zoom (px per metre) the points' round dots aren't drawn, but for the one selected or under the pointer */
+export const NODE_DOTS_MIN_SCALE = 1;
 export interface Camera { cx: number; cy: number; scale: number; w: number; h: number; dpr: number }
 export const toScreen = (c: Camera, x: number, y: number): Vec => ({ x: (x - c.cx) * c.scale + c.w / 2, y: (y - c.cy) * c.scale + c.h / 2 });
 export const toWorld = (c: Camera, sx: number, sy: number): Vec => ({ x: (sx - c.w / 2) / c.scale + c.cx, y: (sy - c.h / 2) / c.scale + c.cy });
@@ -93,6 +95,20 @@ export function arrowGlyph(p: Path2D, at: Vec, d: Vec, turns: string) {
     seg([[fb, 0], [fb + 0.55, -0.25], [fb + 0.6, -0.85], [fb + 0.15, -1.2], [fb - 0.7, -1.2]]);
     head(fb - 0.7, -1.2, -1, 0);
   }
+}
+
+/** a bicycle painted on a bike lane, seen side on from above: about 2.2 m along the lane (front along `d`), 1.1 m across, its top to the left of the way of travel (stroked, as `arrowGlyph`) */
+export function bikeGlyph(p: Path2D, at: Vec, d: Vec) {
+  const l = { x: d.y, y: -d.x };
+  // (f along the way of travel, u up the bicycle)
+  const P = (f: number, u: number) => ({ x: at.x + d.x * f + l.x * u, y: at.y + d.y * f + l.y * u });
+  const seg = (pts: [number, number][]) => { const a = P(...pts[0]); p.moveTo(a.x, a.y); for (const q of pts.slice(1)) { const b = P(...q); p.lineTo(b.x, b.y); } };
+  // (the wheels, then the frame: the rear triangle and the main one, the fork up to the handlebar, the saddle)
+  for (const f of [-0.7, 0.7]) { const c = P(f, -0.3); p.moveTo(c.x + 0.38, c.y); p.arc(c.x, c.y, 0.38, 0, Math.PI * 2); }
+  seg([[-0.7, -0.3], [-0.05, -0.3], [-0.25, 0.25], [-0.7, -0.3]]);
+  seg([[-0.25, 0.25], [0.5, 0.25], [-0.05, -0.3]]);
+  seg([[0.7, -0.3], [0.45, 0.42], [0.62, 0.48]]);
+  seg([[-0.42, 0.33], [-0.08, 0.33]]);
 }
 
 export function buildPaths(geo: RoadGeo): PathCache {
@@ -179,6 +195,8 @@ export interface Overlay {
   pendingPoint: Vec | null;
   reservations: boolean;
   bySpeed: boolean;
+  /** turn signals drawn (off: none; a broken-down vehicle's hazard lights still) */
+  blinkers?: boolean;
   labels: boolean;
   snapStep: number;
   gridOn: boolean;
@@ -490,10 +508,10 @@ export function drawScene(
     paths.layers.forEach((c, i) => {
       if (i > 0) blit(ctx, bg.layers[i], dpr, scale, w, h, cam);
       const a0 = c.level < 0 ? 0.55 : 1;
-      if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo && v.level <= c.level, a0, view); }
+      if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px, v => v.level > lo && v.level <= c.level, a0, view); }
       prev = c.level;
     });
-    if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo, 1, view); }
+    if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px, v => v.level > lo, 1, view); }
     if (sim && showVehicles && compiled.parking.length) drawParked(ctx, pal, compiled, sim, px);
   }
 
@@ -591,7 +609,7 @@ export function drawScene(
       ctx.setLineDash([]);
       }
     }
-    if (ov.maskRoads && showVehicles) drawVehicles(ctx, pal, sim, ov.bySpeed, px);
+    if (ov.maskRoads && showVehicles) drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px);
     if (sv) {
       const q = sim.pose(sv);
       ctx.strokeStyle = pal.select; ctx.lineWidth = px * 2;
@@ -685,8 +703,10 @@ export function drawScene(
       if (q.x < -20 || q.y < -20 || q.x > w + 20 || q.y > h + 20) continue;
       const selected = sel?.kind === "node" && sel.id === n.id, hovered = ov.hover?.kind === "node" && ov.hover.id === n.id;
       const cn = compiled.nodeById.get(n.id);
-      // (road ends and joints with the roads; junctions and entry points with their own layers)
-      if (!selected && !on("roads") && !(cn && ((on("junctions") && cn.controlled && (cn.degree >= 2 || !!cn.lead)) || (on("entries") && cn.gateway)))) continue;
+      // (zoomed out, the round dots are wider than the roads: only the one selected or under the pointer; an entry point's square stays)
+      if (!selected && !hovered && !cn?.gateway && scale < NODE_DOTS_MIN_SCALE) continue;
+      // (road joints with their own layer; road ends with the roads; junctions and entry points with their own layers)
+      if (!selected && (cn && isRoadJoint(cn) ? !on("joints") : !on("roads") && !(cn && ((on("junctions") && cn.controlled && (cn.degree >= 2 || !!cn.lead)) || (on("entries") && cn.gateway))))) continue;
       const r = selected || hovered ? 6 : 4.5;
       ctx.lineWidth = 1.5;
       ctx.fillStyle = selected ? pal.select : pal.bg;
@@ -1205,7 +1225,7 @@ function drawLinkHandles(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palett
   if (!(l.c1 && l.c2)) { m.x += (b.y - a.y) === 0 && (b.x - a.x) === 0 ? 0 : 0; }
 }
 
-function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, bySpeed: boolean, px: number, only?: (v: Vehicle) => boolean, alpha = 1, view?: { minX: number; minY: number; maxX: number; maxY: number }) {
+function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, bySpeed: boolean, blinkers: boolean, px: number, only?: (v: Vehicle) => boolean, alpha = 1, view?: { minX: number; minY: number; maxX: number; maxY: number }) {
   // blink on wall-clock time so it looks right at any simulation speed
   const blinkOn = Math.floor(performance.now() / 380) % 2 === 0;
   // one path per colour (speed colours in 16 steps), one for windows, one for turn signals: a few
@@ -1240,7 +1260,9 @@ function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, byS
     pts.forEach(([x, y], i) => { const X = cx + ux * x - uy * y, Y = cy + uy * x + ux * y; if (i) body!.lineTo(X, Y); else body!.moveTo(X, Y); });
     body.closePath();
     // turn signals: amber corners on the side the vehicle is heading (local +y = right); 2: hazard lights, both sides
-    const bl = blinkOn ? sim.blinker(v) : 0;
+    // (turn signals switched off in the display options: only the hazard lights)
+    let bl = blinkOn ? sim.blinker(v) : 0;
+    if (!blinkers && bl !== 2) bl = 0;
     if (bl) {
       const bw = Math.max(0.65, px * 4), bh = Math.max(0.5, px * 3.2);
       for (const sd of bl === 2 ? [1, -1] : [bl]) {

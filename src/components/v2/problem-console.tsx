@@ -13,12 +13,13 @@ import type { SimProblem, SimStats, StuckCar } from "@/lib/lane-sketch-sim";
 import { roadsDrawnOver, type DrawnOver } from "@/lib/overlap-check";
 import { CONNECTOR_KINK_LIMIT, connectorKinks, type ConnectorKink } from "@/lib/connector-kinks";
 import { deadEndTurnarounds, type DeadEnd } from "@/lib/dead-ends";
+import type { JunctionWarning } from "@/lib/junction-warnings";
 import type { SketchSimClient } from "@/state/sketch-sim-client";
 
-type Kind = SimProblem["kind"] | "stuck" | "drawn" | "kinked" | "deadend";
-const LABEL: Record<Kind, string> = { drawn: "Drawn over", kinked: "Turns back", deadend: "Dead end", stuck: "Stuck", collision: "Collision", jump: "Jump", deadlock: "Deadlock", breakdown: "Breakdown", towed: "Towed" };
+type Kind = SimProblem["kind"] | "stuck" | "drawn" | "kinked" | "deadend" | "junction";
+const LABEL: Record<Kind, string> = { junction: "Junction", drawn: "Drawn over", kinked: "Turns back", deadend: "Dead end", stuck: "Stuck", collision: "Collision", jump: "Jump", deadlock: "Deadlock", breakdown: "Breakdown", towed: "Towed" };
 const TONE: Record<Kind, string> = {
-  drawn: "bg-amber-500/20 text-amber-800 dark:text-amber-300", kinked: "bg-amber-500/20 text-amber-800 dark:text-amber-300",
+  junction: "bg-amber-500/20 text-amber-800 dark:text-amber-300", drawn: "bg-amber-500/20 text-amber-800 dark:text-amber-300", kinked: "bg-amber-500/20 text-amber-800 dark:text-amber-300",
   stuck: "bg-amber-500/20 text-amber-800 dark:text-amber-300", deadlock: "bg-amber-500/20 text-amber-800 dark:text-amber-300",
   collision: "bg-red-500/15 text-red-700 dark:text-red-300", jump: "bg-red-500/15 text-red-700 dark:text-red-300",
   breakdown: "bg-muted text-muted-foreground", towed: "bg-muted text-muted-foreground", deadend: "bg-sky-500/15 text-sky-800 dark:text-sky-300",
@@ -27,7 +28,7 @@ type Show = "all" | Kind;
 const clock = (s: number) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "—");
 /** a line of the console: a problem the run had, the cars stuck at one place now, or roads drawn over each other or a connector
  * turning back (no time, no car; the connector picked with a click) */
-interface Row { t: number; kind: Kind; car: number; other?: number; x: number; y: number; place: string; detail: string; connector?: string }
+interface Row { t: number; kind: Kind; car: number; other?: number; x: number; y: number; place: string; detail: string; connector?: string; /** a junction warning's lanes and connectors (selected and framed on a click) */ items?: string[] }
 
 /** how many problems the run has had and how many cars are stuck now (for the console's button), from the stats */
 export const problemCount = (s: SimStats | null) => (s ? s.collisions + s.jumps + s.deadlocks + s.breakdowns + s.towed + (s.stuck ?? 0) : 0);
@@ -43,13 +44,17 @@ export const problemCount = (s: SimStats | null) => (s ? s.collisions + s.jumps 
 /** the console's height while open (px): what sits over the map's foot (the replay bar) goes above it */
 export const CONSOLE_HEIGHT = 224;
 
-export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, onReplay, replayFrom, open, onOpen }: {
+export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, onReplay, replayFrom, open, onOpen, junctionWarnings, onItems }: {
   /** the cars' simulation, if there is one (asked for when wanted) */
   sim: () => SketchSimClient | null; stats: SimStats | null; sketch: Sketch; contents: Map<string, JunctionContents>;
   /** the view to `p`, the car picked if it is still there */
   onGo: (p: Pt, car: number) => void;
   /** a connector picked (one turning back) */
   onSelect?: (connector: string) => void;
+  /** the junction warnings (worked out off the page, a moment after edits: see junction-warnings-client.ts), and still checking */
+  junctionWarnings?: { list: JunctionWarning[]; checking: boolean };
+  /** a junction warning's lanes and connectors selected and framed */
+  onItems?: (items: string[]) => void;
   /** replay from `t`; `replayFrom`: the earliest moment kept (null: nothing kept) */
   onReplay: (t: number) => void; replayFrom: number | null;
   /** open (the editor keeps it, so the replay bar can make room) */
@@ -73,7 +78,8 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, o
     const id = setTimeout(() => { setDrawn(roadsDrawnOver(sketch)); setKinks(connectorKinks(sketch)); setEnds(deadEndTurnarounds(sketch)); }, 1500);
     return () => clearTimeout(id);
   }, [sketch]);
-  const count = problemCount(stats) + drawn.length + kinks.length;
+  const jw = useMemo(() => junctionWarnings?.list ?? [], [junctionWarnings?.list]);
+  const count = problemCount(stats) + drawn.length + kinks.length + jw.length;
   // (asked for while open, again as the stats change: about every quarter of a second while the cars run)
   useEffect(() => {
     const client = sim();
@@ -109,6 +115,10 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, o
         detail: `Connector ${k.connector} turns back ${k.angle}° at a bend (more than ${CONNECTOR_KINK_LIMIT}°): cars on it double back across the junction's other connectors. Tidy takes out the bends that do it.`,
       });
     }
+    for (const w of jw) {
+      const j = w.junction ? sketch.junctions.find(x => x.id === w.junction) : null;
+      out.push({ t: NaN, kind: "junction", car: -1, x: 0, y: 0, place: j?.name ?? "No junction", detail: w.text, items: w.items });
+    }
     if (ends.length) {
       const name = (d: DeadEnd) => (d.junction ? sketch.junctions.find(j => j.id === d.junction)?.name : null) ?? roadOf(sketch, d.lane)?.name ?? `lane ${d.lane}`;
       out.push({
@@ -126,7 +136,7 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, o
     for (const p of data?.problems ?? []) if (p.t > cleared) out.push({ t: p.t, kind: p.kind, car: p.car, other: p.other, x: p.x, y: p.y, place: place(p.edge), detail: p.detail });
     const f = filter.trim().toLowerCase();
     return out.filter(r => (show === "all" || r.kind === show) && (!f || `#${r.car} #${r.other ?? ""} ${r.place} ${r.detail} ${LABEL[r.kind]}`.toLowerCase().includes(f)));
-  }, [data, drawn, kinks, ends, sketch, place, cleared, show, filter, stats?.t]);
+  }, [data, drawn, kinks, ends, jw, sketch, place, cleared, show, filter, stats?.t]);
   const byKind = useMemo(() => {
     const m = new Map<Kind, number>();
     for (const r of rows) m.set(r.kind, (m.get(r.kind) ?? 0) + 1);
@@ -154,7 +164,7 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, o
       <div className="flex items-center gap-2 border-b px-3 py-1.5">
         <span className="text-sm font-medium">Console</span>
         <span className="truncate text-xs text-muted-foreground tabular-nums">
-          {rows.length ? [...byKind].map(([k, n]) => `${n} ${LABEL[k].toLowerCase()}`).join(" · ") : stats ? "nothing wrong so far" : "run the cars to see what goes wrong"}
+          {rows.length ? [...byKind].map(([k, n]) => `${n} ${LABEL[k].toLowerCase()}`).join(" · ") : stats ? "nothing wrong so far" : "run the cars to see what goes wrong"}{junctionWarnings?.checking ? " · checking junctions…" : ""}
         </span>
         <Select value={show} onValueChange={v => setShow(v as Show)}>
           <SelectTrigger size="sm" className="ml-auto h-7 w-36 text-xs" aria-label="Problems shown"><SelectValue /></SelectTrigger>
@@ -171,13 +181,13 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, o
       </div>
       <div ref={list} className="min-h-0 flex-1 overflow-y-auto font-mono text-xs" onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24; }}>
         {rows.length ? rows.map((r, i) => (
-          <div key={i} className="group flex cursor-pointer items-start gap-2 border-b border-border/50 px-3 py-1 hover:bg-muted/60" onClick={() => { onGo({ x: r.x, y: r.y }, r.car); if (r.connector) onSelect?.(r.connector); }} title={r.connector ? "Go there and pick the connector" : r.car >= 0 ? "Go there (and pick the car, if it is still there)" : "Go there"}>
+          <div key={i} className="group flex cursor-pointer items-start gap-2 border-b border-border/50 px-3 py-1 hover:bg-muted/60" onClick={() => { if (r.items) { onItems?.(r.items); return; } onGo({ x: r.x, y: r.y }, r.car); if (r.connector) onSelect?.(r.connector); }} title={r.items ? "Select what it is about, and frame it" : r.connector ? "Go there and pick the connector" : r.car >= 0 ? "Go there (and pick the car, if it is still there)" : "Go there"}>
             <span className="w-10 shrink-0 text-right text-muted-foreground tabular-nums">{clock(r.t)}</span>
             <span className={cn("w-[72px] shrink-0 rounded px-1 text-center font-sans text-[11px] font-medium", TONE[r.kind])}>{LABEL[r.kind]}</span>
             <span className="w-24 shrink-0 tabular-nums">{r.car >= 0 && `#${r.car}`}{r.other != null ? ` · #${r.other}` : ""}</span>
             <span className="w-48 shrink-0 truncate text-muted-foreground" title={r.place}>{r.place}</span>
             <span className="min-w-0 flex-1 font-sans">{r.detail}</span>
-            {r.kind !== "stuck" && r.kind !== "drawn" && r.kind !== "kinked" && r.kind !== "deadend" && replayFrom !== null && r.t - 5 >= replayFrom && (
+            {r.kind !== "stuck" && r.kind !== "drawn" && r.kind !== "kinked" && r.kind !== "deadend" && r.kind !== "junction" && replayFrom !== null && r.t - 5 >= replayFrom && (
               <Button variant="ghost" size="icon-sm" className="size-6 opacity-0 group-hover:opacity-100" aria-label="Replay from just before" title="Replay from 5 s before"
                 onClick={e => { e.stopPropagation(); onReplay(r.t - 5); onGo({ x: r.x, y: r.y }, r.car); }}><History /></Button>
             )}

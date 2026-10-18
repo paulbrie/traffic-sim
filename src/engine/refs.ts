@@ -3,6 +3,8 @@ import type { Compiled, CNode } from "./compile";
 
 /** (a road's loose end counts too once connectors make it part of a junction over several nodes) */
 export const isJunction = (n: CNode) => n.controlled && (n.degree >= 2 || n.cluster.length > 1);
+/** a road joint: a point where just two roads meet, no junction there and no way in or out (the "Road joints" layer) */
+export const isRoadJoint = (n: CNode) => n.degree === 2 && !n.gateway && !isJunction(n);
 
 /** numbered in the order the nodes were created, so references stay put while you draw */
 export function junctionRefs(c: Compiled): Map<string, string> {

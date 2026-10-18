@@ -12,14 +12,14 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { connectorPts, junctionLevel, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
+import { connectorPts, junctionLevel, shownCarZ, shownZ, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
 import { LEVEL_H } from "@/engine/compile";
 import { speedColor } from "@/render/palette";
 import { buildSketch3D, type Sketch3D } from "@/render/sketch3d";
 import { buildZones3D, type Zones3D } from "@/render/zones3d";
 import type { SketchLayers } from "@/state/sketch-layers";
 import type { Underlay } from "@/lib/underlay";
-import { readPalette } from "@/render/palette";
+import { isDark, onThemeChange, readPalette } from "@/render/palette";
 import { satelliteMosaic, type SatSource } from "@/render/satellite";
 import type { SatOptions } from "@/state/sat-options";
 import type { EditorUi } from "@/state/sketch-ui";
@@ -41,6 +41,8 @@ export interface View3DProps {
   underlay: Underlay | null; underlayImg: HTMLImageElement | null; image: boolean;
   /** the cars as shown now (live, or the moment replayed), coloured by their speed or not, and the lights' state */
   cars: () => Car3D[] | null; bySpeed: boolean;
+  /** the cars' turn signals shown (off: none) */
+  blinkers: boolean;
   simT: () => number | null; signals: () => SignalController[] | null;
   /** the car picked's way on to the end of its trip (drawn on the road), if it has one */
   carWay?: () => Pt[] | null;
@@ -236,7 +238,7 @@ export function View3DV2(props: View3DProps) {
       let nb = 0, ng = 0, nl = 0;
       for (const c of cars) {
         if (nb + 2 > MAXV) break;
-        const y = (c.z ?? 0) * LEVEL_H + 0.06, yaw = -Math.atan2(c.d.y, c.d.x), truck = !!c.trailer;
+        const y = shownCarZ(p.sketch, c.p, c.z ?? 0) * LEVEL_H + 0.06, yaw = -Math.atan2(c.d.y, c.d.x), truck = !!c.trailer;
         const col = p.bySpeed ? speedColor(pal, Math.round(Math.min(1, c.share) * 15) / 15) : truck ? pal.truck : pal.car;
         put(bodies, nb, c.p.x, y + 0.25, c.p.y, yaw, c.len, truck ? TRUCK_H : CAR_H, truck ? TRUCK_W : CAR_W); bodies.setColorAt(nb++, colorOf(col));
         if (c.trailer) { const t = c.trailer; put(bodies, nb, t.p.x, y + 0.5, t.p.y, -Math.atan2(t.d.y, t.d.x), t.len, TRAILER_H, TRUCK_W); bodies.setColorAt(nb++, colorOf("#e9e6dd")); }
@@ -244,7 +246,7 @@ export function View3DV2(props: View3DProps) {
         if (c.broken && flash && nl + 4 <= MAXL) {
           const n = { x: -c.d.y, y: c.d.x }, hl = c.len / 2, hw = (truck ? TRUCK_W : CAR_W) / 2 + 0.05;
           for (const [f, s2] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) { P.set(c.p.x + c.d.x * hl * f + n.x * hw * s2, y + 0.9, c.p.y + c.d.y * hl * f + n.y * hw * s2); M.makeTranslation(P.x, P.y, P.z); lamps.setMatrixAt(nl++, M); }
-        } else if (c.blink && blinkOn && nl + 2 <= MAXL) {
+        } else if (c.blink && p.blinkers && blinkOn && nl + 2 <= MAXL) {
           // (its turn signal: on that side, at the front and the back (a truck's trailer's), as V1's)
           const hw = (truck ? TRUCK_W : CAR_W) / 2 + 0.05, b = c.trailer ?? c;
           for (const [q, dd, k] of [[c.p, c.d, c.len / 2], [b.p, b.d, -b.len / 2]] as const) {
@@ -274,7 +276,7 @@ export function View3DV2(props: View3DProps) {
           for (const [lane, conns] of held) {
             const l = laneById(sk, lane);
             if (!l || n >= 2000) continue;
-            const L = laneLength(l.shape), e = pointAt(l.shape, L), r = { x: e.d.y, y: -e.d.x }, o = l.width / 2 + 0.6, h = zAt(sk, lane, L) * LEVEL_H;
+            const L = laneLength(l.shape), e = pointAt(l.shape, L), r = { x: e.d.y, y: -e.d.x }, o = l.width / 2 + 0.6, h = shownZ(sk, lane, L) * LEVEL_H;
             const x = e.p.x + r.x * o, z = e.p.y + r.y * o;
             P.set(x, h, z); S.set(1, 4.2, 1); M.compose(P, Q.identity(), S); poles.setMatrixAt(n, M);
             put(heads, n, x, h + 4.2, z, -Math.atan2(e.d.y, e.d.x), 0.35, 0.9, 0.35);
@@ -343,7 +345,7 @@ export function View3DV2(props: View3DProps) {
         const l = laneById(sk, id);
         if (!l) continue;
         const L = laneLength(l.shape), pts: Pt[] = [], hs: number[] = [];
-        for (let s2 = 0; s2 <= L + 1e-6; s2 += Math.max(0.5, Math.min(2, L / 40))) { pts.push(pointAt(l.shape, Math.min(s2, L)).p); hs.push(zAt(sk, id, Math.min(s2, L)) * LEVEL_H); }
+        for (let s2 = 0; s2 <= L + 1e-6; s2 += Math.max(0.5, Math.min(2, L / 40))) { pts.push(pointAt(l.shape, Math.min(s2, L)).p); hs.push(shownZ(sk, id, Math.min(s2, L)) * LEVEL_H); }
         ribbon(pts, hs, l.width);
       }
       for (const id of sel.connectors) {
@@ -373,11 +375,11 @@ export function View3DV2(props: View3DProps) {
       const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === id);
       if (!c) return;
       const s2 = Math.max(3.2, c.len * 0.8);
-      ring.position.set(c.p.x, (c.z ?? 0) * LEVEL_H + 0.2, c.p.y); ring.scale.set(s2, s2, s2); ring.visible = true;
+      ring.position.set(c.p.x, shownCarZ(live.current.sketch, c.p, c.z ?? 0) * LEVEL_H + 0.2, c.p.y); ring.scale.set(s2, s2, s2); ring.visible = true;
     };
     // the car picked: its way on to the end of its trip, a ribbon on the road in the selection's colour (made again at most 4 times a second)
     // (the blue the map draws it in, the selection's there: the 3D view's own green is lost on the asphalt)
-    const wayBlue = () => (document.documentElement.classList.contains("dark") ? "#60a5fa" : "#2563eb");
+    const wayBlue = () => (isDark() ? "#60a5fa" : "#2563eb");
     const wayMat = new THREE.MeshBasicMaterial({ color: wayBlue(), transparent: true, opacity: 0.9, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -10, polygonOffsetUnits: -10, side: THREE.DoubleSide });
     const wayLine = new THREE.Mesh(new THREE.BufferGeometry(), wayMat);
     wayLine.renderOrder = 5; wayLine.frustumCulled = false; wayLine.visible = false; scene.add(wayLine);
@@ -388,7 +390,7 @@ export function View3DV2(props: View3DProps) {
       const p = live.current, pts = p.car !== null ? p.carWay?.() ?? null : null;
       wayLine.visible = !!pts && pts.length > 1;
       if (!wayLine.visible) return;
-      const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car), y = (c?.z ?? 0) * LEVEL_H + 0.3;
+      const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car), y = (c ? shownCarZ(p.sketch, c.p, c.z ?? 0) : 0) * LEVEL_H + 0.3;
       setRibbon(wayLine, pts!, y, 1.2);
     };
     /** `mesh` made a ribbon `hw` either side of `pts` at height `y`: a quad a piece */
@@ -417,7 +419,7 @@ export function View3DV2(props: View3DProps) {
       if (now - whyAt < 250) return;
       whyAt = now;
       const p = live.current, w = p.car !== null ? p.carWhy?.() ?? null : null;
-      const c = w ? (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car) : null, y = (c?.z ?? 0) * LEVEL_H + 0.35;
+      const c = w ? (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car) : null, y = (c ? shownCarZ(p.sketch, c.p, c.z ?? 0) : 0) * LEVEL_H + 0.35;
       // (a zone shorter than the 1 m its points are apart: a small square where it is)
       const zone = (pts: Pt[] | undefined) => (!pts?.length ? null : pts.length > 1 ? pts : [{ x: pts[0].x - 1.6, y: pts[0].y }, { x: pts[0].x + 1.6, y: pts[0].y }]);
       const lines: [Pt[] | null, number][] = [[zone(w?.zone?.mine), 1.6], [zone(w?.zone?.theirs), 1.6], [c && w?.leader ? [c.p, w.leader] : null, 0.15], [c && w?.blocker ? [c.p, w.blocker] : null, 0.3]];
@@ -469,6 +471,8 @@ export function View3DV2(props: View3DProps) {
     const onTheme = () => { pal = readPalette(); builtFor = []; selMat.color.set(pal.select); (ring.material as THREE.MeshBasicMaterial).color.set(pal.select); wayMat.color.set(wayBlue()); scene.background = new THREE.Color(pal.sky); (scene.fog as THREE.Fog).color.set(pal.sky); (ground.material as THREE.MeshLambertMaterial).color.set(pal.ground); };
     const mo = new MutationObserver(onTheme);
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    // (and the system switching between day and night: the colours read again)
+    const offTheme = onThemeChange(onTheme);
     frame = requestAnimationFrame(tick);
     // (the bridge's screenshot: a frame drawn just before it is read)
     live.current.canvasRef.current = () => { if (disposed) return null; draw(); return renderer.domElement; };
@@ -477,7 +481,7 @@ export function View3DV2(props: View3DProps) {
       disposed = true;
       cancelAnimationFrame(frame);
       document.removeEventListener("visibilitychange", onVisible);
-      ro.disconnect(); mo.disconnect();
+      ro.disconnect(); mo.disconnect(); offTheme();
       renderer.domElement.removeEventListener("pointerdown", onDown); renderer.domElement.removeEventListener("pointerup", onUp);
       controls.removeEventListener("start", onStart); controls.removeEventListener("change", onChange);
       // (the plan view to where the 3D view looks: its middle, and a zoom showing as much across)

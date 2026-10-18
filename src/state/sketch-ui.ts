@@ -14,14 +14,15 @@ import { createContext, useCallback, useContext, useMemo, useSyncExternalStore }
 import { DeepSubject } from "subjecto";
 import type { Piece } from "@/lib/lane-sketch";
 import { argOf, bridgeApp, setBridgeUi } from "@/state/bridge-registry";
+import { offerEditsToBridge } from "@/state/bridge-edits";
 import { ui } from "@/state/store";
 import { SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
 
 /** the drawing tools */
-export type Tool = "select" | "lane" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing" | "zone";
-/** what is selected: lanes, connectors and junctions (a road: its lanes, with its id), or a link, or a zebra crossing */
-export type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null };
+export type Tool = "select" | "lane" | "bike" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing" | "zone" | "stop";
+/** what is selected: lanes, connectors and junctions (a road: its lanes, with its id), or a link, a zebra crossing, or a bus stop */
+export type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null; /** a bus stop, selected on its own */ stop?: string | null };
 export const NO_SEL: Sel = { lanes: [], connectors: [], junctions: [], road: null };
 
 /** an editor's state: the plan's (`plan`; a V1 plan's sketch window: `whole`) or the Sketch window's (`scratch`) */
@@ -43,7 +44,7 @@ export interface EditorUi {
   camera: { x: number; y: number; distance: number; heading: number; tilt: number } | null;
   run: {
     running: boolean;
-    /** the simulation speed (1, 3, 10, 30) */
+    /** the simulation speed (1, 3, 10, 30, 50, 100) */
     speed: number;
     /** the cars' clock (s), copied in at most 4 times a second */
     t: number;
@@ -51,6 +52,12 @@ export interface EditorUi {
     replayT: number | null;
     playing: boolean;
     kept: { from: number; to: number; frames: number; bytes: number } | null;
+    /** the simulation settings changed from their defaults (as saved with the plan: sketch-tuning.ts's keys; the switches 0 / 1) */
+    tune: Record<string, number>;
+    /** (the Sketch window) an experimental engine run instead of the main one (T213: "spatial", cars driving roundabouts by
+     * sensing space), and its cars' sensor rays shown; per window, off on opening, never saved with the plan */
+    experiment: "spatial" | null;
+    rays: boolean;
   };
   /** its dialogs and what is open under the map */
   dialogs: {
@@ -92,13 +99,13 @@ export interface SketchUiState {
   layers: SketchLayers;
   /** how the satellite imagery is shown (kept in the browser) */
   background: SatOptions;
-  /** how the map shows things (kept in the browser): the cars coloured by their speed (else all one colour) */
-  display: { carsBySpeed: boolean };
+  /** how the map shows things (kept in the browser): the cars coloured by their speed (else all one colour), their turn signals shown */
+  display: { carsBySpeed: boolean; carBlinkers: boolean };
 }
 
 const editor = (tool: Tool): EditorUi => ({
   mode: "plan", tool, selection: NO_SEL, point: null, car: null, follow: false, view: { cx: 0, cy: 0, scale: 6 }, camera: null,
-  run: { running: false, speed: 1, t: 0, replayT: null, playing: false, kept: null },
+  run: { running: false, speed: 1, t: 0, replayT: null, playing: false, kept: null, tune: {}, experiment: null, rays: true },
   dialogs: { search: { open: false, query: "" }, console: { open: false, kind: "all", text: "", clearedAt: -1 }, settings: false, optimizer: { open: false, junction: null, chosen: [], effort: "quick", stage: "setup" } },
   tables: { junctions: { by: "delay", flip: false, shown: 12 }, roads: { by: "delay", flip: false, shown: 12 } },
   route: { from: null, to: null, result: null, test: null },
@@ -123,7 +130,7 @@ export const sketchUi = new DeepSubject<SketchUiState>({
   sketchWindow: { open: false, test: stored<TestOptions>(TEST_KEY, { cut: 70, mode: "replace", run: true }), lastPiece: null },
   layers: sketchLayers$.getValue(),
   background: typeof localStorage === "undefined" ? { brightness: 0.85, source: "esri" } : loadSatOptions(),
-  display: stored<{ carsBySpeed: boolean }>(DISPLAY_KEY, { carsBySpeed: true }),
+  display: stored<{ carsBySpeed: boolean; carBlinkers: boolean }>(DISPLAY_KEY, { carsBySpeed: true, carBlinkers: true }),
 }, { name: "sketchUi" });
 sketchUi.subscribe("display", v => store(DISPLAY_KEY, v), { skipInitialCall: true });
 sketchUi.subscribe("background", v => saveSatOptions(JSON.parse(JSON.stringify(v)) as SatOptions), { skipInitialCall: true });
@@ -219,6 +226,8 @@ const editorFor = (a: Record<string, unknown>): EditorUi => {
 /** offered to the bridge while a V2 plan is open (the plan's editor): the state to read, and a few changes to it an agent may ask for (no others) */
 export function offerSketchUiToBridge() {
   const offs = [
+    // the edit actions (T189: only with the user's leave, checked by the server and against the editor and sketch here)
+    offerEditsToBridge(() => sketchUi.getValue().active),
     setBridgeUi({
       snapshot: sketchUiSnapshot,
       subscribe: (path, fn) => { const h = sketchUi.subscribe(path, v => fn(v), { skipInitialCall: true }); return () => h.unsubscribe(); },

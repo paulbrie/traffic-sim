@@ -19,7 +19,7 @@ import { worldToImage, type Underlay } from "@/lib/underlay";
 import { unproject } from "@/lib/osm/area";
 import { routeBetween, routeShape } from "@/engine/route";
 import * as ops from "@/state/ops";
-import { isJunction } from "@/engine/refs";
+import { isJunction, isRoadJoint } from "@/engine/refs";
 import { canJoin, createJunction, deleteJunction, joinStandalone, standaloneAt } from "@/state/junctions";
 import { groupById, groupHull, groupOfLink, groupOfNode, groupPorts, hull, moveGroup, place, placePoint } from "@/state/groups";
 import { placingPiece, stopPlacing } from "@/state/placing";
@@ -469,10 +469,10 @@ export function PlanCanvas() {
      */
     function pickInLayers(layers: readonly LayerId[], sx: number, sy: number, w: Vec): Selection | null {
       const c = simController.compiled, on = (l: LayerId) => layers.includes(l);
-      // (with roads on, every point of the drawing: road ends and joints too)
+      // (with roads on, every point of the drawing but the road joints, which have their own layer: road ends too)
       const nodeOk = (n: CNode) => (on("junctions") && n.controlled && (n.degree >= 2 || !!n.lead))
         || (on("signals") && n.controlled && n.def.control === "lights") || ((on("entries") || on("zones")) && n.gateway);
-      const nodeId = hitNode(sx, sy, undefined, id => { if (on("roads")) return true; const n = c.nodeById.get(id); return !!n && nodeOk(n); });
+      const nodeId = hitNode(sx, sy, undefined, id => { const n = c.nodeById.get(id); if (n && isRoadJoint(n)) return on("joints"); if (on("roads")) return true; return !!n && nodeOk(n); });
       if (nodeId) return { kind: "node", id: nodeId };
       if (on("stops")) { const id = hitStop(w); if (id) return { kind: "stop", id }; }
       // zebra crossings drawn by hand, rows of parking bays (a click on one of their bays)
@@ -877,7 +877,7 @@ export function PlanCanvas() {
       }
       for (const n of net.nodes) {
         const cn = c.nodeById.get(n.id);
-        const ok = on("roads") || (cn && ((on("junctions") && cn.controlled && cn.degree >= 2) || (on("entries") && cn.gateway)));
+        const ok = cn && isRoadJoint(cn) ? on("joints") : on("roads") || (cn && ((on("junctions") && cn.controlled && cn.degree >= 2) || (on("entries") && cn.gateway)));
         if (ok && inside(n)) out.push({ kind: "node", id: n.id });
       }
       if (on("stops") && geo) for (const s of geo.stops) if (inside(s.p)) out.push({ kind: "stop", id: s.id });
@@ -1263,7 +1263,7 @@ export function PlanCanvas() {
         drawScene(ctx, cam, pal, geo!, paths!, net, simController.compiled, simController.sim, {
           selection: u.selection, hover, showNodes: u.tool !== "pan", draft: draftOv,
           pendingPoint: u.tool === "road" && pending ? pending.p : null,
-          reservations: u.display.reservations, bySpeed: u.display.bySpeed, labels: u.display.labels, junctions: u.display.junctions,
+          reservations: u.display.reservations, bySpeed: u.display.bySpeed, blinkers: u.display.blinkers, labels: u.display.labels, junctions: u.display.junctions,
           snapStep: u.snap.step, gridOn: u.snap.grid,
           underlay: ul ? { u: ul, img: ulImg, editing: u.tool === "image" && !u.calib.active, hover: ulHover } : null,
           calib: u.calib.active ? { a: u.calib.a, b: u.calib.b, cursor: cursorWorld } : null,

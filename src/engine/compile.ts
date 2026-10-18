@@ -902,6 +902,43 @@ export function compile(net: Network, opts: { outlines?: boolean | "cached" } = 
     if (dark.length) warnings.push(`Traffic lights at ${n.def.id}: ${dark.length} lane connector${dark.length > 1 ? "s" : ""} never get${dark.length > 1 ? "" : "s"} green; set ${dark.length > 1 ? "them" : "it"} in the junction's phases.`);
   }
 
+  // ---- lights over a junction of road ends: one controller for all its points ----
+  // (road ends joined by lane connectors make one junction, but each end has a single road, so none got phases
+  // of its own above: their approaches, across the points, grouped facing each other as at a 3-way junction or
+  // more, and run by the first point set to lights; not one drawn by hand, a ring's, or one with per-connector lights)
+  for (const n of nodes) {
+    const g = n.cluster;
+    if (g.length < 2 || g[0] !== n) continue;
+    if (g.some(k => k.phases.length || k.signals !== k || k.customPhases || k.lead || k.ringR > 0)) continue;
+    const ctl = g.find(k => k.controlled && k.def.control === "lights");
+    if (!ctl) continue;
+    const sig = ctl.def.signal;
+    const withIn = g.flatMap(k => k.arms.map((a, i) => ({ k, a, i })).filter(x => x.a.inEdge));
+    const groups: (typeof withIn)[] = [], used = new Set<(typeof withIn)[number]>();
+    if (sig.separate) for (const x of withIn) { groups.push([x]); used.add(x); }
+    for (const x of withIn) {
+      if (used.has(x)) continue;
+      used.add(x);
+      let best: (typeof withIn)[number] | null = null, bestErr = 0.7;
+      for (const y of withIn) {
+        if (used.has(y)) continue;
+        const err = Math.abs(Math.abs(normAngle(y.a.angle - x.a.angle)) - Math.PI);
+        if (err < bestErr) { bestErr = err; best = y; }
+      }
+      if (best) used.add(best);
+      groups.push(best ? [x, best] : [x]);
+    }
+    // (lights need two phases: two approaches facing each other each get their own; a single one, an all-red phase)
+    const phases = groups.length === 1 ? (groups[0].length >= 2 ? groups[0].map(x => [x]) : [groups[0], []]) : groups;
+    for (const k of g) {
+      k.signals = ctl; k.controlled = true;
+      k.phases = phases.map(p => p.filter(x => x.k === k).map(x => x.i));
+      k.lanePhases = k.arms.map((a, i) => (a.inEdge ? Array.from({ length: a.inEdge.n }, () => phases.flatMap((p, pi) => (p.some(x => x.k === k && x.i === i) ? [pi] : []))) : []));
+      k.phaseGreen = phases.map(() => sig.green);
+      k.phaseMinGreen = phases.map(() => sig.minGreen);
+    }
+  }
+
   // ---- connectors into a road starting at another node that run along other roads' lanes (a slip road
   // joining a road some way before the node it was drawn to, or leaving it some way after): the stretch they
   // share (see Overlay). Traffic on either keeps clear of the other there, and traffic on a lane into the

@@ -1,15 +1,44 @@
 "use client";
 
 import { useState } from "react";
-import { useEditorKind, useUiPath } from "@/state/sketch-ui";
+import { sketchUi, useEditorKind, useUiPath } from "@/state/sketch-ui";
+import { useSubject } from "subjecto/react";
+import { sketchList } from "@/lib/sketch-list";
+import { laneSketch$ } from "@/state/store";
 import { Dices, RotateCcw, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { resolveTuning, sanitizeTuning, TUNE_GROUPS, TUNING, type TuneInfo, type Tuning } from "@/lib/sketch-tuning";
 import type { SimParams } from "@/lib/lane-sketch-sim";
+
+/**
+ * The simulation's behaviours chosen with a switch, not a slider (0 off, the default and as before; 1 on): Bob's tuning keys
+ * (T165, T172), each with its two choices, a short label and a one-line hint, in the group of the dialog it goes in
+ */
+interface TuneSwitch { key: TuneInfo["key"]; section: string; label: string; off: string; on: string; hint: string }
+const SWITCHES: TuneSwitch[] = [
+  { key: "junctionRules", section: "Junctions", label: "Junction rules", off: "First come", on: "Priority",
+    hint: "First come: whoever gets there first goes. Priority: by the rules of the road (the ring, give-way lines, the main road, the car from the right)." },
+  { key: "ringLanes", section: "Roundabouts", label: "Lane by exit", off: "Off", on: "On",
+    hint: "On a two-lane roundabout, cars take the lane for their exit before the ring: first exit outer, third or later inner, straight on either." },
+  { key: "ringKeepLane", section: "Roundabouts", label: "Keep your lane", off: "Off", on: "On",
+    hint: "On a two-lane roundabout, cars keep their ring; from the inner ring they move out only just before their exit, else go round once more." },
+  { key: "ringDriving", section: "Roundabouts", label: "Roundabout driving", off: "Off", on: "On",
+    hint: "At roundabouts, cars pull away and follow more briskly, approach the give-way line faster and take the ring's bends quicker, as drivers do there." },
+  { key: "visionCone", section: "Junctions", label: "Vision cone", off: "Off", on: "On",
+    hint: "A car with right of way only reacts to crossing cars it could see ahead (±100° at ring crossings, ±60° elsewhere); cars that give way still look everywhere." },
+];
+const SWITCH_KEYS = new Set<string>(SWITCHES.map(x => x.key));
+/** sliders shown in another group of the dialog than their tuning group (the roundabout-only ones with the roundabout switches; keys and values as they are) */
+const SHOWN_IN: Partial<Record<TuneInfo["key"], string>> = { ringGap: "Roundabouts" };
+const sectionOf = (t: TuneInfo) => SHOWN_IN[t.key] ?? t.group;
+/** the dialog's groups: the tuning's, and those only switches have (Roundabouts), after Junctions */
+const extra = [...new Set([...SWITCHES.map(x => x.section), ...Object.values(SHOWN_IN)].filter(x => !(TUNE_GROUPS as readonly string[]).includes(x)))];
+const SECTIONS: string[] = TUNE_GROUPS.flatMap(g => (g === "Junctions" ? [g, ...extra] : [g]));
 
 const digits = (step: number) => (step >= 1 ? 0 : step >= 0.1 ? 1 : 2);
 const fmt = (t: TuneInfo, v: number) => `${v.toFixed(digits(t.step))}${t.unit ? ` ${t.unit}` : ""}`;
@@ -19,8 +48,14 @@ const fmt = (t: TuneInfo, v: number) => `${v.toFixed(digits(t.step))}${t.unit ? 
  * the map. Saved with the plan, applied to the running cars straight away; the seed when the cars restart.
  */
 export function SimSettingsButton({ params, setParams, readOnly }: { params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean }) {
-  // (open or not: the editor's, in the V2 UI store)
-  const [open, setOpen] = useUiPath<boolean>(`editors/${useEditorKind()}/dialogs/settings`);
+  // (open or not: the editor's, in the V2 UI store; one editor's at a time: the plan's and the Sketch window's would lie
+  // one on the other, alike, and the one under would show when the top one closes, as if its settings were the other's)
+  const kind = useEditorKind();
+  const [open, setOpenOwn] = useUiPath<boolean>(`editors/${kind}/dialogs/settings`);
+  const setOpen = (v: boolean) => {
+    if (v) for (const k of ["plan", "scratch", "whole"] as const) if (k !== kind && sketchUi.getValue().editors[k].dialogs.settings) sketchUi.getValue().editors[k].dialogs.settings = false;
+    setOpenOwn(v);
+  };
   const changed = Object.keys(params.tune ?? {}).length + (params.seed !== undefined && params.seed !== 1 ? 1 : 0);
   return (
     <>
@@ -30,14 +65,22 @@ export function SimSettingsButton({ params, setParams, readOnly }: { params: Sim
       <Dialog open={open} onOpenChange={setOpen} modal={false}>
         <DialogContent overlay={false} className="top-16 right-4 left-auto max-h-[calc(100vh-6rem)] translate-x-0 translate-y-0 overflow-y-auto sm:max-w-md"
           onInteractOutside={e => e.preventDefault()}>
-          <SimSettings params={params} setParams={setParams} readOnly={readOnly} />
+          <SimSettings params={params} setParams={setParams} readOnly={readOnly} kind={kind} />
         </DialogContent>
       </Dialog>
     </>
   );
 }
 
-function SimSettings({ params, setParams, readOnly }: { params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean }) {
+/** whose settings these are: the plan's, or the open sketch's (its name) */
+function Whose({ kind }: { kind: string }) {
+  useSubject(laneSketch$);
+  if (kind !== "scratch") return <>the plan</>;
+  const { list, open } = sketchList(laneSketch$.getValue());
+  return <>the sketch &ldquo;{list.find(x => x.id === open)?.name}&rdquo;</>;
+}
+
+function SimSettings({ params, setParams, readOnly, kind }: { params: SimParams; setParams: (p: SimParams) => void; readOnly: boolean; kind: string }) {
   const T = resolveTuning(params.tune), changed = Object.keys(params.tune ?? {}).length;
   const set = (patch: Partial<Tuning>) => { const tune = sanitizeTuning({ ...T, ...patch }); const { tune: _, ...rest } = params; setParams(tune ? { ...rest, tune } : rest); };
   const [seedText, setSeedText] = useState(String(params.seed ?? 1));
@@ -45,8 +88,8 @@ function SimSettings({ params, setParams, readOnly }: { params: SimParams; setPa
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Simulation settings</DialogTitle>
-        <DialogDescription>Saved with the plan and applied to the running cars straight away. A new seed gives another run of the same traffic; it applies when the cars restart (↺).</DialogDescription>
+        <DialogTitle>Simulation settings · {kind === "scratch" ? "Sketch" : "Plan"}</DialogTitle>
+        <DialogDescription>For <Whose kind={kind} /> only{kind === "scratch" ? " (the plan and each sketch have their own)" : " (each sketch has its own)"}; saved with the plan and applied to the running cars straight away. A new seed gives another run of the same traffic; it applies when the cars restart (↺).</DialogDescription>
       </DialogHeader>
       <div className="flex items-end gap-2">
         <div className="grid flex-1 gap-1.5">
@@ -61,10 +104,25 @@ function SimSettings({ params, setParams, readOnly }: { params: SimParams; setPa
         </Button>
       </div>
       <div className="grid gap-5 pt-1">
-        {TUNE_GROUPS.map(g => (
+        {SECTIONS.map(g => (
           <section key={g} className="grid gap-3">
             <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{g}</h3>
-            {TUNING.filter(t => t.group === g).map(t => {
+            {SWITCHES.filter(x => x.section === g).map(x => {
+              const id = `tune-${x.key}`, on = !!T[x.key];
+              return (
+                <div key={x.key} className="grid gap-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm" id={id}>{x.label}</span>
+                    <ToggleGroup type="single" aria-labelledby={id} disabled={readOnly} className="h-7" value={on ? "on" : "off"} onValueChange={v => { if (v) set({ [x.key]: v === "on" ? 1 : 0 }); }}>
+                      <ToggleGroupItem value="off" className="h-7 px-2 text-xs">{x.off}</ToggleGroupItem>
+                      <ToggleGroupItem value="on" className="h-7 px-2 text-xs">{x.on}</ToggleGroupItem>
+                    </ToggleGroup>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{x.hint}</p>
+                </div>
+              );
+            })}
+            {TUNING.filter(t => sectionOf(t) === g && !SWITCH_KEYS.has(t.key)).map(t => {
               const v = T[t.key], isDef = v === t.def, id = `tune-${t.key}`;
               return (
                 <div key={t.key} className="grid gap-1.5">

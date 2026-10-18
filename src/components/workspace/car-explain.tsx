@@ -3,7 +3,7 @@
 import { ClipboardCopy, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { edgeName, explainText, headline, RULE_WORDS, tagWords, type CarExplain } from "@/lib/car-explain";
+import { crossingWords, edgeName, explainText, headline, movingLoop, noRouteText, patienceNote, RULE_WORDS, tagWords, type CarExplain } from "@/lib/car-explain";
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const one = (x: number) => x.toFixed(1);
@@ -13,24 +13,31 @@ const one = (x: number) => x.toFixed(1);
  * and the car holding it, how far its stop point is, for how long; the chain of cars holding each other (a ring is a
  * deadlock), its plan and the gaps it turned down, its last decisions. Each car named is a link that picks it.
  */
-export function CarWhy({ x, live, onPick }: { x: CarExplain | null; live: boolean; onPick: (id: number) => void }) {
+export function CarWhy({ x, live, patience: firstCome, onPick }: {
+  x: CarExplain | null; live: boolean;
+  /** the plan's tuning "patience" (s): how long cars of equal standing wait before the one waiting longer goes */
+  patience?: number;
+  onPick: (id: number) => void;
+}) {
   if (!x) return null;
   const h = headline(x), car = (id: number) => <button key={id} className="font-mono underline" onClick={() => onPick(id)} title={`Pick car ${id}`}>{id}</button>;
   const row = (label: string, value: React.ReactNode) => (
     <div className="flex justify-between gap-2"><span className="shrink-0 text-muted-foreground">{label}</span><span className="min-w-0 text-right">{value}</span></div>
   );
-  const ring = new Set(x.deadlock ?? []);
-  const copy = () => void navigator.clipboard.writeText(explainText(x, clock)).then(() => toast.success(`Car ${x.car}'s explanation copied`), () => toast.error("Couldn't copy"));
+  const ring = new Set(x.deadlock ?? []), patience = patienceNote(x, firstCome), lost = noRouteText(x);
+  const copy = () => void navigator.clipboard.writeText(explainText(x, clock, firstCome)).then(() => toast.success(`Car ${x.car}'s explanation copied`), () => toast.error("Couldn't copy"));
   return (
     <div className="grid gap-1 rounded border bg-background/60 px-2 py-1.5 text-xs" aria-label="Why">
       <div className="flex items-center justify-between gap-2">
         <span className="text-muted-foreground">Why</span>
         <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={copy} title="Copy the explanation as plain text, to paste into a conversation"><ClipboardCopy className="size-3" /> Copy explanation</Button>
       </div>
-      <p className={x.deadlock ? "font-medium text-destructive" : "font-medium"}>
+      <p className={x.deadlock || h.text === lost ? "font-medium text-destructive" : "font-medium"}>
         {x.deadlock && <TriangleAlert className="mr-1 inline size-3.5" />}
         {h.text}
       </p>
+      {lost && h.text !== lost && <p className="text-[11px] font-medium text-destructive">{lost}</p>}
+      {patience && <p className="text-[11px] text-muted-foreground">{patience}</p>}
       {!x.traced && (
         <p className="text-[11px] text-muted-foreground">
           {live ? "Just picked, from the recording: its speeds, plan and the gaps it turns down are traced from the next step (Run)." : "From the recording (it wasn't picked then): its speeds, plan and the gaps it turned down weren't traced."}
@@ -41,11 +48,11 @@ export function CarWhy({ x, live, onPick }: { x: CarExplain | null; live: boolea
       {x.rule && row("Rule", <>{RULE_WORDS[x.rule.kind]}{x.rule.edge ? ` · ${edgeName(x.rule.edge)}` : ""}{x.rule.detail ? ` (${x.rule.detail})` : ""} <span className="font-mono text-muted-foreground tabular">{one(x.since)} s</span></>)}
       {x.blocker && row("Held by", (
         <>car {car(x.blocker.car)} on <span className="font-mono">{edgeName(x.blocker.edge)}</span>
-          {(x.blocker.gap !== undefined || x.blocker.theirSec !== undefined) && (
-            <span className="block font-mono text-muted-foreground tabular">
-              {[x.blocker.gap !== undefined ? `gap ${one(x.blocker.gap)} m` : "", x.blocker.needGap !== undefined ? `needs ${one(x.blocker.needGap)} m` : "", x.blocker.theirSec !== undefined ? `it's there in ${one(x.blocker.theirSec)} s` : "", x.blocker.mySec !== undefined ? `clearing takes ${one(x.blocker.mySec)} s` : ""].filter(Boolean).join(" · ")}
-            </span>
-          )}
+          {(() => {
+            const b = x.blocker, cw = crossingWords(b);
+            const parts = [b.gap !== undefined ? `gap ${one(b.gap)} m` : "", b.needGap !== undefined ? `needs ${one(b.needGap)} m` : "", ...cw.where, cw.need ? `needs ${cw.need}` : ""].filter(Boolean);
+            return parts.length > 0 && <span className="block font-mono text-muted-foreground tabular">{parts.join(" · ")}</span>;
+          })()}
         </>
       ))}
       {x.stopAt && row("Stops in", <span><span className="font-mono tabular">{one(x.stopAt.dist)} m</span> <span className="text-muted-foreground">({tagWords(x.stopAt.why)})</span></span>)}
@@ -55,6 +62,7 @@ export function CarWhy({ x, live, onPick }: { x: CarExplain | null; live: boolea
           <span className="font-mono">{x.car}</span>
           {x.chain.map((id, i) => <span key={i} className={ring.has(id) ? "text-destructive" : ""}>→ {car(id)}</span>)}
           {x.deadlock && <span className="ml-1 rounded bg-destructive/15 px-1 font-medium text-destructive">Deadlock: {x.deadlock.join(", ")}</span>}
+          {movingLoop(x) && <span className="ml-1 text-muted-foreground">(a loop, still moving: not a deadlock)</span>}
         </div>
       )}
       {x.plan && (

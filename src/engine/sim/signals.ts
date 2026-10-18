@@ -35,7 +35,9 @@ export abstract class SimSignals extends SimRouting {
     if (phase !== st.phase) st.prev = st.phase;
     st.phase = phase; st.stage = stage;
     if (newGreen) {
-      if (this.logging(n)) this.ev(n, null, "signal", `green for ${n.phases[phase].map(a => n.arms[a].inEdge?.link.name || n.arms[a].link.id).join(" + ") || "nobody (all red)"}${n.coord ? ` (${n.coord.groupName})` : ""}`);
+      // (a junction over several points: the roads green at every point this controller runs)
+      const green = n.cluster.filter(k => k.signals === n).flatMap(k => (k.phases[phase] ?? []).map(a => k.arms[a].inEdge?.link.name || k.arms[a].link.id));
+      if (this.logging(n)) this.ev(n, null, "signal", `green for ${green.join(" + ") || "nobody (all red)"}${n.coord ? ` (${n.coord.groupName})` : ""}`);
       for (const a of n.phases[phase]) { st.cyc[a].greenAt = this.tick; st.cyc[a].count = 0; }
     }
   }

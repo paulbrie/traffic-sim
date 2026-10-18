@@ -31,14 +31,18 @@
  * when there is room on the other (neither it nor the car coming up behind there has to brake hard),
  * clear of crossings; if it can't, it waits where it has to change at the latest, and the next car
  * coming up on the other lane lets it in after a while. A car held up by a slower one changes to a
- * neighbour with clearly more room ahead, to overtake, and changes back once there is room again.
+ * neighbour with clearly more room ahead, to overtake, and changes back once there is room again. Two rings
+ * of a road beside each other all the way round (a two-lane roundabout) are neighbours too: a car on one
+ * changes to the other where it can (a crossing no one is in or coming up to no bar), missing its way off
+ * goes round again, never onto that one nearly full; a way onto either waits, before it crosses anything,
+ * while the other is nearly full.
  *
  * It keeps what happened, to copy and look into: a log of each car coming in, moving onto a lane or
  * connector and leaving; every car's state over the last 30 s; and "jumps", where a car is drawn
  * further from where it was drawn a step before than it drove.
  */
 import { speedLimitOf,
-  CHANGE_COST, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
+  CHANGE_COST, drivable, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
   onCrossing, crossingFrame,
   type LaneControl, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
 } from "./lane-sketch";
@@ -179,7 +183,7 @@ interface ReplayFrame { t: number; nums: Float32Array; tags: Uint32Array; /** pe
 /** a frame's size in memory, about (its arrays, and a little for each object) */
 const frameBytes = (f: ReplayFrame) => f.nums.byteLength + f.tags.byteLength + f.aux.byteLength + (f.explain ? 2000 : 0) + 16 + (f.peds ? f.peds.ids.byteLength + f.peds.nums.byteLength : 0) + (f.trailers?.byteLength ?? 0);
 /** a recorded car, as replayed */
-export interface ReplayCar { id: number; p: Pt; d: Pt; len: number; trailer?: Body; share: number; broken?: boolean; /** turn signal: -1 left, 1 right (`blinker`) */ blink?: -1 | 1; kmh: number; edge: string; exit: string | null; why: string | null; /** the gap it kept to what held it (m), and how long it had stood still (s) */ gap?: number; still?: number }
+export interface ReplayCar { id: number; p: Pt; d: Pt; len: number; trailer?: Body; share: number; broken?: boolean; /** turn signal: -1 left, 1 right (`blinker`) */ blink?: -1 | 1; kmh: number; edge: string; exit: string | null; why: string | null; /** the gap it kept to what held it (m), and how long it had stood still (s) */ gap?: number; still?: number; /** a bus (T21) */ bus?: boolean }
 const r2 = (x: number) => Math.round(x * 100) / 100;
 /** seconds for a vehicle going `v` to cover `d` metres, speeding up as it can (`acc`, up to `vmax`) */
 function timeTo(d: number, v: number, vmax: number, acc = A_MAX) {
@@ -193,10 +197,18 @@ function timeTo(d: number, v: number, vmax: number, acc = A_MAX) {
  * Where two paths come close (cross, run side by side, or end at the same place): the closest point along
  * each, and how far before and after it each is within reach of the other (the zone to keep clear).
  */
+/** a roundabout: its rings (inner first), middle, which way round (+1: the angle grows), and its ways off with where they leave */
+interface RingGroup { rings: Edge[]; c: Pt; sign: 1 | -1; exits: { conn: Edge; ang: number }[] }
 /** a lane of the same road running beside this one the same way: along this one from `a0` to `a1`, and the place beside it there (every metre from `a0`) */
-interface Neighbor { lane: Edge; a0: number; a1: number; map: number[] }
+interface Neighbor { lane: Edge; a0: number; a1: number; map: number[]; /** two rings round one middle (a two-lane roundabout): beside all the way round, places on both wrapping round */ round?: boolean }
 // (join: two connectors running together into the same place on a lane, see the zip in step)
-interface Conflict { other: Edge; at: number; otherAt: number; before: number; after: number; otherBefore: number; otherAfter: number; join: boolean }
+interface Conflict {
+  other: Edge; at: number; otherAt: number; before: number; after: number; otherBefore: number; otherAfter: number; join: boolean;
+  /** who goes first where the two meet (T161): 1 this one, -1 the other, 0 neither (first come, first served); and the rule that says so */
+  prio: -1 | 0 | 1; prioWhy: PrioWhy;
+}
+/** the rules that order two paths where they meet, in the order they are looked at (`junctionPriority`) */
+type PrioWhy = "roundabout" | "give-way line" | "lights" | "main road" | "left turn" | "from the right" | "first come";
 interface Edge {
   key: string;
   kind: "lane" | "conn";
@@ -237,6 +249,12 @@ interface Edge {
   ins: { conn: Edge; s: number }[];
   /** lanes: the ones of its road beside it, going the same way (a car can change to them) */
   neighbors: Neighbor[];
+  /** connectors: a way off a two-lane roundabout's inner ring (across the outer one): it gives way to the outer ring (T179) */
+  innerOff?: boolean;
+  /** a roundabout's: a ring, or a way on or off one (for `ringDriving`) */
+  atRing?: boolean;
+  /** a lane (or a connector leaving/joining one): a bus lane, closed to ordinary cars */
+  bus: boolean;
   /** where it crosses other lanes and connectors (or, connectors, ends where another does) */
   conflicts: Conflict[];
   /** connectors: stretches of it in reach of other paths (crossing zones overlapping one another as one; not joins): one in there is committed */
@@ -278,6 +296,8 @@ export interface SimVehicle {
   blocking: boolean;
   /** told to go (a deadlock broken) until this time: it skips giving way, though never into a car in its way */
   forceUntil: number;
+  /** set off through the zones ahead (T161): until then it doesn't stop again for one not yet there, and others take it as in among them */
+  commitUntil: number;
   /** times it was told to go (the next deadlock tries another car first) */
   forced: number;
   /** the gap it kept last step to what holds it back (m; Infinity: nothing within reach) */
@@ -286,6 +306,16 @@ export interface SimVehicle {
   vf: number;
   /** a truck (longer, slower to speed up, a longer time gap) */
   truck: boolean;
+  /** a bus: runs a line's stops in a loop, closed roads' bus lanes open to it (T21) */
+  bus: boolean;
+  /** a bus's line, and the index of the stop it is going to next (in `line.stops`) */
+  busLine: string | null;
+  stopIdx: number;
+  /** a bus stopped at its stop: seconds left before it moves on (0: not stopped) */
+  dwell: number;
+  /** a bus's passengers, and how many it has room for */
+  pax: number;
+  cap: number;
   /** its length, metres */
   len: number;
   /** fuel it has burnt, mL */
@@ -315,7 +345,9 @@ const NO_PLACES: { w: SimVehicle; pos: number }[] = [];
 const NO_VEHICLES: SimVehicle[] = [];
 /** (no vehicles: a cell of the grid the collision check looks in, empty) */
 const NO_CARS: number[] = [];
-const LEN = 4.5, A_LAT = 2.5, LOOK = 120;
+const LEN = 4.5, A_LAT = 2.5, LOOK = 120, TAU = 2 * Math.PI;
+/** a bus: its length (m) and passenger capacity */
+const BUS_LEN = 12, BUS_CAP = 40;
 /** a truck's cab, and how far its trailer reaches under it (to the hitch) */
 const CAB = 4, HITCH = 1;
 /** how far past a crossing a truck's trailer may still sweep across it, cutting in on a bend: it is clear that much later */
@@ -327,10 +359,22 @@ let TRUCK_A = 1, TRUCK_HW = 1.8;
 /** a vehicle's acceleration and time gap (a truck's, or the drivers') */
 /** how far behind its front a vehicle's body may still be over something it went past */
 const reach = (v: SimVehicle) => (v.truck ? v.len + SWEEP : v.len);
-const accOf = (v: SimVehicle) => (v.truck ? TRUCK_A : A_MAX);
-const hwOf = (v: SimVehicle) => (v.truck ? TRUCK_HW : T_HEAD);
+/** roundabout driving (`ringDriving`, T172): livelier at a roundabout (on a ring, a way on or off one, the last 40 m before a way on) */
+let RING_DRIVE = false;
+const RING_A = 2.5, RING_HW = 0.9, RING_YIELD_V = 6, RING_BEND = 1.3;
+const atRing = (v: SimVehicle) => RING_DRIVE && (v.edge.atRing || (v.edge.kind === "lane" && v.edge.len - v.pos < 40 && v.edge.outs.some(o => o.conn.atRing && o.conn.to!.lane.ring)));
+const accOf = (v: SimVehicle) => (v.truck ? TRUCK_A : atRing(v) ? Math.max(A_MAX, RING_A) : A_MAX);
+const hwOf = (v: SimVehicle) => (v.truck ? TRUCK_HW : atRing(v) ? Math.min(T_HEAD, RING_HW) : T_HEAD);
 /** seconds of waiting after which a car goes before cars that can still stop for it */
 let PATIENCE = 6;
+/** a car giving way (its path ranked after the other's) that has waited this long goes before one that can still stop for it (s) */
+const GIVE_PATIENCE = 10;
+/** a car kept this long waiting to change lane, with no way from its own lane to where it is going, gives that up (s; T194) */
+const LANE_STUCK = 30;
+/** a deadlock none of whose cars has moved for this long, letting them go or not: one of them is taken off the road (s; T195) */
+const LOCK_CLEAR = 60;
+/** how long a car let go from waiting at a zone stays committed to going through (s) */
+const COMMIT = 3;
 /** seconds kept waiting where it turns off before a car looks for another way */
 let REROUTE = 40;
 const HALF_W = 0.9;
@@ -352,7 +396,11 @@ function applyTuning(t: Tuning) {
   PED_WALK = t.pedWalk; PED_YIELD = t.pedYield; PED_V = t.pedSpeed;
   TRUCK_A = t.truckAccel; TRUCK_HW = t.truckHeadway;
   LC_PAUSE = t.laneChangePause; OVERTAKE_ROOM = t.overtakeRoom; RING_GAP = t.ringGap;
+  VISION = t.visionCone >= 0.5;
+  RING_DRIVE = t.ringDriving >= 0.5;
 }
+/** drivers' field of view (`visionCone`, T179): crossing foes outside it aren't considered */
+let VISION = false;
 /** seconds a car takes to move over to the lane it changes to */
 const SHIFT_T = 2;
 /** how far past the place where two connectors meet on a lane the zone between them goes (m): a car's length and a metre */
@@ -481,7 +529,7 @@ function bodiesOverlap(a: Body, b: Body) {
 
 /** what holds the car watched back, as its step decided it (for the explainer): the rule, the other car, the edge it names, the
  * gap it saw and needed (m), seconds to the zone (theirs) and to clear it (mine), the conflict zone on both paths */
-type Won = { kind: ExplainRule; car?: number; edge?: string; detail?: string; gap?: number; need?: number; theirSec?: number; mySec?: number; zone?: { mine: Edge; mineAt: [number, number]; theirs: Edge; theirsAt: [number, number] } };
+type Won = { kind: ExplainRule; car?: number; edge?: string; detail?: string; gap?: number; need?: number; theirSec?: number; mySec?: number; wantSec?: number; round?: number; zone?: { mine: Edge; mineAt: [number, number]; theirs: Edge; theirsAt: [number, number] } };
 
 /** a car's `why` read back (any car, a replayed one too): the rule, the other car, the edge it names; null: nothing holds it */
 export function readWhy(why: string | null): { kind: ExplainRule; car?: number; edge?: string; detail?: string } | null {
@@ -522,7 +570,22 @@ export class SketchSim {
   private bRnd: () => number;
   /** the shortest ways to the exits, and the exits' shares of the trips */
   private routes: RouteTable | null = null;
+  /** the shortest ways for a bus: like `routes`, but a bus lane is open to it too */
+  private busRoutes: RouteTable | null = null;
+  /** people waiting at a stop, by its id (grows over time, shrinks as a bus boards them; T21) */
+  private stopWaiting = new Map<string, number>();
+  private boarded = 0;
+  /** lanes and connectors from which no way leads out of the sketch (a ring with no way off, a loop): driven onto, a car circles for ever (T166) */
+  private trap = new Set<Edge>();
+  /** seconds each car has been giving way on a way off an inner ring (T180) */
+  private offWait = new Map<number, number>();
+  /** a roundabout's rings (one, or two-lane, rings beside each other all the way round; inner first), its middle, which way round
+   * cars go (+1: the angle grows), and its ways off with where they leave (the angle); by each way on (T172) */
+  private ringOn = new Map<Edge, RingGroup>();
   private exitWeights = new Map<string, number>();
+  /** an exit lane's way out: it and the lanes of its road ending beside it (as the Demand panel groups them). A car going to
+   * one leaves by whichever it is on: no changing lane at the sketch's edge for nothing (T194) */
+  private outWay = new Map<string, string[]>();
   private nextId = 1;
   /** test cars (`sendTest`): numbered -1, -2… (the others' numbers, which settle who goes first, as without them), their own
    * random numbers; the last one's trip, and where one drove off the end of a lane last step */
@@ -575,6 +638,8 @@ export class SketchSim {
   private tuning: Tuning;
   private seed: number;
   constructor(sk: Sketch, public params: SimParams = DEFAULT_SIM, seed = 1) {
+    // (no vehicle on a bike lane for now, ticket #20: the sketch without them)
+    sk = drivable(sk);
     this.seed = params.seed ?? seed;
     this.rnd = mulberry32(this.seed);
     this.pedRnd = mulberry32((this.seed * 7919) ^ 0x9ed5);
@@ -589,6 +654,7 @@ export class SketchSim {
 
   /** the sketch changed: the lanes and connectors rebuilt; vehicles on ones that are gone are taken off */
   setSketch(sk: Sketch) {
+    sk = drivable(sk);
     if (sk === this.sketch) return;
     this.sketch = sk;
     this.posed = null;
@@ -622,7 +688,7 @@ export class SketchSim {
     const sk = this.sketch;
     // (where it is drawn moves with the lanes: an edit isn't a jump)
     this.drawn.clear(); this.unseen = true;
-    const v0 = this.params.speed / 3.6, edges = new Map<string, Edge>(), paths = new Map<string, Pt[]>(), bf = this.tuning.bendSpeed;
+    const v0 = this.params.speed / 3.6, edges = new Map<string, Edge>(), paths = new Map<string, Pt[]>(), bf = this.tuning.bendSpeed, rd = this.tuning.ringDriving >= 0.5;
     // (each lane's speed limit: its road's, or its own, else the sketch's)
     const limit = (lane: string) => { const k = speedLimitOf(sk, lane); return k !== undefined ? k / 3.6 : v0; };
     // (lanes into a junction with lights: those, not lines; the lights carried on as they were)
@@ -640,9 +706,9 @@ export class SketchSim {
       paths.set(`lane:${l.id}`, samples(sh, 1));
       edges.set(`lane:${l.id}`, {
         key: `lane:${l.id}`, kind: "lane", id: l.id, len, ring, z: null, outs: [], ins: [], from: null, to: null, siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
-        control: ring || signals.has(l.id) ? null : l.control ?? null, minor: null, signal: ring ? null : signals.get(l.id) ?? null, atEnd: false,
+        control: ring || signals.has(l.id) ? null : l.control ?? null, minor: null, signal: ring ? null : signals.get(l.id) ?? null, atEnd: false, bus: !!l.bus,
         // (bends slow it down: arcs, and lines with curved points or closed round; a sharp drawn corner doesn't slow a whole lane)
-        vmax: (lv => (sh.kind === "arc" ? bendSpeed(sh.r, lv, bf) : sh.curved?.some(Boolean) || ring ? bendSpeed(minRadius(samples(sh, 1)), lv, bf) : lv))(limit(l.id)),
+        vmax: (lv => (sh.kind === "arc" ? bendSpeed(sh.r, lv, bf * (ring && rd ? RING_BEND : 1)) : sh.curved?.some(Boolean) || ring ? bendSpeed(minRadius(samples(sh, 1)), lv, bf * (ring && rd ? RING_BEND : 1)) : lv))(limit(l.id)), ...(ring ? { atRing: true } : {}),
         locate: pos => pointAt(sh, ring ? ((pos % len) + len) % len : pos),
       });
     }
@@ -654,8 +720,9 @@ export class SketchSim {
       // (places rounded to the centimetre can be a hair past a lane's end)
       const e: Edge = {
         key: `conn:${c.id}`, kind: "conn", id: c.id, len: Math.max(pl.len, 0.1), ring: false, z: null, outs: [], ins: [], siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
-        control: null, minor: from.control && c.from.s >= from.len - 1 ? from.control : null, signal: null, atEnd: c.from.s >= from.len - 1,
-        from: { lane: from, s: Math.min(c.from.s, from.len) }, to: { lane: to, s: Math.min(c.to.s, to.len) }, vmax: bendSpeed(minRadius(pts), limit(c.to.lane), bf), locate: pl.locate,
+        control: null, minor: from.control && c.from.s >= from.len - 1 ? from.control : null, signal: null, atEnd: c.from.s >= from.len - 1, bus: from.bus || to.bus,
+        from: { lane: from, s: Math.min(c.from.s, from.len) }, to: { lane: to, s: Math.min(c.to.s, to.len) }, vmax: bendSpeed(minRadius(pts), limit(c.to.lane), bf * (rd && (from.ring || to.ring) ? RING_BEND : 1)), locate: pl.locate,
+        ...(from.ring || to.ring ? { atRing: true } : {}),
       };
       edges.set(e.key, e);
       paths.set(e.key, pts);
@@ -682,13 +749,26 @@ export class SketchSim {
       if (e.kind === "lane") { const id = e.id; e.z = pos => zAt(sk, id, pos); }
       else { const c = connectorById(sk, e.id), lv = c ? connectorLevel(sk, c) : 0; e.z = () => lv; }
     }
-    // lanes of a road beside each other the same way (about a lane's width apart): the longest stretch, at least 10 m
+    // lanes of a road beside each other the same way (about a lane's width apart): the longest stretch, at least 10 m; two rings
+    // of a road, beside each other all the way round (a two-lane roundabout's), the whole of them
     const width = new Map(sk.lanes.map(l => [`lane:${l.id}`, l.width ?? 3.5]));
     for (const road of sk.roads) {
-      const ls = road.lanes.map(id => edges.get(`lane:${id}`)).filter((e): e is Edge => !!e && !e.ring);
+      const ls = road.lanes.map(id => edges.get(`lane:${id}`)).filter((e): e is Edge => !!e);
       for (const A of ls) for (const B of ls) {
-        if (A === B) continue;
+        // (geometric neighbours only here, whatever their `bus` flags: who may actually change into whom is for the
+        // vehicle-aware code that reads `neighbors` to say, not this one-off-per-sketch graph)
+        if (A === B || A.ring !== B.ring) continue;
         const pb = paths.get(B.key)!, cb = polyline(pb).cum, far = (width.get(A.key)! + width.get(B.key)!) / 2 + 0.75;
+        if (A.ring) {
+          const map: number[] = [];
+          for (let s = 0; s <= Math.ceil(A.len); s++) {
+            const a = A.locate(s), q = nearestOnPolyline(pb, cb, a.p), d = B.locate(q.s).d;
+            if (q.d <= 0.5 || q.d > far || a.d.x * d.x + a.d.y * d.y < 0.8) break;
+            map.push(q.s);
+          }
+          if (map.length > Math.ceil(A.len) && Math.abs(this.zOf(A, 0) - this.zOf(B, map[0])) < 0.5) A.neighbors.push({ lane: B, a0: 0, a1: A.len, map, round: true });
+          continue;
+        }
         let best: Neighbor | null = null, cur: Neighbor | null = null;
         for (let s = 0; s <= A.len; s++) {
           const a = A.locate(s), q = nearestOnPolyline(pb, cb, a.p), d = B.locate(q.s).d;
@@ -743,8 +823,8 @@ export class SketchSim {
         // still there, so the zone goes on a car's length along the lane, either way)
         const meet = !join && A.kind === "conn" && B.kind === "conn" && A.to!.lane === B.to!.lane && Math.abs(A.to!.s - B.to!.s) < 1 && r.a1 > A.len - 0.5 && r.b1 > B.len - 0.5;
         const after = meet ? Math.max(r.a1 - r.at, MEET_CLEAR) : r.a1 - r.at, otherAfter = meet ? Math.max(r.otherAfter, MEET_CLEAR) : r.otherAfter;
-        A.conflicts.push({ other: B, at: r.at, otherAt: r.otherAt, before: r.at - r.a0, after, otherBefore: r.otherBefore, otherAfter, join });
-        B.conflicts.push({ other: A, at: r.otherAt, otherAt: r.at, before: r.otherBefore, after: otherAfter, otherBefore: r.at - r.a0, otherAfter: after, join });
+        A.conflicts.push({ other: B, at: r.at, otherAt: r.otherAt, before: r.at - r.a0, after, otherBefore: r.otherBefore, otherAfter, join, prio: 0, prioWhy: "first come" });
+        B.conflicts.push({ other: A, at: r.otherAt, otherAt: r.at, before: r.otherBefore, after: otherAfter, otherBefore: r.at - r.a0, otherAfter: after, join, prio: 0, prioWhy: "first come" });
       }
     }
     // (a lane drawn into the lane its connectors join, short of where they join it, as a way into a roundabout drawn up into
@@ -759,6 +839,31 @@ export class SketchSim {
       T.conflicts = T.conflicts.filter(x => !(x.other === F && Math.abs(x.at - k.otherAt) < 1e-6));
       const at = k.otherAt - k.otherBefore;
       for (const o of F.outs) o.conn.joinBack = { len: F.len - (k.at - k.before), at: T.ring ? ((at % T.len) + T.len) % T.len : Math.max(0, at) };
+    }
+    // (ways off an inner ring, a ring beside it all the way round further out: across that, giving way to it)
+    for (const e of all) if (e.kind === "conn" && e.from!.lane.ring && !e.to!.lane.ring && e.from!.lane.neighbors.some(n => n.round && n.lane.len > e.from!.lane.len)) e.innerOff = true;
+    this.junctionPriority(sk, all, paths);
+    // (what leads out of the sketch, back from the lanes nothing leaves, changing lane over to one counting: the rest is a trap)
+    const besideOf = new Map<Edge, Edge[]>();
+    for (const e of all) for (const n of e.neighbors) (besideOf.get(n.lane) ?? besideOf.set(n.lane, []).get(n.lane)!).push(e);
+    const out = new Set<Edge>(all.filter(e => e.kind === "lane" && !e.ring && !e.outs.length)), todo = [...out];
+    while (todo.length) {
+      const e = todo.pop()!;
+      for (const p of e.kind === "lane" ? [...e.ins.map(o => o.conn), ...(besideOf.get(e) ?? [])] : [e.from!.lane]) if (!out.has(p)) { out.add(p); todo.push(p); }
+    }
+    this.trap = new Set(all.filter(e => !out.has(e)));
+    // roundabouts: each ring with the rings beside it all the way round; their ways off, their ways on
+    this.ringOn = new Map();
+    const grouped = new Set<Edge>();
+    for (const R of all) {
+      if (R.kind !== "lane" || !R.ring || grouped.has(R)) continue;
+      const rings = [R, ...R.neighbors.filter(n => n.round).map(n => n.lane)].sort((a, b) => a.len - b.len);
+      rings.forEach(x => grouped.add(x));
+      const pts = Array.from({ length: 16 }, (_, i) => R.locate((R.len * i) / 16).p), c = { x: pts.reduce((a, p) => a + p.x, 0) / 16, y: pts.reduce((a, p) => a + p.y, 0) / 16 };
+      const ang = (p: Pt) => Math.atan2(p.y - c.y, p.x - c.x), a0 = ang(R.locate(0).p), a1 = ang(R.locate(1).p);
+      const G: RingGroup = { rings, c, sign: ((((a1 - a0 + Math.PI) % TAU) + TAU) % TAU) - Math.PI > 0 ? 1 : -1, exits: [] };
+      for (const x of rings) for (const o of x.outs) if (!o.conn.to!.lane.ring) G.exits.push({ conn: o.conn, ang: ang(x.locate(o.s).p) });
+      for (const x of rings) for (const o of x.ins) if (!o.conn.from!.lane.ring) this.ringOn.set(o.conn, G);
     }
     for (const e of all) {
       const zs = e.conflicts.filter(k => !k.join).map(k => ({ s: k.at - k.before, e: k.at + k.after })).sort((p, q) => p.s - q.s);
@@ -793,9 +898,11 @@ export class SketchSim {
     });
     // where cars go: the shortest ways to the exits, and their shares
     this.routes = new RouteTable(sk);
+    this.busRoutes = (sk.busLines ?? []).some(l => l.stops.length >= 2) ? new RouteTable(sk, true) : null;
     this.exitWeights = new Map(sk.lanes.map(l => [l.id, laneOutWeight(l)]));
     // journeys: their ways' lanes (as the Demand panel groups them); their counts kept, the next arrival drawn again if the rate changed
     const ways = demandWays(sk), oldJ = new Map(this.journeys.map(j => [j.def.id, j]));
+    this.outWay = new Map(ways.exits.flatMap(w => w.lanes.map(l => [l, w.lanes])));
     this.journeys = (sk.journeys ?? []).map(def => {
       const was = oldJ.get(def.id), from = ways.entries.find(w => w.lanes.includes(def.from))?.lanes ?? [], to = ways.exits.find(w => w.lanes.includes(def.to))?.lanes ?? [];
       return { def, from, to, next: was && was.def.rate === def.rate ? was.next : this.t + this.jGap(def.rate), sent: was?.sent ?? 0, arrived: was?.arrived ?? 0, tripSum: was?.tripSum ?? 0, noRoute: was?.noRoute ?? 0 };
@@ -864,7 +971,7 @@ export class SketchSim {
 
   reset() {
     this.posed = null;
-    this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0;
+    this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0; this.offWait.clear();
     this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.problemList = []; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, { through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 }); for (const r of this.rTally) Object.assign(r, { through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0, lanes: {} }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
     this.watchTrace = null; this.watchState = null; this.watchLog = []; this.watchRejected = [];
     this.replay = []; this.replayBytes = 0; this.replayCapped = false; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
@@ -995,7 +1102,7 @@ export class SketchSim {
     // (room at the start: nothing there yet, its back clear of where this one's front comes in)
     if (this.vehicles.some(w => (w.edge === e && w.pos - w.len < len + S0 + 1) || (w.left === e && Math.abs(w.pos) < len + S0 + 1))) return null;
     const v0 = Math.min(e.vmax, (0.6 * this.params.speed) / 3.6);
-    const v: SimVehicle = { id: this.testId, seenX: NaN, seenY: NaN, edge: e, pos: 0, v: v0, exit: null, goal: null, dest: to, changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, gap: Infinity, vf: 1, truck: false, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: null, turn: null, born: this.t, fuel: 0, broken: null };
+    const v: SimVehicle = { id: this.testId, seenX: NaN, seenY: NaN, edge: e, pos: 0, v: v0, exit: null, goal: null, dest: to, changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, commitUntil: 0, gap: Infinity, vf: 1, truck: false, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: null, turn: null, born: this.t, fuel: 0, broken: null, bus: false, busLine: null, stopIdx: 0, dwell: 0, pax: 0, cap: 0 };
     this.plan(v);
     // (no way from there: not sent)
     if (from !== to && !v.goal) return null;
@@ -1011,7 +1118,7 @@ export class SketchSim {
     this.testOut = null;
     if (!T || T.state !== "driving") return;
     const v = this.vehicles.find(x => x.id === T.id);
-    if (!v) { T.state = out?.id === T.id && out.lane === T.to ? "arrived" : "gone"; T.t1 = this.t; return; }
+    if (!v) { T.state = out?.id === T.id && this.outsOf(T.to).includes(out.lane) ? "arrived" : "gone"; T.t1 = this.t; return; }
     if (T.path[T.path.length - 1] !== v.edge.key) T.path.push(v.edge.key);
     const still = v.still >= 2;
     if (still && !T.still) T.stops++;
@@ -1053,6 +1160,30 @@ export class SketchSim {
     for (const ex of opts) { r -= this.exitWeights.get(ex) ?? 1; if (r <= 0) return ex; }
     return opts[opts.length - 1] ?? null;
   }
+  /**
+   * Car `v`, stuck waiting to change to `to`, goes where its own lane leads instead: out at its end if that is a way out, else on by
+   * one of the ways that leave it, to an exit that way drawn by the exits' shares. Counted as a deadlock broken (T194).
+   */
+  private missTurn(v: SimVehicle, to: Edge): boolean {
+    const rt = this.routes, was = v.dest, goal = v.goal, exit = v.exit;
+    if (!rt) return false;
+    v.dest = null;
+    this.plan(v, true);
+    const g = v.goal;
+    if (!g) { v.dest = was; v.goal = goal; v.exit = exit; return false; }
+    if (!g.conn) v.dest = g.lane.id;
+    else {
+      const opts = rt.exits.filter(ex => (this.exitWeights.get(ex) ?? 1) > 0 && rt.viaConnector(g.conn!.id, ex) < Infinity);
+      let r = (v.id < 0 ? this.testRnd : this.rnd)() * opts.reduce((a, ex) => a + (this.exitWeights.get(ex) ?? 1), 0);
+      v.dest = opts.find(ex => (r -= this.exitWeights.get(ex) ?? 1) <= 0) ?? opts[opts.length - 1] ?? null;
+    }
+    this.deadlocks++;
+    this.note({ what: "change", car: v.id, gaveUp: was, to: to.key, waited: r2(v.still), goal: g.conn?.key ?? `end of ${g.lane.key}` });
+    this.problem("deadlock", v, `stuck ${Math.round(v.still)} s changing to ${to.key}, no gap: gave up going to lane:${was} and went ${g.conn ? `by ${g.conn.key}` : `out at the end of ${g.lane.key}`} instead`);
+    return true;
+  }
+  /** the lanes a car going to exit `dest` may leave by (T194) */
+  private outsOf(dest: string) { return this.outWay.get(dest) ?? [dest]; }
 
   /** metres from `a` to `b` along a lane (round a ring) */
   /** an edge's elevation `pos` metres along it (in levels) */
@@ -1074,7 +1205,15 @@ export class SketchSim {
    * there; on its own lane or one it can change to (a neighbour, or one of its neighbours, with 20 m to
    * change in per lane over).
    */
-  private plan(v: SimVehicle, ownLane = false) {
+  private plan(v: SimVehicle, ownLane = false, ringIn = false): void {
+    // (a bus: its destination is always its line's next stop, never a drawn-at-random exit; already on that
+    // stop's lane, short of the stop itself: wait right there, no further connector, however it would score)
+    if (v.bus) {
+      const line = v.busLine ? this.sketch.busLines?.find(l => l.id === v.busLine) : undefined;
+      const stop = line ? this.sketch.stops?.find(s => s.id === line.stops[v.stopIdx]) : undefined;
+      if (stop && v.edge.id === stop.lane && !v.edge.ring && v.pos <= stop.s + 0.5) { v.goal = { lane: v.edge, conn: null }; v.exit = null; return; }
+      if (stop) v.dest = stop.lane;
+    }
     // (a test car with its own random numbers: the others' run as without it)
     const rnd = v.id < 0 ? this.testRnd : this.rnd;
     // (each with how far it is: along the lane, a lane change counting `CHANGE_COST`)
@@ -1086,19 +1225,24 @@ export class SketchSim {
       if (!lane.ring && from < lane.len - 0.01 && !lane.outs.some(o => o.s >= lane.len - EXIT_CLEAR)) goals.push({ lane, conn: null, d: extra + lane.len - from });
     };
     const seen = new Set([v.edge]), todo = [{ lane: v.edge, at: v.pos }];
+    let skippedIn = false;
     while (todo.length) {
       const { lane, at } = todo.shift()!;
       add(lane, at);
       if (ownLane) break;
       for (const n of lane.neighbors) {
         const there = Math.max(at, n.a0) + 20;
-        if (seen.has(n.lane) || there > n.a1) continue;
+        if (seen.has(n.lane) || (!n.round && there > n.a1)) continue;
+        // (a bus lane is no lane for an ordinary car to change into; a bus may)
+        if (n.lane.bus && !v.bus) continue;
+        // (keeping its ring (`ringKeepLane`): not over from the outer ring to the inner, unless no other way leads there)
+        if (n.round && n.lane.len < lane.len && this.tuning.ringKeepLane >= 0.5 && !ringIn) { skippedIn = true; continue; }
         seen.add(n.lane);
         todo.push({ lane: n.lane, at: this.across(n, there)! });
       }
     }
     // going to an exit: the way there that is shortest (from those within 5 m of it, one at random)
-    const rt = this.routes;
+    const rt = v.bus ? this.busRoutes : this.routes;
     let dest = v.dest;
     // turning shares (as v1's): on a way in that has them, its road out drawn by them (once on the way in), only the
     // ways there taken; where it was going not to be reached from there, another way out that can be (journeys keep theirs)
@@ -1125,27 +1269,109 @@ export class SketchSim {
         }
       }
     }
+    // (a two-lane roundabout ahead, lane by exit (`ringLanes`): only the ways onto the ring its exit asks for)
+    if (rt && dest && this.tuning.ringLanes >= 0.5) {
+      const want = this.ringByExit(v, goals, dest);
+      if (want) { const keep = goals.filter(g => !g.conn || !this.ringOn.has(g.conn) || g.conn.to!.lane === want); if (keep.some(g => g.conn && this.ringOn.has(g.conn) && rt.viaConnector(g.conn.id, dest!) < Infinity)) goals.splice(0, goals.length, ...keep); }
+    }
     if (rt && dest) {
-      const cost = (g: (typeof goals)[number]) => g.d + (g.conn ? rt.viaConnector(g.conn.id, dest) : g.lane.id === dest ? 0 : Infinity);
+      const outs = this.outsOf(dest), cost = (g: (typeof goals)[number]) => g.d + (g.conn ? rt.viaConnector(g.conn.id, dest) : outs.includes(g.lane.id) ? 0 : Infinity);
       const best = goals.reduce((m, g) => Math.min(m, cost(g)), Infinity);
+      if (best === Infinity && skippedIn) { this.plan(v, ownLane, true); return; }
       if (best < Infinity) {
-        const near = goals.filter(g => cost(g) <= best + 5);
+        // (its own lane leaving by the way out too: no change to another lane of it for nothing (T194); but never
+        // down to no option at all — a lane beside it dead-ending nearer may be the only one this close to `best`)
+        const ownOut = goals.some(g => !g.conn && g.lane === v.edge && cost(g) < Infinity);
+        const withinBest = goals.filter(g => cost(g) <= best + 5);
+        const near0 = withinBest.filter(g => !(ownOut && !g.conn && g.lane !== v.edge));
+        const near = near0.length ? near0 : withinBest;
         const g = near[Math.floor(rnd() * near.length)];
         v.goal = { lane: g.lane, conn: g.conn };
         v.exit = v.goal.lane === v.edge ? v.goal.conn : null;
         return;
       }
     }
-    // (one place to go reached from several lanes: from the nearest, its own if it can; no changing lane for nothing)
+    // (giving up a lane change: only for a way that still leads where it is going; none, it keeps to the change it waits for)
+    if (ownLane && rt && dest) { v.goal = null; v.exit = null; return; }
+    // (one place to go reached from several lanes: from the nearest, its own if it can; no changing lane for nothing; never into a
+    // trap, a loop nothing leaves, while there is another way)
     const where = new Map<string, { lane: Edge; conn: Edge | null }>();
     for (const g of goals) { const k = g.conn ? g.conn.to!.lane.key : `end:${g.lane.key}`; if (!where.has(k)) where.set(k, { lane: g.lane, conn: g.conn }); }
-    const options = [...where.values()];
+    const all = [...where.values()], safe = all.filter(o => !o.conn || !this.trap.has(o.conn)), options = safe.length ? safe : all;
     v.goal = options.length ? options[Math.floor(rnd() * options.length)] : null;
     v.exit = v.goal?.lane === v.edge ? v.goal.conn : null;
   }
 
+  /** a bus reaching its stop: some alight, some of those waiting board (as many as it has room for); it dwells a while, boarding
+   * and alighting taking longer the more of them there are */
+  private busArrive(v: SimVehicle): void {
+    const line = this.sketch.busLines?.find(x => x.id === v.busLine);
+    const stop = line && this.sketch.stops?.find(x => x.id === line.stops[v.stopIdx]);
+    if (!stop) return;
+    const alight = Math.floor(v.pax * (0.25 + this.rnd() * 0.35));
+    const waiting = this.stopWaiting.get(stop.id) ?? 0;
+    const board = Math.max(0, Math.min(Math.floor(waiting), v.cap - (v.pax - alight)));
+    v.pax = v.pax - alight + board;
+    this.stopWaiting.set(stop.id, waiting - board);
+    this.boarded += board;
+    v.dwell = 3 + 0.5 * alight + 0.8 * board;
+    v.why = "at its stop"; v.stopped = true;
+  }
+
+  /** a bus moving on from its stop (its dwell run out): the line's next stop it can still reach (skipping one it can't, as a
+   * driver skips a closed stop); none at all reachable from here: it leaves the sketch like an ordinary car instead, and the
+   * line's own fleet count notices it short a bus and spawns another one along the loop */
+  private busDepart(v: SimVehicle): void {
+    v.stopped = false;
+    const line = this.sketch.busLines?.find(x => x.id === v.busLine);
+    if (line && line.stops.length >= 2) for (let tries = 0; tries < line.stops.length; tries++) {
+      v.stopIdx = (v.stopIdx + 1) % line.stops.length;
+      const stop = this.sketch.stops?.find(x => x.id === line.stops[v.stopIdx]);
+      if (!stop) continue;
+      if (v.edge.id === stop.lane ? v.pos <= stop.s : (this.busRoutes?.from(v.edge.id, v.pos, stop.lane) ?? Infinity) < Infinity) {
+        v.dest = stop.lane; this.plan(v); return;
+      }
+    }
+    v.bus = false; v.busLine = null; v.dest = this.pickDest(v.edge.id, v.pos); this.plan(v);
+  }
+
+  /**
+   * Lane by exit at a two-lane roundabout (T172): of the ways onto it a car could take, the ring its exit asks for, as the rules
+   * do (Romania art. 107): the first exit from the outer ring, the third or later and U-turns from the inner one, the second
+   * (straight on) either, 45% of cars the inner. Its exit: the one on its shortest way to where it is going; exits counted round
+   * from where it joins, ways off within 0.35 rad of each other one arm's. Null: no such roundabout ahead, or no choice.
+   */
+  private ringByExit(v: SimVehicle, goals: { lane: Edge; conn: Edge | null; d: number }[], dest: string): Edge | null {
+    const ins = goals.filter(g => g.conn && this.ringOn.has(g.conn)).map(g => g.conn!);
+    if (!ins.length) return null;
+    const G = this.ringOn.get(ins[0])!;
+    if (G.rings.length < 2 || new Set(ins.filter(c => this.ringOn.get(c) === G).map(c => c.to!.lane)).size < 2) return null;
+    const ang = (p: Pt) => Math.atan2(p.y - G.c.y, p.x - G.c.x), round = (a: number, b: number) => ((((b - a) * G.sign) % TAU) + TAU) % TAU;
+    const aIn = ang(ins[0].to!.lane.locate(ins[0].to!.s).p), r = G.rings[G.rings.length - 1].len / TAU, rt = this.routes!;
+    const exits = G.exits.map(x => ({ ...x, d: round(aIn, x.ang) })).sort((a, b) => a.d - b.d);
+    let best: (typeof exits)[number] | null = null, bc = Infinity;
+    for (const x of exits) { const c = x.d * r + rt.viaConnector(x.conn.id, dest); if (c < bc) { bc = c; best = x; } }
+    if (!best) return null;
+    let arm = 0;
+    for (let i = 0; i < exits.length; i++) { if (i === 0 || exits[i].d - exits[i - 1].d > 0.35) arm++; if (exits[i] === best) break; }
+    const inner = G.rings[0], outer = G.rings[G.rings.length - 1];
+    const want = arm === 1 ? outer : arm >= 3 ? inner : (Math.imul(v.id, 2654435761) >>> 0) % 100 < 45 ? inner : outer;
+    // (that arm's ways off all leaving the inner ring: from the inner ring, whatever the exit)
+    const i = exits.indexOf(best);
+    let a = i, b = i;
+    while (a > 0 && exits[a].d - exits[a - 1].d <= 0.35) a--;
+    while (b < exits.length - 1 && exits[b + 1].d - exits[b].d <= 0.35) b++;
+    return want === outer && exits.slice(a, b + 1).every(x => x.conn.from!.lane !== outer) ? inner : want;
+  }
+
   /** the place on the neighbour beside `pos` (null: not beside it there) */
   private across(n: Neighbor, pos: number) {
+    if (n.round) {
+      // (round two rings: from where it is round its own, to the place beside it round the other, over either's start)
+      const L = n.lane.len, p = ((pos % n.a1) + n.a1) % n.a1, k = Math.floor(p), a = n.map[k], d = n.map[k + 1] - a;
+      const x = a + (p - k) * (d > L / 2 ? d - L : d < -L / 2 ? d + L : d);
+      return ((x % L) + L) % L;
+    }
     if (pos < n.a0 - 0.01 || pos > n.a1 + 0.01) return null;
     const i = Math.max(0, Math.min(n.map.length - 1, pos - n.a0)), k = Math.floor(i), f = i - k;
     return k + 1 < n.map.length ? n.map[k] * (1 - f) + n.map[k + 1] * f : n.map[k];
@@ -1178,6 +1404,12 @@ export class SketchSim {
     const n = first.get(g.lane);
     if (!n) return null;
     const hops = depth.get(g.lane)!;
+    if (n.round) {
+      // (round a ring: 15 m before where it leaves, as beside this ring, 20 m more per ring over; past there, once more round)
+      let l = g.lane, s = g.conn ? this.exitS(g.conn) : 0;
+      while (l !== e) { const x = l.neighbors.find(x => x.round && depth.get(x.lane) === depth.get(l)! - 1); if (!x) break; s = this.across(x, s)!; l = x.lane; }
+      return { n, hops, by: (((s - 15 - 20 * (hops - 1)) % e.len) + e.len) % e.len };
+    }
     let by = n.a1 - 15 - 20 * (hops - 1);
     // (one change: before where it leaves, as beside this lane)
     if (hops === 1) {
@@ -1192,6 +1424,11 @@ export class SketchSim {
     if (!w.left || this.t - w.changedAt >= SHIFT_T) return null;
     const n = w.edge.neighbors.find(x => x.lane === w.left);
     return n ? this.across(n, w.pos) : null;
+  }
+
+  /** a two-lane roundabout's ring nearly full, with `more` metres more on it: its cars (each its length and a gap) over three quarters of where a car can stand on it (not in its crossings) */
+  private ringFull(L: Edge, byEdge: Map<Edge, SimVehicle[]>, more: number) {
+    return (byEdge.get(L) ?? NO_VEHICLES).reduce((a, w) => a + w.len + S0, more) > 0.75 * (L.len - L.runs.reduce((a, r) => a + r.e - r.s, 0));
   }
 
   /** the cars on a lane or beside it (turning off it, joining it, or just changed lane off it), and where along it */
@@ -1216,13 +1453,25 @@ export class SketchSim {
   private room(v: SimVehicle, n: Neighbor, byEdge: Map<Edge, SimVehicle[]>, ghosts: Map<Edge, { w: SimVehicle; pos: number }[]>) {
     const m = this.across(n, v.pos), L = n.lane, W = v.id === this.watchId;
     if (W) this.roomNo = null;
-    if (m === null || m < v.len || m > L.len - 1) return null;
-    for (const k of L.conflicts) if (k.at - k.before < m + 2 && k.at + k.after > m - v.len - 2) return null;
+    // (onto a ring nearly full, no; but keeping its ring (`ringKeepLane`), moving out to its way off is as leaving: only the cars there count)
+    const out = n.round && this.tuning.ringKeepLane >= 0.5 && L.len > v.edge.len;
+    if (m === null || (!L.ring && (m < v.len || m > L.len - 1)) || (n.round && !out && this.ringFull(L, byEdge, v.len + S0))) return null;
+    // (how far on from there: round a ring, ahead or behind whichever is nearer)
+    const rel = (s: number) => (L.ring ? ((((s - m) % L.len) + L.len * 1.5) % L.len) - L.len / 2 : s - m);
+    // (round two rings, a crossing no one is in or coming up to is no bar: else, on a busy two-lane roundabout, nowhere is)
+    const near = (k: Conflict, w: SimVehicle, pos: number) => pos - w.len < k.otherAt + k.otherAfter && pos > k.otherAt - k.otherBefore - (w.v > 0.5 ? 2 + 2 * w.v : 0);
+    const inUse = (k: Conflict) => !n.round || k.other.ring || (byEdge.get(k.other) ?? NO_VEHICLES).some(w => near(k, w, w.pos)) || (this.tails.get(k.other) ?? NO_PLACES).some(t => near(k, t.w, t.pos));
+    for (const k of L.conflicts) if (rel(k.at - k.before) < 2 && rel(k.at + k.after) > -v.len - 2 && inUse(k)) return null;
+    // (roundabout driving: not over to the other ring beside where one is about to come onto it, within 4 s)
+    if (n.round && RING_DRIVE) for (const o of L.ins) {
+      if (o.conn.from!.lane.ring) continue;
+      for (const w of byEdge.get(o.conn) ?? NO_VEHICLES) { const d = rel(o.s); if ((o.conn.len - w.pos) / Math.max(w.v, 1) < 4 && d > -(v.len + 8) && d < 15) return null; }
+    }
     // (each one there, as occupants() has them, looked at in place: whoever it is, any one too close is enough)
     let ahead = Infinity;
     const at = (w: SimVehicle, pos: number) => {
       if (w === v) return true;
-      const d = pos - m;
+      const d = rel(pos);
       if (d >= 0) {
         // (never onto a lane only to stop behind one broken down there)
         if (w.broken !== null && d < 60) return false;
@@ -1252,8 +1501,9 @@ export class SketchSim {
     return Math.round(hi * 10) / 10;
   }
   /** a zone the car watched waits at, for the explainer: the other car, both paths' stretches, its seconds to it and mine to clear it */
-  private zoneWon(kind: ExplainRule, k: Conflict, mine: Edge, w: SimVehicle, ws: number, dMe: number, v: SimVehicle): Won {
-    return { kind, car: w.id, edge: k.other.key, theirSec: r2(timeTo(Math.max(0, ws), w.v, k.other.vmax, accOf(w))), mySec: r2(timeTo(dMe + k.after + reach(v), v.v, mine.vmax, accOf(v))),
+  private zoneWon(kind: ExplainRule, k: Conflict, mine: Edge, w: SimVehicle, ws: number, dMe: number, v: SimVehicle, rules: boolean): Won {
+    return { kind, car: w.id, ...(ws <= 0 ? { detail: "already in the zone" } : rules ? { detail: w.commitUntil > this.t ? "set off first" : k.prioWhy } : {}), edge: k.other.key, theirSec: r2(timeTo(Math.max(0, ws), w.v, k.other.vmax, accOf(w))), mySec: r2(timeTo(dMe + k.after + reach(v), v.v, mine.vmax, accOf(v))),
+      ...(kind === "give-way" ? { wantSec: GAP } : {}), ...(k.other.ring && ws > 0 ? { round: r2(ws) } : {}),
       zone: { mine, mineAt: [k.at - k.before, k.at + k.after], theirs: k.other, theirsAt: [k.otherAt - k.otherBefore, k.otherAt + k.otherAfter] } };
   }
   /** a line in the car watched's log (about 30 kept); a repeat of the last one within 2 s only updates its time */
@@ -1352,13 +1602,14 @@ export class SketchSim {
    * past it, its body maybe still over it); null if it isn't going there (as far as it knows). Round a
    * ring, up to `past` metres past it counts as past (its body over what reaches that far past it).
    */
-  private toPlace(w: SimVehicle, e: Edge, at: number, past = w.len + 1): number | null {
+  private toPlace(w: SimVehicle, e: Edge, at: number, past = w.len + 1, before = 0): number | null {
     const rel = (lane: Edge, from: number) => (lane.ring ? this.along(lane, from, at) : at - from);
     if (w.edge === e) {
       let d = rel(e, w.pos);
       if (e.ring && d > e.len - Math.min(past, e.len / 2)) d -= e.len;
-      // (it turns off before getting there)
-      if (d > 0 && e.kind === "lane" && w.exit && this.along(e, w.pos, this.exitS(w.exit)) < d) return null;
+      // (it turns off before getting there: before `before` metres short of it, where a zone round it begins; turning off inside
+      // the zone, its front still sweeps through it (T206))
+      if (d > 0 && e.kind === "lane" && w.exit && this.along(e, w.pos, this.exitS(w.exit)) < d - before) return null;
       return d;
     }
     // (just left it, its back still on it; or one before that, across edges shorter than it)
@@ -1394,6 +1645,17 @@ export class SketchSim {
       if (!c || !at.has(c.id)) continue;
       const ring = path.slice(at.get(c.id)!);
       if (ring.some(x => x.forceUntil > this.t)) continue;
+      // (still all standing LOCK_CLEAR s on, letting them go again and again no help, or none of them only giving way: a lock of
+      // bodies in each other's way, which no driver can undo. As a warden clearing a blocked box would: the one standing across
+      // another's path (else the one stuck longest) is taken off the road, and the console says so (T195))
+      if (ring.every(x => x.still >= LOCK_CLEAR)) {
+        const across = ring.filter(x => x.blocking), out = (across.length ? across : ring).reduce((a, b) => (b.still > a.still ? b : a));
+        this.vehicles = this.vehicles.filter(x => x !== out); this.offWait.delete(out.id);
+        this.deadlocks++;
+        this.note({ what: "deadlock", car: out.id, ring: ring.map(x => x.id), why: out.why, cleared: true });
+        this.problem("deadlock", out, `deadlock of ${ring.length} that letting cars go didn't end (none moved for ${Math.round(Math.min(...ring.map(x => x.still)))} s): taken off the road${out.blocking ? ", standing across another's path" : ""}`);
+        continue;
+      }
       const soft = ring.filter(x => /^(zone |keeping clear|merge \S+ for car)/.test(x.why ?? ""));
       if (!soft.length) continue;
       const pick = soft.reduce((a, b) => (b.forced < a.forced || (b.forced === a.forced && b.still > a.still) ? b : a));
@@ -1411,9 +1673,78 @@ export class SketchSim {
   }
 
   /** of two cars each waiting for the other: whether `v` goes — the one in the other's way, that way clear; else the lower number */
-  private goesFirst(v: SimVehicle, w: SimVehicle) {
+  private goesFirst(v: SimVehicle, w: SimVehicle, rules = false) {
     const a = this.inWayOf(v, w), b = this.inWayOf(w, v);
-    return a === b ? v.id < w.id : a;
+    // (neither in the other's way: the lower number; by the rules of the road, the one that has waited longer, as they came)
+    return a === b ? (rules && Math.abs(v.still - w.still) > 0.05 ? v.still > w.still : v.id < w.id) : a;
+  }
+
+  /**
+   * Who goes first where two paths meet (T161), as real junctions are driven, once for each pair, the same seen from either:
+   * 1. a roundabout: the ring and the ways off it before everything, ways onto it after the others, and a path across its
+   *    middle (a lane or connector through the ring, joined to neither) after all;
+   * 2. a give-way or stop line: the path from it gives way;
+   * 3. lights on both: left to the lights, but a car turning left still gives way to one going straight or right;
+   * 4. the main road: going straight on from the way in with the higher limit, then more lanes that way, before the others;
+   * 5. a left turn (or a U-turn) gives way to one going straight or right;
+   * 6. the car coming from the right goes first;
+   * 7. otherwise first come, first served (with the patience of `yieldsTo`).
+   */
+  private junctionPriority(sk: Sketch, all: Edge[], paths: Map<string, Pt[]>) {
+    // (the rings, and what passes in among one (inside its outer edge by a metre), joined to it by neither end: across its middle)
+    const rings = sk.lanes.filter(l => l.shape.kind === "arc" && this.edges.get(`lane:${l.id}`)?.ring).map(l => ({ e: this.edges.get(`lane:${l.id}`)!, c: (l.shape as { c: Pt }).c, r: (l.shape as { r: number }).r + l.width / 2 - 1 }));
+    const inside = new Map<Edge, boolean>();
+    const across = (e: Edge) => {
+      let x = inside.get(e);
+      if (x === undefined) {
+        // (a ring round the same middle as one it is joined to, a two-lane roundabout's other ring, counts as that one; a lane
+        // leading onto or off a ring is a way in or out, not across it)
+        const touches = (R: (typeof rings)[number]) => rings.some(o => Math.hypot(o.c.x - R.c.x, o.c.y - R.c.y) < 1 && (e.from?.lane === o.e || e.to?.lane === o.e || e.outs.some(x => x.conn.to!.lane === o.e) || e.ins.some(x => x.conn.from!.lane === o.e)));
+        x = !e.ring && rings.some(R => !touches(R) && (paths.get(e.key) ?? []).some(p => Math.hypot(p.x - R.c.x, p.y - R.c.y) < R.r));
+        inside.set(e, x);
+      }
+      return x;
+    };
+    // (a way off an inner ring crossing the outer one: after the ring, before the ways on)
+    const role = (e: Edge) => (e.innerOff ? 2.5 : e.ring || e.from?.lane.ring ? 3 : across(e) ? 0 : e.to?.lane.ring ? 1 : 2);
+    // (the way a path comes in, and how it turns: clockwise on the map, y down, is to the right)
+    const dirIn = (e: Edge) => (e.kind === "conn" ? e.from!.lane.locate(Math.min(e.from!.s, e.from!.lane.len)).d : e.locate(0).d);
+    const turn = (e: Edge) => {
+      if (e.kind !== "conn") return "straight";
+      const a = e.locate(0).d, b = e.locate(e.len).d, d = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
+      return d < -0.6 || Math.abs(d) > 2.6 ? "left" : d > 0.6 ? "right" : "straight";
+    };
+    // (how much of a road a path comes in on: its limit, then its lanes going that way)
+    const sameWay = new Map<string, number>();
+    for (const road of sk.roads) for (const id of road.lanes) {
+      const L = this.edges.get(`lane:${id}`);
+      if (!L || L.ring) continue;
+      const d = L.locate(L.len / 2).d;
+      sameWay.set(id, road.lanes.filter(o => { const M = this.edges.get(`lane:${o}`); if (!M) return false; const q = M.locate(M.len / 2).d; return d.x * q.x + d.y * q.y > 0.5; }).length);
+    }
+    const weight = (e: Edge) => { const L = e.kind === "conn" ? e.from!.lane : e; return Math.round((L.vmax * 3.6) / 5) * 100 + (sameWay.get(L.id) ?? 1); };
+    const lit = (e: Edge) => !!(e.kind === "conn" ? e.from!.lane.signal : e.signal);
+    const order = (A: Edge, B: Edge): [-1 | 0 | 1, PrioWhy] => {
+      const ra = role(A), rb = role(B);
+      if (ra !== rb && (ra !== 2 || rb !== 2)) return [ra > rb ? 1 : -1, "roundabout"];
+      const ma = !!A.minor, mb = !!B.minor;
+      if (ma !== mb) return [ma ? -1 : 1, "give-way line"];
+      const ta = turn(A), tb = turn(B);
+      if (lit(A) || lit(B)) return lit(A) && lit(B) && (ta === "left") !== (tb === "left") ? [ta === "left" ? -1 : 1, "left turn"] : [0, "lights"];
+      const wa = weight(A), wb = weight(B);
+      if (wa !== wb && (wa > wb ? ta : tb) === "straight") return [wa > wb ? 1 : -1, "main road"];
+      if ((ta === "left") !== (tb === "left")) return [ta === "left" ? -1 : 1, "left turn"];
+      const da = dirIn(A), db = dirIn(B), side = db.x * da.y - db.y * da.x;
+      if (da.x * db.x + da.y * db.y < 0.5 && Math.abs(side) > 0.5) return [side > 0 ? -1 : 1, "from the right"];
+      return [0, "first come"];
+    };
+    for (const A of all) for (const k of A.conflicts) {
+      if (k.join || k.prioWhy !== "first come" || k.prio !== 0) continue;
+      const m = k.other.conflicts.find(x => x.other === A && Math.abs(x.at - k.otherAt) < 1e-6 && Math.abs(x.otherAt - k.at) < 1e-6);
+      const [p, why] = order(A, k.other);
+      k.prio = p; k.prioWhy = why;
+      if (m) { m.prio = (-p || 0) as -1 | 0 | 1; m.prioWhy = why; }
+    }
   }
 
   /** a car with its front at `pos` on `e`, past the start of the zones that the one starting at `zs` is part of */
@@ -1552,7 +1883,7 @@ export class SketchSim {
       // (no faster than it can stop from behind the last car in, nor than it can stop before the first crossing on its lane)
       const zone = s.lane.conflicts.reduce((m, k) => (k.join || k.at - k.before < 0 ? m : Math.min(m, k.at - k.before)), Infinity);
       const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - S0 - 1)), Math.sqrt(2 * B_COMF * Math.max(0, zone - 1)));
-      const v: SimVehicle = { id: this.nextId++, seenX: NaN, seenY: NaN, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, gap: Infinity, vf: truck ? this.tuning.truckSpeed / 100 : this.tuning.speedVsLimit, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, turn: null, born: this.t, fuel: 0, broken: null };
+      const v: SimVehicle = { id: this.nextId++, seenX: NaN, seenY: NaN, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, commitUntil: 0, gap: Infinity, vf: truck ? this.tuning.truckSpeed / 100 : this.tuning.speedVsLimit, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, turn: null, born: this.t, fuel: 0, broken: null, bus: false, busLine: null, stopIdx: 0, dwell: 0, pax: 0, cap: 0 };
       if (jw) this.journeys.find(j => j.def.id === jw.journey)!.sent++;
       else s.truck = undefined;
       // (speeds varying: its own share of the lanes' speed; no random number drawn when they don't, so runs stay as they were)
@@ -1566,6 +1897,30 @@ export class SketchSim {
       this.spawned++;
       // (come in on a road: onto it from outside)
       { const r = this.rOn.get(s.lane); if (r !== undefined) this.countOnto(r, s.lane.id); }
+    }
+
+    // bus lines: each kept near its set fleet size, one more spawned at a stop with room for it, spread round the loop
+    // rather than piled at the first stop; people waiting at every stop grow over time, for a bus to pick up
+    if (Math.floor(this.t) !== Math.floor(this.t - dt)) for (const stop of this.sketch.stops ?? []) if (this.rnd() < 0.12) this.stopWaiting.set(stop.id, Math.min(80, (this.stopWaiting.get(stop.id) ?? 0) + 1));
+    for (const line of this.sketch.busLines ?? []) {
+      if (line.stops.length < 2 || line.buses <= 0) continue;
+      const have = this.vehicles.filter(w => w.bus && w.busLine === line.id).length;
+      if (have >= line.buses) continue;
+      const stopId = line.stops[have % line.stops.length], stop = stopId ? this.sketch.stops?.find(x => x.id === stopId) : undefined;
+      const lane = stop && this.edges.get(`lane:${stop.lane}`);
+      if (!stop || !lane || lane.kind !== "lane") continue;
+      const p = lane.locate(stop.s);
+      if (near(p.p, BUS_LEN).some(w => w.edge === lane && Math.abs(w.pos - stop.s) < (BUS_LEN + w.len) / 2 + 2)) continue;
+      const v: SimVehicle = {
+        id: this.nextId++, seenX: NaN, seenY: NaN, edge: lane, pos: stop.s, v: 0, exit: null, goal: null, dest: stop.lane, changedAt: -Infinity, left: null, shift: null,
+        still: 0, run: BUS_LEN, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, commitUntil: 0, gap: Infinity, vf: this.tuning.truckSpeed / 100,
+        truck: false, len: BUS_LEN, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: null, turn: null, born: this.t, fuel: 0, broken: null,
+        bus: true, busLine: line.id, stopIdx: have % line.stops.length, dwell: 1, pax: Math.floor(this.rnd() * 10), cap: BUS_CAP,
+      };
+      this.vehicles.push(v);
+      (byEdge.get(lane) ?? byEdge.set(lane, []).get(lane)!).push(v);
+      if (spawnGrid) toGrid(v);
+      this.spawned++;
     }
 
     // cars just changed lane, their bodies still partly over the lane they left; and cars waiting to change lane, where they would be on the other
@@ -1598,11 +1953,19 @@ export class SketchSim {
     const acc = new Map<SimVehicle, number>(), held = new Map<SimVehicle, { gap: number; lead: number }>();
     // (what each was waiting for as this step began: those decided before another in it mustn't change what that one sees)
     const whyWas = new Map(this.vehicles.map(v => [v, v.why]));
+    const commitWas = new Map(this.vehicles.map(v => [v, v.commitUntil]));
     let carIds: Map<number, SimVehicle> | null = null;
     const carById = (id: number) => (carIds ??= new Map(this.vehicles.map(w => [w.id, w]))).get(id);
     for (const v of this.vehicles) {
       // (broken down: rolls to a stop where it is, an obstacle in its lane)
       if (v.broken !== null) { acc.set(v, v.v > 0 ? -Math.min(2.5, v.v / dt) : 0); held.set(v, { gap: Infinity, lead: 0 }); v.gap = Infinity; v.why = "broken down"; v.blocking = false; continue; }
+      // (a bus dwelling at its stop: motionless, boarding and alighting, until its dwell timer runs out)
+      if (v.bus && v.dwell > 0) {
+        v.dwell = Math.max(0, v.dwell - dt);
+        acc.set(v, v.v > 0 ? -Math.min(2.5, v.v / dt) : 0); held.set(v, { gap: Infinity, lead: 0 }); v.gap = Infinity; v.why = "at its stop"; v.blocking = false;
+        if (v.dwell <= 0) this.busDepart(v);
+        continue;
+      }
       const route = this.route(v);
       let gap = Infinity, lead = 0, vmax = v.edge.vmax * v.vf, why: string | null = null;
       // (the reason: a car's "car <id>" made only when it is the nearest yet, not for every car looked at)
@@ -1613,7 +1976,7 @@ export class SketchSim {
         if (g < gap) { gap = g; lead = speed; why = typeof reason === "string" ? reason : `car ${reason.id}`; if (W) won = info ?? (typeof reason === "string" ? null : { kind: "follow", car: reason.id }); }
       };
       /** the zones ahead where its path meets another (not to stop in), and where those it gives way at start */
-      const zones: { s: number; e: number }[] = [], yields: { at: number; why: string; info?: Won }[] = [];
+      const zones: { s: number; e: number; clear?: boolean }[] = [], yields: { at: number; why: string; info?: Won }[] = [];
       // (a car stops 0.5 m short of a zone; one closer than 0.1 m, or too fast to stop before it, is committed)
       const canStopBefore = (d: number) => d >= Math.max(0.1, (v.v * v.v) / 8 - 1);
       const forced = v.forceUntil > this.t;
@@ -1623,7 +1986,17 @@ export class SketchSim {
         if (line < 1.5 && v.v < 0.2) v.stopped = true;
         else behind(Math.max(0.1, line - 0.5 + S0), 0, `stop ${v.edge.key}`);
       }
-      if (line !== null && v.edge.control === "yield") vmax = Math.min(vmax, Math.sqrt(YIELD_V ** 2 + 2 * B_COMF * line));
+      if (line !== null && v.edge.control === "yield") vmax = Math.min(vmax, Math.sqrt((RING_DRIVE && v.exit?.atRing ? Math.max(YIELD_V, RING_YIELD_V) : YIELD_V) ** 2 + 2 * B_COMF * line));
+      // a bus nearing its stop: slows to it, as to a stop line; stopped and still there, it dwells (boards, alights, moves on)
+      if (v.bus) {
+        const busLine = v.busLine ? this.sketch.busLines?.find(x => x.id === v.busLine) : undefined;
+        const stop = busLine ? this.sketch.stops?.find(x => x.id === busLine.stops[v.stopIdx]) : undefined;
+        if (stop && v.edge.id === stop.lane) {
+          const d = stop.s - v.pos;
+          if (d >= -0.5) behind(Math.max(0.1, d - 0.5 + S0), 0, `stop ${stop.name}`);
+          if (d < 1 && v.v < 0.3) this.busArrive(v);
+        }
+      }
       // lights: waiting at the line on red, and on amber if it can still stop in comfort
       if (line !== null && v.edge.signal) {
         const st = v.exit ? v.edge.signal.stateOf(v.exit.id) : null;
@@ -1631,7 +2004,8 @@ export class SketchSim {
       }
       // changing lane: waiting where it has to have changed, if it can't before
       const hop = v.run >= v.len ? this.hop(v) : null;
-      if (hop) {
+      // (round a ring it doesn't stop to change: missing its way off, it goes round again)
+      if (hop && !hop.n.round) {
         // (beside one waiting to change onto its lane, the two of them in each other's way: the one with the lower number goes on, to make room)
         const swap = (waitIn.get(v.edge) ?? []).some(({ w, pos }) => w.edge === hop.n.lane && w.id > v.id && Math.abs(pos - v.pos) < v.len + w.len + 3);
         const by = swap ? hop.n.a1 - 2 : hop.by;
@@ -1640,7 +2014,7 @@ export class SketchSim {
       // (just changed lane: still partly over the one it left, the cars ahead there are in its way)
       const mine = this.ghostPos(v);
       if (mine !== null) for (const w of byEdge.get(v.left!) ?? []) {
-        const x = w.pos - mine;
+        const x = v.left!.ring ? ((((w.pos - mine) % v.left!.len) + v.left!.len * 1.5) % v.left!.len) - v.left!.len / 2 : w.pos - mine;
         if (x > 0 && x < 40) behind(x - w.len, w.v, w);
       }
       for (const r of route) {
@@ -1663,6 +2037,20 @@ export class SketchSim {
           if (r.edge === v.edge) for (const { w, pos } of waitIn.get(r.edge) ?? []) {
             const x = ahead(pos) - w.len - 3;
             if (x > 0.1 && x <= 30 && canStopBefore(x)) behind(x + S0, 0, `letting car ${w.id} change lane`);
+          }
+          // (keeping lanes on a two-lane roundabout (`ringKeepLane`): on the outer ring, easing off, if it can in comfort, for one on the
+          // inner ring just ahead about to move out to its way off: bounded courtesy)
+          if (r.edge === v.edge && r.edge.ring && this.tuning.ringKeepLane >= 0.5) for (const n of r.edge.neighbors) {
+            const back = n.round && n.lane.len < r.edge.len ? n.lane.neighbors.find(x => x.lane === r.edge && x.round) : undefined;
+            if (!back) continue;
+            for (const w of byEdge.get(n.lane) ?? []) {
+              const x = w.goal?.conn;
+              if (!x || w.goal!.lane !== r.edge || w.v < 1) continue;
+              const m = this.across(back, w.pos)!, d = this.along(r.edge, v.pos, m);
+              if (d < 0.5 || d > 25 || this.along(r.edge, m, this.exitS(x)) > (1.6 * r.edge.len) / TAU) continue;
+              if (this.idm(v.v, r.edge.vmax, Math.max(0.1, d - w.len), w.v, accOf(v), hwOf(v)) < -B_COMF) continue;
+              behind(d - w.len, w.v, `letting car ${w.id} change lane`);
+            }
           }
           // …also one turning off this lane, while still beside it…
           for (const o of r.edge.outs) {
@@ -1743,32 +2131,69 @@ export class SketchSim {
         if (r.off > 0) vmax = Math.min(vmax, Math.sqrt((r.edge.vmax * v.vf) ** 2 + 2 * B_COMF * r.off));
         const tMe = (d: number) => timeTo(d, v.v, r.edge.vmax, accOf(v));
         // (on a connector from a line it gives way at; still before the line, it waits there, not at the zone)
-        const minor = r.edge.kind === "conn" && !!r.edge.minor;
+        const minor = r.edge.kind === "conn" && !!r.edge.minor, rules = this.tuning.junctionRules >= 0.5;
         const hold = (z: number) => (minor && v.edge !== r.edge ? Math.min(z, r.off + 0.5) : z);
         // joining a lane part-way: give way to the cars coming along it
         if (r.edge.kind === "conn") {
           const t = r.edge.to!, dMerge = r.off + r.edge.len - r.a, jb = r.edge.joinBack, z = Math.min(dMerge - r.edge.mergeBefore, jb ? r.off - r.a - jb.len : Infinity);
           if ((t.lane.ring || t.s > 1) && dMerge < 40) {
             zones.push({ s: z, e: dMerge });
-            if (canStopBefore(hold(z))) {
+            // (roundabout driving: onto an inner ring across the outer one, the checks for joining it made before that crossing, not standing in it)
+            const xs = !RING_DRIVE ? [] : r.edge.conflicts.filter(k => !k.join && k.other.ring && k.other !== t.lane).map(k => r.off + k.at - k.before - r.a), firstX = xs.length ? Math.min(...xs) : Infinity;
+            const mh = firstX < z - 0.1 && firstX > 0.1 && canStopBefore(hold(firstX)) ? hold(firstX) : hold(z);
+            if (canStopBefore(mh)) {
               const arrive = tMe(dMerge), onLane = byEdge.get(t.lane) ?? [];
               // (how far back along the lane the joining stretch reaches)
               const laneZone = Math.max(0, this.diff(t.lane, this.beside(r.edge.onTo, r.edge.len - r.edge.mergeBefore), t.s), jb ? this.diff(t.lane, jb.at, t.s) : 0);
-              if (!forced && t.lane.ring && onLane.reduce((a, w) => a + w.len + S0, 0) > 0.75 * t.lane.len) yields.push({ at: hold(z), why: `merge ${t.lane.key}: ring nearly full`, ...(W ? { info: { kind: "ring-full", edge: t.lane.key } } : {}) });
+              if (!forced && t.lane.ring && onLane.reduce((a, w) => a + w.len + S0, 0) > 0.75 * t.lane.len) yields.push({ at: mh, why: `merge ${t.lane.key}: ring nearly full`, ...(W ? { info: { kind: "ring-full", edge: t.lane.key } } : {}) });
+              // (or, a two-lane roundabout's, the ring beside it, cars on this one having to get over to that one: waited for before
+              // the connector crosses anything (the other ring), not standing across it; once in there, on)
+              else if (!forced && t.lane.ring) {
+                const full = t.lane.neighbors.find(n => n.round && this.ringFull(n.lane, byEdge, 0))?.lane, r0 = r.edge.runs[0], at = hold(r0 ? Math.min(z, r.off + r0.s - r.a) : z);
+                if (full && at > 0.1 && canStopBefore(at)) yields.push({ at, why: `merge ${full.key}: ring nearly full`, ...(W ? { info: { kind: "ring-full", edge: full.key } } : {}) });
+              }
               for (const w of onLane) {
                 // (one holding back to let it in)
                 if (w === v || (w.v < 0.3 && w.why?.includes(`letting car ${v.id} in`))) continue;
                 // (no room just past where it joins)
                 const past = this.along(t.lane, t.s, w.pos);
-                if (past < w.len + S0 + 2 && w.v < 3 && (t.lane.ring || w.pos > t.s)) { yields.push({ at: hold(z), why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
+                if (past < w.len + S0 + 2 && w.v < 3 && (t.lane.ring || w.pos > t.s)) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
                 const u = this.along(t.lane, w.pos, t.s);
-                if (!t.lane.ring && w.pos > t.s) { if (w.pos - t.s < w.len + 1) { yields.push({ at: hold(z), why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "just past where it joins", car: w.id, edge: t.lane.key } } : {}) }); break; } continue; }
+                if (!t.lane.ring && w.pos > t.s) { if (w.pos - t.s < w.len + 1) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "just past where it joins", car: w.id, edge: t.lane.key } } : {}) }); break; } continue; }
                 if (u > 70) continue;
                 // (it leaves before getting here)
                 if (w.exit && this.along(t.lane, w.pos, this.exitS(w.exit)) < u) continue;
                 // (told to go: only one right there stops it)
                 if (forced && u >= laneZone + v.len + 1) continue;
-                if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v)) { yields.push({ at: hold(z), why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, gap: r2(Math.max(0, u - laneZone - w.v * arrive)), need: r2(Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v, v.len + 1)) } } : {}) }); break; }
+                if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v)) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, gap: r2(Math.max(0, u - laneZone - w.v * arrive)), need: r2(Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v, v.len + 1)) } } : {}) }); break; }
+              }
+              // (roundabout driving: one on another way onto this ring, joining it upstream, counts as on it already: coming up to the line
+              // faster, this one would otherwise be past stopping once that one is on)
+              if (!forced && t.lane.ring && RING_DRIVE && !yields.length) for (const o of t.lane.ins) {
+                if (o.conn === r.edge || o.conn.from!.lane.ring) continue;
+                const up = this.along(t.lane, o.s, t.s);
+                if (up <= 0.05 || up > t.lane.len / 2) continue;
+                for (const w of byEdge.get(o.conn) ?? []) {
+                  // (only one on its way, near: one held on its connector isn't coming)
+                  if (w.v < 2) continue;
+                  const u = o.conn.len - w.pos + up;
+                  if (u > 25) continue;
+                  if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, RING_GAP * w.v)) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "joining it just before" } } : {}) }); break; }
+                }
+                if (yields.length) break;
+              }
+              // (keeping lanes on a two-lane roundabout (`ringKeepLane`): one on the inner ring about to move out onto this ring, to its
+              // way off, counts as on it already)
+              if (!forced && t.lane.ring && this.tuning.ringKeepLane >= 0.5 && !yields.length) for (const n of t.lane.neighbors) {
+                const back = n.round && n.lane.len < t.lane.len ? n.lane.neighbors.find(x => x.lane === t.lane && x.round) : undefined;
+                if (!back) continue;
+                for (const w of byEdge.get(n.lane) ?? []) {
+                  const x = w.goal?.conn;
+                  if (!x || w.goal!.lane !== t.lane) continue;
+                  const m = this.across(back, w.pos)!, u = this.along(t.lane, m, t.s);
+                  if (u > 70 || this.along(t.lane, m, this.exitS(x)) > (1.6 * t.lane.len) / TAU || this.along(t.lane, m, this.exitS(x)) < u) continue;
+                  if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, RING_GAP * w.v)) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "moving out from the inner ring" } } : {}) }); break; }
+                }
               }
             }
           }
@@ -1780,8 +2205,13 @@ export class SketchSim {
           if (k.join) {
             const O = k.other, mine = r.off + r.edge.len - r.a;
             if (mine > 80) continue;
+            // (one nearly standing well back from the join is no car to keep a gap to yet: up to where the two run together, and waiting
+            // there, not stopping short anywhere on the way, maybe in another's path (T195); told to go, it doesn't wait)
+            const hold = r.off + ahead(k.at - k.before) - 0.5;
             const zip = (w: SimVehicle, theirs: number) => {
-              if (w !== v && (theirs < mine || (theirs === mine && w.id < v.id))) behind(mine - theirs - w.len, w.v, w, W ? { kind: "merge", detail: "zip", car: w.id, edge: O.to!.lane.key } : null);
+              if (w === v || forced || !(theirs < mine || (theirs === mine && w.id < v.id))) return;
+              const g = mine - theirs - w.len;
+              behind(w.v < 1 && v.blocking ? Math.max(g, hold) : g, w.v, `merge ${O.to!.lane.key} for car ${w.id}`, W ? { kind: "merge", detail: "zip", car: w.id, edge: O.to!.lane.key } : null);
             };
             for (const w of byEdge.get(O) ?? []) zip(w, O.len - w.pos);
             // (and one about to take it, still on the lane into it)
@@ -1794,41 +2224,57 @@ export class SketchSim {
           if (rel < -0.01 || rel > r.b - r.a + 0.01) continue;
           const dMe = r.off + rel, zs = dMe - k.before;
           if (zs > 60) continue;
-          zones.push({ s: zs, e: dMe + k.after });
+          zones.push({ s: zs, e: dMe + k.after, ...(k.other.innerOff && (byEdge.get(k.other) ?? NONE).some(w => (this.offWait.get(w.id) ?? 0) > GIVE_PATIENCE) ? { clear: true } : {}) });
           // (too late to stop: on it goes)
           if (!canStopBefore(hold(zs))) continue;
-          // (giving way at a line, it goes when it would be through before the other gets there, with time to spare)
-          const tClear = minor ? timeTo(dMe + k.after + reach(v), v.v, r.edge.vmax, accOf(v)) + GAP : 0;
           // (already in among the zones this one is part of: it can't stop short of them any more, it goes through first)
           const meIn = r.edge === v.edge && r.edge.kind === "conn" && this.inRun(r.edge, v.pos, k.at - k.before);
           for (const w of toward.get(k.other) ?? NONE) {
             // (nor one following this one, behind it in its lane or held up by it: it can't get there first)
             if (w === v || (w.edge === v.edge && !v.edge.ring && w.pos < v.pos) || whyWas.get(w) === `car ${v.id}`) continue;
-            const dW = this.toPlace(w, k.other, k.otherAt, reach(w) + 1 + k.otherAfter);
+            const dW = this.toPlace(w, k.other, k.otherAt, reach(w) + 1 + k.otherAfter, k.otherBefore);
             if (dW === null) continue;
             const ws = dW - k.otherBefore;
             // (gone through, its back clear of the zone; or far off)
-            if (dW + k.otherAfter < -reach(w) || ws > (minor ? LOOK : 70)) continue;
-            const wIn = ws > 0 && w.edge === k.other && k.other.kind === "conn" && this.inRun(k.other, w.pos, k.otherAt - k.otherBefore);
+            if (dW + k.otherAfter < -reach(w) || ws > ((rules ? k.prio < 0 : minor) ? LOOK : 70)) continue;
+            // (in among the zones, or set off through them: committed, still able to be stopped for in comfort by this one)
+            const wIn = ws > 0 && ((w.edge === k.other && k.other.kind === "conn" && this.inRun(k.other, w.pos, k.otherAt - k.otherBefore))
+              || (rules && commitWas.get(w)! > this.t && w.v > 1 && ws < 12 && (!(v.commitUntil > this.t) || w.id < v.id) && zs > (v.v * v.v) / (2 * B_COMF)));
+            // (drivers' field of view (`visionCone`): one on its way to the crossing, not in it, outside the driver's field (±100° at a
+            // ring crossing, ±60° elsewhere) or beyond its sight distance, isn't considered; but one giving way there looks for what it
+            // gives way to, wherever it comes from)
+            if (VISION && ws > 0 && !wIn && !r.edge.minor && !(r.edge.innerOff && k.other.ring) && !this.inView(v, w, r.edge.ring || k.other.ring)) continue;
+            // (this one set off through them: it doesn't stop again for one not there yet that can still stop for it)
+            if (rules && v.commitUntil > this.t && ws > 0 && !wIn && ws > (w.v * w.v) / (2 * B_COMF) + 1) continue;
             // (stopped short of the zone, waiting for this one as this one would for it: the one standing in another's way goes, that
             // way clear; else the one with the lower number — the same from either side. Short of it or at its edge: held 0.5 m short
             // of another zone it may stand up to 0.5 m into this one, not on its way through it)
             const wWhy = whyWas.get(w) ?? null;
-            if (ws > -0.5 && w.v < 0.3 && wWhy?.endsWith(`for car ${v.id}`) && this.goesFirst(v, w)) continue;
+            if (ws > -0.5 && w.v < 0.3 && wWhy?.endsWith(`for car ${v.id}`) && this.goesFirst(v, w, rules)) continue;
             // (stopped short of the zone for something else, the car ahead, keeping another crossing clear,
             // joining a lane: it isn't on its way through here, and waiting for it would lock the junction; one held by
             // nothing is setting off. So too in among zones running on along a connector: queued there, it is no nearer
             // going through)
             if (w.v < 0.3 && ws > 0.1 && wWhy !== null && !wWhy.startsWith(`zone ${r.edge.key}`)) continue;
             // (in among the zones, it is on its way through: it goes first, unless this one is in among them too)
-            if (wIn && !meIn && !forced) { yields.push({ at: hold(zs), why: `zone ${k.other.key} for car ${w.id}`, ...(W ? { info: this.zoneWon("priority", k, r.edge, w, ws, dMe, v) } : {}) }); break; }
+            if (wIn && !meIn && !forced) { yields.push({ at: hold(zs), why: `zone ${k.other.key} for car ${w.id}`, ...(W ? { info: this.zoneWon("priority", k, r.edge, w, ws, dMe, v, rules) } : {}) }); break; }
             // (this one in among them, the other able to stop short: it waits)
             if (meIn && !wIn && ws > 0 && ws >= (w.v * w.v) / 8) continue;
-            // (one from a line goes after those without one, unless it is past its line and can't stop any more)
-            const wMinor = !!k.other.minor, committed = w.edge === k.other && ws < Math.max(0.1, (w.v * w.v) / 8 - 1);
+            // (one that can't stop any more for this one: past its line, or too close and fast)
+            // (a way off an inner ring gives way where it crosses the outer ring, as at a line (art. 107(1¹)))
+            const wMinor = !!k.other.minor || (!!k.other.innerOff && r.edge.ring), committed = w.edge === k.other && ws < Math.max(0.1, (w.v * w.v) / 8 - 1);
+            const here = minor || (!!r.edge.innerOff && k.other.ring);
+            // (who goes first by the junction's rules (junctionPriority): after the other, it goes when it would be through before the
+            // other gets there, with time to spare, or once it has waited long and the other can still stop; before it, only one that
+            // can't stop any more holds it; neither, first come, first served, with patience)
             const first = ws <= 0
-              || (!forced && (minor === wMinor ? this.yieldsTo(v, zs, r.edge.vmax, w, ws, k.other.vmax) : minor ? timeTo(ws, w.v, k.other.vmax, accOf(w)) < tClear : committed));
-            if (first) { yields.push({ at: hold(zs), why: `zone ${k.other.key} for car ${w.id}`, ...(W ? { info: this.zoneWon(ws <= 0 ? "priority" : minor && !wMinor ? "give-way" : "zone", k, r.edge, w, ws, dMe, v) } : {}) }); break; }
+              || (!forced && !rules && (here === wMinor ? this.yieldsTo(v, zs, r.edge.vmax, w, ws, k.other.vmax) : here ? timeTo(ws, w.v, k.other.vmax, accOf(w)) < timeTo(dMe + k.after + reach(v), v.v, r.edge.vmax, accOf(v)) + GAP
+                // (a way off an inner ring kept waiting long for a gap in the outer ring: it goes once the one coming can still stop in comfort)
+                && !(r.edge.innerOff && (this.offWait.get(v.id) ?? 0) > GIVE_PATIENCE && ws > (w.v * w.v) / (2 * B_COMF) + 1) : committed))
+              || (!forced && rules && (k.prio < 0
+                ? !(v.still > GIVE_PATIENCE && ws > (w.v * w.v) / (2 * B_COMF) + 1) && timeTo(ws, w.v, k.other.vmax, accOf(w)) < timeTo(dMe + k.after + reach(v), v.v, r.edge.vmax, accOf(v)) + GAP
+                : k.prio > 0 ? committed : this.yieldsTo(v, zs, r.edge.vmax, w, ws, k.other.vmax)));
+            if (first) { yields.push({ at: hold(zs), why: `zone ${k.other.key} for car ${w.id}`, ...(W ? { info: this.zoneWon(rules ? (ws <= 0 || k.prio > 0 ? "priority" : k.prio < 0 ? "give-way" : "zone") : ws <= 0 ? "priority" : here && !wMinor ? "give-way" : "zone", k, r.edge, w, ws, dMe, v, rules) } : {}) }); break; }
           }
         }
       }
@@ -1837,13 +2283,16 @@ export class SketchSim {
       // giving way or at a line: still moving, it is about to stop there, and one following it in would stop in the zone
       const ahead = /^car (-?\d+)$/.exec(why ?? ""), leadWhy = ahead ? whyWas.get(carById(Number(ahead[1]))!) : null;
       const leadHeld = !!leadWhy && /^(zone |merge |keeping clear|signal |stop |pedestrians)/.test(leadWhy);
-      if ((lead < 3 || leadHeld) && !forced) {
-        const runs: { s: number; e: number }[] = [];
+      // (and, the car ahead on the move or not, a crossing of a way off an inner ring: kept clear unless there's room past it, as a
+      // marked box (T190))
+      const slow = lead < 3 || leadHeld;
+      if ((slow || zones.some(z => z.clear)) && !forced) {
+        const runs: { s: number; e: number; clear?: boolean }[] = [];
         for (const z of [...zones].sort((p, q) => p.s - q.s)) {
           const last = runs[runs.length - 1];
-          if (last && z.s <= last.e) last.e = Math.max(last.e, z.e); else runs.push({ ...z });
+          if (last && z.s <= last.e) { last.e = Math.max(last.e, z.e); last.clear ||= z.clear; } else runs.push({ ...z });
         }
-        for (const z of runs) if (z.s > 0.1 && canStopBefore(z.s) && gap < z.e + reach(v) + 1) yields.push({ at: z.s, why: `keeping clear (${why})`, ...(W ? { info: { kind: "keep-clear" as const, ...(why ? { detail: why } : {}), ...((won as Won | null)?.car !== undefined ? { car: (won as Won | null)!.car } : {}), ...((won as Won | null)?.edge ? { edge: (won as Won | null)!.edge } : {}) } } : {}) });
+        for (const z of runs) if ((slow || z.clear) && z.s > 0.1 && canStopBefore(z.s) && gap < z.e + reach(v) + 1) yields.push({ at: z.s, why: `keeping clear (${why})`, ...(W ? { info: { kind: "keep-clear" as const, ...(why ? { detail: why } : {}), ...((won as Won | null)?.car !== undefined ? { car: (won as Won | null)!.car } : {}), ...((won as Won | null)?.edge ? { edge: (won as Won | null)!.edge } : {}) } } : {}) });
       }
       // giving way: stopping short of the zone, and of every other zone its body would block there
       for (const { at: x, why: reason, info } of yields) {
@@ -1857,7 +2306,14 @@ export class SketchSim {
         // (an obstacle with its back at `t + S0`: the front stops at `t`)
         behind(Math.max(0.1, t + S0), 0, reason, info);
       }
+      // (let go from waiting at a zone, nearly standing: committed to going through, so it doesn't change its mind on the next step)
+      const wasWaiting = /^(zone |keeping clear)/.test(whyWas.get(v) ?? "");
+      if (this.tuning.junctionRules >= 0.5 && wasWaiting && !/^(zone |keeping clear)/.test(why ?? "") && v.v < 2 && zones.some(q => q.s > -0.5 && q.s < 15)) v.commitUntil = this.t + COMMIT;
+      // (stopped again for something else, a car ahead or no room where it joins: no longer on its way through)
+      else if (v.commitUntil > this.t && v.v < 0.3 && why !== null && !/^(zone |keeping clear)/.test(why)) v.commitUntil = 0;
       v.why = gap < 30 ? why : null;
+      // (how long it has been held on a way off an inner ring, creeping up or not, until it gets going: for its patience there)
+      if (v.edge.innerOff && v.v < 2) this.offWait.set(v.id, (this.offWait.get(v.id) ?? 0) + dt); else this.offWait.delete(v.id);
       v.blocking = zones.some(q => q.s < -0.01 && q.e > -reach(v));
       // IDM
       const free = 1 - (v.v / Math.max(vmax, 0.1)) ** 4;
@@ -1881,7 +2337,8 @@ export class SketchSim {
     const rt = this.routes;
     if (rt) for (const v of this.vehicles) {
       const x = v.exit, dest = v.dest;
-      if (!x || !dest || v.broken !== null || v.held < REROUTE || this.t - v.rerouteT < REROUTE || v.gaveUp?.includes(x) || v.edge.kind !== "lane" || this.along(v.edge, v.pos, this.exitS(x)) > 10) continue;
+      // (a bus always follows its line, never this car-only reroute: it has its own way of giving up on a stop, in `busDepart`)
+      if (v.bus || !x || !dest || v.broken !== null || v.held < REROUTE || this.t - v.rerouteT < REROUTE || v.gaveUp?.includes(x) || v.edge.kind !== "lane" || this.along(v.edge, v.pos, this.exitS(x)) > 10) continue;
       // (nor queued behind another on its lane: the one at the head looks)
       const ahead = /^car (-?\d+)/.exec(v.why ?? ""), lead = ahead && byId().get(Number(ahead[1]));
       if (lead && lead.edge === v.edge) continue;
@@ -1906,13 +2363,21 @@ export class SketchSim {
       if (e.kind !== "lane" || !e.neighbors.length || v.broken !== null || v.run < v.len || this.t - v.changedAt < SHIFT_T + 1) continue;
       const h = this.hop(v), { gap, lead } = held.get(v)!;
       if (h) {
-        if (v.pos > h.n.a1 - 1) { this.plan(v); continue; }
+        if (!h.n.round && v.pos > h.n.a1 - 1) { this.plan(v); continue; }
         // (kept waiting to change lane: somewhere else it can go from its own lane will do)
         if (v.still > 8 && v.why?.startsWith("changing to")) {
           const was = v.goal;
           this.plan(v, true);
-          if (v.goal) { this.note({ what: "change", car: v.id, gaveUp: was?.conn?.key ?? null, goal: v.goal.conn?.key ?? `end of ${v.goal.lane.key}` }); continue; }
+          if (v.goal) { this.note({ what: "change", car: v.id, gaveUp: was?.conn?.key ?? null, to: h.n.lane.key, waited: r2(v.still), goal: v.goal.conn?.key ?? `end of ${v.goal.lane.key}` }); continue; }
           v.goal = was; v.exit = null;
+          // (and still none after LANE_STUCK s, nowhere to go but the lane beside, the car there stuck as it is: it gives up where it was
+          // going, as a driver who misses a turn does, and goes where its own lane leads; out, if its end is a way out (T194))
+          if (v.still > LANE_STUCK && this.missTurn(v, h.n.lane)) continue;
+        }
+        // (keeping its ring (`ringKeepLane`): over to the outer ring only just before its way off; missing it, once more round)
+        if (h.n.round && this.tuning.ringKeepLane >= 0.5 && h.n.lane.len > e.len) {
+          const x = v.goal?.conn, m = this.across(h.n, v.pos);
+          if (x && m !== null && x.from!.lane === h.n.lane && this.along(h.n.lane, m, this.exitS(x)) > (1.6 * h.n.lane.len) / TAU) continue;
         }
         const q = this.room(v, h.n, byEdge, ghosts);
         if (v.id === this.watchId && !q && this.roomNo) {
@@ -1923,13 +2388,13 @@ export class SketchSim {
           }
           this.watchNote("rejected gap", `no room to change to ${h.n.lane.key}: gap ${no.gap.toFixed(1)} m${no.car !== undefined ? ` to car ${no.car}` : ""}, needs ${no.need.toFixed(1)} m`, no.car);
         }
-        if (!q || (h.by - v.pos > 60 && q.ahead < Math.min(gap, 50) - 5)) continue;
+        if (!q || ((h.n.round ? this.along(e, v.pos, h.by) : h.by - v.pos) > 60 && q.ahead < Math.min(gap, 50) - 5)) continue;
         this.changeIn(byEdge, ghosts, v, h.n);
       } else {
         // (stopped behind one broken down in its lane: any lane beside with room will do, to get round it)
         const m = gap < 60 && v.v < 3 ? /^car (-?\d+)/.exec(v.why ?? "") : null, lw = m && byId().get(Number(m[1]));
         if (lw && lw.broken !== null && lw.edge === e) {
-          const n = e.neighbors.find(n => n.a1 - v.pos > 10 && this.room(v, n, byEdge, ghosts));
+          const n = e.neighbors.find(n => (n.round || n.a1 - v.pos > 10) && !(n.lane.bus && !v.bus) && this.room(v, n, byEdge, ghosts));
           if (n) this.changeIn(byEdge, ghosts, v, n);
           continue;
         }
@@ -1939,7 +2404,7 @@ export class SketchSim {
         // (far enough from where it leaves to come back)
         if ((g.conn ? this.exitS(g.conn) : e.len) - v.pos < 80) continue;
         const best = e.neighbors
-          .filter(n => n.a1 - v.pos > 60)
+          .filter(n => !n.round && n.a1 - v.pos > 60 && !(n.lane.bus && !v.bus))
           .map(n => ({ n, q: this.room(v, n, byEdge, ghosts) }))
           .filter(x => x.q && x.q.ahead > gap + OVERTAKE_ROOM)
           .sort((a, b) => b.q!.ahead - a.q!.ahead)[0];
@@ -2067,17 +2532,27 @@ export class SketchSim {
 
   /** an event of the car watched, in its log */
   private watchEvent(e: Omit<SimEvent, "t">) {
-    const x = e as Record<string, unknown>, me = this.watchId;
+    const n = this.eventLine(e, this.watchId!);
+    if (n) this.watchNote(n.what, n.text, n.car);
+  }
+  /** an event of car `me` as a line in its log (the same for the car watched and, from the event log, one asked about later) */
+  private eventLine(e: Omit<SimEvent, "t">, me: number): { what: string; text: string; car?: number } | null {
+    const x = e as Record<string, unknown>;
     switch (e.what) {
-      case "in": return this.watchNote("in", `came in on ${x.lane}`);
-      case "out": return this.watchNote("out", `left the map at ${x.lane}`);
-      case "onto": return this.watchNote("onto", `onto ${x.to}`);
-      case "change": return x.gaveUp !== undefined ? this.watchNote("lane change", `gave up its lane change: now ${x.goal}`) : this.watchNote("lane change", `changed from ${x.from} to ${x.to}`);
-      case "reroute": return this.watchNote("reroute", `rerouted from ${x.from} to ${x.to} after ${x.waited} s`);
-      case "deadlock": return this.watchNote("deadlock", `deadlock of ${(x.ring as number[]).length} (${(x.ring as number[]).join(", ")}) broken: car ${e.car} let go${e.car === me ? " (this one)" : ""}`, e.car === me ? undefined : (e.car as number));
-      case "collision": return this.watchNote("collision", `collision with car ${e.car === me ? x.with : e.car}`, (e.car === me ? x.with : e.car) as number);
-      case "breakdown": return this.watchNote("breakdown", `broke down on ${x.edge}`);
+      case "in": return { what: "in", text: `came in on ${x.lane}` };
+      case "out": return { what: "out", text: `left the map at ${x.lane}` };
+      case "onto": return { what: "onto", text: `onto ${x.to}` };
+      case "change": {
+        if (x.gaveUp === undefined) return { what: "lane change", text: `changed from ${x.from} to ${x.to}` };
+        const goal = String(x.goal), instead = goal.startsWith("end of ") ? `drives to the ${goal}` : `takes ${goal}`;
+        return { what: "lane change", text: x.to !== undefined ? `gave up changing to ${x.to} after ${x.waited} s without a gap: ${instead} from its own lane instead` : `gave up its lane change: now ${goal}` };
+      }
+      case "reroute": return { what: "reroute", text: `rerouted from ${x.from} to ${x.to} after ${x.waited} s` };
+      case "deadlock": return { what: "deadlock", text: `deadlock of ${(x.ring as number[]).length} (${(x.ring as number[]).join(", ")}) broken: car ${e.car} ${x.cleared ? "taken off the road" : "let go"}${e.car === me ? " (this one)" : ""}`, ...(e.car === me ? {} : { car: e.car as number }) };
+      case "collision": return { what: "collision", text: `collision with car ${e.car === me ? x.with : e.car}`, car: (e.car === me ? x.with : e.car) as number };
+      case "breakdown": return { what: "breakdown", text: `broke down on ${x.edge}` };
     }
+    return null;
   }
   /** the car watched's state after a step: a new rule or another car holding it is a line in its log */
   private watchStep() {
@@ -2137,9 +2612,10 @@ export class SketchSim {
     const f = fr[lo], n = f.tags.length / 3, cars: ReplayCar[] = [];
     for (let i = 0; i < n; i++) {
       const a = f.nums.subarray(i * 8, i * 8 + 8), g = f.tags.subarray(i * 3, i * 3 + 3);
-      // (the share slot also holds the turn signal: +10 left, +20 right; -1 broken down)
-      const sig = a[6] >= 10 ? Math.floor(a[6] / 10) : 0, share = a[6] - sig * 10;
-      cars.push({ id: a[0], p: { x: a[1], y: a[2] }, d: { x: a[3], y: a[4] }, len: a[7], kmh: a[5] * 3.6, share: Math.max(0, share), ...(share < 0 ? { broken: true } : {}), ...(sig ? { blink: sig === 1 ? (-1 as const) : (1 as const) } : {}), edge: this.tags[g[0]], exit: this.tags[g[1]] || null, why: this.tags[g[2]] || null, ...(f.aux[i * 2] !== 65535 ? { gap: f.aux[i * 2] / 10 } : {}), still: f.aux[i * 2 + 1] / 10 });
+      // (the share slot also holds the turn signal: +10 left, +20 right; a bus: +100 more; -1 broken down)
+      const isBus = a[6] >= 100, rest = isBus ? a[6] - 100 : a[6];
+      const sig = rest >= 10 ? Math.floor(rest / 10) : 0, share = rest - sig * 10;
+      cars.push({ id: a[0], p: { x: a[1], y: a[2] }, d: { x: a[3], y: a[4] }, len: a[7], kmh: a[5] * 3.6, share: Math.max(0, share), ...(share < 0 ? { broken: true } : {}), ...(sig ? { blink: sig === 1 ? (-1 as const) : (1 as const) } : {}), ...(isBus ? { bus: true as const } : {}), edge: this.tags[g[0]], exit: this.tags[g[1]] || null, why: this.tags[g[2]] || null, ...(f.aux[i * 2] !== 65535 ? { gap: f.aux[i * 2] / 10 } : {}), still: f.aux[i * 2 + 1] / 10 });
     }
     const tr = f.trailers;
     if (tr) for (let i = 0; i < tr.length; i += 6) cars[tr[i]].trailer = { p: { x: tr[i + 1], y: tr[i + 2] }, d: { x: tr[i + 3], y: tr[i + 4] }, len: tr[i + 5] };
@@ -2191,9 +2667,9 @@ export class SketchSim {
       const trailers: number[] = [];
       this.vehicles.forEach((v, i) => {
         const { p, d, len, trailer: t } = posed.get(v)!;
-        // (broken down: its share kept as -1; else the turn signal added to it, +10 left, +20 right: no more bytes)
+        // (broken down: its share kept as -1; else the turn signal added to it, +10 left, +20 right; a bus, +100 more: no more bytes)
         const sig = this.blinker(v);
-        nums.set([v.id, p.x, p.y, d.x, d.y, v.v, v.broken !== null ? -1 : Math.min(9, v.v / Math.max(1, v.edge.vmax)) + (sig === -1 ? 10 : sig === 1 ? 20 : 0), len], i * 8);
+        nums.set([v.id, p.x, p.y, d.x, d.y, v.v, v.broken !== null ? -1 : Math.min(9, v.v / Math.max(1, v.edge.vmax)) + (sig === -1 ? 10 : sig === 1 ? 20 : 0) + (v.bus ? 100 : 0), len], i * 8);
         if (t) trailers.push(i, t.p.x, t.p.y, t.d.x, t.d.y, t.len);
         tags.set([this.tag(v.edge.key), this.tag(v.exit?.key ?? null), this.tag(v.why)], i * 3);
         aux[i * 2] = Number.isFinite(v.gap) ? Math.min(65534, Math.round(Math.max(0, v.gap) * 10)) : 65535; aux[i * 2 + 1] = Math.min(65535, Math.round(v.still * 10));
@@ -2302,7 +2778,7 @@ export class SketchSim {
   poses() {
     return this.vehicles.map(v => {
       const blink = this.blinker(v);
-      return { id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax), ...(v.broken !== null ? { broken: true } : {}), ...(blink ? { blink } : {}), ...(v.edge.z ? { z: v.edge.z(v.pos) } : {}) };
+      return { id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax), ...(v.broken !== null ? { broken: true } : {}), ...(blink ? { blink } : {}), ...(v.edge.z ? { z: v.edge.z(v.pos) } : {}), ...(v.bus ? { bus: true as const } : {}) };
     });
   }
 
@@ -2362,7 +2838,7 @@ export class SketchSim {
     }
     const pose = this.poseOf(v);
     return {
-      id: v.id, truck: v.truck, length: v.len, edge: v.edge.key, pos: v.pos, len: v.edge.len, ring: v.edge.ring,
+      id: v.id, truck: v.truck, bus: v.bus, length: v.len, edge: v.edge.key, pos: v.pos, len: v.edge.len, ring: v.edge.ring,
       kmh: v.v * 3.6, desiredKmh: v.edge.vmax * v.vf * 3.6, exit: v.exit?.key ?? null, then: v.exit?.to?.lane.key ?? (v.edge.kind === "conn" ? v.edge.to!.lane.key : null),
       /** drives off the end of the lane it is on (leaves the sketch there) */
       leaves: v.edge.kind === "lane" && !v.exit && !v.edge.ring && v.goal?.lane === v.edge,
@@ -2418,6 +2894,7 @@ export class SketchSim {
       blocker = { car: r.car, edge: r.edge ?? w?.edge.key ?? "",
         ...(won?.gap !== undefined ? { gap: won.gap, needGap: won.need } : r.kind === "lane-change" && last && this.t - last.t < 1.5 ? { gap: last.gap, needGap: last.need } : {}),
         ...(won?.theirSec !== undefined ? { theirSec: won.theirSec, mySec: won.mySec } : {}),
+        ...(won?.wantSec !== undefined ? { wantSec: won.wantSec } : {}), ...(won?.round !== undefined ? { round: won.round } : {}),
         ...(won?.zone ? { zone: { mine: pts(won.zone.mine, ...won.zone.mineAt), theirs: pts(won.zone.theirs, ...won.zone.theirsAt) } } : {}) };
     } else if (r?.kind === "lane-change") {
       const last = this.watchRejected[this.watchRejected.length - 1];
@@ -2429,7 +2906,7 @@ export class SketchSim {
       const dist = Math.max(0, tr!.gap - S0);
       for (const e of this.route(v)) if (dist <= e.off + (e.b - e.a) + 1e-6) { const s = e.a + (dist - e.off); stopAt = { edge: e.edge.key, s: r2(e.edge.ring ? ((s % e.edge.len) + e.edge.len) % e.edge.len : s), dist: r2(dist), why: v.why ?? "" }; break; }
     }
-    const { chain, deadlock } = this.chainOf(id, (c: number) => { const w = byId.get(c); return w ? this.ruleOf(w)?.car ?? null : null; }, blocker?.car ?? (r?.kind === "follow" ? r.car ?? null : null));
+    const { chain, deadlock } = this.chainOf(id, (c: number) => { const w = byId.get(c); return w ? this.ruleOf(w)?.car ?? null : null; }, blocker?.car ?? (r?.kind === "follow" ? r.car ?? null : null), (c: number) => (byId.get(c)?.v ?? 0) < 1);
     const h = this.hop(v);
     return {
       car: id, t: r2(this.t), traced, why: v.why,
@@ -2440,18 +2917,33 @@ export class SketchSim {
       chain, deadlock,
       plan: { next: v.exit?.key ?? (v.edge.kind === "conn" ? v.edge.to!.lane.key : null), goal: v.goal ? v.goal.conn?.key ?? `end:${v.goal.lane.key}` : null, dest: v.dest ?? null,
         laneChange: h ? { to: h.n.lane.key, why: "route" } : null, rejected: id === this.watchId ? [...this.watchRejected] : [] },
+      noRoute: this.noRouteOf(v),
       log: id === this.watchId ? [...this.watchLog] : [],
     };
   }
   /** a car's blockers in turn (not the car itself), at most 12; when they come round again, the last is the first repeated, and the ring */
-  private chainOf(id: number, next: (car: number) => number | null, first: number | null): { chain: number[]; deadlock: number[] | null } {
+  private chainOf(id: number, next: (car: number) => number | null, first: number | null, held: (car: number) => boolean = () => true): { chain: number[]; deadlock: number[] | null } {
     const chain: number[] = [], seen = new Set([id]);
     for (let c = first; c !== null && chain.length < 12; c = next(c)) {
       chain.push(c);
-      if (seen.has(c)) { const i = c === id ? -1 : chain.indexOf(c); return { chain, deadlock: i < 0 ? [id, ...chain.slice(0, -1)] : chain.slice(i, -1) }; }
+      if (seen.has(c)) {
+        const i = c === id ? -1 : chain.indexOf(c), ring = i < 0 ? [id, ...chain.slice(0, -1)] : chain.slice(i, -1);
+        // (a deadlock only when every one in the ring is held: cars following one another round a loop on the move aren't)
+        return { chain, deadlock: ring.every(held) ? ring : null };
+      }
       seen.add(c);
     }
     return { chain, deadlock: null };
+  }
+  /** car `v` has no way from where it is to where it is going: why, or null (it has one, or goes nowhere in particular) */
+  private noRouteOf(v: SimVehicle): CarExplain["noRoute"] {
+    const rt = this.routes, dest = v.dest;
+    if (!rt || !dest) return null;
+    const via = (c: Edge) => rt.viaConnector(c.id, dest) < Infinity, outs = this.outsOf(dest);
+    const ok = v.edge.kind === "conn" ? via(v.edge) || outs.includes(v.edge.to!.lane.id)
+      : outs.includes(v.edge.id) || v.edge.outs.some(o => via(o.conn)) || v.edge.neighbors.some(n => outs.includes(n.lane.id) || n.lane.outs.some(o => via(o.conn)));
+    if (ok) return null;
+    return { dest: `lane:${dest}`, at: v.edge.key, why: this.trap.has(v.edge) ? "it is on a loop that no way leaves" : "no way from here leads there" };
   }
   /** car `id` at a moment past, from the recording: its why, gap, time standing, the others' whys then, its whys before */
   private explainReplayed(id: number, at: number): CarExplain | null {
@@ -2477,16 +2969,68 @@ export class SketchSim {
       if (same && tag === now) since = f.t - fr[j].t; else same = false;
       if (tag !== last) { const w = this.tags[last] || null, rr = readWhy(w); log.unshift({ t: fr[j + 1].t, what: "state", text: w ? `${rr?.kind ?? "held"}: ${w}` : "free road", ...(rr?.car !== undefined ? { car: rr.car } : {}) }); last = tag; }
     }
+    // (and its own events from the event log over the same while: how a lane change ended, where it went onto, ...)
+    for (const e of this.log) {
+      if (e.t <= f.t - 120 || e.t > f.t + 0.05) continue;
+      if (e.car !== id && e.with !== id && !(Array.isArray(e.ring) && (e.ring as number[]).includes(id))) continue;
+      const n = this.eventLine(e, id);
+      if (n) log.push({ t: e.t, ...n });
+    }
+    // (an event before the state it led to, at the same time)
+    log.sort((a, b) => a.t - b.t || (a.what === "state" ? 1 : 0) - (b.what === "state" ? 1 : 0));
     const gap = f.aux[me * 2] !== 65535 ? f.aux[me * 2] / 10 : null;
-    const { chain, deadlock } = this.chainOf(id, (c: number) => readWhy(whyOf.get(c) ?? null)?.car ?? null, r?.car ?? null);
+    const speedOf = new Map<number, number>(); for (let i = 0; i < n; i++) speedOf.set(f.nums[i * 8], f.nums[i * 8 + 5]);
+    const zw = r?.kind === "zone" ? this.zoneReplayed(f, me, r) : null;
+    const { chain, deadlock } = this.chainOf(id, (c: number) => readWhy(whyOf.get(c) ?? null)?.car ?? null, r?.car ?? null, (c: number) => (speedOf.get(c) ?? 0) < 1);
     return {
       car: id, t: f.t, traced: false, why,
-      rule: r ? { kind: r.kind, ...(r.edge ? { edge: r.edge } : {}), ...(r.detail ? { detail: r.detail } : {}) } : null,
+      rule: r ? { kind: zw?.kind ?? r.kind, ...(r.edge ? { edge: r.edge } : {}), ...(zw?.detail ?? r.detail ? { detail: zw?.detail ?? r.detail } : {}) } : null,
       speed: null,
       leader: r?.kind === "follow" && r.car !== undefined && gap !== null ? { car: r.car, gap, kmh: r2((f.nums[[...Array(n).keys()].find(i => f.nums[i * 8] === r.car)! * 8 + 5] ?? 0) * 3.6) } : null,
-      blocker: r && r.car !== undefined && r.kind !== "follow" ? { car: r.car, edge: r.edge ?? (() => { for (let i = 0; i < n; i++) if (f.nums[i * 8] === r.car) return this.tags[f.tags[i * 3]]; return ""; })() } : null,
-      stopAt: null, since: r2(since), chain, deadlock, plan: null, log: log.slice(-30),
+      blocker: r && r.car !== undefined && r.kind !== "follow" ? { car: r.car, edge: r.edge ?? (() => { for (let i = 0; i < n; i++) if (f.nums[i * 8] === r.car) return this.tags[f.tags[i * 3]]; return ""; })(),
+        ...(zw?.theirSec !== undefined ? { theirSec: zw.theirSec, mySec: zw.mySec } : {}), ...(zw?.wantSec !== undefined ? { wantSec: zw.wantSec } : {}), ...(zw?.round !== undefined ? { round: zw.round } : {}) } : null,
+      stopAt: null, since: r2(since), chain, deadlock, plan: null, noRoute: null, log: log.slice(-30),
     };
+  }
+
+  /**
+   * A recorded wait at a crossing ("zone <edge> for car N", the same words whichever rule it was): the rule, from the conflict
+   * between the car's way (its edge, or the connector it takes off it) and the edge named, as the step decides it (give-way,
+   * priority, first come; with the junction's rules, their priority and why); and, the other car on that edge or the connector
+   * onto it, its seconds to the zone and this one's to clear it, as the step reckons them, the gap wanted and how far round a ring
+   * it is. Places from where each is drawn; null: no such conflict found.
+   */
+  private zoneReplayed(f: ReplayFrame, me: number, r: { car?: number; edge?: string }): Won | null {
+    const E = this.edges.get(this.tags[f.tags[me * 3]]), X = this.edges.get(this.tags[f.tags[me * 3 + 1]]), other = r.edge ? this.edges.get(r.edge) : undefined;
+    if (!E || !other) return null;
+    const mine = [E, X].find(e => e?.conflicts.some(k => k.other === other));
+    const k = mine?.conflicts.find(q => q.other === other);
+    if (!mine || !k) return null;
+    const n = f.tags.length / 3, idx = (car: number) => { for (let i = 0; i < n; i++) if (f.nums[i * 8] === car) return i; return -1; };
+    const wi = r.car !== undefined ? idx(r.car) : -1;
+    // (where on edge `e` a car is: the nearest of its points every half metre to where it is drawn; within a metre or two of where the
+    // step had it, so the seconds below are about those the step reckoned, to a few tenths)
+    const posOn = (e: Edge, i: number) => { const x = f.nums[i * 8 + 1], y = f.nums[i * 8 + 2]; let best = 0, bd = Infinity; for (let s = 0; s <= e.len; s += 0.5) { const p = e.locate(s).p, d = (p.x - x) ** 2 + (p.y - y) ** 2; if (d < bd) { bd = d; best = s; } } return best; };
+    const rules = this.tuning.junctionRules >= 0.5;
+    let ws: number | null = null;
+    if (wi >= 0) {
+      const wE = this.edges.get(this.tags[f.tags[wi * 3]]);
+      if (wE === other) { let d = other.ring ? this.along(other, posOn(other, wi), k.otherAt) : k.otherAt - posOn(other, wi); if (other.ring && d > other.len - Math.min(f.nums[wi * 8 + 7] + 1 + k.otherAfter, other.len / 2)) d -= other.len; ws = d - k.otherBefore; }
+      else if (wE?.kind === "conn" && wE.to!.lane === other) { const d = (other.ring ? this.along(other, wE.to!.s, k.otherAt) : k.otherAt - wE.to!.s); if (d >= 0) ws = wE.len - posOn(wE, wi) + d - k.otherBefore; }
+    }
+    const minor = (mine.kind === "conn" && !!mine.minor) || (!!mine.innerOff && other.ring), wMinor = !!other.minor || (!!other.innerOff && mine.ring);
+    const kind: ExplainRule = ws !== null && ws <= 0 ? "priority" : rules ? (k.prio > 0 ? "priority" : k.prio < 0 ? "give-way" : "zone") : minor && !wMinor ? "give-way" : "zone";
+    const detail = ws !== null && ws <= 0 ? "already in the zone" : rules ? k.prioWhy : undefined;
+    const out: Won = { kind, car: r.car, edge: other.key, ...(detail ? { detail } : {}) };
+    if (ws !== null && ws > 0) {
+      const len = f.nums[me * 8 + 7], wLen = f.nums[wi * 8 + 7], truck = (l: number) => l > LEN + 1;
+      const dMe = (mine === E ? 0 : this.exitS(mine) - posOn(E, me)) + k.at - k.before - (mine === E ? posOn(E, me) : 0);
+      out.theirSec = r2(timeTo(ws, f.nums[wi * 8 + 5], other.vmax, truck(wLen) ? TRUCK_A : A_MAX));
+      out.mySec = r2(timeTo(Math.max(0, dMe) + k.after + len + (truck(len) ? SWEEP : 0), f.nums[me * 8 + 5], mine.vmax, truck(len) ? TRUCK_A : A_MAX));
+      if (kind === "give-way") out.wantSec = GAP;
+      if (other.ring) out.round = r2(ws);
+    }
+    return out;
   }
 
   /** a car's states over the last 10 s (as kept every 0.1 s), to copy */
@@ -2522,6 +3066,14 @@ export class SketchSim {
    * round tight corners). Sliding over to a lane it changed to: what is left of the way over, the cab turned
    * a little towards it.
    */
+  /** does car `v`'s driver see car `w`: within ±100° of straight ahead (`wide`; else ±60°) and its sight distance (25 m and 4 s at its speed) */
+  private inView(v: SimVehicle, w: SimVehicle, wide: boolean) {
+    const a = v.edge.locate(v.pos), b = w.edge.locate(w.pos).p, x = b.x - a.p.x, y = b.y - a.p.y, d = Math.hypot(x, y);
+    if (d > 25 + 4 * v.v) return false;
+    if (d < 0.1) return true;
+    return (a.d.x * x + a.d.y * y) / d >= Math.cos(((wide ? 100 : 60) * Math.PI) / 180);
+  }
+
   private poseOf(v: SimVehicle): Body & { trailer?: Body } {
     const front = v.edge.locate(v.pos), len = v.truck ? CAB : v.len, back = this.behindFront(v, len);
     const mid = (a: { p: Pt }, b: { p: Pt }, fb: Pt): { p: Pt; d: Pt } => {

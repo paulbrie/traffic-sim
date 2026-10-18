@@ -305,7 +305,7 @@ function PointInspector({ net, node }: { net: Network; node: NodeDef }) {
       {(degree >= 3 || (cn?.cluster.length ?? 1) > 1) && node.control === "priority" && cn && <ApproachSignsSection net={net} node={node} />}
       {(degree >= 3 || crossing) && node.control !== "roundabout" && cn && <PedestriansSection node={node} nodeIdx={cn.idx} set={set} />}
       {degree >= 3 && node.control !== "roundabout" && cn && <SlipLanesSection net={net} node={node} />}
-      {(degree >= 3 || crossing) && <SignalGroupSection net={net} node={node} />}
+      {(degree >= 3 || crossing || (cn?.cluster.length ?? 1) > 1) && <SignalGroupSection net={net} node={node} />}
       {degree >= 2 && node.control !== "roundabout" && <JunctionShapeSection net={net} node={node} />}
       {degree >= 2 && node.control !== "roundabout" && <LaneConnectionsSection net={net} node={node} />}
       {ref && cn && <JunctionLive net={net} nodeIdx={cn.idx} />}

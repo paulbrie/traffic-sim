@@ -18,7 +18,9 @@ const NEW = "__new__", NONE = "__none__";
 
 /** phase label from the directions its approaches come from, e.g. "N + S" (custom phases: "phase 2 (N + S)") */
 export const phaseName = (cn: CNode, p: number) => {
-  const dirs = cn.phases[p]?.length ? cn.phases[p].map(i => compass(cn.arms[i].u.x, cn.arms[i].u.y).name).join(" + ") : "All red";
+  // (a junction over several points: the approaches at every point its lights run)
+  const run = cn.cluster.filter(k => k.signals === cn), arms = (run.length ? run : [cn]).flatMap(k => (k.phases[p] ?? []).map(i => k.arms[i]));
+  const dirs = arms.length ? arms.map(a => compass(a.u.x, a.u.y).name).join(" + ") : "All red";
   return cn.customPhases ? `phase ${p + 1} (${dirs})` : dirs;
 };
 
@@ -27,10 +29,11 @@ export const phaseName = (cn: CNode, p: number) => {
  * phase is coordinated, its share of green and its offset. The whole group (cycle, speed, order,
  * green wave) is edited here too, since it is only ever reached through one of its junctions.
  */
-export function SignalGroupSection({ net, node }: { net: Network; node: NodeDef }) {
+export function SignalGroupSection({ net, node: point }: { net: Network; node: NodeDef }) {
   const c = simController.compiled;
-  const cn = c.nodeById.get(node.id);
-  if (!cn || node.control !== "lights" || cn.phases.length < 2) return null;
+  // (a junction over several points: the one its lights run from is in the group, for the whole junction)
+  const at = c.nodeById.get(point.id), cn = at?.signals, node = cn?.def;
+  if (!at || !cn || !node || node.control !== "lights" || cn.phases.length < 2) return null;
   const group = ops.groupOf(net, node.id);
   const groups = net.signalGroups ?? [];
   const onPick = (v: string) => {
@@ -47,6 +50,7 @@ export function SignalGroupSection({ net, node }: { net: Network; node: NodeDef 
           <SelectItem value={NEW}>+ New signal group</SelectItem>
         </SelectContent>
       </Select>
+      {cn !== at && <p className="text-xs text-muted-foreground">For the whole junction: its lights run from {junctionRefs(c).get(node.id) ?? node.id}.</p>}
       {!group ? (
         <p className="text-xs text-muted-foreground">Put neighbouring lights in the same group to run them on one cycle, with offsets between them so traffic meets green after green.</p>
       ) : <GroupEditor net={net} node={node} cn={cn} group={group} compiled={c} />}

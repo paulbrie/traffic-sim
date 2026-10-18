@@ -22,7 +22,8 @@ import { basePath } from "@/lib/base-path";
 import { MAX_LANES, type Network, type PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 import type { Sketch } from "@/lib/lane-sketch";
-import { allLayersOn, applyRemote, commit, edits, LAYER_HIGHLIGHT_MAX, LAYERS, loadPlan, markSynced, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll, laneSketch$ } from "@/state/store";
+import { emptiesPlan } from "@/lib/plan-empty";
+import { allLayersOn, applyRemote, commit, edits, LAYER_HIGHLIGHT_MAX, LAYERS, lastSynced, loadPlan, markSynced, network$, redo, select, setSettings, setTool, settings$, stats$, ui, undo, underlay$, type LayerId, type Tool , selectedAll, laneSketch$ } from "@/state/store";
 import { DELETABLE, deleteSelected } from "@/state/bulk";
 import { simController } from "@/state/sim-controller";
 import { heliKeys$ } from "@/state/heli-keys";
@@ -602,6 +603,18 @@ let editsAtSave = 0;
 
 async function doSave(planId: string, force = false) {
   if (saving) { again = true; return; }
+  {
+    // (never sent: an empty store, a hot reload in development or anything gone wrong, must not overwrite a plan, T185)
+    const what = emptiesPlan(lastSynced(), { network: network$.getValue(), sketch: laneSketch$.getValue() });
+    if (what) {
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      const s = ui.getValue().save;
+      s.status = "error"; s.message = `Not saved: ${what} would be empty`;
+      console.error(`[save] refused for plan ${planId}: ${what} is empty here but was not when loaded or last saved`);
+      toast.error(`Not saved: ${what} would be empty`, { description: "The plan was loaded with something in it, and this save would have emptied it. Reload the page to get the saved plan back (History keeps every version).", duration: 20_000 });
+      return;
+    }
+  }
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   saving = true; dirtySince = 0; editsAtSave = edits.n;
   const s = ui.getValue().save;
@@ -621,6 +634,10 @@ async function doSave(planId: string, force = false) {
       s.status = again || network$.getValue() !== net || settings$.getValue() !== settings || underlay$.getValue() !== underlay || laneSketch$.getValue() !== sketch ? "dirty" : "saved";
     } else if (res.reason === "forbidden") {
       s.status = "error"; s.message = "You no longer have edit access";
+    } else if (res.reason === "empty") {
+      // (the server's guard, T186: as the page's own, T185)
+      s.status = "error"; s.message = `Not saved: ${res.what} would be empty`;
+      toast.error(`Not saved: ${res.what} would be empty`, { description: "The saved plan has something there, and this save would have emptied it. Reload the page to get the saved plan back (History keeps every version).", duration: 20_000 });
     } else if (res.reason === "conflict" && mergeTries < 3) {
       // saved elsewhere meanwhile: take that in (merged with these changes) and save the result
       mergeTries++;

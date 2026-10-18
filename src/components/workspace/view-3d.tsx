@@ -919,7 +919,8 @@ export function View3D() {
         let nl = 0;
         if (vsim && Math.floor(now / 380) % 2 === 0) for (const v of vsim.vehicles) {
           const b = vsim.blinker(v);
-          if (!b || nl + 4 > 16000 || combat.isGone(v.id)) continue;
+          // (turn signals switched off in the display options: only the hazard lights)
+          if (!b || (b !== 2 && !u.display.blinkers) || nl + 4 > 16000 || combat.isGone(v.id)) continue;
           const q = vsim.pose(v);
           let mx = (q.fx + q.rx) / 2, mz = (q.fy + q.ry) / 2;
           if (followOffset(v)) { mx += follow.ox; mz += follow.oz; }

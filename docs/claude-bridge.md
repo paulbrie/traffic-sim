@@ -25,6 +25,15 @@ process; a restart drops them: the page reconnects, the agent pairs again).
    replaces the old; the page shows who is attached). The page can disconnect: `POST /api/bridge/page/close`.
 3. Pairings end after 8 h idle.
 
+**How it stands, in the panel (T193).** The hub's code counts down (`expiresAt`); expired unused, the panel says so and
+offers a new code; used, it says by whom and when (the `hub` event's `codesUsed`: the last 8 codes claimed, the hub's own
+and Add agent's). Each agent in the `hub` event carries `pairedAt` and `lastSeen` (its last bridge call; the hub is told
+at most every 15 s, the page counts the time since): "seen 20 s ago", or "quiet 5 min" with what that means (an agent acts
+only while its session works). A message still "sent" after 20 s gets a line on why (who fetches it, when it last looked).
+When the stream drops the page asks the server (`hello`) whether the pairing still stands: 404, the server no longer knows
+it (a restart, or it ended): "Pairing lost", with why and "Pair again"; 401/403, signed out, the same; the server out of
+reach, "reconnecting…" and the pairing kept.
+
 ## Page side
 
 - `GET /api/bridge/page/stream?pageId=…` (SSE, cookie + `x-bridge-page` as query `t=` since EventSource can't
@@ -51,7 +60,8 @@ process; a restart drops them: the page reconnects, the agent pairs again).
 | `type` | `{ role?, name?, selector?, text, submit?: boolean }` | `{ typed }` |
 | `key` | `{ key: string }` (e.g. `"Control+k"`, `"Escape"`) | `{}` |
 | `navigate` | `{ url }` (same origin) | `{ url }` |
-| `app` | `{ action, args }`: `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30…), `replay` `{ t }`, `restart`, `testCar` (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
+| `app` | `{ action, args }` (edits too, with the user's leave: see "Edits"): `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30, 50, 100), `replay` `{ t }`, `restart`, `testCar` (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
+| `report` | `{ title, intro?, table?: { columns, rows, highlight?, note? }, findings?: string[] }` (T196, `bridge_report`: plain text and numbers, at most 14 columns, 60 rows, 24 findings) | `{ shown }`: the report in a window over the page, kept in the Claude panel (the last 10) to open again, copied as text from there |
 
 Targets by role and name follow Playwright's `getByRole` (name: case-insensitive substring unless `exact`).
 Every command is shown to the user in the activity log; `click` / `type` / `key` move the agent's cursor there first
@@ -78,7 +88,8 @@ Editor = { mode: "plan" | "3d",                  // the map from above or in 3D 
                                            // heading (° clockwise from north), tilt (° from straight down); at most 4 times a second.
                                            // Escape, with nothing else to do (no draft, nothing selected, no car picked), eases it back
                                            // to where it arrived on entering 3D (`key` { key: "Escape" })
-           run: { running, speed, t, replayT, playing, kept },   // t: at most 4 times a second
+           run: { running, speed, t, replayT, playing, kept, tune },   // t: at most 4 times a second; tune: the simulation
+                                           // settings changed from their defaults, as saved (e.g. { junctionRules: 1, ringLanes: 1 })
            dialogs: { search: { open, query }, console: { open, kind, text, clearedAt }, settings,
                       optimizer: { open, junction, chosen, effort, stage } },
            tables: { junctions: { by, flip, shown }, roads: { by, flip, shown } },   // the results tables' sort
@@ -104,7 +115,7 @@ Changes an agent may ask for (`app`; no others, nothing written by path):
 
 Every action's arguments are checked as they are given: `true` or `false` for a switch (not `"yes"`, `1` or `null`), a
 string for a name or text (not `42`), a number for a number; and within what the editor offers: `view` a scale from
-0.3 to 80 px a metre and x, y within 1,000 km of the plan's origin, `speed` 1, 3, 10 or 30, `select`/`goTo` something
+0.3 to 80 px a metre and x, y within 1,000 km of the plan's origin, `speed` 1, 3, 10, 30, 50 or 100, `select`/`goTo` something
 that is there (a car on the plan now), `panel` its `open` given. Anything else, an unknown panel or layer, or a missing
 argument, is an error saying what was expected, and nothing is changed.
 
@@ -117,6 +128,46 @@ argument, is an error saying what was expected, and nothing is changed.
   that isn't there is an error, and the list stays as it was.
 
 The plan's own data stays out (`sketch`, `sketchJson`), and so do the account menu and the bridge's own panel.
+
+## Edits (T189: an agent building in the user's page)
+
+Only with the user's leave: **Allow agent edits** in the hub's Claude panel, **Off** by default; **This sketch only** (the sketch
+the Sketch window has open when it is chosen: the plan's and the sketch's ids are kept, shown as `Only "<name>"`); or **Plan
+and its sketches**. The server keeps it (`POST /api/bridge/page/allow-edits { permit }`; in the `hub` event as `allowEdits`,
+in `bridge_status` too) and holds for the hub's agents' tabs as well. An edit action while it is off is refused by the server
+(403, "Agent edits are off…"); the leave is sent to the page with each edit (set by the server, never taken from the agent),
+and the page checks the editor and the sketch against it: with one sketch only, the plan's editor, another plan, or another
+sketch in the Sketch window are refused, and so is picking or making sketches.
+
+Each edit is an `app` action (args checked strictly, as the others: a number for a number, the lane or connector there, and
+an unknown key refused, so a typo isn't quietly ignored), applied to the editor's sketch through its store: **one undo step**,
+saved as the user's edit would be (Undo takes it back). The agent's cursor goes to where it was, with a few words by it
+("added connector c13 (l4 → l9)") and in the line saying what it did; the activity log says "edited by <agent>: …".
+`editor`: `plan` or `scratch` (the Sketch window); without it, the editor the user is at (with one sketch only: the Sketch
+window). Points are `{ x, y }` in metres, as the map's; `s`: metres along a lane from its start.
+
+| action | args | data |
+|---|---|---|
+| `addLane` | `{ points: [{x,y}, …] (2+), width? (2–6 m, 3.5), speed? (km/h), level?, curved? }` | `{ lane, length }` |
+| `deleteLanes` | `{ lanes: [id] }` (their connectors go; a road left with none goes) | `{ deleted, roadsGone }` |
+| `reshapeLane` | `{ lane, points }` (a line lane; its connectors kept within its new length) | `{ lane, length }` |
+| `movePoint` | `{ lane, i, x, y }` | `{ lane, i }` |
+| `addConnector` | `{ from: { lane, s? (its end) }, to: { lane, s? (its start) }, bends?: [{x,y}], straight? }` | `{ connector, from, to }` |
+| `deleteConnectors` | `{ connectors: [id] }` | `{ deleted }` |
+| `moveConnectorEnd` | `{ connector, end: "from" \| "to", s }` | `{ connector, [end] }` |
+| `setControl` | `{ lanes: [id], control: "yield" \| "stop" \| "none" \| "lights" }` (lights: on the junctions the lanes lead into, their signs taken off) | `{ lanes, control, junctions? }` |
+| `setLights` | `{ junction, on }` | `{ junction, lights }` |
+| `groupRoad` | `{ lanes: [id], name? }` (out of the roads they were in) | `{ road, name, lanes }` |
+| `addJunction` | `{ outline: [{x,y}, …] (3+), name? }` | `{ junction, name }` |
+| `deleteJunctions` | `{ junctions: [id] }` (their lanes and connectors kept) | `{ deleted }` |
+| `roundabout` | `{ x, y, r (8–80 m) }` (as the Roundabout tool: the roads it crosses cut and joined to its ring) | `{ junction, ring }` |
+| `batch` | `{ actions: [{ action, args }] }` (at most 50): one undo step, all or nothing (the first error says which and nothing is done); `"$k"` as an argument (a lane, a connector…): the id the k-th action made, e.g. `{ from: { lane: "$0" }, to: { lane: "l7" } }` | `{ results }` |
+| `openSketch` | `{ id }` (Plan and its sketches only) | `{ open, name, sketches }` |
+| `newSketch` | `{ name? }` (opened) | `{ open, name, made, sketches }` |
+| `duplicateSketch` | `{ id? (the one open), name? }` (opened) | `{ open, name, made, sketches }` |
+
+The edits themselves: `src/lib/bridge-edits.ts` (framework-free, checked by `npm run engine:check`); the page's side:
+`src/state/bridge-edits.ts` (the editors on the page offer themselves; the leave checked there).
 
 ## Events (page → agent)
 
@@ -131,6 +182,14 @@ The plan's own data stays out (`sketch`, `sketchJson`), and so do the account me
 Events go to the agents of that page: a tab's own agent, the hub's to the agent driving it. An agent keeps its last
 200 annotations and messages, and apart from them its last 50 `ui` events, so watching never pushes out what the user
 sent.
+
+**Delivery (T191).** The agent side fetches events in `bridge_wait_events`, and also, without waiting, after every other
+bridge tool call: what came meanwhile follows that tool's answer ("Meanwhile, from the page…"). So an agent at work in the
+page sees a message at its next bridge call. An agent not using the bridge at all can't be woken by the MCP server: it
+sees them when it next calls a bridge tool. Each message and note carries a `msgId` from the page. The first time an
+agent fetches it, the server tells the page (`event: delivered { msgId, agent, at }`), and the panel's log shows it as
+"sent", then "delivered to <agent>"; "no agent" if no agent was connected to take it (the page's post answers `{ to }`,
+how many agents it went to).
 
 ## Agent tabs (several agents, tabs of their own)
 
@@ -185,4 +244,6 @@ Admins only; pairing by code shown in the page; a visible badge while attached, 
 arbitrary JavaScript; cookies and tokens never sent to the agent; every command logged in the page. No typing in or reading
 of password fields; the bridge's own UI (panel, tab bar) is out of the agent's reach; pages of this app only (never its API).
 Agent tabs: only with the user's leave (Allow agent tabs), each agent only in its own tabs, a tab taken over at any time;
+agent edits: only with the user's leave (Allow agent edits: one sketch, or the plan), kept and checked by the server, each
+one undo step and shown;
 an agent token can't drive the hub unless the user paired that agent with the hub's own code.
