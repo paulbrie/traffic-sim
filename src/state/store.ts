@@ -17,10 +17,10 @@ import { mergeNetworks, mergeSettings, mergeSketch, mergeUnderlay } from "./merg
 
 export type Tool = "select" | "road" | "segment" | "stop" | "pan" | "image" | "marker" | "junction" | "crossing" | "parking" | "roundabout" | "ring";
 /** the kinds of object the map shows and can select (TransModeler-style layers); any combination can be on */
-export type LayerId = "roads" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones" | "markers" | "crossings" | "parking";
+export type LayerId = "roads" | "joints" | "lanes" | "junctions" | "connectors" | "entries" | "signals" | "stops" | "counters" | "buildings" | "vehicles" | "zones" | "markers" | "crossings" | "parking";
 /** `key`: Shift + this letter switches the layer on or off (Shift+A: all of them) */
 export const LAYERS: { id: LayerId; label: string; key: string }[] = [
-  { id: "roads", label: "Roads", key: "R" }, { id: "lanes", label: "Lanes", key: "L" }, { id: "junctions", label: "Junctions", key: "J" },
+  { id: "roads", label: "Roads", key: "R" }, { id: "joints", label: "Road joints", key: "N" }, { id: "lanes", label: "Lanes", key: "L" }, { id: "junctions", label: "Junctions", key: "J" },
   { id: "connectors", label: "Lane connectors", key: "C" }, { id: "entries", label: "Entry / exit points", key: "E" }, { id: "signals", label: "Signals", key: "S" },
   { id: "stops", label: "Bus stops", key: "B" }, { id: "counters", label: "Traffic counters", key: "T" }, { id: "buildings", label: "Buildings", key: "U" },
   { id: "vehicles", label: "Vehicles", key: "V" }, { id: "zones", label: "Zones", key: "Z" }, { id: "markers", label: "Markers", key: "M" },

@@ -9,7 +9,7 @@ import { outlineCurve, type BuildingDef, type BuildingUse, type LinkDef, type Ne
 import { laneSign, type LaneSign, type RoadGeo, type Strip } from "./geometry";
 import { buildingColor, speedColor, type Palette } from "./palette";
 import { underlayCorners, type Underlay } from "@/lib/underlay";
-import { junctionRefs } from "@/engine/refs";
+import { isRoadJoint, junctionRefs } from "@/engine/refs";
 import { drawSatellite, type SatSource } from "./satellite";
 
 export interface Camera { cx: number; cy: number; scale: number; w: number; h: number; dpr: number }
@@ -699,8 +699,8 @@ export function drawScene(
       if (q.x < -20 || q.y < -20 || q.x > w + 20 || q.y > h + 20) continue;
       const selected = sel?.kind === "node" && sel.id === n.id, hovered = ov.hover?.kind === "node" && ov.hover.id === n.id;
       const cn = compiled.nodeById.get(n.id);
-      // (road ends and joints with the roads; junctions and entry points with their own layers)
-      if (!selected && !on("roads") && !(cn && ((on("junctions") && cn.controlled && (cn.degree >= 2 || !!cn.lead)) || (on("entries") && cn.gateway)))) continue;
+      // (road joints with their own layer; road ends with the roads; junctions and entry points with their own layers)
+      if (!selected && (cn && isRoadJoint(cn) ? !on("joints") : !on("roads") && !(cn && ((on("junctions") && cn.controlled && (cn.degree >= 2 || !!cn.lead)) || (on("entries") && cn.gateway))))) continue;
       const r = selected || hovered ? 6 : 4.5;
       ctx.lineWidth = 1.5;
       ctx.fillStyle = selected ? pal.select : pal.bg;

@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { connectorId, type CNode, type ConnectorView, type Edge, type LanePiece } from "@/engine/compile";
 import { sumCounters } from "@/engine/sim";
-import { junctionRefs, isJunction } from "@/engine/refs";
+import { junctionRefs, isJunction, isRoadJoint } from "@/engine/refs";
 import { polyArea, polyCentroid, tripWeight, USE_LABEL } from "@/engine/buildings";
 import { BUILDING_USES, LEVELS, MAX_LANES, type BuildingDef, type BuildingUse, type Control, type LinkDef, type Network, type NodeDef, type StopDef, type ZoneDef } from "@/engine/types";
 import type { VehicleView } from "@/engine/sim/mirror";
@@ -121,6 +121,13 @@ export function Dataview() {
           { key: "through", label: live("Through"), width: 100, align: "right", value: n => (sim ? sim.junctionStats(n.idx).through : null) },
           { key: "pm", label: "Per min", width: 70, align: "right", value: n => (sim ? Math.round(sim.junctionStats(n.idx).perMin) : null) },
           { key: "wait", label: "Waiting", width: 70, align: "right", value: n => (sim ? sim.junctionStats(n.idx).waiting : null) },
+        ];
+        return { rows, cols, key: n => (n as CNode).def.id, sel: n => ({ kind: "node", id: (n as CNode).def.id }), at: n => (n as CNode).pos } as Def<unknown>;
+      }
+      case "joints": {
+        const rows = c.nodes.filter(isRoadJoint);
+        const cols: Column<CNode>[] = [
+          { key: "roads", label: "Roads", width: 320, value: n => n.arms.map(a => a.link.name || "unnamed").join(" · ") },
         ];
         return { rows, cols, key: n => (n as CNode).def.id, sel: n => ({ kind: "node", id: (n as CNode).def.id }), at: n => (n as CNode).pos } as Def<unknown>;
       }
