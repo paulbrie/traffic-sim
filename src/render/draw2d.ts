@@ -12,6 +12,8 @@ import { underlayCorners, type Underlay } from "@/lib/underlay";
 import { isRoadJoint, junctionRefs } from "@/engine/refs";
 import { drawSatellite, type SatSource } from "./satellite";
 
+/** below this zoom (px per metre) the points' round dots aren't drawn, but for the one selected or under the pointer */
+export const NODE_DOTS_MIN_SCALE = 1;
 export interface Camera { cx: number; cy: number; scale: number; w: number; h: number; dpr: number }
 export const toScreen = (c: Camera, x: number, y: number): Vec => ({ x: (x - c.cx) * c.scale + c.w / 2, y: (y - c.cy) * c.scale + c.h / 2 });
 export const toWorld = (c: Camera, sx: number, sy: number): Vec => ({ x: (sx - c.w / 2) / c.scale + c.cx, y: (sy - c.h / 2) / c.scale + c.cy });
@@ -701,6 +703,8 @@ export function drawScene(
       if (q.x < -20 || q.y < -20 || q.x > w + 20 || q.y > h + 20) continue;
       const selected = sel?.kind === "node" && sel.id === n.id, hovered = ov.hover?.kind === "node" && ov.hover.id === n.id;
       const cn = compiled.nodeById.get(n.id);
+      // (zoomed out, the round dots are wider than the roads: only the one selected or under the pointer; an entry point's square stays)
+      if (!selected && !hovered && !cn?.gateway && scale < NODE_DOTS_MIN_SCALE) continue;
       // (road joints with their own layer; road ends with the roads; junctions and entry points with their own layers)
       if (!selected && (cn && isRoadJoint(cn) ? !on("joints") : !on("roads") && !(cn && ((on("junctions") && cn.controlled && (cn.degree >= 2 || !!cn.lead)) || (on("entries") && cn.gateway))))) continue;
       const r = selected || hovered ? 6 : 4.5;
