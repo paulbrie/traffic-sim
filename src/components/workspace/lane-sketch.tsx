@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { BusFront, Car, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setBusLane, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  addStop, updateStop, deleteStop, type SketchStop,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -31,6 +32,7 @@ import { arrowGlyph } from "@/render/draw2d";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField, Stepper } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
+import { BusLinesPanel } from "@/components/v2/bus-lines-panel";
 import { FuelPanel, fmtFuel } from "@/components/v2/fuel-panel";
 import { JunctionLine, JunctionResults } from "@/components/v2/junction-results";
 import { RoadResults } from "@/components/v2/road-results";
@@ -86,11 +88,12 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
   { id: "crossing", key: "X", label: "Zebra crossing", icon: <Footprints />, hint: "Click one kerb, then the other: the zebra runs between them (4 m wide, 300 pedestrians an hour; set them in its panel) · Esc cancels" },
   { id: "junction", key: "J", label: "Junction", icon: <Pentagon />, hint: "Click the junction's corners; click the first again (or Enter, or double-click) to close it. The lanes in no road and the connectors on it are its own" },
   { id: "zone", key: "Z", label: "Zone", icon: <LandPlot />, hint: "Click the zone's corners; click the first again (or Enter, or double-click) to close it · Backspace takes the last corner back · Esc cancels. A labelled area (a neighbourhood, a zone) for reading the plan: the cars don't see it" },
+  { id: "stop", key: "B", label: "Bus stop", icon: <BusFront />, hint: "Click a lane to put a bus stop there. Add it to a bus line in the Bus lines panel so buses serve it" },
 ];
 const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
 
 interface View { cx: number; cy: number; /** px per metre */ scale: number }
-type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { zone: string };
+type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { zone: string } | { stop: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[] };
 /** a road's or a junction's name as drawn on the map: what it names, and its pill (px on the canvas) */
@@ -154,6 +157,8 @@ function prune(sel: Sel, sk: Sketch): Sel {
   const ids = new Set(sk.lanes.map(l => l.id)), cids = new Set(sk.connectors.map(c => c.id)), jids = new Set(sk.junctions.map(j => j.id));
   const linkOk = !sel.link || !!sk.links?.some(k => k.id === sel.link), crossingOk = !sel.crossing || !!sk.crossings?.some(x => x.id === sel.crossing);
   if (!crossingOk) return { ...sel, crossing: null };
+  const stopOk = !sel.stop || !!sk.stops?.some(x => x.id === sel.stop);
+  if (!stopOk) return { ...sel, stop: null };
   // (a zone deleted, or undone away: let go)
   if (sel.zones?.some(id => !sk.zones?.some(z => z.id === id))) return { ...sel, zones: sel.zones.filter(id => sk.zones?.some(z => z.id === id)) };
   if (linkOk && sel.lanes.every(l => ids.has(l)) && sel.connectors.every(c => cids.has(c)) && sel.junctions.every(j => jids.has(j)) && (!sel.road || sk.roads.some(r => r.id === sel.road))) return sel;
@@ -361,6 +366,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const sk = live.current.sketch, px = 1 / view.current.scale;
     // (a zebra crossing: over the lanes it crosses)
     for (const x of sk.crossings ?? []) if (onCrossing(x, p, 2 * px)) return { crossing: x.id };
+    // (a bus stop: its marker, beside its lane)
+    for (const x of sk.stops ?? []) { const l = laneById(sk, x.lane); if (l && dist(pointAt(l.shape, x.s).p, p) < 6 * px + 1) return { stop: x.id }; }
     let best: Hit | null = null, bd = Infinity;
     // (only what is near it; connectors hidden: not picked, but for the selected ones)
     const near = sketchIndex(sk).near(p, 6 * px + 0.5), cs = sk.connectors.filter(c => near.conns.has(c.id));
@@ -813,6 +820,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const s = live.current.sel;
     if (s.link) { const id = s.link; editSketch(sk => unlink(sk, id)); setSel(NO_SEL); return; }
     if (s.crossing) { const id = s.crossing; editSketch(sk => deleteCrossing(sk, id)); setSel(NO_SEL); return; }
+    if (s.stop) { const id = s.stop; editSketch(sk => deleteStop(sk, id)); setSel(NO_SEL); return; }
     // (zones with it or on their own: one undo step for it all)
     const zones = s.zones ?? [];
     if (isEmpty(s) && !zones.length) return;
@@ -952,6 +960,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       case "link": { const k = sk.links?.find(x => x.id === to.id); if (k) { setSel({ ...NO_SEL, link: k.id }); centerOn(piece({ connectors: k.conns })); } break; }
       case "crossing": { const x = sk.crossings?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, crossing: x.id }); centerOnPts([x.a, x.b]); } break; }
       case "zone": { const z = sk.zones?.find(y => y.id === to.id); if (z) { setSel({ ...NO_SEL, zones: [z.id] }); centerOnPts(z.outline); } break; }
+      case "stop": { const x = sk.stops?.find(y => y.id === to.id); const l = x && laneById(sk, x.lane); if (x && l) { setSel({ ...NO_SEL, stop: x.id }); centerOnPts([pointAt(l.shape, x.s).p]); } break; }
     }
     redraw();
   };
@@ -1219,6 +1228,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         }
         // (a link: selected on its own, nothing to drag)
         if ("link" in hit) { setSel({ ...NO_SEL, link: hit.link }); return; }
+        // (a bus stop: selected on its own, nothing to drag)
+        if ("stop" in hit) { setSel({ ...NO_SEL, stop: hit.stop }); return; }
         // (a zebra crossing: selected on its own, dragged whole)
         if ("crossing" in hit) { setSel({ ...NO_SEL, crossing: hit.crossing }); drag.current = { kind: "crossing", base: sk, id: hit.crossing, part: "move", from: raw }; return; }
         // (a zone: selected on its own, dragged whole)
@@ -1279,6 +1290,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         if (d.pts.length >= 3 && dist(raw, d.pts[0]) <= 10 / view.current.scale) { finishJunction(); return; }
         d.pts.push(p);
         break;
+      }
+      case "stop": {
+        const l = laneUnder(sk, raw, 2 / view.current.scale);
+        if (!l || isFullCircle(l.shape)) { if (!l) toast.error("Click a lane to put a bus stop there."); return; }
+        const s = Math.round(nearestOn(l.shape, raw).s);
+        let made: SketchStop | null = null;
+        editSketch(k => { const [next, x] = addStop(k, l.id, s); made = x; return next; });
+        if (made) setSel({ ...NO_SEL, stop: (made as SketchStop).id });
+        changeTool("select");
+        return;
       }
       case "zone": {
         const p = snap(raw).p;
@@ -1365,6 +1386,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     } else if ("connector" in hit) setSel({ ...NO_SEL, connectors: [hit.connector] });
     else if ("link" in hit) setSel({ ...NO_SEL, link: hit.link });
     else if ("crossing" in hit) setSel({ ...NO_SEL, crossing: hit.crossing });
+    else if ("stop" in hit) setSel({ ...NO_SEL, stop: hit.stop });
     else setSel({ ...NO_SEL, zones: [hit.zone] });
     setSelCar(null);
     return true;
@@ -1572,7 +1594,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "escape") {
       // (a menu or dialog took it already)
       if (e.defaultPrevented) return;
-      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.zones?.length && live.current.selCar === null;
+      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.stop && !live.current.sel.zones?.length && live.current.selCar === null;
       if (d) draft.current = null;
       // (the Sketch window, a modal (T184), one thing a press: the selection, then a drawing tool (back to Select), then
       // the window closed)
@@ -1847,6 +1869,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           ) : sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
             <CrossingPanel x={sketch.crossings.find(x => x.id === sel.crossing)!} readOnly={readOnly} onDelete={deleteSel}
               live={stats ? peds.find(q => q.id === sel.crossing) ?? null : null} />
+          ) : sel.stop && sketch.stops?.some(x => x.id === sel.stop) ? (
+            <StopPanel sketch={sketch} stop={sketch.stops.find(x => x.id === sel.stop)!} readOnly={readOnly} onDelete={deleteSel} />
           ) : (
             <SelectionPanel warnings={jw} onWarning={selectItems} sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
               selPt={selPt} onCurvePoint={curvePoint} onDeletePoint={deletePoint}
@@ -1864,6 +1888,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {page && <RoutePanel sketch={sketch} onGo={x => goTo({ kind: x.kind, id: x.id })} onSendTest={() => sendTestCar().catch((e: Error) => toast.error("No test car", { description: e.message }))} />}
           <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} heldBack={stats?.heldBackBy}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
+          <BusLinesPanel sketch={sketch} readOnly={readOnly}
+            onPick={id => { const x = sketch.stops?.find(s => s.id === id); const l = x && laneById(sketch, x.lane); if (x && l) { setSel({ ...NO_SEL, stop: x.id }); centerOnPts([pointAt(l.shape, x.s).p]); } }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={copy} disabled={empty}><Copy /> Copy JSON</Button>
             <Button size="sm" variant="outline" disabled={empty || readOnly} onClick={tidy}
@@ -1966,7 +1992,7 @@ type KeyLike = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "alt
 
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
-  return { id: c.id, truck: !!c.trailer, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
+  return { id: c.id, truck: !!c.trailer, bus: !!c.bus, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
 function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
@@ -1988,7 +2014,7 @@ function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFo
   );
   const reason = info ? reasonOf(info.why, info.kmh) : null;
   return (
-    <InspectorPanel id="car" title={id < 0 ? `Test car ${-id}` : `${info?.truck ? "Truck" : "Car"} ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
+    <InspectorPanel id="car" title={id < 0 ? `Test car ${-id}` : `${info?.bus ? "Bus" : info?.truck ? "Truck" : "Car"} ${id}`} icon={<Car className="size-3.5 shrink-0 text-muted-foreground" />} className="bg-muted/30"
       actions={<button className="rounded p-0.5 hover:bg-muted" aria-label="Stop inspecting the car" title="Stop inspecting (Esc)" onClick={onClose}><X className="size-3.5" /></button>}>
       {!info ? <p className="text-xs text-muted-foreground">{replayT !== null ? `Not on the ${where} at this moment.` : `It has left the ${where}.`}</p> : replayT !== null ? (
         <>
@@ -2357,7 +2383,7 @@ function takeLanesOut(sk: Sketch, ids: string[], edit: (f: (s: Sketch) => Sketch
 
 /** what the selection can be merged as: two whole roads (the first picked keeping its name), else two lanes; null if neither */
 function mergeTarget(sk: Sketch, sel: Sel): { kind: "roads" | "lanes"; a: string; b: string } | null {
-  if (sel.connectors.length || sel.junctions.length || sel.link || sel.crossing) return null;
+  if (sel.connectors.length || sel.junctions.length || sel.link || sel.crossing || sel.stop) return null;
   const roads = [...new Set(sel.lanes.map(id => roadOf(sk, id)?.id ?? null))];
   if (roads.length === 2 && roads.every(r => r && sk.roads.find(x => x.id === r)!.lanes.every(l => sel.lanes.includes(l)))) return { kind: "roads", a: roads[0]!, b: roads[1]! };
   return sel.lanes.length === 2 ? { kind: "lanes", a: sel.lanes[0], b: sel.lanes[1] } : null;
@@ -2717,6 +2743,28 @@ function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; rea
   );
 }
 
+/** a bus stop: its name, where it is (its lane and how far along), and the lines it's on (T21) */
+function StopPanel({ sketch, stop, readOnly, onDelete }: { sketch: Sketch; stop: SketchStop; readOnly: boolean; onDelete: () => void }) {
+  const { edit: editSketch, show, record } = useSketchStore();
+  const before = useRef<Sketch | null>(null);
+  const l = laneById(sketch, stop.lane), len = l ? laneLength(l.shape) : 0;
+  const lines = (sketch.busLines ?? []).filter(x => x.stops.includes(stop.id));
+  return (
+    <InspectorPanel id="stop" title={`Bus stop ${stop.id}`} icon={<BusFront className="size-3.5 shrink-0 text-muted-foreground" />}
+      actions={!readOnly && <Button size="icon-sm" variant="ghost" aria-label="Delete the bus stop" title="Delete it (Del)" onClick={onDelete}><Trash2 /></Button>}>
+      <label className="grid gap-1 text-xs">
+        <span className="text-muted-foreground">Name</span>
+        <Input aria-label="Bus stop name" value={stop.name} className="h-8" disabled={readOnly}
+          onFocus={() => { before.current = sketch; }} onBlur={() => { if (before.current) record(before.current); before.current = null; }}
+          onChange={e => show(updateStop(sketch, stop.id, { name: e.target.value }))} />
+      </label>
+      <p className="text-xs text-muted-foreground">On {l ? (roadOf(sketch, l.id)?.name ?? `lane ${l.id}`) : "a lane that's gone"}, {stop.s.toFixed(0)} of {len.toFixed(0)} m along.</p>
+      {!readOnly && l && <NumberField id="sk-stop-s" label="Along its lane" unit="m" value={stop.s} min={0} max={len} step={1} digits={0} onCommit={s => editSketch(sk => updateStop(sk, stop.id, { s }))} />}
+      <p className="text-xs text-muted-foreground">{lines.length ? `On ${lines.map(x => x.name).join(", ")}.` : "Not on a bus line yet — add it to one below."}</p>
+    </InspectorPanel>
+  );
+}
+
 /** (the Sketch window) the experiment's switch, and while on its rays' switch and its own results, marked as the experiment's (T213) */
 function ExperimentRow({ x }: { x: NonNullable<Parameters<typeof TrafficPanel>[0]["experiment"]> }) {
   const st = x.stats, rate = st && st.t > 0 ? Math.round((st.finished * 3600) / st.t) : 0;
@@ -3021,7 +3069,7 @@ interface PaintState {
   /** the route traced (its lanes and connectors), drawn over the map; and where a test car drove another way */
   route: { lanes: Set<string>; conns: Set<string>; driven: { lanes: Set<string>; conns: Set<string> } } | null;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
-  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1 }[] | null;
+  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1; bus?: boolean }[] | null;
   /** the time of the cars shown (live or replayed), for the traffic lights; null with no cars */
   simT: number | null;
   /** the traffic lights as they run with the cars (null: worked out from the fixed cycle) */
@@ -3257,7 +3305,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     for (const car of cars) {
       const t = car.trailer;
       if (t) vehicleBody(t.p, t.d, t.len, "#e9e6dd", false, "rgba(20,28,34,0.7)");
-      vehicleBody(car.p, car.d, car.len, st.bySpeed ? speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15) : t ? pal.truck : pal.car, true, "rgba(20,28,34,0.45)");
+      vehicleBody(car.p, car.d, car.len, st.bySpeed ? speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15) : car.bus ? pal.busVeh : t ? pal.truck : pal.car, true, "rgba(20,28,34,0.45)");
       // (broken down: hazard lights flashing at its four corners, dim between flashes so they show when paused)
       if (car.broken) {
         const { p, d } = car, back = t ?? car, bl = t ? t.len : car.len, r = Math.max(0.35, 2.5 * px);
@@ -3593,6 +3641,20 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         path(f.corners); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.lineWidth = (on ? 2 : 1.5) * px; ctx.setLineDash(on ? [] : [5 * px, 3 * px]); ctx.stroke(); ctx.setLineDash([]);
       }
       if (on) { square(x.a); square(x.b); }
+    }
+    // bus stops: a dot beside the lane, in the colour of the first line serving it (grey: none yet); its name at higher zoom
+    if (st.layers.signs && sk.stops?.length) {
+      const colorOf = (id: string) => (sk.busLines ?? []).find(x => x.stops.includes(id))?.color ?? "#888888";
+      for (const x of sk.stops) {
+        const l = laneById(sk, x.lane);
+        if (!l) continue;
+        const { p, d } = pointAt(l.shape, x.s), n = { x: -d.y, y: d.x }, off = l.width / 2 + 1.3, c = { x: p.x + n.x * off, y: p.y + n.y * off };
+        if (c.x < x0 - 5 || c.x > x1 + 5 || c.y < y0 - 5 || c.y > y1 + 5) continue;
+        const on = s.stop === x.id, over = !!hv && "stop" in hv && hv.stop === x.id, R = Math.max(1, 5 * px);
+        ctx.beginPath(); ctx.arc(c.x, c.y, R, 0, Math.PI * 2); ctx.fillStyle = colorOf(x.id); ctx.fill();
+        ctx.strokeStyle = on || over ? col.sel : "#ffffff"; ctx.lineWidth = Math.max(0.3, (on ? 2.5 : 1.5) * px); ctx.stroke();
+        if (v.scale >= 3 || on || over) label(x.name, { x: c.x, y: c.y - off * 0.4 - 2 / v.scale }, col.text);
+      }
     }
   }
   // the zebras' pedestrians: waiting at the first kerb, crossing to the other, three abreast

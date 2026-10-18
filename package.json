@@ -33,6 +33,7 @@
     "align:check": "tsx scripts/lane-align-check.ts",
     "bus:check": "tsx scripts/bus-lane-check.ts",
     "plan:check": "tsx scripts/plan-fallback-check.ts",
+    "bus-support:check": "tsx scripts/bus-support-check.ts",
     "engine:baseline": "tsx scripts/engine-baseline.ts",
     "audit": "tsx scripts/junction-audit.ts"
   },
