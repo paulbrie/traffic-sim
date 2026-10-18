@@ -77,4 +77,22 @@ let bad = 0;
   if (!ok) bad++;
   console.log(`buses + ordinary car demand sharing the loop: bus-lane ticks car=${r.onBusLaneCar}/bus=${r.onBusLaneBus}, collisions ${r.collisions}, deadlocks ${r.deadlocks} | ok ${ok}`);
 }
+{
+  // (a stop on a lane later made a bike lane, ticket #20's drivable(): unreachable, but graceful — no crash, the
+  // line keeps serving its other, reachable stops, found by Tatiana's probe on the merge)
+  const sk = loopSketch(0);
+  sk.lanes = [...sk.lanes, { id: "bikeSpur", width: 2, bike: true, shape: { kind: "line", pts: [{ x: 200, y: 0 }, { x: 200, y: -50 }] } }];
+  sk.stops = [...(sk.stops ?? []), { id: "s4", name: "D", lane: "bikeSpur", s: 25 }];
+  sk.busLines = sk.busLines!.map(l => (l.id === "line1" ? { ...l, stops: [...l.stops, "s4"] } : l));
+  let ok = true;
+  try {
+    const r = run(sk, 600);
+    ok = r.onBusLaneCar === 0 && r.collisions === 0 && r.deadlocks === 0 && r.maxBuses === 2;
+    console.log(`a stop's lane later made a bike lane: no crash, ${r.maxBuses} buses still running, collisions ${r.collisions}, deadlocks ${r.deadlocks} | ok ${ok}`);
+  } catch (e) {
+    ok = false;
+    console.error("a stop's lane made a bike lane threw:", (e as Error).message);
+  }
+  if (!ok) bad++;
+}
 if (bad) { console.error(`${bad} check(s) failed`); process.exit(1); }

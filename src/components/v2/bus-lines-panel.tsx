@@ -5,12 +5,12 @@
  * once. Put bus stops with the Bus stop tool, then add them here in order. A line needs at least two stops
  * before buses run.
  */
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
-import { addBusLine, BUS_LINE_COLORS, deleteBusLine, updateBusLine, type Sketch, type SketchBusLine } from "@/lib/lane-sketch";
+import { addBusLine, BUS_LINE_COLORS, deleteBusLine, laneById, updateBusLine, type Sketch, type SketchBusLine } from "@/lib/lane-sketch";
 import { useSketchStore } from "@/state/lane-sketch";
 import { InspectorPanel } from "./inspector-panel";
 
@@ -51,9 +51,11 @@ export function BusLinesPanel({ sketch, readOnly, onFocus, onPick }: {
               <span className="text-[11px] text-muted-foreground">Stops, in order</span>
               {l.stops.map((id, i) => {
                 const stop = stops.find(s => s.id === id);
+                const bike = stop && laneById(sketch, stop.lane)?.bike;
                 return (
                   <div key={id} className="flex items-center gap-1 text-xs">
                     <span className="w-4 shrink-0 text-right text-muted-foreground tabular">{i + 1}</span>
+                    {bike && <TriangleAlert className="size-3 shrink-0 text-amber-700 dark:text-amber-500" aria-label="Its lane is for bikes now: no bus can reach it" />}
                     <button type="button" className="min-w-0 flex-1 truncate text-left hover:underline disabled:pointer-events-none" disabled={!stop} onClick={() => stop && onPick?.(stop.id)}>
                       {stop?.name ?? "a stop that's gone"}
                     </button>

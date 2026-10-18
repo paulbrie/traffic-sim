@@ -2766,6 +2766,7 @@ function StopPanel({ sketch, stop, readOnly, onDelete }: { sketch: Sketch; stop:
       </label>
       <p className="text-xs text-muted-foreground">On {l ? (roadOf(sketch, l.id)?.name ?? `lane ${l.id}`) : "a lane that's gone"}, {stop.s.toFixed(0)} of {len.toFixed(0)} m along.</p>
       {!readOnly && l && <NumberField id="sk-stop-s" label="Along its lane" unit="m" value={stop.s} min={0} max={len} step={1} digits={0} onCommit={s => editSketch(sk => updateStop(sk, stop.id, { s }))} />}
+      {l?.bike && <p className="flex gap-1.5 text-[11px] text-amber-700 dark:text-amber-500"><TriangleAlert className="mt-0.5 size-3 shrink-0" /> Its lane is for bikes now: no bus can reach it. Move it to a car or bus lane.</p>}
       <p className="text-xs text-muted-foreground">{lines.length ? `On ${lines.map(x => x.name).join(", ")}.` : "Not on a bus line yet — add it to one below."}</p>
     </InspectorPanel>
   );
