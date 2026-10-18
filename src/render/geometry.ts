@@ -307,7 +307,7 @@ export function buildRoadGeo(c: Compiled, net: Network): RoadGeo {
         const ctl = node.signals.def.control;
         const kind = node.ringR > 0 ? "yield"
           : ctl === "stop" && (node.degree >= 2 || !!node.lead) ? "stop"
-            : ctl === "lights" && (node.degree >= 2 || !!node.lead) ? "signal"
+            : ctl === "lights" && (node.degree >= 2 || !!node.lead || node.phases.length >= 2) ? "signal"
               : ctl === "priority" && e.sign === "stop" ? "stop"
                 : ctl === "priority" && e.sign === "yield" ? "yield" : "priority";
         const signed = ctl === "priority" && !!e.sign;

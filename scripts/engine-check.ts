@@ -1546,3 +1546,25 @@ function alongKerb(input: any): any {
   console.log(`bridge edits: a batch built two lanes, a connector, a give-way, a junction, a road ${built}, lights ${lights}, bad arguments refused ${strict}, an end moved ${moved}, a lane deleted with its connector ${deleted}, a batch addConnector answered ok and applied once ${once} | ok ${ok}`);
   if (!ok) process.exit(1);
 }
+// ticket #24: a junction made of road ends only (none with two roads), joined by lane connectors, set to lights: one
+// controller over all its points (each end alone has a single road, so none got phases of its own: no lights at all,
+// traffic sorted out by its paths alone); its approaches facing each other share a phase, the lights shown on the map
+{
+  const W = makeNode(-200, 0), A = makeNode(-8, 0, "lights", false), B = makeNode(8, 0, "lights", false), E = makeNode(200, 0);
+  const N = makeNode(0, -200), C = makeNode(0, -8, "lights", false), D = makeNode(0, 8, "lights", false), S = makeNode(0, 200);
+  const wa = makeLink(W, A, 1, 0), be = makeLink(B, E, 1, 0), nc = makeLink(N, C, 1, 0), ds = makeLink(D, S, 1, 0);
+  A.connectors = [{ in: `${wa.id}:1`, a: 0, out: `${be.id}:1`, b: 0 }, { in: `${wa.id}:1`, a: 0, out: `${ds.id}:1`, b: 0 }];
+  C.connectors = [{ in: `${nc.id}:1`, a: 0, out: `${ds.id}:1`, b: 0 }, { in: `${nc.id}:1`, a: 0, out: `${be.id}:1`, b: 0 }];
+  const net: Network = { version: 1, nodes: [W, A, B, E, N, C, D, S], links: [wa, be, nc, ds], stops: [], lines: [] };
+  const c = compile(net), a = c.nodeById.get(A.id)!, cc = c.nodeById.get(C.id)!;
+  const one = a.cluster.length === 4 && a.cluster.every(k => k.signals === a);
+  const phases = a.phases.length === 2 && JSON.stringify(a.phases.map(p => p.length)) === JSON.stringify(cc.phases.map(p => 1 - p.length));
+  const heads = buildRoadGeo(c, net).signals.filter(s => s.kind === "lights" && (s.nodeIdx === a.idx || s.nodeIdx === cc.idx)).length === 2;
+  const sim = new Sim(c, { cars: 0, trucks: 0, seed: 1 });
+  const aspects = new Set<string>();
+  for (let t = 0; t < 1200; t++) { sim.step(); aspects.add(`${sim.signalFor(a.idx, 0)}/${sim.signalFor(cc.idx, 0)}`); }
+  const cycles = aspects.has("green/red") && aspects.has("red/green") && !aspects.has("green/green");
+  const ok = one && phases && heads && cycles;
+  console.log(`lights over a junction of road ends: one controller ${one}, its two approaches in turn ${phases}, heads on the map ${heads}, cycling (never both green) ${cycles} [${[...aspects].join(" ")}] | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
