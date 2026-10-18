@@ -1247,9 +1247,12 @@ export class SketchSim {
       const best = goals.reduce((m, g) => Math.min(m, cost(g)), Infinity);
       if (best === Infinity && skippedIn) { this.plan(v, ownLane, true); return; }
       if (best < Infinity) {
-        // (its own lane leaving by the way out too: no change to another lane of it for nothing (T194))
+        // (its own lane leaving by the way out too: no change to another lane of it for nothing (T194); but never
+        // down to no option at all — a lane beside it dead-ending nearer may be the only one this close to `best`)
         const ownOut = goals.some(g => !g.conn && g.lane === v.edge && cost(g) < Infinity);
-        const near = goals.filter(g => cost(g) <= best + 5 && !(ownOut && !g.conn && g.lane !== v.edge));
+        const withinBest = goals.filter(g => cost(g) <= best + 5);
+        const near0 = withinBest.filter(g => !(ownOut && !g.conn && g.lane !== v.edge));
+        const near = near0.length ? near0 : withinBest;
         const g = near[Math.floor(rnd() * near.length)];
         v.goal = { lane: g.lane, conn: g.conn };
         v.exit = v.goal.lane === v.edge ? v.goal.conn : null;
