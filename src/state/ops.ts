@@ -595,6 +595,24 @@ export function deleteGroup(net: Network, id: string): Network {
   return withGroups(net, (net.signalGroups ?? []).filter(g => g.id !== id));
 }
 
+/**
+ * Puts junctions with lights in one signal group, to run on one cycle (ticket #25): the group the first of them
+ * is already in, else a new one; each one joining gets offset 0, so they all switch together (Green wave staggers
+ * them). `nodes`: any of their points; a junction over several points goes in once, by the point its lights run
+ * from. Null: fewer than two junctions with lights among them.
+ */
+export function coordinate(net: Network, compiled: Compiled, nodes: string[]): { net: Network; group: string; junctions: string[] } | null {
+  const lit: string[] = [];
+  for (const id of nodes) {
+    const n = compiled.nodeById.get(id)?.signals;
+    if (n && n.controlled && n.def.control === "lights" && n.phases.length >= 2 && !lit.includes(n.def.id)) lit.push(n.def.id);
+  }
+  if (lit.length < 2) return null;
+  let out = net, group = lit.map(id => groupOf(net, id)?.id).find(id => !!id) ?? null;
+  for (const id of lit) if (!group || groupOf(out, id)?.id !== group) [out, group] = joinGroup(out, id, group);
+  return { net: out, group: group!, junctions: lit };
+}
+
 /** Sets every member's offset from the travel time between junctions (see engine/signals.ts). */
 export function applyGreenWave(net: Network, compiled: Compiled, id: string): Network {
   const g = net.signalGroups?.find(x => x.id === id);

@@ -1,11 +1,13 @@
 "use client";
 
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Group, Trash2, X } from "lucide-react";
+import { Group, Trash2, TrafficCone, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { DELETABLE, deleteSelected, describeSelection } from "@/state/bulk";
 import { makeGroup } from "@/state/groups";
+import { simController } from "@/state/sim-controller";
+import * as ops from "@/state/ops";
 import { commit, network$, select, selectedAll, selectMany, ui, type Selection } from "@/state/store";
 import { Section } from "./fields";
 
@@ -30,6 +32,9 @@ export function MultiSelection() {
   const pts = new Set(all.filter(s => s.kind === "node").map(s => s.id));
   const groupable = [...new Set([...all.filter(s => s.kind === "link").map(s => s.id), ...net.links.filter(l => pts.has(l.from) && pts.has(l.to)).map(l => l.id)])];
   const remove = () => { commit(deleteSelected(net, deletable)); select(null); };
+  // (two junctions with lights or more among the points: run them on one cycle, in one signal group)
+  const lights = ops.coordinate(net, simController.compiled, all.filter(s => s.kind === "node").map(s => s.id));
+  const coordinate = () => { if (!lights) return; commit(lights.net); select({ kind: "node", id: lights.junctions[0] }); };
   return (
     <div>
       <div className="border-b px-4 py-3">
@@ -45,6 +50,10 @@ export function MultiSelection() {
           {groupable.length > 0 && !readOnly && (
             <Button size="sm" variant="outline" title="Keep the selected roads (and those between selected points) together as one junction: move, copy and save it as one"
               onClick={() => { const [n2, g] = makeGroup(net, groupable); if (g) { commit(n2); select({ kind: "group", id: g.id }); } }}><Group /> Make a junction group</Button>
+          )}
+          {lights && !readOnly && (
+            <Button size="sm" variant="outline" title="Put their lights in one signal group: one cycle for all, every offset 0 so they switch together (set offsets or a green wave in the group, from any of them)"
+              onClick={coordinate}><TrafficCone /> Coordinate {lights.junctions.length} lights</Button>
           )}
           <Button size="sm" variant="ghost" onClick={() => select(null)}><X /> Clear</Button>
         </div>

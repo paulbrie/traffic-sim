@@ -20,7 +20,7 @@ import { canJoin, createJunction, deleteJunction, setJunctionControl } from "../
 import { junctionRefs } from "../src/engine/refs";
 import { bayOutline, rowEnds } from "../src/engine/parking";
 import { mergeNetworks, mergeSettings } from "../src/state/merge";
-import { addNode, deleteLink, updateLink } from "../src/state/ops";
+import { addNode, coordinate, deleteLink, updateLink } from "../src/state/ops";
 import { mergeLanes as mergeSketchLanes, mergeRoads as mergeSketchRoads } from "../src/lib/sketch-merge";
 import { CONNECTOR_KINK_LIMIT, connectorKinks, turnsAt, unkinkPts } from "../src/lib/connector-kinks";
 import { tidySketch } from "../src/lib/sketch-tidy";
@@ -1566,5 +1566,40 @@ function alongKerb(input: any): any {
   const cycles = aspects.has("green/red") && aspects.has("red/green") && !aspects.has("green/green");
   const ok = one && phases && heads && cycles;
   console.log(`lights over a junction of road ends: one controller ${one}, its two approaches in turn ${phases}, heads on the map ${heads}, cycling (never both green) ${cycles} [${[...aspects].join(" ")}] | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+// ticket #25: two junctions with lights put in one signal group from a selection: one cycle, offsets 0, so they switch
+// together (on their own, with different greens, they drift apart); a junction over several points (#24) goes in once,
+// by the point its lights run from
+{
+  const cross = (x: number, green: number) => {
+    const J = { ...makeNode(x, 0, "lights", false), signal: { ...makeNode(0, 0).signal, green, actuated: false } };
+    const arms = [makeNode(x - 60, 0), makeNode(x + 60, 0), makeNode(x, -150), makeNode(x, 150)];
+    return { J, nodes: [J, ...arms], links: arms.map(a => makeLink(a, J)) };
+  };
+  const a = cross(0, 20), b = cross(200, 35);
+  const net: Network = { version: 1, nodes: [...a.nodes, ...b.nodes], links: [...a.links, ...b.links], stops: [], lines: [] };
+  const inStep = (n: Network) => {
+    const c = compile(n), sim = new Sim(c, { cars: 0, trucks: 0, seed: 1 }), ia = c.nodeById.get(a.J.id)!.idx, ib = c.nodeById.get(b.J.id)!.idx;
+    let same = 0;
+    for (let t = 0; t < 3000; t++) { sim.step(); const x = sim.nodeState(ia), y = sim.nodeState(ib); if (x.phase === y.phase && x.stage === y.stage) same++; }
+    return same / 3000;
+  };
+  const alone = inStep(net), r = coordinate(net, compile(net), [a.J.id, b.J.id]);
+  const g = r?.net.signalGroups?.find(x => x.id === r.group);
+  const grouped = !!g && g.members.length === 2 && g.members.every(m => m.offset === 0), together = r ? inStep(r.net) : 0;
+  // (with the road-end junction of #24: its four points selected, one member)
+  const W = makeNode(-200, 400), A = makeNode(-8, 400, "lights", false), B = makeNode(8, 400, "lights", false), E = makeNode(200, 400);
+  const N = makeNode(0, 200, "lights"), C = makeNode(0, 392, "lights", false), D = makeNode(0, 408, "lights", false), S = makeNode(0, 600);
+  const wa = makeLink(W, A, 1, 0), be = makeLink(B, E, 1, 0), nc = makeLink(N, C, 1, 0), ds = makeLink(D, S, 1, 0);
+  A.connectors = [{ in: `${wa.id}:1`, a: 0, out: `${be.id}:1`, b: 0 }, { in: `${wa.id}:1`, a: 0, out: `${ds.id}:1`, b: 0 }];
+  C.connectors = [{ in: `${nc.id}:1`, a: 0, out: `${ds.id}:1`, b: 0 }, { in: `${nc.id}:1`, a: 0, out: `${be.id}:1`, b: 0 }];
+  N.gateway = true; N.control = "priority";
+  const net2: Network = { ...net, nodes: [...net.nodes, W, A, B, E, N, C, D, S], links: [...net.links, wa, be, nc, ds] };
+  const r2 = coordinate(net2, compile(net2), [a.J.id, A.id, B.id, C.id, D.id]);
+  const ends = !!r2 && r2.junctions.length === 2 && r2.junctions.includes(a.J.id) && r2.net.signalGroups!.find(x => x.id === r2.group)!.members.length === 2;
+  const one = coordinate(net, compile(net), [a.J.id]) === null;
+  const ok = alone < 0.9 && grouped && together === 1 && ends && one;
+  console.log(`coordinate junctions: in step on their own ${(alone * 100).toFixed(0)}%, grouped (offsets 0) ${grouped}, in step together ${(together * 100).toFixed(0)}%, a road-end junction in once ${ends}, one junction refused ${one} | ok ${ok}`);
   if (!ok) process.exit(1);
 }
