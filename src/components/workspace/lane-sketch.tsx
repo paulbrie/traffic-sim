@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { cn } from "@/lib/utils";
 import { unproject } from "@/lib/osm/area";
 import {
-  LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setBusLane, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -2595,6 +2595,11 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
         {inRoad
           ? <p className="text-xs text-muted-foreground">Speed limit: {inRoad.speed ?? sketch.traffic?.speed ?? 50} km/h{inRoad.speed === undefined ? " (the sketch's)" : ""}, its road&apos;s.</p>
           : <SpeedRow sketch={sketch} id={`lane-${lane.id}`} own={lane.speed} of="lane" onSet={v => editSketch(sk => setLaneSpeed(sk, lane.id, v))} />}
+        <label className="flex items-center gap-2 text-xs" htmlFor={`sk-bus-${lane.id}`}>
+          <Switch id={`sk-bus-${lane.id}`} checked={!!lane.bus} onCheckedChange={on => editSketch(sk => setBusLane(sk, lane.id, on))}
+            aria-label="Bus lane" title="Closed to ordinary cars; at the road's border or in the middle" />
+          Bus lane
+        </label>
         {sh.kind === "arc" && !lead && (
           <Button size="sm" variant="outline" title="Make it curved points along the same circle, to drag, add and curve like a drawn lane (a ring stays a ring); its connectors stay where they are"
             onClick={() => editSketch(s => arcToPoints(s, lane.id))}><Spline /> Edit as points</Button>
@@ -3341,6 +3346,20 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
             ctx.beginPath();
             for (const l of lw) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
             ctx.lineWidth = wd + (pass ? 0 : kerbW); ctx.stroke();
+          }
+          // bus lanes: tinted over their asphalt, closed to ordinary cars
+          if (pass) {
+            const busByWidth = new Map<number, typeof roadLanes>();
+            for (const l of ls) if (l.bus) busByWidth.set(l.width, [...(busByWidth.get(l.width) ?? []), l]);
+            if (busByWidth.size) {
+              ctx.strokeStyle = pal.bus; ctx.globalAlpha = 0.55;
+              for (const [wd, lw] of busByWidth) {
+                ctx.beginPath();
+                for (const l of lw) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
+                ctx.lineWidth = wd; ctx.stroke();
+              }
+              ctx.globalAlpha = 1; ctx.strokeStyle = asphalt;
+            }
           }
         }
         // the markings, as on the plan's map: dashed lines between lanes, the centre line in its yellow

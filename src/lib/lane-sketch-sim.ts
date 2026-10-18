@@ -253,6 +253,8 @@ interface Edge {
   innerOff?: boolean;
   /** a roundabout's: a ring, or a way on or off one (for `ringDriving`) */
   atRing?: boolean;
+  /** a lane (or a connector leaving/joining one): a bus lane, closed to ordinary cars */
+  bus: boolean;
   /** where it crosses other lanes and connectors (or, connectors, ends where another does) */
   conflicts: Conflict[];
   /** connectors: stretches of it in reach of other paths (crossing zones overlapping one another as one; not joins): one in there is committed */
@@ -684,7 +686,7 @@ export class SketchSim {
       paths.set(`lane:${l.id}`, samples(sh, 1));
       edges.set(`lane:${l.id}`, {
         key: `lane:${l.id}`, kind: "lane", id: l.id, len, ring, z: null, outs: [], ins: [], from: null, to: null, siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
-        control: ring || signals.has(l.id) ? null : l.control ?? null, minor: null, signal: ring ? null : signals.get(l.id) ?? null, atEnd: false,
+        control: ring || signals.has(l.id) ? null : l.control ?? null, minor: null, signal: ring ? null : signals.get(l.id) ?? null, atEnd: false, bus: !!l.bus,
         // (bends slow it down: arcs, and lines with curved points or closed round; a sharp drawn corner doesn't slow a whole lane)
         vmax: (lv => (sh.kind === "arc" ? bendSpeed(sh.r, lv, bf * (ring && rd ? RING_BEND : 1)) : sh.curved?.some(Boolean) || ring ? bendSpeed(minRadius(samples(sh, 1)), lv, bf * (ring && rd ? RING_BEND : 1)) : lv))(limit(l.id)), ...(ring ? { atRing: true } : {}),
         locate: pos => pointAt(sh, ring ? ((pos % len) + len) % len : pos),
@@ -698,7 +700,7 @@ export class SketchSim {
       // (places rounded to the centimetre can be a hair past a lane's end)
       const e: Edge = {
         key: `conn:${c.id}`, kind: "conn", id: c.id, len: Math.max(pl.len, 0.1), ring: false, z: null, outs: [], ins: [], siblings: [], shared: new Map(), forkShared: 0, mergeBefore: 0, onFrom: [], onTo: [], conflicts: [], runs: [], neighbors: [],
-        control: null, minor: from.control && c.from.s >= from.len - 1 ? from.control : null, signal: null, atEnd: c.from.s >= from.len - 1,
+        control: null, minor: from.control && c.from.s >= from.len - 1 ? from.control : null, signal: null, atEnd: c.from.s >= from.len - 1, bus: from.bus || to.bus,
         from: { lane: from, s: Math.min(c.from.s, from.len) }, to: { lane: to, s: Math.min(c.to.s, to.len) }, vmax: bendSpeed(minRadius(pts), limit(c.to.lane), bf * (rd && (from.ring || to.ring) ? RING_BEND : 1)), locate: pl.locate,
         ...(from.ring || to.ring ? { atRing: true } : {}),
       };
@@ -733,7 +735,8 @@ export class SketchSim {
     for (const road of sk.roads) {
       const ls = road.lanes.map(id => edges.get(`lane:${id}`)).filter((e): e is Edge => !!e);
       for (const A of ls) for (const B of ls) {
-        if (A === B || A.ring !== B.ring) continue;
+        // (a bus lane is no lane for an ordinary car to change into; leaving one is fine)
+        if (A === B || A.ring !== B.ring || (B.bus && !A.bus)) continue;
         const pb = paths.get(B.key)!, cb = polyline(pb).cum, far = (width.get(A.key)! + width.get(B.key)!) / 2 + 0.75;
         if (A.ring) {
           const map: number[] = [];

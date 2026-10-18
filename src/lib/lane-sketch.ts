@@ -35,6 +35,8 @@ export interface SketchLane {
   level?: number;
   /** a lane in no road: its speed limit (km/h; default: its road's, else the sketch's traffic speed) */
   speed?: number;
+  /** a bus lane: closed to ordinary cars, at the road's border or in the middle */
+  bus?: true;
 }
 /** a place on a lane, `s` metres from its start */
 export interface LaneAt { lane: string; s: number }
@@ -942,6 +944,11 @@ export function unlink(sk: Sketch, id: string): Sketch {
 /** a stop or yield line put at a lane's end, or taken away (null) */
 export function setControl(sk: Sketch, id: string, control: LaneControl | null): Sketch {
   return { ...sk, lanes: sk.lanes.map(l => { if (l.id !== id) return l; const next = { ...l }; if (control) next.control = control; else delete next.control; return next; }) };
+}
+
+/** a lane made (or no longer) a bus lane: closed to ordinary cars */
+export function setBusLane(sk: Sketch, id: string, bus: boolean): Sketch {
+  return { ...sk, lanes: sk.lanes.map(l => { if (l.id !== id) return l; const next = { ...l }; if (bus) next.bus = true; else delete next.bus; return next; }) };
 }
 
 /**
@@ -1892,7 +1899,8 @@ export function entryLanes(sk: Sketch): SketchLane[] {
   let x = entries.get(sk);
   if (x) return x;
   const fed = new Set(sk.connectors.filter(c => c.to.s < ENTRY_CLEAR).map(c => c.to.lane));
-  entries.set(sk, (x = sk.lanes.filter(l => !isFullCircle(l.shape) && !fed.has(l.id))));
+  // (a bus lane: closed to ordinary cars, no ordinary traffic starts there)
+  entries.set(sk, (x = sk.lanes.filter(l => !isFullCircle(l.shape) && !fed.has(l.id) && !l.bus)));
   return x;
 }
 
@@ -1903,7 +1911,8 @@ export function exitLanes(sk: Sketch): SketchLane[] {
   // (the furthest any connector leaves each lane)
   const last = new Map<string, number>();
   for (const c of sk.connectors) last.set(c.from.lane, Math.max(last.get(c.from.lane) ?? -Infinity, c.from.s));
-  exits.set(sk, (x = sk.lanes.filter(l => !isFullCircle(l.shape) && !((last.get(l.id) ?? -Infinity) > laneLength(l.shape) - EXIT_CLEAR))));
+  // (a bus lane: closed to ordinary cars, no ordinary trip ends there)
+  exits.set(sk, (x = sk.lanes.filter(l => !isFullCircle(l.shape) && !((last.get(l.id) ?? -Infinity) > laneLength(l.shape) - EXIT_CLEAR) && !l.bus)));
   return x;
 }
 
@@ -1940,7 +1949,8 @@ export class RouteTable {
     // (lanes side by side in a road, the same way: where on the other a place on one is beside; two rings, a two-lane roundabout's)
     for (const r of sk.roads) for (const a of r.lanes) for (const b of r.lanes) {
       const A = this.lanes.get(a), Bl = this.lanes.get(b);
-      if (!A || !Bl || a === b || A.ring !== Bl.ring) continue;
+      // (a bus lane is no lane for an ordinary car's route to change into; leaving one is fine)
+      if (!A || !Bl || a === b || A.ring !== Bl.ring || (Bl.lane.bus && !A.lane.bus)) continue;
       // (rings: beside all the way round, as the simulation has them)
       const near = (f: number) => { const m = pointAt(A.lane.shape, A.len * f), q = nearestOn(Bl.lane.shape, m.p), d = pointAt(Bl.lane.shape, q.s).d; return q.d <= (A.lane.width + Bl.lane.width) / 2 + 0.75 && m.d.x * d.x + m.d.y * d.y >= 0.5; };
       if (!(A.ring ? [0, 1, 2, 3, 4, 5, 6, 7].every(k => near(k / 8)) : near(0.5))) continue;
@@ -1980,6 +1990,8 @@ export class RouteTable {
     /** the connectors that come onto lane `lane` (or, with a change, onto a lane beside it) before `s`, with what they would cost from there */
     const back = (laneId: string, s: number, onward: number) => {
       const L = this.lanes.get(laneId)!;
+      // (a bus lane: no ordinary car's route drives on it, not even in passing)
+      if (L.lane.bus) return;
       for (const i of L.ins) { const a = this.reach(L, i.s, s); if (a !== null) push(this.connLen.get(i.id)! + a + onward, i.id); }
       // (from a lane beside it: coming onto that one, then changing over)
       for (const b of this.besideOf.get(laneId) ?? []) {
@@ -2173,7 +2185,8 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
       ...(num(l.inRate) && l.inRate >= 0 ? { inRate: Math.min(5000, l.inRate) } : {}), ...(num(l.outWeight) && l.outWeight >= 0 ? { outWeight: Math.min(100, l.outWeight) } : {}),
       ...(num(l.level) && Math.round(l.level) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(l.level))) } : {}),
       // (its own speed limit, km/h, as the traffic's speed is kept)
-      ...(num(l.speed) ? { speed: Math.min(130, Math.max(10, l.speed)) } : {}) });
+      ...(num(l.speed) ? { speed: Math.min(130, Math.max(10, l.speed)) } : {}),
+      ...(l.bus === true ? { bus: true as const } : {}) });
   }
   const ids = new Set(lanes.map(l => l.id));
   // (a place a hair before a lane's start, from rounding, is its start)
