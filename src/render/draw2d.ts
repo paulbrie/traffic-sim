@@ -193,6 +193,8 @@ export interface Overlay {
   pendingPoint: Vec | null;
   reservations: boolean;
   bySpeed: boolean;
+  /** turn signals drawn (off: none; a broken-down vehicle's hazard lights still) */
+  blinkers?: boolean;
   labels: boolean;
   snapStep: number;
   gridOn: boolean;
@@ -504,10 +506,10 @@ export function drawScene(
     paths.layers.forEach((c, i) => {
       if (i > 0) blit(ctx, bg.layers[i], dpr, scale, w, h, cam);
       const a0 = c.level < 0 ? 0.55 : 1;
-      if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo && v.level <= c.level, a0, view); }
+      if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px, v => v.level > lo && v.level <= c.level, a0, view); }
       prev = c.level;
     });
-    if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, px, v => v.level > lo, 1, view); }
+    if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px, v => v.level > lo, 1, view); }
     if (sim && showVehicles && compiled.parking.length) drawParked(ctx, pal, compiled, sim, px);
   }
 
@@ -605,7 +607,7 @@ export function drawScene(
       ctx.setLineDash([]);
       }
     }
-    if (ov.maskRoads && showVehicles) drawVehicles(ctx, pal, sim, ov.bySpeed, px);
+    if (ov.maskRoads && showVehicles) drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px);
     if (sv) {
       const q = sim.pose(sv);
       ctx.strokeStyle = pal.select; ctx.lineWidth = px * 2;
@@ -1219,7 +1221,7 @@ function drawLinkHandles(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palett
   if (!(l.c1 && l.c2)) { m.x += (b.y - a.y) === 0 && (b.x - a.x) === 0 ? 0 : 0; }
 }
 
-function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, bySpeed: boolean, px: number, only?: (v: Vehicle) => boolean, alpha = 1, view?: { minX: number; minY: number; maxX: number; maxY: number }) {
+function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, bySpeed: boolean, blinkers: boolean, px: number, only?: (v: Vehicle) => boolean, alpha = 1, view?: { minX: number; minY: number; maxX: number; maxY: number }) {
   // blink on wall-clock time so it looks right at any simulation speed
   const blinkOn = Math.floor(performance.now() / 380) % 2 === 0;
   // one path per colour (speed colours in 16 steps), one for windows, one for turn signals: a few
@@ -1254,7 +1256,9 @@ function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, byS
     pts.forEach(([x, y], i) => { const X = cx + ux * x - uy * y, Y = cy + uy * x + ux * y; if (i) body!.lineTo(X, Y); else body!.moveTo(X, Y); });
     body.closePath();
     // turn signals: amber corners on the side the vehicle is heading (local +y = right); 2: hazard lights, both sides
-    const bl = blinkOn ? sim.blinker(v) : 0;
+    // (turn signals switched off in the display options: only the hazard lights)
+    let bl = blinkOn ? sim.blinker(v) : 0;
+    if (!blinkers && bl !== 2) bl = 0;
     if (bl) {
       const bw = Math.max(0.65, px * 4), bh = Math.max(0.5, px * 3.2);
       for (const sd of bl === 2 ? [1, -1] : [bl]) {

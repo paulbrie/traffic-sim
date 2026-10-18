@@ -41,6 +41,8 @@ export interface View3DProps {
   underlay: Underlay | null; underlayImg: HTMLImageElement | null; image: boolean;
   /** the cars as shown now (live, or the moment replayed), coloured by their speed or not, and the lights' state */
   cars: () => Car3D[] | null; bySpeed: boolean;
+  /** the cars' turn signals shown (off: none) */
+  blinkers: boolean;
   simT: () => number | null; signals: () => SignalController[] | null;
   /** the car picked's way on to the end of its trip (drawn on the road), if it has one */
   carWay?: () => Pt[] | null;
@@ -244,7 +246,7 @@ export function View3DV2(props: View3DProps) {
         if (c.broken && flash && nl + 4 <= MAXL) {
           const n = { x: -c.d.y, y: c.d.x }, hl = c.len / 2, hw = (truck ? TRUCK_W : CAR_W) / 2 + 0.05;
           for (const [f, s2] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) { P.set(c.p.x + c.d.x * hl * f + n.x * hw * s2, y + 0.9, c.p.y + c.d.y * hl * f + n.y * hw * s2); M.makeTranslation(P.x, P.y, P.z); lamps.setMatrixAt(nl++, M); }
-        } else if (c.blink && blinkOn && nl + 2 <= MAXL) {
+        } else if (c.blink && p.blinkers && blinkOn && nl + 2 <= MAXL) {
           // (its turn signal: on that side, at the front and the back (a truck's trailer's), as V1's)
           const hw = (truck ? TRUCK_W : CAR_W) / 2 + 0.05, b = c.trailer ?? c;
           for (const [q, dd, k] of [[c.p, c.d, c.len / 2], [b.p, b.d, -b.len / 2]] as const) {

@@ -1263,7 +1263,7 @@ export function PlanCanvas() {
         drawScene(ctx, cam, pal, geo!, paths!, net, simController.compiled, simController.sim, {
           selection: u.selection, hover, showNodes: u.tool !== "pan", draft: draftOv,
           pendingPoint: u.tool === "road" && pending ? pending.p : null,
-          reservations: u.display.reservations, bySpeed: u.display.bySpeed, labels: u.display.labels, junctions: u.display.junctions,
+          reservations: u.display.reservations, bySpeed: u.display.bySpeed, blinkers: u.display.blinkers, labels: u.display.labels, junctions: u.display.junctions,
           snapStep: u.snap.step, gridOn: u.snap.grid,
           underlay: ul ? { u: ul, img: ulImg, editing: u.tool === "image" && !u.calib.active, hover: ulHover } : null,
           calib: u.calib.active ? { a: u.calib.a, b: u.calib.b, cursor: cursorWorld } : null,

@@ -272,6 +272,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [readOnly] = useDeepSubject(ui, "readOnly");
   // (the cars coloured by speed, or all one colour: in the V2 UI store, kept in the browser)
   const [bySpeed] = useUiPath<boolean>("display/carsBySpeed");
+  const [blinkers] = useUiPath<boolean>("display/carBlinkers");
   // (the plan's editor takes the keys: on opening the page, and when the sketch window over it closes)
   const [sketchOpen] = useDeepSubject(ui, "sketch");
   useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
@@ -323,7 +324,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     } else if ((stats.t < T.t0 && testSeen.current === T.car) || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
   }, [stats, sketch, route.result, route.test, setRoute]);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, in3d, route: routeShown });
 
   // ------------------------------------------------------------ coordinates, snapping, picking
   const toWorld = (e: { clientX: number; clientY: number }): Pt => {
@@ -555,7 +556,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (a render: the kept image drawn again only if something it shows changed, not for the cars' stats)
   const shownBy = useRef<unknown[]>([]);
   useEffect(() => {
-    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, in3d, route: routeShown };
+    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, in3d, route: routeShown };
     const now = [sketch, sel, tool, contents, selPt, selCorner, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown];
     const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
     shownBy.current = now;
@@ -1798,7 +1799,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               : <><span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · </>}scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
           </div>
           {in3d && (
-            <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed}
+            <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed} blinkers={blinkers}
               selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c && live.current.replayT === null ? carWay(live.current.sketch, c)?.pts ?? null : null; }} carWhy={() => carsShown().why} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
@@ -2787,6 +2788,7 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
       </ToggleGroup>
       {experiment && <ExperimentRow x={experiment} />}
       <BySpeedSwitch />
+      <BlinkersSwitch />
       {stats && (
         <div className="grid gap-0.5">
           {row("Time", clock(stats.t))}
@@ -3023,6 +3025,8 @@ interface PaintState {
   selCorner?: { junction: string; i: number } | null;
   /** the cars coloured by their speed (else all one colour, a truck's cab its own) */
   bySpeed: boolean;
+  /** the cars' turn signals shown (off: none) */
+  blinkers: boolean;
   /** the route traced (its lanes and connectors), drawn over the map; and where a test car drove another way */
   route: { lanes: Set<string>; conns: Set<string>; driven: { lanes: Set<string>; conns: Set<string> } } | null;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
@@ -3100,6 +3104,16 @@ function BySpeedSwitch() {
   return (
     <label className="flex items-center justify-between gap-2 text-xs" title="Each car coloured from red (stopped) through amber to green (at the speed it wants); off, all one colour">
       Colour cars by speed <Switch checked={on} onCheckedChange={set} aria-label="Colour cars by speed" />
+    </label>
+  );
+}
+
+/** the cars' turn signals blinking, or not shown (a broken-down car still flashes) */
+function BlinkersSwitch() {
+  const [on, set] = useUiPath<boolean>("display/carBlinkers");
+  return (
+    <label className="flex items-center justify-between gap-2 text-xs" title="A car turning or changing lane blinks on that side, as V1's; off, no turn signals (a broken-down car still flashes)">
+      Show turn signals <Switch checked={on} onCheckedChange={set} aria-label="Show turn signals" />
     </label>
   );
 }
@@ -3274,7 +3288,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         for (const c of corners) { ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.fill(); }
       }
       // (turning, or changing lane: its signal on that side, at its front and back corners, blinking as V1's; nothing between flashes)
-      else if (car.blink && Math.floor(performance.now() / BLINK_MS) % 2 === 0) {
+      else if (car.blink && st.blinkers && Math.floor(performance.now() / BLINK_MS) % 2 === 0) {
         const back = t ?? car, bl = t ? t.len : car.len, r = Math.max(0.3, 2.2 * px), side = car.blink;
         ctx.fillStyle = BLINK;
         for (const [q, dd, k] of [[car.p, car.d, car.len / 2], [back.p, back.d, -bl / 2]] as const) {

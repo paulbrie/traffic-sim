@@ -99,8 +99,8 @@ export interface SketchUiState {
   layers: SketchLayers;
   /** how the satellite imagery is shown (kept in the browser) */
   background: SatOptions;
-  /** how the map shows things (kept in the browser): the cars coloured by their speed (else all one colour) */
-  display: { carsBySpeed: boolean };
+  /** how the map shows things (kept in the browser): the cars coloured by their speed (else all one colour), their turn signals shown */
+  display: { carsBySpeed: boolean; carBlinkers: boolean };
 }
 
 const editor = (tool: Tool): EditorUi => ({
@@ -130,7 +130,7 @@ export const sketchUi = new DeepSubject<SketchUiState>({
   sketchWindow: { open: false, test: stored<TestOptions>(TEST_KEY, { cut: 70, mode: "replace", run: true }), lastPiece: null },
   layers: sketchLayers$.getValue(),
   background: typeof localStorage === "undefined" ? { brightness: 0.85, source: "esri" } : loadSatOptions(),
-  display: stored<{ carsBySpeed: boolean }>(DISPLAY_KEY, { carsBySpeed: true }),
+  display: stored<{ carsBySpeed: boolean; carBlinkers: boolean }>(DISPLAY_KEY, { carsBySpeed: true, carBlinkers: true }),
 }, { name: "sketchUi" });
 sketchUi.subscribe("display", v => store(DISPLAY_KEY, v), { skipInitialCall: true });
 sketchUi.subscribe("background", v => saveSatOptions(JSON.parse(JSON.stringify(v)) as SatOptions), { skipInitialCall: true });

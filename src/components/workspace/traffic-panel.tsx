@@ -106,6 +106,7 @@ export function TrafficPanel() {
       <Section title="Display">
         {([
           ["bySpeed", "Colour vehicles by speed"],
+          ["blinkers", "Show turn signals"],
           ["reservations", "Show junction reservations"],
           ["labels", "Show stop names"],
           ["junctions", "Show junction numbers and stats"],
