@@ -20,7 +20,7 @@ import { SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from
 import { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
 
 /** the drawing tools */
-export type Tool = "select" | "lane" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing" | "zone";
+export type Tool = "select" | "lane" | "bike" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing" | "zone";
 /** what is selected: lanes, connectors and junctions (a road: its lanes, with its id), or a link, or a zebra crossing */
 export type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null };
 export const NO_SEL: Sel = { lanes: [], connectors: [], junctions: [], road: null };

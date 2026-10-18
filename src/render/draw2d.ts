@@ -95,6 +95,20 @@ export function arrowGlyph(p: Path2D, at: Vec, d: Vec, turns: string) {
   }
 }
 
+/** a bicycle painted on a bike lane, seen side on from above: about 2.2 m along the lane (front along `d`), 1.1 m across, its top to the left of the way of travel (stroked, as `arrowGlyph`) */
+export function bikeGlyph(p: Path2D, at: Vec, d: Vec) {
+  const l = { x: d.y, y: -d.x };
+  // (f along the way of travel, u up the bicycle)
+  const P = (f: number, u: number) => ({ x: at.x + d.x * f + l.x * u, y: at.y + d.y * f + l.y * u });
+  const seg = (pts: [number, number][]) => { const a = P(...pts[0]); p.moveTo(a.x, a.y); for (const q of pts.slice(1)) { const b = P(...q); p.lineTo(b.x, b.y); } };
+  // (the wheels, then the frame: the rear triangle and the main one, the fork up to the handlebar, the saddle)
+  for (const f of [-0.7, 0.7]) { const c = P(f, -0.3); p.moveTo(c.x + 0.38, c.y); p.arc(c.x, c.y, 0.38, 0, Math.PI * 2); }
+  seg([[-0.7, -0.3], [-0.05, -0.3], [-0.25, 0.25], [-0.7, -0.3]]);
+  seg([[-0.25, 0.25], [0.5, 0.25], [-0.05, -0.3]]);
+  seg([[0.7, -0.3], [0.45, 0.42], [0.62, 0.48]]);
+  seg([[-0.42, 0.33], [-0.08, 0.33]]);
+}
+
 export function buildPaths(geo: RoadGeo): PathCache {
   const byLevel = new Map<number, LayerPaths>();
   const L = (on: { lv: number }) => {

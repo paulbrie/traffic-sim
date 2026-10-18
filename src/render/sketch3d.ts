@@ -7,7 +7,7 @@
  */
 import * as THREE from "three";
 import { arrowGlyph } from "@/render/draw2d";
-import type { Palette } from "@/render/palette";
+import { mix, type Palette } from "@/render/palette";
 import type { SketchLayers } from "@/state/sketch-layers";
 import { LEVEL_H } from "@/engine/compile";
 import { junctionSurfaceHoles, nestLoops } from "@/lib/junction-fill";
@@ -128,7 +128,7 @@ export interface Sketch3D { group: THREE.Group; dispose: () => void }
 export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents>, pal: Palette, layers: SketchLayers): Sketch3D {
   const group = new THREE.Group();
   const kerb = new Mesh(), asphalt = new Mesh(), paint = new Mesh(), yellow = new Mesh(), concrete = new Mesh();
-  const red = new Mesh();
+  const red = new Mesh(), bike = new Mesh();
   const cOf = (id: string) => contents.get(id) ?? { lanes: [], connectors: [], roads: [] };
   if (layers.surfaces) {
     // each lane's band, on its kerb; a bridge's sides and pillars where it is up
@@ -136,7 +136,8 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       if (laneLength(l.shape) < 0.3) continue;
       const ring = isFullCircle(l.shape), { pts, hs } = laneLine(sk, l.id, l.shape, 1);
       kerb.ribbon(pts, hs, l.width + KERB, Y.kerb, ring);
-      asphalt.ribbon(pts, hs, l.width, Y.asphalt, ring);
+      // (a bike lane: its asphalt in the 2D tint's green)
+      (l.bike ? bike : asphalt).ribbon(pts, hs, l.width, Y.asphalt, ring);
       if (hs.some(h => h > 0.5)) {
         const hw = (l.width + KERB) / 2;
         let since = 0;
@@ -230,9 +231,9 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
     }
   }
   const lambert = (color: string, offset: number, side: THREE.Side = THREE.FrontSide) => new THREE.MeshLambertMaterial({ color, polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset, side });
-  const mats = [lambert(pal.curb, -1, THREE.DoubleSide), lambert(pal.asphalt, -2, THREE.DoubleSide), lambert(pal.mark, -4, THREE.DoubleSide), lambert(pal.divider, -4, THREE.DoubleSide), lambert("#b9b5ab", 0, THREE.DoubleSide), lambert("#dc2626", -4)];
-  const parts: [Mesh, number, "up" | "computed"][] = [[kerb, 0, "up"], [asphalt, 1, "up"], [paint, 2, "up"], [yellow, 3, "up"], [concrete, 4, "computed"], [red, 5, "up"]];
-  for (const [m, i, nrm] of parts) if (m.idx.length) { const mesh = m.build(mats[i], nrm); mesh.name = ["kerb", "asphalt", "paint", "yellow", "concrete", "red"][i]; group.add(mesh); }
+  const mats = [lambert(pal.curb, -1, THREE.DoubleSide), lambert(pal.asphalt, -2, THREE.DoubleSide), lambert(pal.mark, -4, THREE.DoubleSide), lambert(pal.divider, -4, THREE.DoubleSide), lambert("#b9b5ab", 0, THREE.DoubleSide), lambert("#dc2626", -4), lambert(mix(pal.asphalt, pal.bike, 0.55), -3, THREE.DoubleSide)];
+  const parts: [Mesh, number, "up" | "computed"][] = [[kerb, 0, "up"], [asphalt, 1, "up"], [paint, 2, "up"], [yellow, 3, "up"], [concrete, 4, "computed"], [red, 5, "up"], [bike, 6, "up"]];
+  for (const [m, i, nrm] of parts) if (m.idx.length) { const mesh = m.build(mats[i], nrm); mesh.name = ["kerb", "asphalt", "paint", "yellow", "concrete", "red", "bike"][i]; group.add(mesh); }
   return {
     group,
     dispose: () => { for (const o of group.children) (o as THREE.Mesh).geometry.dispose(); for (const m of mats) m.dispose(); },

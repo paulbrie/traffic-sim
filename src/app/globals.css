@@ -33,6 +33,7 @@
   --map-mark: #f6f1d8;
   --map-divider: #d6a21e;
   --map-bus: #9a4a40;
+  --map-bike: #6f9a2e;
   --map-island: #86ad74;
   --map-select: #1f7a5a;
   --map-building: #d6d3c9;
@@ -74,6 +75,7 @@
     --map-mark: #cfc9ae;
     --map-divider: #c9962a;
     --map-bus: #6a322c;
+    --map-bike: #4c6a22;
     --map-island: #3e6a45;
     --map-select: #3ebb8b;
     --map-building: #3a3f3b;

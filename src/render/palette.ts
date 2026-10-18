@@ -2,7 +2,7 @@ import type { BuildingUse } from "@/engine/types";
 
 export interface Palette {
   ground: string; grid: string; gridMajor: string; asphalt: string; curb: string; mark: string; divider: string;
-  bus: string; island: string; select: string; car: string; truck: string; busVeh: string;
+  bus: string; bike: string; island: string; select: string; car: string; truck: string; busVeh: string;
   go: string; slow: string; stop: string; fg: string; muted: string; bg: string; primary: string;
   sans: string; mono: string; sky: string; building: string; buildingEdge: string;
 }
@@ -29,7 +29,7 @@ export function readPalette(el: Element = document.documentElement): Palette {
   return {
     ground: g("--map-ground", "#e3e8dd"), grid: g("--map-grid", "#d4dbcc"), gridMajor: g("--map-grid-major", "#c4ccba"),
     asphalt: g("--map-asphalt", "#4a5058"), curb: g("--map-curb", "#f1f3ec"), mark: g("--map-mark", "#f6f1d8"),
-    divider: g("--map-divider", "#d6a21e"), bus: g("--map-bus", "#9a4a40"), island: g("--map-island", "#86ad74"),
+    divider: g("--map-divider", "#d6a21e"), bus: g("--map-bus", "#9a4a40"), bike: g("--map-bike", "#6f9a2e"), island: g("--map-island", "#86ad74"),
     select: g("--map-select", "#1f7a5a"), car: g("--veh-car", "#f4f5f2"), truck: g("--veh-truck", "#3d6c8c"), busVeh: g("--veh-bus", "#d99800"),
     go: g("--sig-go", "#23a566"), slow: g("--sig-slow", "#e8a300"), stop: g("--sig-stop", "#d9403f"),
     fg: g("--foreground", "#222"), muted: g("--muted-foreground", "#666"), bg: g("--background", "#fff"), primary: g("--primary", "#1f7a5a"),

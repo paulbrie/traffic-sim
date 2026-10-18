@@ -42,7 +42,7 @@
  * further from where it was drawn a step before than it drove.
  */
 import { speedLimitOf,
-  CHANGE_COST, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
+  CHANGE_COST, drivable, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
   onCrossing, crossingFrame,
   type LaneControl, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
 } from "./lane-sketch";
@@ -621,6 +621,8 @@ export class SketchSim {
   private tuning: Tuning;
   private seed: number;
   constructor(sk: Sketch, public params: SimParams = DEFAULT_SIM, seed = 1) {
+    // (no vehicle on a bike lane for now, ticket #20: the sketch without them)
+    sk = drivable(sk);
     this.seed = params.seed ?? seed;
     this.rnd = mulberry32(this.seed);
     this.pedRnd = mulberry32((this.seed * 7919) ^ 0x9ed5);
@@ -635,6 +637,7 @@ export class SketchSim {
 
   /** the sketch changed: the lanes and connectors rebuilt; vehicles on ones that are gone are taken off */
   setSketch(sk: Sketch) {
+    sk = drivable(sk);
     if (sk === this.sketch) return;
     this.sketch = sk;
     this.posed = null;

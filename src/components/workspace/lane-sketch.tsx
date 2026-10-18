@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Car, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Bike, Car, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { cn } from "@/lib/utils";
 import { unproject } from "@/lib/osm/area";
 import {
-  LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setBusLane, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
@@ -27,7 +27,7 @@ import { changeSketches, clipText, onScratchFocus, readClipText, requestScratchF
 import { testPiece } from "@/lib/test-piece";
 import { offRoute } from "@/lib/route-trace";
 import { isDark, onThemeChange, readPalette, speedColor } from "@/render/palette";
-import { arrowGlyph } from "@/render/draw2d";
+import { arrowGlyph, bikeGlyph } from "@/render/draw2d";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
 import { NumberField, Stepper } from "./fields";
 import { DemandPanel } from "@/components/v2/demand-panel";
@@ -78,6 +78,7 @@ const LAYERS = SKETCH_LAYERS, ALL_LAYERS = ALL_SKETCH_LAYERS;
 const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint: string }[] = [
   { id: "select", key: "V", label: "Select", icon: <MousePointer2 />, hint: "Click a lane, connector or junction (Shift adds) · drag to move · drag points to reshape (Alt-click a lane's point curves it), a connector's ends along their lanes or onto others (double-click a lane, connector or junction edge adds a point, double-click a point removes it) · round handle turns lanes and junctions (Shift: 15°; Q / E) · ⌘C / ⌘X / ⌘V, ⌘D duplicates · double-click a lane selects its road" },
   { id: "lane", key: "L", label: "Lane", icon: <Spline />, hint: "Click the lane's points in the direction of travel · double-click or Enter to finish · Backspace takes the last point back · Esc cancels" },
+  { id: "bike", key: "B", label: "Bike lane", icon: <Bike />, hint: "Click the bike lane's points in the direction of travel (2 m wide; no vehicles run on it for now) · double-click or Enter to finish · Backspace takes the last point back · Esc cancels" },
   { id: "arc", key: "A", label: "Arc", icon: <Waypoints />, hint: "Click the centre, then where the lane starts, then move round the way it goes and click where it ends" },
   { id: "circle", key: "O", label: "Ring", icon: <Circle />, hint: "Click the centre, then the radius: a full ring of lane, anticlockwise (Shift: clockwise)" },
   { id: "roundabout", key: "U", label: "Roundabout", icon: <CircleDashed />, hint: "Click the centre, then the radius: a ring joined to the lanes ending and starting within 30 m outside it (dashed), yield on the ways in, a surface over it; what went straight across taken out. Then all ordinary pieces, to edit as any other; one undo takes it back" },
@@ -103,7 +104,7 @@ type Handle = { kind: "lane" | "bend" | "corner" | "zcorner"; id: string; i: num
   | { kind: "jmid"; id: string; i: number; p: Pt };
 
 type Draft =
-  | { kind: "lane"; pts: Pt[] }
+  | { kind: "lane"; pts: Pt[]; bike?: true }
   | { kind: "arc"; c: Pt; start: { r: number; a0: number; sweep: number; last: number } | null }
   | { kind: "circle"; c: Pt }
   | { kind: "roundabout"; c: Pt }
@@ -776,7 +777,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (d?.kind !== "lane") return;
     const pts = d.pts.filter((q, i) => i === 0 || dist(q, d.pts[i - 1]) > 0.05);
     draft.current = null;
-    if (pts.length >= 2) addShape({ kind: "line", pts });
+    if (pts.length >= 2) addShape({ kind: "line", pts }, d.bike);
     redraw();
   };
   const finishJunction = () => {
@@ -804,9 +805,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     redraw();
   };
-  const addShape = (shape: LaneShape) => {
+  const addShape = (shape: LaneShape, bike?: true) => {
     const id = nextId("l", live.current.sketch.lanes.map(l => l.id));
-    editSketch(s => addLane(s, { id, shape, width: LANE_WIDTH }));
+    editSketch(s => addLane(s, bike ? { id, shape, width: BIKE_LANE_WIDTH, bike } : { id, shape, width: LANE_WIDTH }));
     setSel({ ...NO_SEL, lanes: [id] });
   };
   const deleteSel = () => {
@@ -1258,9 +1259,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         });
         return;
       }
-      case "lane": {
+      case "lane":
+      case "bike": {
         const p = snap(raw).p;
-        if (d?.kind === "lane") d.pts.push(p); else draft.current = { kind: "lane", pts: [p] };
+        if (d?.kind === "lane") d.pts.push(p); else draft.current = tool === "bike" ? { kind: "lane", pts: [p], bike: true } : { kind: "lane", pts: [p] };
         break;
       }
       case "crossing": {
@@ -1479,7 +1481,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
 
   const onDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (tool === "lane") { finishLane(); return; }
+    if (tool === "lane" || tool === "bike") { finishLane(); return; }
     if (tool === "junction") { finishJunction(); return; }
     if (tool === "zone") { finishZone(); return; }
     if (tool !== "select") return;
@@ -2595,11 +2597,14 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
         {inRoad
           ? <p className="text-xs text-muted-foreground">Speed limit: {inRoad.speed ?? sketch.traffic?.speed ?? 50} km/h{inRoad.speed === undefined ? " (the sketch's)" : ""}, its road&apos;s.</p>
           : <SpeedRow sketch={sketch} id={`lane-${lane.id}`} own={lane.speed} of="lane" onSet={v => editSketch(sk => setLaneSpeed(sk, lane.id, v))} />}
-        <label className="flex items-center gap-2 text-xs" htmlFor={`sk-bus-${lane.id}`}>
-          <Switch id={`sk-bus-${lane.id}`} checked={!!lane.bus} onCheckedChange={on => editSketch(sk => setBusLane(sk, lane.id, on))}
-            aria-label="Bus lane" title="Closed to ordinary cars; at the road's border or in the middle" />
-          Bus lane
-        </label>
+        <div className="flex items-center gap-2">
+          <span className="text-xs" id={`sk-use-${lane.id}`}>Lane for</span>
+          <ToggleGroup type="single" aria-labelledby={`sk-use-${lane.id}`} className="h-7" value={laneUse(lane)} onValueChange={v => v && editSketch(sk => setLaneUse(sk, lane.id, v as LaneUse))}>
+            <ToggleGroupItem value="car" className="h-7 px-2 text-xs" title="Ordinary traffic">Cars</ToggleGroupItem>
+            <ToggleGroupItem value="bus" className="h-7 px-2 text-xs" title="Closed to ordinary cars; at the road's border or in the middle">Bus</ToggleGroupItem>
+            <ToggleGroupItem value="bike" className="h-7 px-2 text-xs" title="A bike lane (2 m): no vehicles run on it for now, and the cars leave it and its connectors out">Bike</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
         {sh.kind === "arc" && !lead && (
           <Button size="sm" variant="outline" title="Make it curved points along the same circle, to drag, add and curve like a drawn lane (a ring stays a ring); its connectors stay where they are"
             onClick={() => editSketch(s => arcToPoints(s, lane.id))}><Spline /> Edit as points</Button>
@@ -3347,19 +3352,18 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
             for (const l of lw) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
             ctx.lineWidth = wd + (pass ? 0 : kerbW); ctx.stroke();
           }
-          // bus lanes: tinted over their asphalt, closed to ordinary cars
-          if (pass) {
-            const busByWidth = new Map<number, typeof roadLanes>();
-            for (const l of ls) if (l.bus) busByWidth.set(l.width, [...(busByWidth.get(l.width) ?? []), l]);
-            if (busByWidth.size) {
-              ctx.strokeStyle = pal.bus; ctx.globalAlpha = 0.55;
-              for (const [wd, lw] of busByWidth) {
-                ctx.beginPath();
-                for (const l of lw) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
-                ctx.lineWidth = wd; ctx.stroke();
-              }
-              ctx.globalAlpha = 1; ctx.strokeStyle = asphalt;
+          // bus lanes (closed to ordinary cars) and bike lanes: tinted over their asphalt
+          if (pass) for (const [use, tint] of [["bus", pal.bus], ["bike", pal.bike]] as const) {
+            const tinted = new Map<number, typeof roadLanes>();
+            for (const l of ls) if (laneUse(l) === use) tinted.set(l.width, [...(tinted.get(l.width) ?? []), l]);
+            if (!tinted.size) continue;
+            ctx.strokeStyle = tint; ctx.globalAlpha = 0.55;
+            for (const [wd, lw] of tinted) {
+              ctx.beginPath();
+              for (const l of lw) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
+              ctx.lineWidth = wd; ctx.stroke();
             }
+            ctx.globalAlpha = 1; ctx.strokeStyle = asphalt;
           }
         }
         // the markings, as on the plan's map: dashed lines between lanes, the centre line in its yellow
@@ -3453,6 +3457,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       const pts = samples(l.shape, 0.5), closed = isFullCircle(l.shape);
       ctx.lineCap = "butt"; ctx.lineJoin = "round"; ctx.strokeStyle = col.lane;
       path(pts); if (closed) ctx.closePath();
+      // (a bike lane's band in its green, so it reads apart from the cars' lanes)
+      if (l.bike) { ctx.strokeStyle = pal.bike; ctx.globalAlpha = 0.35; ctx.lineWidth = l.width; ctx.stroke(); ctx.strokeStyle = col.lane; }
       ctx.globalAlpha = 0.12; ctx.lineWidth = l.width; ctx.stroke(); ctx.globalAlpha = 1;
       ctx.lineWidth = Math.max(0.2, 2 * px); ctx.stroke();
       const L = laneLength(l.shape), gap = Math.max(6, 60 * px), k = Math.max(0.5, 5 * px);
@@ -3469,6 +3475,19 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       const ap = new Path2D();
       for (const a of turnArrows(sk)) if (vis.lanes.has(a.lane) && inPass(a.level) && a.p.x > viewBox.x0 && a.p.x < viewBox.x1 && a.p.y > viewBox.y0 && a.p.y < viewBox.y1) arrowGlyph(ap, a.p, a.d, a.turns);
       ctx.strokeStyle = pal.mark; ctx.lineWidth = 0.22; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke(ap); ctx.lineCap = "butt"; ctx.lineJoin = "miter";
+    }
+    // a bicycle painted along each bike lane, every 25 m, close up
+    if (S && !far && st.layers.markings && v.scale >= 3) {
+      const bp = new Path2D();
+      for (const l of sk.lanes) {
+        if (!l.bike || !vis.lanes.has(l.id) || !lIn(l)) continue;
+        const L = laneLength(l.shape);
+        for (let a = Math.min(8, L / 2); a < L; a += 25) {
+          const { p, d } = pointAt(l.shape, a);
+          if (p.x > viewBox.x0 && p.x < viewBox.x1 && p.y > viewBox.y0 && p.y < viewBox.y1) bikeGlyph(bp, p, d);
+        }
+      }
+      ctx.strokeStyle = pal.mark; ctx.lineWidth = 0.12; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke(bp); ctx.lineCap = "butt"; ctx.lineJoin = "miter";
     }
     // stop and yield lines across lane ends: on the surfaces, white as on the plan's map (a solid bar, a
     // dashed one); otherwise a red bar, or a row of teeth pointing at the traffic coming up
@@ -3735,7 +3754,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   ctx.strokeStyle = col.sel; ctx.fillStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.setLineDash([6 * px, 4 * px]);
   if (d?.kind === "lane") {
     path(cur ? [...d.pts, cur.p] : d.pts);
-    ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.lineJoin = "round"; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.globalAlpha = 0.35; ctx.lineWidth = d.bike ? BIKE_LANE_WIDTH : LANE_WIDTH; ctx.setLineDash([]); ctx.lineJoin = "round"; ctx.stroke(); ctx.globalAlpha = 1;
   } else if (d?.kind === "junction") {
     const pts = cur ? [...d.pts, cur.p] : d.pts;
     translucentArea(ctx, pts, col.sel, px, EDITED_AREA);
@@ -3783,7 +3802,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   ctx.setLineDash([]);
   if (d && "c" in d) dot(d.c, 3 * px, col.sel);
-  if (cur && (tool === "lane" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "zone" || tool === "crossing")) {
+  if (cur && (tool === "lane" || tool === "bike" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "zone" || tool === "crossing")) {
     ctx.beginPath(); ctx.arc(cur.p.x, cur.p.y, (cur.snapped ? 5 : 3) * px, 0, Math.PI * 2);
     ctx.strokeStyle = col.sel; ctx.fillStyle = col.sel; ctx.lineWidth = 1.5 * px; if (cur.snapped) ctx.stroke(); else ctx.fill();
   }
