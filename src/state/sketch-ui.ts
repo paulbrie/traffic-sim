@@ -20,9 +20,9 @@ import { SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from
 import { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
 
 /** the drawing tools */
-export type Tool = "select" | "lane" | "bike" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing" | "zone";
-/** what is selected: lanes, connectors and junctions (a road: its lanes, with its id), or a link, or a zebra crossing */
-export type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null };
+export type Tool = "select" | "lane" | "bike" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing" | "zone" | "stop";
+/** what is selected: lanes, connectors and junctions (a road: its lanes, with its id), or a link, a zebra crossing, or a bus stop */
+export type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null; /** a bus stop, selected on its own */ stop?: string | null };
 export const NO_SEL: Sel = { lanes: [], connectors: [], junctions: [], road: null };
 
 /** an editor's state: the plan's (`plan`; a V1 plan's sketch window: `whole`) or the Sketch window's (`scratch`) */

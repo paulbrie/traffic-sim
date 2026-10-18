@@ -95,6 +95,10 @@ export interface Sketch {
   crossings?: SketchCrossing[];
   /** journeys between a particular way in and way out (see `SketchJourney`) */
   journeys?: SketchJourney[];
+  /** bus stops, a point on a lane (see `SketchStop`) */
+  stops?: SketchStop[];
+  /** bus lines, each a loop of stops (see `SketchBusLine`) */
+  busLines?: SketchBusLine[];
   /** junctions' lights run together (see `SketchSignalGroup`) */
   signalGroups?: SketchSignalGroup[];
   /** areas drawn and labelled (neighbourhoods, zones; see sketch-zones.ts): for reading the plan, the cars don't see them */
@@ -133,6 +137,46 @@ export function deleteJourney(sk: Sketch, id: string): Sketch {
   const rest = (sk.journeys ?? []).filter(x => x.id !== id);
   const { journeys: _, ...out } = sk;
   return rest.length ? { ...out, journeys: rest } : out;
+}
+/** a bus stop: a point on a lane, `s` metres from its start */
+export interface SketchStop { id: string; name: string; lane: string; s: number }
+/** a bus line: a loop of stops (back to the first after the last), its colour on the map, and `buses` running on it at once */
+export interface SketchBusLine { id: string; name: string; color: string; stops: string[]; buses: number }
+export const BUS_LINE_COLORS = ["#d99800", "#2f6fb5", "#9a4a40", "#3f8f5f", "#8a4fae", "#c0527a"];
+/** a new stop on `lane`, `s` metres along it (the next free id) */
+export function addStop(sk: Sketch, lane: string, s: number): [Sketch, SketchStop] {
+  const used = new Set((sk.stops ?? []).map(x => x.id));
+  let n = used.size + 1;
+  while (used.has(`stop${n}`)) n++;
+  const stop: SketchStop = { id: `stop${n}`, name: `Stop ${n}`, lane, s };
+  return [{ ...sk, stops: [...(sk.stops ?? []), stop] }, stop];
+}
+export function updateStop(sk: Sketch, id: string, patch: Partial<Omit<SketchStop, "id">>): Sketch {
+  return { ...sk, stops: (sk.stops ?? []).map(x => (x.id === id ? { ...x, ...patch } : x)) };
+}
+export function deleteStop(sk: Sketch, id: string): Sketch {
+  const stops = (sk.stops ?? []).filter(x => x.id !== id);
+  const busLines = (sk.busLines ?? []).map(l => (l.stops.includes(id) ? { ...l, stops: l.stops.filter(x => x !== id) } : l));
+  const { stops: _s, busLines: _b, ...out } = sk;
+  return { ...out, ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}) };
+}
+/** a new bus line, empty of stops (the next free id, the next unused preset colour) */
+export function addBusLine(sk: Sketch): [Sketch, SketchBusLine] {
+  const used = new Set((sk.busLines ?? []).map(x => x.id));
+  let n = used.size + 1;
+  while (used.has(`line${n}`)) n++;
+  const usedColors = new Set((sk.busLines ?? []).map(x => x.color));
+  const color = BUS_LINE_COLORS.find(c => !usedColors.has(c)) ?? BUS_LINE_COLORS[n % BUS_LINE_COLORS.length];
+  const line: SketchBusLine = { id: `line${n}`, name: `Line ${n}`, color, stops: [], buses: 2 };
+  return [{ ...sk, busLines: [...(sk.busLines ?? []), line] }, line];
+}
+export function updateBusLine(sk: Sketch, id: string, patch: Partial<Omit<SketchBusLine, "id">>): Sketch {
+  return { ...sk, busLines: (sk.busLines ?? []).map(x => (x.id === id ? { ...x, ...patch } : x)) };
+}
+export function deleteBusLine(sk: Sketch, id: string): Sketch {
+  const rest = (sk.busLines ?? []).filter(x => x.id !== id);
+  const { busLines: _, ...out } = sk;
+  return rest.length ? { ...out, busLines: rest } : out;
 }
 /**
  * A zebra crossing, as V1's: from one kerb `a` to the other `b`, `width` metres along the traffic, `peds`
@@ -1981,7 +2025,8 @@ export class RouteTable {
   /** per lane: the lanes it is beside of, and how a place on those maps onto it */
   private besideOf = new Map<string, { from: string; map: (s: number) => number }[]>();
 
-  constructor(sk: Sketch) {
+  /** `bus`: buses may route onto and change onto a `bus` lane too (ordinary cars never can) */
+  constructor(sk: Sketch, private bus = false) {
     // (no vehicle on a bike lane, ticket #20: they and their connectors are no part of any route)
     sk = drivable(sk);
     for (const l of sk.lanes) this.lanes.set(l.id, { lane: l, len: laneLength(l.shape), ring: isFullCircle(l.shape), outs: [], ins: [], beside: [] });
@@ -1997,8 +2042,8 @@ export class RouteTable {
     // (lanes side by side in a road, the same way: where on the other a place on one is beside; two rings, a two-lane roundabout's)
     for (const r of sk.roads) for (const a of r.lanes) for (const b of r.lanes) {
       const A = this.lanes.get(a), Bl = this.lanes.get(b);
-      // (a bus lane is no lane for an ordinary car's route to change into; leaving one is fine)
-      if (!A || !Bl || a === b || A.ring !== Bl.ring || (Bl.lane.bus && !A.lane.bus)) continue;
+      // (a bus lane is no lane for an ordinary car's route to change into; leaving one is fine; a bus may change into one)
+      if (!A || !Bl || a === b || A.ring !== Bl.ring || (Bl.lane.bus && !A.lane.bus && !this.bus)) continue;
       // (rings: beside all the way round, as the simulation has them)
       const near = (f: number) => { const m = pointAt(A.lane.shape, A.len * f), q = nearestOn(Bl.lane.shape, m.p), d = pointAt(Bl.lane.shape, q.s).d; return q.d <= (A.lane.width + Bl.lane.width) / 2 + 0.75 && m.d.x * d.x + m.d.y * d.y >= 0.5; };
       if (!(A.ring ? [0, 1, 2, 3, 4, 5, 6, 7].every(k => near(k / 8)) : near(0.5))) continue;
@@ -2038,8 +2083,8 @@ export class RouteTable {
     /** the connectors that come onto lane `lane` (or, with a change, onto a lane beside it) before `s`, with what they would cost from there */
     const back = (laneId: string, s: number, onward: number) => {
       const L = this.lanes.get(laneId)!;
-      // (a bus lane: no ordinary car's route drives on it, not even in passing)
-      if (L.lane.bus) return;
+      // (a bus lane: no ordinary car's route drives on it, not even in passing; a bus's route may)
+      if (L.lane.bus && !this.bus) return;
       for (const i of L.ins) { const a = this.reach(L, i.s, s); if (a !== null) push(this.connLen.get(i.id)! + a + onward, i.id); }
       // (from a lane beside it: coming onto that one, then changing over)
       for (const b of this.besideOf.get(laneId) ?? []) {
@@ -2288,6 +2333,18 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const trucks = num(j.trucks) ? Math.round(Math.min(100, Math.max(0, j.trucks))) : 0;
     journeys.push({ id: j.id, from: j.from, to: j.to, rate: Math.round(Math.min(5000, Math.max(0, j.rate))), ...(trucks ? { trucks } : {}) });
   }
+  const stops: SketchStop[] = [];
+  for (const x of Array.isArray(o.stops) ? o.stops : []) {
+    const l = str(x?.lane) ? lanes.find(y => y.id === x.lane) : undefined;
+    if (!str(x?.id) || !l || !num(x?.s) || stops.some(y => y.id === x.id)) continue;
+    stops.push({ id: x.id, name: typeof x.name === "string" && x.name.trim() ? x.name.trim().slice(0, 80) : x.id, lane: l.id, s: Math.max(0, Math.min(laneLength(l.shape), x.s)) });
+  }
+  const busLines: SketchBusLine[] = [];
+  for (const x of Array.isArray(o.busLines) ? o.busLines : []) {
+    if (!str(x?.id) || busLines.some(y => y.id === x.id)) continue;
+    const lineStops = (Array.isArray(x.stops) ? x.stops : []).filter((s: unknown): s is string => typeof s === "string" && stops.some(y => y.id === s));
+    busLines.push({ id: x.id, name: typeof x.name === "string" && x.name.trim() ? x.name.trim().slice(0, 80) : x.id, color: typeof x.color === "string" && /^#[0-9a-f]{6}$/i.test(x.color) ? x.color.toLowerCase() : BUS_LINE_COLORS[0], stops: lineStops, buses: num(x.buses) ? Math.round(Math.min(30, Math.max(0, x.buses))) : 0 });
+  }
   const signalGroups: SketchSignalGroup[] = [], grouped = new Set<string>();
   for (const g of Array.isArray(o.signalGroups) ? o.signalGroups : []) {
     if (!str(g?.id) || signalGroups.some(y => y.id === g.id) || !Array.isArray(g.members)) continue;
@@ -2318,7 +2375,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const zones = sanitizeZones(o.zones);
   const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.zones?.length) ? sc : null;
   if (!lanes.length && !junctions.length && !geo && !crossings.length && !zones.length && !scratch && !sketches.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
 }
 
 // ---------------------------------------------------------------- elevation (as v1's)
