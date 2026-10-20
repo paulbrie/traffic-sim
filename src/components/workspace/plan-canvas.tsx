@@ -1263,7 +1263,7 @@ export function PlanCanvas() {
         drawScene(ctx, cam, pal, geo!, paths!, net, simController.compiled, simController.sim, {
           selection: u.selection, hover, showNodes: u.tool !== "pan", draft: draftOv,
           pendingPoint: u.tool === "road" && pending ? pending.p : null,
-          reservations: u.display.reservations, bySpeed: u.display.bySpeed, blinkers: u.display.blinkers, labels: u.display.labels, junctions: u.display.junctions,
+          reservations: u.display.reservations, bySpeed: u.display.bySpeed, blinkers: u.display.blinkers, carNumbers: u.display.carNumbers, labels: u.display.labels, junctions: u.display.junctions,
           snapStep: u.snap.step, gridOn: u.snap.grid,
           underlay: ul ? { u: ul, img: ulImg, editing: u.tool === "image" && !u.calib.active, hover: ulHover } : null,
           calib: u.calib.active ? { a: u.calib.a, b: u.calib.b, cursor: cursorWorld } : null,
@@ -1356,6 +1356,8 @@ export function PlanCanvas() {
       el.style.width = `${nice * c.scale}px`;
       el.dataset.label = nice >= 1000 ? `${nice / 1000} km` : `${nice} m`;
       const lab = el.querySelector("span"); if (lab) lab.textContent = el.dataset.label;
+      const zoom = wrap.querySelector<HTMLElement>("[data-zoomlevel]");
+      if (zoom) zoom.textContent = `${c.scale >= 10 ? Math.round(c.scale) : c.scale.toFixed(1)} px/m`;
     }
 
     return () => {
@@ -1395,6 +1397,7 @@ export function PlanCanvas() {
         <div data-scalebar className="h-1.5 border-x-2 border-b-2 border-foreground/70" style={{ width: 100 }}>
           <span className="relative -top-4 text-[11px] font-medium text-foreground/80 tabular">100 m</span>
         </div>
+        <span data-zoomlevel className="text-[11px] font-medium text-foreground/80 tabular" />
       </div>
     </div>
   );

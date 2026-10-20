@@ -1976,7 +1976,7 @@ export class SketchSim {
         if (g < gap) { gap = g; lead = speed; why = typeof reason === "string" ? reason : `car ${reason.id}`; if (W) won = info ?? (typeof reason === "string" ? null : { kind: "follow", car: reason.id }); }
       };
       /** the zones ahead where its path meets another (not to stop in), and where those it gives way at start */
-      const zones: { s: number; e: number; clear?: boolean }[] = [], yields: { at: number; why: string; info?: Won }[] = [];
+      const zones: { s: number; e: number; clear?: boolean }[] = [], yields: { at: number; why: string; info?: Won; speed?: number }[] = [];
       // (a car stops 0.5 m short of a zone; one closer than 0.1 m, or too fast to stop before it, is committed)
       const canStopBefore = (d: number) => d >= Math.max(0.1, (v.v * v.v) / 8 - 1);
       const forced = v.forceUntil > this.t;
@@ -2285,17 +2285,26 @@ export class SketchSim {
       const leadHeld = !!leadWhy && /^(zone |merge |keeping clear|signal |stop |pedestrians)/.test(leadWhy);
       // (and, the car ahead on the move or not, a crossing of a way off an inner ring: kept clear unless there's room past it, as a
       // marked box (T190))
-      const slow = lead < 3 || leadHeld;
-      if ((slow || zones.some(z => z.clear)) && !forced) {
+      // (hysteresis: already holding for this, a leader easing away only lets it go once plainly moving, not the moment
+      // its speed ticks back over 3 — else noise in a slowly accelerating leader's speed flicks this on and off)
+      const wasClear = /^keeping clear/.test(whyWas.get(v) ?? "");
+      const slow = lead < (wasClear ? 5 : 3) || leadHeld;
+      // (already standing in the box, unable to back out, and stuck there past patience: no sense holding it there any
+      // longer for a crossing that still isn't clearing — it pushes on rather than blocking the junction indefinitely)
+      const stuckInBox = v.blocking && v.still > GIVE_PATIENCE;
+      if ((slow || zones.some(z => z.clear)) && !forced && !stuckInBox) {
         const runs: { s: number; e: number; clear?: boolean }[] = [];
         for (const z of [...zones].sort((p, q) => p.s - q.s)) {
           const last = runs[runs.length - 1];
           if (last && z.s <= last.e) { last.e = Math.max(last.e, z.e); last.clear ||= z.clear; } else runs.push({ ...z });
         }
-        for (const z of runs) if ((slow || z.clear) && z.s > 0.1 && canStopBefore(z.s) && gap < z.e + reach(v) + 1) yields.push({ at: z.s, why: `keeping clear (${why})`, ...(W ? { info: { kind: "keep-clear" as const, ...(why ? { detail: why } : {}), ...((won as Won | null)?.car !== undefined ? { car: (won as Won | null)!.car } : {}), ...((won as Won | null)?.edge ? { edge: (won as Won | null)!.edge } : {}) } } : {}) });
+        // (the leader itself still moving, just slow, not held up for its own reason nor a zone kept clear on patience: ease
+        // to its pace at the zone's edge rather than planting a dead stop there, as a driver easing off behind one would, not braking hard)
+        const holdSpeed = (z: { clear?: boolean }) => (z.clear || leadHeld ? 0 : lead);
+        for (const z of runs) if ((slow || z.clear) && z.s > 0.1 && canStopBefore(z.s) && gap < z.e + reach(v) + 1) yields.push({ at: z.s, why: `keeping clear (${why})`, speed: holdSpeed(z), ...(W ? { info: { kind: "keep-clear" as const, ...(why ? { detail: why } : {}), ...((won as Won | null)?.car !== undefined ? { car: (won as Won | null)!.car } : {}), ...((won as Won | null)?.edge ? { edge: (won as Won | null)!.edge } : {}) } } : {}) });
       }
       // giving way: stopping short of the zone, and of every other zone its body would block there
-      for (const { at: x, why: reason, info } of yields) {
+      for (const { at: x, why: reason, info, speed: ySpeed } of yields) {
         let t = x - 0.5;
         // (a zone starting just ahead counts too: one stopped half a metre short of it, then let on, would stop in it)
         for (let i = 0; i < 12; i++) {
@@ -2303,8 +2312,8 @@ export class SketchSim {
           if (!z) break;
           t = z.s - 0.5;
         }
-        // (an obstacle with its back at `t + S0`: the front stops at `t`)
-        behind(Math.max(0.1, t + S0), 0, reason, info);
+        // (an obstacle with its back at `t + S0`: the front stops at `t`, or eases to `ySpeed` there if that's not a full stop)
+        behind(Math.max(0.1, t + S0), ySpeed ?? 0, reason, info);
       }
       // (let go from waiting at a zone, nearly standing: committed to going through, so it doesn't change its mind on the next step)
       const wasWaiting = /^(zone |keeping clear)/.test(whyWas.get(v) ?? "");
@@ -2784,9 +2793,10 @@ export class SketchSim {
 
   /**
    * A car's turn signal, as V1's (src/engine/sim, `blinker`): -1 left, 1 right, 0 off. Lit while it changes lane
-   * (toward the lane it slides to, until it is within half a metre of it), within 45 m before the connector it
-   * turns onto, and while it turns along it; never round a roundabout (a ring, or a connector onto or off one).
-   * Broken down: off here (its hazard lights are `broken`). Reads the car only, so it can't change a run.
+   * (toward the lane it slides to, until it is within half a metre of it; or, still waiting for a gap, toward the
+   * lane it means to), within 45 m before the connector it turns onto, and while it turns along it; never round a
+   * roundabout (a ring, or a connector onto or off one). Broken down: off here (its hazard lights are `broken`).
+   * Reads the car only, so it can't change a run.
    */
   blinker(v: SimVehicle): -1 | 0 | 1 {
     if (v.broken !== null) return 0;
@@ -2796,6 +2806,16 @@ export class SketchSim {
       if (k * Math.hypot(v.shift.x, v.shift.y) > 0.5) {
         const { d } = this.poseOf(v), r = -v.shift.x * -d.y + -v.shift.y * d.x;
         return r > 0 ? 1 : -1;
+      }
+    }
+    // (meaning to change lane, not yet sliding over: signals toward the lane it's waiting for a gap into; clamped
+    // into the neighbour's overlap, since `v.pos` may by now sit outside it, but the side it's on doesn't change)
+    if (v.why?.startsWith("changing to lane:")) {
+      const h = this.hop(v), acrossPos = h && this.across(h.n, Math.min(Math.max(v.pos, h.n.a0), h.n.a1));
+      if (h && acrossPos !== null) {
+        const here = v.edge.locate(v.pos), there = h.n.lane.locate(acrossPos);
+        const r = (there.p.x - here.p.x) * -here.d.y + (there.p.y - here.p.y) * here.d.x;
+        if (r) return r > 0 ? 1 : -1;
       }
     }
     const c = v.edge.kind === "conn" ? v.edge : v.exit && v.exit.from && v.exit.from.s - v.pos < 45 ? v.exit : null;

@@ -99,8 +99,8 @@ export interface SketchUiState {
   layers: SketchLayers;
   /** how the satellite imagery is shown (kept in the browser) */
   background: SatOptions;
-  /** how the map shows things (kept in the browser): the cars coloured by their speed (else all one colour), their turn signals shown */
-  display: { carsBySpeed: boolean; carBlinkers: boolean };
+  /** how the map shows things (kept in the browser): the cars coloured by their speed (else all one colour), their turn signals shown, their number printed above them, live traffic conditions (TomTom) polled and shown over the plan */
+  display: { carsBySpeed: boolean; carBlinkers: boolean; carNumbers: boolean; liveTraffic: boolean };
 }
 
 const editor = (tool: Tool): EditorUi => ({
@@ -113,7 +113,7 @@ const editor = (tool: Tool): EditorUi => ({
 export const freshEditor = (): EditorUi => editor("select");
 
 /** the inspector's panels (their ids): the only ones that can be folded away */
-export const PANEL_IDS = ["selection", "car", "crossing", "zone", "test-in-sketch", "background", "traffic", "fuel", "junction-results", "road-results", "demand", "route"];
+export const PANEL_IDS = ["selection", "car", "crossing", "zone", "test-in-sketch", "background", "traffic", "display", "fuel", "junction-results", "road-results", "demand", "route"];
 // (kept in the browser: the panels folded away, Test in Sketch's options)
 const PANELS_KEY = "trafficsim:v2-closed-panels", TEST_KEY = "laneSketch:testInSketch", DISPLAY_KEY = "v2:display";
 const stored = <T,>(key: string, fallback: T): T => {
@@ -130,7 +130,7 @@ export const sketchUi = new DeepSubject<SketchUiState>({
   sketchWindow: { open: false, test: stored<TestOptions>(TEST_KEY, { cut: 70, mode: "replace", run: true }), lastPiece: null },
   layers: sketchLayers$.getValue(),
   background: typeof localStorage === "undefined" ? { brightness: 0.85, source: "esri" } : loadSatOptions(),
-  display: stored<{ carsBySpeed: boolean; carBlinkers: boolean }>(DISPLAY_KEY, { carsBySpeed: true, carBlinkers: true }),
+  display: stored<{ carsBySpeed: boolean; carBlinkers: boolean; carNumbers: boolean; liveTraffic: boolean }>(DISPLAY_KEY, { carsBySpeed: true, carBlinkers: true, carNumbers: false, liveTraffic: false }),
 }, { name: "sketchUi" });
 sketchUi.subscribe("display", v => store(DISPLAY_KEY, v), { skipInitialCall: true });
 sketchUi.subscribe("background", v => saveSatOptions(JSON.parse(JSON.stringify(v)) as SatOptions), { skipInitialCall: true });
