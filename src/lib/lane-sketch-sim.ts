@@ -318,6 +318,11 @@ export interface SimVehicle {
   /** when it last changed lane, and the lane it left (its body still partly over it for `SHIFT_T`) */
   changedAt: number;
   left: Edge | null;
+  /** its goal's key (a connector's, or `end:<lane>`), and since when it has wanted it: how long it has been trying for
+   * the same lane change, moving or not (unlike `still`, which only counts time stood dead still - a car circling a
+   * ring, never stopping, could otherwise want the one change forever and never be noticed; ticket #56) */
+  goalKey: string | null;
+  goalSince: number;
   /** where it was drawn before changing lane, from where it would be on the new one (drawn sliding over) */
   shift: Pt | null;
   /** seconds without moving */
@@ -1159,7 +1164,7 @@ export class SketchSim {
     // (room at the start: nothing there yet, its back clear of where this one's front comes in)
     if (this.vehicles.some(w => (w.edge === e && w.pos - w.len < len + S0 + 1) || (w.left === e && Math.abs(w.pos) < len + S0 + 1))) return null;
     const v0 = Math.min(e.vmax, (0.6 * this.params.speed) / 3.6);
-    const v: SimVehicle = { id: this.testId, seenX: NaN, seenY: NaN, edge: e, pos: 0, v: v0, exit: null, goal: null, dest: to, changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, commitUntil: 0, gap: Infinity, vf: 1, truck: false, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: null, turn: null, born: this.t, fuel: 0, broken: null, bus: false, busLine: null, stopIdx: 0, dwell: 0, pax: 0, cap: 0 };
+    const v: SimVehicle = { id: this.testId, seenX: NaN, seenY: NaN, edge: e, pos: 0, v: v0, exit: null, goal: null, dest: to, changedAt: -Infinity, left: null, goalKey: null, goalSince: -Infinity, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, commitUntil: 0, gap: Infinity, vf: 1, truck: false, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: null, turn: null, born: this.t, fuel: 0, broken: null, bus: false, busLine: null, stopIdx: 0, dwell: 0, pax: 0, cap: 0 };
     this.plan(v);
     // (no way from there: not sent)
     if (from !== to && !v.goal) return null;
@@ -1221,7 +1226,7 @@ export class SketchSim {
    * Car `v`, stuck waiting to change to `to`, goes where its own lane leads instead: out at its end if that is a way out, else on by
    * one of the ways that leave it, to an exit that way drawn by the exits' shares. Counted as a deadlock broken (T194).
    */
-  private missTurn(v: SimVehicle, to: Edge): boolean {
+  private missTurn(v: SimVehicle, to: Edge, wanted: number): boolean {
     const rt = this.routes, was = v.dest, goal = v.goal, exit = v.exit;
     if (!rt) return false;
     v.dest = null;
@@ -1235,8 +1240,8 @@ export class SketchSim {
       v.dest = opts.find(ex => (r -= this.exitWeights.get(ex) ?? 1) <= 0) ?? opts[opts.length - 1] ?? null;
     }
     this.deadlocks++;
-    this.note({ what: "change", car: v.id, gaveUp: was, to: to.key, waited: r2(v.still), goal: g.conn?.key ?? `end of ${g.lane.key}` });
-    this.problem("deadlock", v, `stuck ${Math.round(v.still)} s changing to ${to.key}, no gap: gave up going to lane:${was} and went ${g.conn ? `by ${g.conn.key}` : `out at the end of ${g.lane.key}`} instead`);
+    this.note({ what: "change", car: v.id, gaveUp: was, to: to.key, waited: r2(wanted), goal: g.conn?.key ?? `end of ${g.lane.key}` });
+    this.problem("deadlock", v, `stuck ${Math.round(wanted)} s changing to ${to.key}, no gap: gave up going to lane:${was} and went ${g.conn ? `by ${g.conn.key}` : `out at the end of ${g.lane.key}`} instead`);
     return true;
   }
   /** the lanes a car going to exit `dest` may leave by (T194) */
@@ -1998,7 +2003,7 @@ export class SketchSim {
       // (no faster than it can stop from behind the last car in, nor than it can stop before the first crossing on its lane)
       const zone = s.lane.conflicts.reduce((m, k) => (k.join || k.at - k.before < 0 ? m : Math.min(m, k.at - k.before)), Infinity);
       const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - S0 - 1)), Math.sqrt(2 * B_COMF * Math.max(0, zone - 1)));
-      const v: SimVehicle = { id: this.nextId++, seenX: NaN, seenY: NaN, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, commitUntil: 0, gap: Infinity, vf: truck ? this.tuning.truckSpeed / 100 : this.tuning.speedVsLimit, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, turn: null, born: this.t, fuel: 0, broken: null, bus: false, busLine: null, stopIdx: 0, dwell: 0, pax: 0, cap: 0 };
+      const v: SimVehicle = { id: this.nextId++, seenX: NaN, seenY: NaN, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, goalKey: null, goalSince: -Infinity, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, commitUntil: 0, gap: Infinity, vf: truck ? this.tuning.truckSpeed / 100 : this.tuning.speedVsLimit, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey ?? null, turn: null, born: this.t, fuel: 0, broken: null, bus: false, busLine: null, stopIdx: 0, dwell: 0, pax: 0, cap: 0 };
       if (jw) this.journeys.find(j => j.def.id === jw.journey)!.sent++;
       else s.truck = undefined;
       // (speeds varying: its own share of the lanes' speed; no random number drawn when they don't, so runs stay as they were)
@@ -2027,7 +2032,7 @@ export class SketchSim {
       const p = lane.locate(stop.s);
       if (near(p.p, BUS_LEN).some(w => w.edge === lane && Math.abs(w.pos - stop.s) < (BUS_LEN + w.len) / 2 + 2)) continue;
       const v: SimVehicle = {
-        id: this.nextId++, seenX: NaN, seenY: NaN, edge: lane, pos: stop.s, v: 0, exit: null, goal: null, dest: stop.lane, changedAt: -Infinity, left: null, shift: null,
+        id: this.nextId++, seenX: NaN, seenY: NaN, edge: lane, pos: stop.s, v: 0, exit: null, goal: null, dest: stop.lane, changedAt: -Infinity, left: null, goalKey: null, goalSince: -Infinity, shift: null,
         still: 0, run: BUS_LEN, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, commitUntil: 0, gap: Infinity, vf: this.tuning.truckSpeed / 100,
         truck: false, len: BUS_LEN, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: null, turn: null, born: this.t, fuel: 0, broken: null,
         bus: true, busLine: line.id, stopIdx: have % line.stops.length, dwell: 1, pax: Math.floor(this.rnd() * 10), cap: BUS_CAP,
@@ -2510,17 +2515,22 @@ export class SketchSim {
       const e = v.edge;
       if (e.kind !== "lane" || !e.neighbors.length || v.broken !== null || v.run < v.len || this.t - v.changedAt < SHIFT_T + 1) continue;
       const h = this.hop(v), { gap, lead } = held.get(v)!;
+      // (how long it has wanted this same lane change, moving or not: a car circling a ring while waiting for a gap
+      // never stops, so `still` alone never catches it - ticket #56)
+      const gk = v.goal ? (v.goal.conn?.key ?? `end:${v.goal.lane.key}`) : null;
+      if (gk !== v.goalKey) { v.goalKey = gk; v.goalSince = this.t; }
+      const wanted = this.t - v.goalSince;
       if (h) {
         if (!h.n.round && v.pos > h.n.a1 - 1) { this.plan(v); continue; }
         // (kept waiting to change lane: somewhere else it can go from its own lane will do)
-        if (v.still > 8 && v.why?.startsWith("changing to")) {
+        if (wanted > 8 && v.why?.startsWith("changing to")) {
           const was = v.goal;
           this.plan(v, true);
-          if (v.goal) { this.note({ what: "change", car: v.id, gaveUp: was?.conn?.key ?? null, to: h.n.lane.key, waited: r2(v.still), goal: v.goal.conn?.key ?? `end of ${v.goal.lane.key}` }); continue; }
+          if (v.goal) { this.note({ what: "change", car: v.id, gaveUp: was?.conn?.key ?? null, to: h.n.lane.key, waited: r2(wanted), goal: v.goal.conn?.key ?? `end of ${v.goal.lane.key}` }); continue; }
           v.goal = was; v.exit = null;
           // (and still none after LANE_STUCK s, nowhere to go but the lane beside, the car there stuck as it is: it gives up where it was
           // going, as a driver who misses a turn does, and goes where its own lane leads; out, if its end is a way out (T194))
-          if (v.still > LANE_STUCK && this.missTurn(v, h.n.lane)) continue;
+          if (wanted > LANE_STUCK && this.missTurn(v, h.n.lane, wanted)) continue;
         }
         // (keeping its ring (`ringKeepLane`): over to the outer ring only just before its way off; missing it, once more round)
         if (h.n.round && this.tuning.ringKeepLane >= 0.5 && h.n.lane.len > e.len) {

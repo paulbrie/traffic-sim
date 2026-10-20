@@ -5,7 +5,7 @@
  * another lane or connector, has chosen another connector, or is going elsewhere (a reroute); between, the first stretch
  * only is cut to where it is. Framework-free.
  */
-import { connectorPts, dist, drivable, laneById, pointAt, speedLimitOf, type Pt, type Sketch } from "./lane-sketch";
+import { connectorPts, dist, drivable, isFullCircle, laneById, laneLength, pointAt, speedLimitOf, type Pt, type Sketch } from "./lane-sketch";
 import { routeTableOf, traceRoute, type RouteStep } from "./route-trace";
 
 /** what the car's panel and the map need of the car (what `inspect` gives) */
@@ -30,9 +30,12 @@ function stretch(sk: Sketch, x: RouteStep, from = 0): Pt[] {
   if (x.kind === "lane") {
     const l = laneById(sk, x.id);
     if (!l) return [];
+    // (a ring: `to` may run past the lane's length, round it again - wrapped back into [0, len) before locating a point,
+    // or it draws a straight line, cutting across, to wherever that overshoot happens to land past the lane's own end)
+    const len = laneLength(l.shape), ring = isFullCircle(l.shape), at = (s: number) => (ring ? ((s % len) + len) % len : s);
     const a = Math.max(x.from, from), b = x.to, pts: Pt[] = [];
-    for (let s = a; s < b; s += 2) pts.push(pointAt(l.shape, s).p);
-    pts.push(pointAt(l.shape, b).p);
+    for (let s = a; s < b; s += 2) pts.push(pointAt(l.shape, at(s)).p);
+    pts.push(pointAt(l.shape, at(b)).p);
     return pts;
   }
   if (x.kind === "connector") {
