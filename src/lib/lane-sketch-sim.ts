@@ -2271,12 +2271,15 @@ export class SketchSim {
             const xs = !RING_DRIVE ? [] : r.edge.conflicts.filter(k => !k.join && k.other.ring && k.other !== t.lane).map(k => r.off + k.at - k.before - r.a), firstX = xs.length ? Math.min(...xs) : Infinity;
             const mh = firstX < z - 0.1 && firstX > 0.1 && canStopBefore(hold(firstX)) ? hold(firstX) : hold(z);
             if (canStopBefore(mh)) {
-              const arrive = tMe(dMerge), onLane = byEdge.get(t.lane) ?? [];
+              // (kept waiting to join: the longer it waits, the more it eases both the time it assumes it needs to get
+              // moving from a stop (`arrive`, which otherwise only grows the longer it is stood still, however
+              // generous the room ahead really is) and the gap it wants once there, down to a floor still safe, as a
+              // driver kept out would push in and would also, after a while, stop computing the full worst-case
+              // standing-start time against oncoming traffic; ticket #56)
+              const joinPatience = Math.max(JOIN_FLOOR, 1 - Math.max(0, v.still - JOIN_PATIENCE) / JOIN_EASE);
+              const arrive = tMe(dMerge) * joinPatience, onLane = byEdge.get(t.lane) ?? [];
               // (how far back along the lane the joining stretch reaches)
               const laneZone = Math.max(0, this.diff(t.lane, this.beside(r.edge.onTo, r.edge.len - r.edge.mergeBefore), t.s), jb ? this.diff(t.lane, jb.at, t.s) : 0);
-              // (kept waiting to join: eases the gap it wants, down to a floor still safe, the longer it waits, as a
-              // driver kept out would push in; ticket #56)
-              const joinPatience = Math.max(JOIN_FLOOR, 1 - Math.max(0, v.still - JOIN_PATIENCE) / JOIN_EASE);
               if (!forced && t.lane.ring && onLane.reduce((a, w) => a + w.len + S0, 0) > 0.75 * t.lane.len) yields.push({ at: mh, why: `merge ${t.lane.key}: ring nearly full`, ...(W ? { info: { kind: "ring-full", edge: t.lane.key } } : {}) });
               // (or, a two-lane roundabout's, the ring beside it, cars on this one having to get over to that one: waited for before
               // the connector crosses anything (the other ring), not standing across it; once in there, on)
