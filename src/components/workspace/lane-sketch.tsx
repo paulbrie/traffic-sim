@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { StreetNameItems } from "./street-names-menu";
 import { cn } from "@/lib/utils";
 import { project, unproject } from "@/lib/osm/area";
 import {
@@ -1858,6 +1859,18 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                     </a>
                   </DropdownMenuItem>
                   <div className="px-2 pb-1 font-mono text-[11px] text-muted-foreground tabular">{menu.geo.lat.toFixed(6)}, {menu.geo.lon.toFixed(6)}</div>
+                  {/* the street names near the click, from OpenStreetMap: to name the road under it (ticket #48) */}
+                  <DropdownMenuSeparator />
+                  {(() => {
+                    const roads = [...new Set(menu.lanes.map(id => roadOf(sketch, id)).filter(r => !!r))];
+                    const road = roads.length === 1 ? roads[0]! : null;
+                    return (
+                      <StreetNameItems
+                        lat={menu.geo.lat} lon={menu.geo.lon} road={road ? { id: road.id, name: road.name } : null} readOnly={readOnly}
+                        onName={(id, name) => editSketch(sk => ({ ...sk, roads: sk.roads.map(r => (r.id === id ? { ...r, name } : r)) }))}
+                      />
+                    );
+                  })()}
                 </>}
               </DropdownMenuContent>
             </DropdownMenu>
