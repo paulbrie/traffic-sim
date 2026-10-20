@@ -2282,9 +2282,9 @@ export class SketchSim {
                 if (past < w.len + S0 + 2 && w.v < 3 && (t.lane.ring || w.pos > t.s)) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
                 const u = this.along(t.lane, w.pos, t.s);
                 if (!t.lane.ring && w.pos > t.s) { if (w.pos - t.s < w.len + 1) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "just past where it joins", car: w.id, edge: t.lane.key } } : {}) }); break; } continue; }
-                // (nor beside the joining stretch, standing, even one about to turn off before where this joins: this one would stop
-                // behind it there, on a two-lane roundabout across the outer ring, the ring then locked (ticket #50))
-                if (t.lane.ring && w.v < 3 && u < laneZone) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
+                // (onto an inner ring across the outer one, nor one beside the joining stretch, standing, even about to turn off before
+                // where this joins: this one would stop behind it there, across the outer ring, the ring then locked (ticket #50))
+                if (t.lane.ring && xs.length && w.v < 3 && u < laneZone) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
                 if (u > 70) continue;
                 // (it leaves before getting here)
                 if (w.exit && this.along(t.lane, w.pos, this.exitS(w.exit)) < u) continue;
