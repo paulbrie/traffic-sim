@@ -31,6 +31,9 @@ export interface VehicleDetail {
   v: number; v0: number; acc: number; gap: number;
   road: string; lane: number | null; lanes: number | null;
   heading: string; wait: number; laneChanges: number; reroutes: number;
+  /** what `road` and `heading` name, for the inspector's links: the road (link id) or the junction (node id) it is on; the road or stop it is heading to (null: leaving the plan) */
+  at: { kind: "link" | "node"; id: string };
+  to: { kind: "link" | "stop"; id: string } | null;
   /** seconds since it set off, and of those, in traffic (stopped or crawling) */
   trip: number; jam: number;
   a: number; b: number; pax: number; cap: number;
@@ -218,6 +221,8 @@ function vehicleDetail(sim: Sim, v: Vehicle): VehicleDetail {
     road: e ? e.link.name || "unnamed" : v.piece.kind === "ring" ? "roundabout" : "junction",
     lane: e ? v.lane : null, lanes: e ? e.n : null,
     heading: v.dest.kind === "gateway" ? "leaving the plan" : v.dest.kind === "stop" ? `stop ${v.dest.stop.def.name}` : `${v.dest.edge.link.name || "a road"}`,
+    at: e ? { kind: "link", id: e.link.id } : { kind: "node", id: (v.piece as Exclude<Vehicle["piece"], { kind: "lane" }>).node.def.id },
+    to: v.dest.kind === "edge" ? { kind: "link", id: v.dest.edge.link.id } : v.dest.kind === "stop" ? { kind: "stop", id: v.dest.stop.def.id } : null,
     wait: v.wait, trip: (sim.tick - v.bornT) * DT, jam: v.jam, laneChanges: v.laneChanges, reroutes: v.reroutes, a: v.a, b: v.b, pax: v.pax, cap: v.cap, aggressive: v.aggressive, pref: v.pref,
     fuel: sim.stats.fuel ? { total: (v.fuel ?? 0) / 1000, idle: (v.fuelIdle ?? 0) / 1000, partial: v.bornT * DT < sim.stats.fuel.since } : null,
     nextTurn: nt ? { node: nt.node.def.id, turn: nt.move.turn, lo: nt.move.lo, hi: nt.move.hi } : null,
