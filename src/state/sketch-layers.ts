@@ -4,7 +4,7 @@
  */
 import { Subject } from "subjecto";
 
-export type SketchLayer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names" | "demand" | "satellite" | "image" | "zones";
+export type SketchLayer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names" | "demand" | "satellite" | "image" | "zones" | "traffic";
 export type SketchLayers = Record<SketchLayer, boolean>;
 /** (`page`: only on a V2 plan's full-page editor) */
 export const SKETCH_LAYERS: { id: SketchLayer; label: string; hint: string; page?: boolean }[] = [
@@ -19,6 +19,7 @@ export const SKETCH_LAYERS: { id: SketchLayer; label: string; hint: string; page
   { id: "grid", label: "Grid", hint: "A line every metre close up, every 10 m stronger" },
   { id: "satellite", label: "Satellite imagery", hint: "The imagery where the plan is on the map (V2 plans placed on the map)", page: true },
   { id: "image", label: "Reference image", hint: "The plan's reference image (V2 plans)", page: true },
+  { id: "traffic", label: "Live traffic", hint: "Real current traffic (TomTom): incidents while Live traffic sync is on in Display options, and the roads' speeds once fetched in the Live traffic panel", page: true },
   // (last: the digit keys go to the layers above, in this order)
   { id: "zones", label: "Zones", hint: "The areas drawn and labelled on the plan (neighbourhoods, zones)" },
 ];

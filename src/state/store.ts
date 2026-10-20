@@ -69,7 +69,7 @@ export interface UiState {
   pickExit: string | null;
   /** route tracer: from an entry point to an exit, starting in an entry lane (null = the kerb-side one) */
   trace: { from: string | null; to: string | null; lane: number | null };
-  display: { bySpeed: boolean; /** turn signals blinking on the vehicles (hazard lights stay, a breakdown's sign) */ blinkers: boolean; reservations: boolean; labels: boolean; buildings: boolean; junctions: boolean; satellite: boolean; connectors: boolean; maskRoads: boolean; /** satellite imagery brightness (0.3–1) */ satBrightness: number; /** where the satellite imagery comes from */ satSource: SatSource; /** the CPU / memory load panel */ perf: boolean };
+  display: { bySpeed: boolean; /** turn signals blinking on the vehicles (hazard lights stay, a breakdown's sign) */ blinkers: boolean; reservations: boolean; labels: boolean; buildings: boolean; junctions: boolean; satellite: boolean; connectors: boolean; maskRoads: boolean; /** satellite imagery brightness (0.3–1) */ satBrightness: number; /** where the satellite imagery comes from */ satSource: SatSource; /** the CPU / memory load panel */ perf: boolean; /** each vehicle's number printed above it */ carNumbers: boolean };
   sim: { running: boolean; speed: number; epoch: number };
   save: { status: SaveStatus; revision: number; savedAt: string | null; message: string };
   cursor: { x: number; y: number; inside: boolean };
@@ -149,7 +149,7 @@ const UI_DEFAULTS: UiState = {
   multi: [],
   extra: [],
   pickExit: null,
-  display: { bySpeed: false, blinkers: true, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85, satSource: "esri", perf: false },
+  display: { bySpeed: false, blinkers: true, reservations: true, labels: true, buildings: true, junctions: false, satellite: true, connectors: false, maskRoads: false, satBrightness: 0.85, satSource: "esri", perf: false, carNumbers: false },
   sim: { running: false, speed: 3, epoch: 0 },
   save: { status: "saved", revision: 1, savedAt: null, message: "" },
   cursor: { x: 0, y: 0, inside: false },

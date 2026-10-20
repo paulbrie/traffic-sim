@@ -103,10 +103,11 @@ export function TrafficPanel() {
       <CountersTable />
       <JunctionTable />
       <Section title="Event log"><EventLogPanel /></Section>
-      <Section title="Display">
+      <Section title="Display options">
         {([
           ["bySpeed", "Colour vehicles by speed"],
           ["blinkers", "Show turn signals"],
+          ["carNumbers", "Show car numbers"],
           ["reservations", "Show junction reservations"],
           ["labels", "Show stop names"],
           ["junctions", "Show junction numbers and stats"],

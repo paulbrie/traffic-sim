@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PARAM_GROUPS, PARAMS, type ParamGroup, resolveParams, sanitizeParams, type ParamInfo, type SimParams } from "@/engine/params";
 import { setSettings, settings$, ui } from "@/state/store";
 
@@ -16,7 +17,7 @@ const TABS: { id: string; label: string; groups: ParamGroup[] }[] = [
   { id: "junctions", label: "Junctions", groups: ["Junctions"] },
 ];
 const digits = (step: number) => (step >= 1 ? 0 : step >= 0.1 ? 1 : 2);
-const fmt = (p: ParamInfo, v: number) => `${v.toFixed(digits(p.step))}${p.unit ? ` ${p.unit}` : ""}`;
+const fmt = (p: ParamInfo, v: number) => (p.choice ? p.choice[v >= 0.5 ? 1 : 0] : p.key === "turnAroundAfter" && v === 0 ? "never" : `${v.toFixed(digits(p.step))}${p.unit ? ` ${p.unit}` : ""}`);
 
 /** the simulation's parameters, grouped; changes apply to the running simulation at once */
 export function SimSettingsButton() {
@@ -87,7 +88,11 @@ function SimSettings() {
                         </Button>
                       </span>
                     </div>
-                    <Slider id={id} disabled={readOnly} min={p.min} max={p.max} step={p.step} value={[v]} onValueChange={([x]) => set({ [p.key]: +x.toFixed(digits(p.step)) })} />
+                    {p.choice ? (
+                      <ToggleGroup type="single" id={id} aria-label={p.label} disabled={readOnly} className="h-7 justify-start" value={v >= 0.5 ? "1" : "0"} onValueChange={x => { if (x) set({ [p.key]: Number(x) }); }}>
+                        {p.choice.map((c, i) => <ToggleGroupItem key={c} value={String(i)} className="h-7 px-2.5 text-xs">{c}</ToggleGroupItem>)}
+                      </ToggleGroup>
+                    ) : <Slider id={id} disabled={readOnly} min={p.min} max={p.max} step={p.step} value={[v]} onValueChange={([x]) => set({ [p.key]: +x.toFixed(digits(p.step)) })} />}
                     <p className="text-xs text-muted-foreground">{p.help}</p>
                   </div>
                 );

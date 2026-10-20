@@ -15,15 +15,21 @@ import { CONNECTOR_KINK_LIMIT, connectorKinks, type ConnectorKink } from "@/lib/
 import { deadEndTurnarounds, type DeadEnd } from "@/lib/dead-ends";
 import type { JunctionWarning } from "@/lib/junction-warnings";
 import type { SketchSimClient } from "@/state/sketch-sim-client";
+import { clearTrafficLog, trafficLog$, type TrafficPull } from "@/state/live-traffic";
+import { ui } from "@/state/store";
+import { useDeepSubject, useSubject } from "subjecto/react";
 
-type Kind = SimProblem["kind"] | "stuck" | "drawn" | "kinked" | "deadend" | "junction";
-const LABEL: Record<Kind, string> = { junction: "Junction", drawn: "Drawn over", kinked: "Turns back", deadend: "Dead end", stuck: "Stuck", collision: "Collision", jump: "Jump", deadlock: "Deadlock", breakdown: "Breakdown", towed: "Towed" };
+type Kind = SimProblem["kind"] | "stuck" | "drawn" | "kinked" | "deadend" | "junction" | "traffic";
+const LABEL: Record<Kind, string> = { traffic: "Live traffic", junction: "Junction", drawn: "Drawn over", kinked: "Turns back", deadend: "Dead end", stuck: "Stuck", collision: "Collision", jump: "Jump", deadlock: "Deadlock", breakdown: "Breakdown", towed: "Towed" };
 const TONE: Record<Kind, string> = {
   junction: "bg-amber-500/20 text-amber-800 dark:text-amber-300", drawn: "bg-amber-500/20 text-amber-800 dark:text-amber-300", kinked: "bg-amber-500/20 text-amber-800 dark:text-amber-300",
   stuck: "bg-amber-500/20 text-amber-800 dark:text-amber-300", deadlock: "bg-amber-500/20 text-amber-800 dark:text-amber-300",
   collision: "bg-red-500/15 text-red-700 dark:text-red-300", jump: "bg-red-500/15 text-red-700 dark:text-red-300",
   breakdown: "bg-muted text-muted-foreground", towed: "bg-muted text-muted-foreground", deadend: "bg-sky-500/15 text-sky-800 dark:text-sky-300",
+  traffic: "bg-sky-500/15 text-sky-800 dark:text-sky-300",
 };
+/** a pull from TomTom as a console line: when (the time of day), what came back or what went wrong */
+const pullDetail = (p: TrafficPull) => `${new Date(p.at).toLocaleTimeString()} · ${p.what === "incidents" ? "incidents polled" : "roads' speeds fetched"}: ${p.error ? `failed (${p.error})` : p.what === "incidents" ? `${p.count} incident${p.count === 1 ? "" : "s"} over the plan's area` : `${p.count} road lines`}`;
 type Show = "all" | Kind;
 const clock = (s: number) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "—");
 /** a line of the console: a problem the run had, the cars stuck at one place now, or roads drawn over each other or a connector
@@ -79,6 +85,10 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, o
     return () => clearTimeout(id);
   }, [sketch]);
   const jw = useMemo(() => junctionWarnings?.list ?? [], [junctionWarnings?.list]);
+  // (the pulls from TomTom for this plan: live traffic, see live-traffic.ts)
+  const [pullsAll] = useSubject(trafficLog$);
+  const [planId] = useDeepSubject(ui, "planId");
+  const pulls = useMemo(() => pullsAll.filter(p => p.plan === planId), [pullsAll, planId]);
   const count = problemCount(stats) + drawn.length + kinks.length + jw.length;
   // (asked for while open, again as the stats change: about every quarter of a second while the cars run)
   useEffect(() => {
@@ -103,6 +113,7 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, o
   const cleared = stats && stats.t >= clearedAt ? clearedAt : -1;
   const rows = useMemo(() => {
     const out: Row[] = [];
+    for (const p of pulls) out.push({ t: NaN, kind: "traffic", car: -1, x: 0, y: 0, place: "TomTom", detail: pullDetail(p) });
     const roadName = (id: string) => sketch.roads.find(r => r.id === id)?.name ?? `Lane ${id}`;
     for (const d of drawn) out.push({
       t: NaN, kind: "drawn", car: -1, x: Math.round(d.at.x), y: Math.round(d.at.y), place: `${roadName(d.roads[0])} × ${roadName(d.roads[1])}`,
@@ -136,7 +147,7 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, o
     for (const p of data?.problems ?? []) if (p.t > cleared) out.push({ t: p.t, kind: p.kind, car: p.car, other: p.other, x: p.x, y: p.y, place: place(p.edge), detail: p.detail });
     const f = filter.trim().toLowerCase();
     return out.filter(r => (show === "all" || r.kind === show) && (!f || `#${r.car} #${r.other ?? ""} ${r.place} ${r.detail} ${LABEL[r.kind]}`.toLowerCase().includes(f)));
-  }, [data, drawn, kinks, ends, jw, sketch, place, cleared, show, filter, stats?.t]);
+  }, [data, drawn, kinks, ends, jw, pulls, sketch, place, cleared, show, filter, stats?.t]);
   const byKind = useMemo(() => {
     const m = new Map<Kind, number>();
     for (const r of rows) m.set(r.kind, (m.get(r.kind) ?? 0) + 1);
@@ -176,12 +187,12 @@ export function ProblemConsole({ sim, stats, sketch, contents, onGo, onSelect, o
         <Input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter (#id, road, junction…)" aria-label="Filter the console" className="h-7 w-52 text-xs" />
         <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Copy the lines shown" title="Copy the lines shown, as text, to paste into a conversation" disabled={!rows.length} onClick={copy}><ClipboardCopy /></Button>
         <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Clear the console" title="Clear the problems so far (the cars stuck now stay)" disabled={!data?.problems.length}
-          onClick={() => setClearedAt(stats?.t ?? 0)}><Trash2 /></Button>
+          onClick={() => { setClearedAt(stats?.t ?? 0); clearTrafficLog(); }}><Trash2 /></Button>
         <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Close the console" onClick={() => setOpen(false)}><X /></Button>
       </div>
       <div ref={list} className="min-h-0 flex-1 overflow-y-auto font-mono text-xs" onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24; }}>
         {rows.length ? rows.map((r, i) => (
-          <div key={i} className="group flex cursor-pointer items-start gap-2 border-b border-border/50 px-3 py-1 hover:bg-muted/60" onClick={() => { if (r.items) { onItems?.(r.items); return; } onGo({ x: r.x, y: r.y }, r.car); if (r.connector) onSelect?.(r.connector); }} title={r.items ? "Select what it is about, and frame it" : r.connector ? "Go there and pick the connector" : r.car >= 0 ? "Go there (and pick the car, if it is still there)" : "Go there"}>
+          <div key={i} className="group flex cursor-pointer items-start gap-2 border-b border-border/50 px-3 py-1 hover:bg-muted/60" onClick={() => { if (r.kind === "traffic") return; if (r.items) { onItems?.(r.items); return; } onGo({ x: r.x, y: r.y }, r.car); if (r.connector) onSelect?.(r.connector); }} title={r.kind === "traffic" ? "A pull from TomTom (live traffic)" : r.items ? "Select what it is about, and frame it" : r.connector ? "Go there and pick the connector" : r.car >= 0 ? "Go there (and pick the car, if it is still there)" : "Go there"}>
             <span className="w-10 shrink-0 text-right text-muted-foreground tabular-nums">{clock(r.t)}</span>
             <span className={cn("w-[72px] shrink-0 rounded px-1 text-center font-sans text-[11px] font-medium", TONE[r.kind])}>{LABEL[r.kind]}</span>
             <span className="w-24 shrink-0 tabular-nums">{r.car >= 0 && `#${r.car}`}{r.other != null ? ` · #${r.other}` : ""}</span>

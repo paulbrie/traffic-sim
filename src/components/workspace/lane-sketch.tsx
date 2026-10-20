@@ -10,13 +10,13 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { unproject } from "@/lib/osm/area";
+import { project, unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   addStop, updateStop, deleteStop, type SketchStop,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
-  alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
+  alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve, roadMiddle,
   type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
 import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
@@ -36,6 +36,10 @@ import { BusLinesPanel } from "@/components/v2/bus-lines-panel";
 import { FuelPanel, fmtFuel } from "@/components/v2/fuel-panel";
 import { JunctionLine, JunctionResults } from "@/components/v2/junction-results";
 import { RoadResults } from "@/components/v2/road-results";
+import { LiveTrafficPanel } from "@/components/v2/live-traffic-panel";
+import { liveTraffic$, logTrafficPull } from "@/state/live-traffic";
+import { basePath } from "@/lib/base-path";
+import { trafficColor, TRAFFIC_NO_DATA, type TrafficMatch } from "@/lib/tomtom";
 import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
@@ -47,6 +51,7 @@ import { paintZoneDraft, paintZones, zoneAt, zoneEditAt } from "@/components/v2/
 import { addZone, deleteZone, formatArea, insertZoneCorner, moveZoneCorner, nextZoneColor, removeZoneCorner, zoneArea, zoneLabelPoint } from "@/lib/sketch-zones";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
+import { streetLabel, streetLabelSize } from "@/render/street-label";
 import { describeHover, SketchHoverCard, type HoverHit } from "@/components/v2/sketch-hover-card";
 import { View3DV2, type View3DApi } from "@/components/v2/view-3d-v2";
 import { RoutePanel } from "@/components/v2/route-panel";
@@ -71,7 +76,7 @@ import type { JunctionWarning } from "@/lib/junction-warnings";
 import { explainMarks, type CarExplain } from "@/lib/car-explain";
 import { keyForEditor, keyTargetOf, somethingOpen } from "@/lib/editor-keys";
 import { resolveTuning } from "@/lib/sketch-tuning";
-import { CarWhy } from "./car-explain";
+import { CarWhy, EdgeLink, PlaceLink, SketchGoContext, SketchText, type SketchPlace } from "./car-explain";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
@@ -94,6 +99,8 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
 const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
 
 interface View { cx: number; cy: number; /** px per metre */ scale: number }
+/** a live traffic incident (TomTom), as the `/api/plans/[planId]/traffic` route reports it */
+interface TrafficIncident { id: string; iconCategory: number; magnitudeOfDelay: number; delay: number | null; from: string | null; to: string | null; description: string | null; coordinates: { lat: number; lon: number }[] }
 type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { zone: string } | { stop: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[] };
@@ -278,6 +285,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (the cars coloured by speed, or all one colour: in the V2 UI store, kept in the browser)
   const [bySpeed] = useUiPath<boolean>("display/carsBySpeed");
   const [blinkers] = useUiPath<boolean>("display/carBlinkers");
+  const [carNumbers] = useUiPath<boolean>("display/carNumbers");
+  const [liveTraffic] = useUiPath<boolean>("display/liveTraffic");
+  const [traffic, setTraffic] = useState<TrafficIncident[] | null>(null);
+  // (TomTom's roads' speeds, once fetched in the Live traffic panel for this plan (its page only), matched onto the lanes)
+  const [planId] = useDeepSubject(ui, "planId");
+  const [liveAll] = useSubject(liveTraffic$);
+  const liveTr = page && liveAll?.plan === planId ? liveAll : null;
+  const flow = useMemo(() => (liveTr && sketch.geo ? liveTr.match(sketch) : null), [liveTr, sketch]);
   // (the plan's editor takes the keys: on opening the page, and when the sketch window over it closes)
   const [sketchOpen] = useDeepSubject(ui, "sketch");
   useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
@@ -329,7 +344,41 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     } else if ((stats.t < T.t0 && testSeen.current === T.car) || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
   }, [stats, sketch, route.result, route.test, setRoute]);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, in3d, route: routeShown });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic, flow, in3d, route: routeShown });
+  // live traffic (TomTom): polled over the plan's area every couple of minutes while the switch is on; cleared when it's
+  // off or the plan isn't placed on Earth (no sketch.geo, so no area to ask TomTom about)
+  useEffect(() => {
+    if (!liveTraffic || !page) return;
+    let stopped = false;
+    const planId = ui.getValue().planId;
+    const poll = async () => {
+      const sk = live.current.sketch;
+      if (!sk.geo || !planId) return;
+      const b = boundsOfPts(piecePoints(sk, { lanes: sk.lanes.map(l => l.id), connectors: [], junctions: sk.junctions.map(j => j.id) }));
+      if (!b) return;
+      const pad = 200;
+      const sw = unproject(sk.geo, { x: b.minX - pad, y: b.maxY + pad }), ne = unproject(sk.geo, { x: b.maxX + pad, y: b.minY - pad });
+      const qs = new URLSearchParams({ south: String(Math.min(sw.lat, ne.lat)), north: String(Math.max(sw.lat, ne.lat)), west: String(Math.min(sw.lon, ne.lon)), east: String(Math.max(sw.lon, ne.lon)) });
+      try {
+        const r = await fetch(`${basePath}/api/plans/${planId}/traffic?${qs}`);
+        if (stopped) return;
+        if (!r.ok) {
+          const why = await r.json().then((d: { error?: string }) => d.error, () => null);
+          logTrafficPull({ what: "incidents", plan: planId, error: `${r.status}${why ? `: ${why}` : ""}` });
+          return;
+        }
+        const data = (await r.json()) as { incidents: TrafficIncident[] };
+        logTrafficPull({ what: "incidents", plan: planId, count: data.incidents.length });
+        if (!stopped) setTraffic(data.incidents);
+      } catch (e) {
+        // (offline or a blip: keep showing the last traffic fetched)
+        if (!stopped) logTrafficPull({ what: "incidents", plan: planId, error: e instanceof Error ? e.message : String(e) });
+      }
+    };
+    poll();
+    const id = setInterval(poll, 120_000);
+    return () => { stopped = true; clearInterval(id); setTraffic(null); };
+  }, [liveTraffic, page]);
 
   // ------------------------------------------------------------ coordinates, snapping, picking
   const toWorld = (e: { clientX: number; clientY: number }): Pt => {
@@ -470,6 +519,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const showAt = (t: number) => {
     // (going into the replay: the cars pause, where they are)
     if (live.current.replayT === null) { setRunning(false); setReplayRange(sim.current?.replayRange() ?? null); }
+    // eslint-disable-next-line react-hooks/immutability -- `live` is a deliberate escape hatch (see its declaration): handlers and drawing read it kept current outside React's render cycle
     live.current.replayT = t;
     setReplayT(t);
     const id = live.current.selCar;
@@ -563,8 +613,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (a render: the kept image drawn again only if something it shows changed, not for the cars' stats)
   const shownBy = useRef<unknown[]>([]);
   useEffect(() => {
-    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, in3d, route: routeShown };
-    const now = [sketch, sel, tool, contents, selPt, selCorner, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown];
+    // eslint-disable-next-line react-hooks/immutability -- `live` is a deliberate escape hatch (see its declaration): handlers and drawing read it kept current outside React's render cycle
+    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic, flow, in3d, route: routeShown };
+    const now = [sketch, sel, tool, contents, selPt, selCorner, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown, flow];
     const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
     shownBy.current = now;
     redraw(changed);
@@ -943,8 +994,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     };
     glide.current = requestAnimationFrame(step);
   };
-  /** a search entry chosen (Cmd/Ctrl+K): selected, and the view moved gently to it */
-  const goTo = (to: SearchTarget) => {
+  /** a search entry chosen (Cmd/Ctrl+K): selected, and the view moved gently to it (`keepCar`: the car picked stays so, its panel open, no longer followed) */
+  const goTo = (to: SearchTarget, keepCar = false) => {
     const sk = live.current.sketch, piece = (p: Partial<Piece>): Piece => ({ lanes: p.lanes ?? [], connectors: p.connectors ?? [], junctions: p.junctions ?? [] });
     if (to.kind === "car") {
       setSel(NO_SEL); setSelCar(to.id);
@@ -953,7 +1004,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       redraw();
       return;
     }
-    setSelCar(null);
+    if (keepCar) setFollow(false); else setSelCar(null);
     switch (to.kind) {
       case "road": { const r = sk.roads.find(x => x.id === to.id); if (r) { setSel({ ...NO_SEL, lanes: r.lanes, road: r.id }); centerOn(piece({ lanes: r.lanes })); } break; }
       case "lane": setSel({ ...NO_SEL, lanes: [to.id] }); centerOn(piece({ lanes: [to.id] })); break;
@@ -1856,16 +1907,18 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
-            <CarPanel info={carInfo} patience={resolveTuning(params.tune).patience} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
-              onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
-              onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
-              onCopy={async () => {
-                const s = sim.current, info = s?.inspect(selCar);
-                if (!s) return;
-                const { frames, events } = await s.car(selCar);
-                const text = `Lane sketch car ${selCar} at ${clock(s.t)}\n\`\`\`json\n${JSON.stringify({ car: info ? { ...info, route: undefined } : `left the ${store.kind === "scratch" ? "sketch" : "plan"}`, frames, events })}\n\`\`\`\n`;
-                void navigator.clipboard.writeText(text).then(() => toast.success(`Car ${selCar}'s data copied`, { description: "Its state, its last 10 s and what happened to it. Paste it into the conversation." }), () => toast.error("Couldn't copy"));
-              }} />
+            <SketchGoContext.Provider value={{ sketch, go: to => goTo(to, true) }}>
+              <CarPanel info={carInfo} patience={resolveTuning(params.tune).patience} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
+                onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
+                onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
+                onCopy={async () => {
+                  const s = sim.current, info = s?.inspect(selCar);
+                  if (!s) return;
+                  const { frames, events } = await s.car(selCar);
+                  const text = `Lane sketch car ${selCar} at ${clock(s.t)}\n\`\`\`json\n${JSON.stringify({ car: info ? { ...info, route: undefined } : `left the ${store.kind === "scratch" ? "sketch" : "plan"}`, frames, events })}\n\`\`\`\n`;
+                  void navigator.clipboard.writeText(text).then(() => toast.success(`Car ${selCar}'s data copied`, { description: "Its state, its last 10 s and what happened to it. Paste it into the conversation." }), () => toast.error("Couldn't copy"));
+                }} />
+            </SketchGoContext.Provider>
           )}
           {zoneSel ? (
             <ZonePanel sketch={sketch} zone={zoneSel} readOnly={readOnly} onDelete={deleteSel} />
@@ -1881,13 +1934,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           )}
           {canTest && hasSel(sel) && <TestInSketchPanel options={tis} setOptions={setTis} onTest={() => testInSketch()} />}
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
+          {page && <LiveTrafficPanel planId={planId} sketch={sketch} live={liveTr} match={flow} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun}
             experiment={ek === "scratch" ? { on: expOn, rays: showRays !== false, stats: expStats, roundabout: expRoundabout,
               set: on => { setRunning(false); exp.current?.terminate(); exp.current = null; setExpStats(null); setExperiment(on ? "spatial" : null); redraw(false); },
               setRays: on => { setShowRays(on); redraw(false); } } : null} />
+          <DisplayOptionsPanel canSyncTraffic={!!(page && sketch.geo)} />
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
-          {stats ? <RoadResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "road", id })} /> : null}
+          {stats ? <RoadResults sketch={sketch} stats={stats} traffic={flow} onGo={id => goTo({ kind: "road", id })} /> : null}
           {page && <RoutePanel sketch={sketch} onGo={x => goTo({ kind: x.kind, id: x.id })} onSendTest={() => sendTestCar().catch((e: Error) => toast.error("No test car", { description: e.message }))} />}
           <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} heldBack={stats?.heldBackBy}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
@@ -1998,6 +2053,9 @@ function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> 
   return { id: c.id, truck: !!c.trailer, bus: !!c.bus, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
+/** where a car's way ends: its way out's road, or the lane when it is in none */
+const destOf = (way: CarWay): SketchPlace => (way.destRoad ? { kind: "road", id: way.destRoad } : { kind: "lane", id: way.dest });
+
 function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
   info: ReturnType<SketchSim["inspect"]>; id: number; follow: boolean; running: boolean; replayT: number | null;
   /** why it does what it does (T157), if the sim says */
@@ -2022,10 +2080,10 @@ function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFo
       {!info ? <p className="text-xs text-muted-foreground">{replayT !== null ? `Not on the ${where} at this moment.` : `It has left the ${where}.`}</p> : replayT !== null ? (
         <>
           {row("At", <span className="font-mono tabular">{clock(replayT)} (replay)</span>)}
-          {row("On", <span className="font-mono">{edgeName(info.edge)}</span>)}
+          {row("On", <EdgeLink edge={info.edge} road className="font-mono" />)}
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h</span>)}
-          {info.exit && row("Going", edgeName(info.exit))}
-          {row("Then", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          {info.exit && row("Going", <EdgeLink edge={info.exit} />)}
+          {row("Then", <><SketchText text={reason!.text} />{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
           <CarWhy x={why} live={replayT === null} patience={patience} onPick={onPick} />
           <Button size="sm" variant={follow ? "secondary" : "outline"} className="h-7" aria-pressed={follow} onClick={() => onFollow(!follow)} title="Keep the view on the car while the replay plays">
             <Crosshair /> {follow ? "Following" : "Follow"}
@@ -2034,10 +2092,10 @@ function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFo
       ) : (
         <>
           {info.truck && row("Truck", <span className="font-mono tabular">{info.length.toFixed(1)} m long</span>)}
-          {row("On", <span className="font-mono">{edgeName(info.edge)} · {info.pos.toFixed(1)}{info.ring ? "" : ` of ${info.len.toFixed(1)}`} m</span>)}
+          {row("On", <span><EdgeLink edge={info.edge} road className="font-mono" /> <span className="font-mono">· {info.pos.toFixed(1)}{info.ring ? "" : ` of ${info.len.toFixed(1)}`} m</span></span>)}
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h <span className="text-muted-foreground">of {info.desiredKmh.toFixed(0)}</span></span>)}
-          {info.changeTo && row("Changing to", <span className="font-mono">{edgeName(info.changeTo)}</span>)}
-          {row("Heading for", info.dest ? `the exit at the end of lane ${info.dest}${way ? ` (${way.destName})` : ""}` : "anywhere (no exit it can reach)")}
+          {info.changeTo && row("Changing to", <EdgeLink edge={info.changeTo} className="font-mono" />)}
+          {row("Heading for", info.dest ? <>the exit at the end of <PlaceLink to={{ kind: "lane", id: info.dest }}>lane {info.dest}</PlaceLink>{way && <> (<PlaceLink to={destOf(way)}>{way.destName}</PlaceLink>)</>}</> : "anywhere (no exit it can reach)")}
           {way && (
             <div className="grid gap-0.5 rounded border bg-background/60 px-2 py-1.5 text-xs" aria-label="Its way to the end">
               <div className="flex justify-between gap-2"><span className="text-muted-foreground">Its way on</span>
@@ -2047,14 +2105,15 @@ function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFo
               </div>
               <ol className="grid gap-px">
                 {way.roads.slice(0, 12).map((r, i) => (
-                  <li key={i} className="flex justify-between gap-2"><span className="truncate">{i + 1}. {r.name}</span><span className="shrink-0 font-mono text-muted-foreground tabular">{kmOrM(r.m)}</span></li>
+                  <li key={i} className="flex justify-between gap-2"><span className="truncate">{i + 1}. <PlaceLink to={r.road ? { kind: "road", id: r.road } : { kind: "lane", id: r.lane }}>{r.name}</PlaceLink></span><span className="shrink-0 font-mono text-muted-foreground tabular">{kmOrM(r.m)}</span></li>
                 ))}
-                {way.roads.length > 12 && <li className="text-muted-foreground">… {way.roads.length - 12} more, to {way.destName}</li>}
+                {way.roads.length > 12 && <li className="text-muted-foreground">… {way.roads.length - 12} more, to <PlaceLink to={destOf(way)}>{way.destName}</PlaceLink></li>}
               </ol>
             </div>
           )}
-          {row("Going", info.goal ? (info.goal.startsWith("end:") ? `off the end of ${edgeName(info.goal.slice(4))}` : edgeName(info.goal)) : info.leaves ? `off the end of ${edgeName(info.edge)}` : info.exit ? `${edgeName(info.exit)}, then ${edgeName(info.then ?? "")}` : info.then ? `onto ${edgeName(info.then)}` : "round the ring")}
-          {row("Now", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          {row("Going", info.goal ? (info.goal.startsWith("end:") ? <>off the end of <EdgeLink edge={info.goal.slice(4)} /></> : <EdgeLink edge={info.goal} />)
+            : info.leaves ? <>off the end of <EdgeLink edge={info.edge} /></> : info.exit ? <><EdgeLink edge={info.exit} />, then <EdgeLink edge={info.then ?? ""} /></> : info.then ? <>onto <EdgeLink edge={info.then} /></> : "round the ring")}
+          {row("Now", <><SketchText text={reason!.text} />{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
           <CarWhy x={why} live={replayT === null} patience={patience} onPick={onPick} />
           {Number.isFinite(info.fuel) && row("Fuel so far", <span className="font-mono tabular">{fmtFuel(info.fuel / 1000)}</span>)}
           {info.journey && row("Journey", <span className="font-mono">{info.journey}</span>)}
@@ -2836,8 +2895,6 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
         {SIM_SPEEDS.map(n => <ToggleGroupItem key={n} value={String(n)} className="h-7 flex-1 px-1 text-xs">{n}×</ToggleGroupItem>)}
       </ToggleGroup>
       {experiment && <ExperimentRow x={experiment} />}
-      <BySpeedSwitch />
-      <BlinkersSwitch />
       {stats && (
         <div className="grid gap-0.5">
           {row("Time", clock(stats.t))}
@@ -2862,6 +2919,18 @@ function TrafficPanel({ sketch, params, setParams, readOnly, simSpeed, setSimSpe
           </Button>
         </div>
       )}
+    </InspectorPanel>
+  );
+}
+
+/** how the map shows the cars: coloured by speed, turn signals, numbers printed above them; live traffic, where the plan is placed on Earth */
+function DisplayOptionsPanel({ canSyncTraffic }: { canSyncTraffic: boolean }) {
+  return (
+    <InspectorPanel id="display" title="Display options">
+      <BySpeedSwitch />
+      <BlinkersSwitch />
+      <CarNumbersSwitch />
+      {canSyncTraffic && <LiveTrafficSwitch />}
     </InspectorPanel>
   );
 }
@@ -3076,10 +3145,14 @@ interface PaintState {
   bySpeed: boolean;
   /** the cars' turn signals shown (off: none) */
   blinkers: boolean;
+  /** each car's number printed above it */
+  carNumbers: boolean;
+  /** live traffic incidents (TomTom) over the plan's area, last polled; null while the switch is off */
+  traffic: TrafficIncident[] | null;
   /** the route traced (its lanes and connectors), drawn over the map; and where a test car drove another way */
   route: { lanes: Set<string>; conns: Set<string>; driven: { lanes: Set<string>; conns: Set<string> } } | null;
   /** the cars, if running: middle, heading, length and speed as a share of the desired one */
-  cars: { p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1; bus?: boolean }[] | null;
+  cars: { id: number; p: Pt; d: Pt; len: number; share: number; trailer?: { p: Pt; d: Pt; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1; bus?: boolean }[] | null;
   /** the time of the cars shown (live or replayed), for the traffic lights; null with no cars */
   simT: number | null;
   /** the traffic lights as they run with the cars (null: worked out from the fixed cycle) */
@@ -3096,6 +3169,8 @@ interface PaintState {
   peds: PedView[] | null;
   /** the layers shown */
   layers: Layers;
+  /** TomTom's roads' speeds matched onto the lanes (the "Live traffic" layer, with the incidents; null: none fetched) */
+  flow: TrafficMatch | null;
   /** what each junction takes in */
   contents: Map<string, JunctionContents>;
   /** filled with the names drawn and where (the kept image's), for clicks and the pointer on them */
@@ -3163,6 +3238,26 @@ function BlinkersSwitch() {
   return (
     <label className="flex items-center justify-between gap-2 text-xs" title="A car turning or changing lane blinks on that side, as V1's; off, no turn signals (a broken-down car still flashes)">
       Show turn signals <Switch checked={on} onCheckedChange={set} aria-label="Show turn signals" />
+    </label>
+  );
+}
+
+/** each car's number printed above it, for picking one out on a crowded map */
+function CarNumbersSwitch() {
+  const [on, set] = useUiPath<boolean>("display/carNumbers");
+  return (
+    <label className="flex items-center justify-between gap-2 text-xs" title="Each car's number printed above it">
+      Show car numbers <Switch checked={on} onCheckedChange={set} aria-label="Show car numbers" />
+    </label>
+  );
+}
+
+/** live traffic conditions (TomTom), polled over the plan's area and shown on the map, on or off */
+function LiveTrafficSwitch() {
+  const [on, set] = useUiPath<boolean>("display/liveTraffic");
+  return (
+    <label className="flex items-center justify-between gap-2 text-xs" title="Real current traffic incidents (TomTom) over this plan's area, polled every couple of minutes while this is on">
+      Live traffic sync <Switch checked={on} onCheckedChange={set} aria-label="Live traffic sync" />
     </label>
   );
 }
@@ -3326,6 +3421,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       const t = car.trailer;
       if (t) vehicleBody(t.p, t.d, t.len, "#e9e6dd", false, "rgba(20,28,34,0.7)");
       vehicleBody(car.p, car.d, car.len, st.bySpeed ? speedColor(pal, Math.round(Math.min(1, car.share) * 15) / 15) : car.bus ? pal.busVeh : t ? pal.truck : pal.car, true, "rgba(20,28,34,0.45)");
+      if (st.carNumbers) label(String(car.id), { x: car.p.x, y: car.p.y - car.len / 2 - 10 * px }, col.text);
       // (broken down: hazard lights flashing at its four corners, dim between flashes so they show when paused)
       if (car.broken) {
         const { p, d } = car, back = t ?? car, bl = t ? t.len : car.len, r = Math.max(0.35, 2.5 * px);
@@ -3363,7 +3459,9 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       drawCars(carsNow.filter(x => zOfCar(x) < 0.5));
       ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(upper!, 0, 0); ctx.restore();
     }
-    if (!S) { /* (the surfaces are in the image kept) */ } else if (st.layers.surfaces) {
+    if (!S) { /* (the surfaces are in the image kept) */ } else {
+      // the surfaces layer off: not hidden, just faded to a tenth, so the roads still read under what's drawn over them
+      const surfAlpha = st.layers.surfaces ? 1 : 0.1;
       // like the roads: one asphalt surface, the union of the road lanes' bands and the junctions (every
       // kerb first, then all the grey over them, so only the outline of the whole shows)
       // (every lane, in a road or not: a lane taken out of its road keeps its asphalt)
@@ -3377,11 +3475,11 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       for (const lv of levels.filter(inPass)) {
         const at = <T,>(xs: T[], f: (x: T) => number) => (leveled ? xs.filter(x => f(x) === lv) : xs);
         const js = at(drawn, jLevel), as = at(autos, jLevel), ks = at(linkGeo, x => kLevel(x.k)), ls = at(roadLanes, laneLevel);
-        ctx.globalAlpha = lv < 0 ? 0.55 : 1;
+        ctx.globalAlpha = (lv < 0 ? 0.55 : 1) * surfAlpha;
         // (its shadow, cast further the higher it is, in a shade of black: its junctions moved by it, its lanes point by
         // point by their height there, none where they come down to the ground; the lanes of one width in one go)
         if (lv > 0 && !far) {
-          ctx.save(); ctx.globalAlpha = 0.28; ctx.strokeStyle = ctx.fillStyle = "#000";
+          ctx.save(); ctx.globalAlpha = 0.28 * surfAlpha; ctx.strokeStyle = ctx.fillStyle = "#000";
           const byWidth = new Map<number, typeof roadLanes>();
           for (const l of ls) byWidth.set(l.width, [...(byWidth.get(l.width) ?? []), l]);
           for (const [wd, lw] of byWidth) {
@@ -3420,13 +3518,13 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
             const tinted = new Map<number, typeof roadLanes>();
             for (const l of ls) if (laneUse(l) === use) tinted.set(l.width, [...(tinted.get(l.width) ?? []), l]);
             if (!tinted.size) continue;
-            ctx.strokeStyle = tint; ctx.globalAlpha = 0.55;
+            ctx.strokeStyle = tint; ctx.globalAlpha = 0.55 * surfAlpha;
             for (const [wd, lw] of tinted) {
               ctx.beginPath();
               for (const l of lw) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
               ctx.lineWidth = wd; ctx.stroke();
             }
-            ctx.globalAlpha = 1; ctx.strokeStyle = asphalt;
+            ctx.globalAlpha = (lv < 0 ? 0.55 : 1) * surfAlpha; ctx.strokeStyle = asphalt;
           }
         }
         // the markings, as on the plan's map: dashed lines between lanes, the centre line in its yellow
@@ -3449,34 +3547,6 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         const loops = loopsOf.get(j.id), bands = bandsOf.get(j.id);
         if (loops) { loopsPath(loops); ctx.strokeStyle = col.sel; ctx.globalAlpha = jOn(j) ? 1 : 0.6; ctx.lineWidth = 2 * px; ctx.stroke(); ctx.globalAlpha = 1; }
         else if (bands?.length) bandEdge(bands, col.sel, jOn(j) ? 2 * px : 1.5 * px);
-      }
-    } else {
-      // a tint with a dashed edge (automatic ones: the union of their bands, so overlaps don't darken; links: dashed along their sides)
-      for (const { g, on, over, k } of linkGeo) {
-        if (!inPass(kLevel(k))) continue;
-        path(g.outline); ctx.closePath(); ctx.fillStyle = col.jFill; ctx.fill();
-        ctx.strokeStyle = on || over ? col.sel : col.jLine; ctx.lineWidth = (on ? 2 : over ? 1.5 : 1) * px; ctx.setLineDash(on ? [] : [4 * px, 3 * px]);
-        for (const side of g.sides) { path(side); ctx.stroke(); }
-        ctx.setLineDash([]);
-      }
-      for (const j of drawn) {
-        if (!inPass(jLevel(j))) continue;
-        path(outlinePath(j)); ctx.closePath();
-        ctx.fillStyle = col.jFill; ctx.fill();
-        if (jOn(j)) { ctx.strokeStyle = col.sel; ctx.lineWidth = 2 * px; ctx.setLineDash([]); }
-        else { ctx.strokeStyle = col.jLine; ctx.lineWidth = (jOver(j) ? 2 : 1) * px; ctx.setLineDash([4 * px, 3 * px]); }
-        ctx.lineJoin = "round"; ctx.stroke(); ctx.setLineDash([]);
-      }
-      for (const j of autos) {
-        if (!inPass(jLevel(j))) continue;
-        const loops = loopsOf.get(j.id);
-        if (loops) {
-          loopsPath(loops); ctx.fillStyle = col.jFill; ctx.fill("evenodd");
-          ctx.strokeStyle = jOn(j) || jOver(j) ? col.sel : col.jLine; ctx.lineWidth = (jOn(j) ? 2 : jOver(j) ? 1.5 : 1) * px; ctx.lineJoin = "round"; ctx.stroke();
-          continue;
-        }
-        const bands = bandsOf.get(j.id)!;
-        if (bands.length) bandEdge(bands, jOn(j) || jOver(j) ? col.sel : col.jLine, (jOn(j) ? 2 : jOver(j) ? 1.5 : 1) * px, { color: dark ? "rgb(58,64,71)" : "rgb(74,80,88)", alpha: dark ? 0.55 : 0.16 });
       }
     }
     // (an automatic junction's border, saying what it takes in, shown to edit while it is selected or hovered)
@@ -3532,6 +3602,19 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         ctx.moveTo(p.x - d.x * k - d.y * k, p.y - d.y * k + d.x * k); ctx.lineTo(p.x, p.y); ctx.lineTo(p.x - d.x * k + d.y * k, p.y - d.y * k - d.x * k);
         ctx.stroke();
       }
+    }
+    // live traffic (TomTom): each lane it covers in the colour of its speed now against its free-flow speed, over the lane's middle;
+    // the others grey (their green lane line would read as free flow)
+    if (S && st.layers.traffic && st.flow) {
+      const m = st.flow;
+      ctx.lineCap = "butt"; ctx.lineJoin = "round"; ctx.globalAlpha = 0.85;
+      for (const l of sk.lanes) {
+        const t = m.lanes.get(l.id), c = t ? trafficColor(t) : l.bike ? null : TRAFFIC_NO_DATA;
+        if (!c || !vis.lanes.has(l.id) || !lIn(l)) continue;
+        path(samples(l.shape, far ? 2 : 0.5)); if (isFullCircle(l.shape)) ctx.closePath();
+        ctx.strokeStyle = c; ctx.lineWidth = Math.max(l.width * 0.6, 3 * px); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     }
     // turn arrows near the ends of the lanes leading into junctions, painted on the road (over the lanes' lines), close up
     if (S && !far && st.layers.markings && v.scale >= 3) {
@@ -3706,6 +3789,22 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     for (let i = 0; i < Math.min(q.waiting, 9); i++) person(-GAP - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
   }
   drawCars(split ? carsNow.filter(x => zOfCar(x) >= 0.5) : carsNow);
+  // live traffic (TomTom): its road drawn in red/amber by how bad the delay is, a label with what it is and the delay
+  if (D && st.layers.traffic && st.traffic?.length && sk.geo) {
+    const geo = sk.geo;
+    for (const inc of st.traffic) {
+      const pts = inc.coordinates.map(c => project(geo, c.lat, c.lon));
+      if (!pts.length) continue;
+      const color = inc.magnitudeOfDelay >= 3 ? "#dc2626" : inc.magnitudeOfDelay >= 1 ? "#f59e0b" : "#a3a3a3";
+      if (pts.length > 1) {
+        ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+        ctx.strokeStyle = color; ctx.lineWidth = Math.max(0.8, 3 * px); ctx.lineCap = "round"; ctx.stroke();
+      }
+      const mid = pts[Math.floor(pts.length / 2)];
+      const mins = inc.delay ? Math.max(1, Math.round(inc.delay / 60)) : null;
+      label(`${inc.description ?? "Traffic"}${mins ? ` +${mins} min` : ""}`, mid, color);
+    }
+  }
   // the car picked: the way it will go, and a ring round it
   if (D && st.car) {
     // (its way on to the end of its trip, as V1 shows it but all of it; going nowhere in particular, or replayed: the way just ahead)
@@ -3931,13 +4030,19 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     if (p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
     st.labels?.push({ kind: "zone", id: z.id, ...label(z.name, p, z.color) });
   }
-  // (a road's name once on the screen, a street cut into several roads named once)
-  const named = new Set<string>();
-  for (const r of st.layers.names && v.scale >= 1.5 ? sk.roads : []) {
-    const l = laneById(sk, r.lanes[0]), p = l && pointAt(l.shape, laneLength(l.shape) / 2).p;
-    if (!p || named.has(r.name) || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
-    named.add(r.name);
-    st.labels?.push({ kind: "road", id: r.id, ...label(r.name, p, col.text) });
+  // roads' names as on the plan's map (V1, ticket #42): along each road's middle, letter by letter, where they fit
+  if (st.layers.names && v.scale >= 0.35) {
+    ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const size = streetLabelSize(v.scale), toPx = (p: Pt) => ({ x: (p.x - v.cx) * v.scale + w / 2, y: (p.y - v.cy) * v.scale + h / 2 });
+    for (const r of sk.roads) {
+      const pts = roadMiddle(sk, r);
+      if (!pts) continue;
+      const mid = pts[pts.length >> 1], m = 0.1 * (x1 - x0);
+      if (mid.x < x0 - m || mid.x > x1 + m || mid.y < y0 - m || mid.y > y1 + m) continue;
+      const box = streetLabel(ctx, pts.map(toPx), r.name, size, pal.sans);
+      if (box) st.labels?.push({ kind: "road", id: r.id, ...box });
+    }
+    ctx.restore();
   }
   for (const j of st.layers.names && v.scale >= 3 ? sk.junctions : []) {
     const top = j.outline.reduce((a, p) => (p.y < a.y ? p : a), j.outline[0]);

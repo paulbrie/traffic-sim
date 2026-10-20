@@ -35,6 +35,7 @@
     "bike:check": "tsx scripts/bike-lane-check.ts",
     "plan:check": "tsx scripts/plan-fallback-check.ts",
     "bus-support:check": "tsx scripts/bus-support-check.ts",
+    "tomtom:check": "tsx scripts/tomtom-check.ts",
     "engine:baseline": "tsx scripts/engine-baseline.ts",
     "audit": "tsx scripts/junction-audit.ts"
   },

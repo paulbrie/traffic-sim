@@ -197,6 +197,8 @@ export interface Overlay {
   bySpeed: boolean;
   /** turn signals drawn (off: none; a broken-down vehicle's hazard lights still) */
   blinkers?: boolean;
+  /** each vehicle's number printed above it */
+  carNumbers?: boolean;
   labels: boolean;
   snapStep: number;
   gridOn: boolean;
@@ -508,10 +510,10 @@ export function drawScene(
     paths.layers.forEach((c, i) => {
       if (i > 0) blit(ctx, bg.layers[i], dpr, scale, w, h, cam);
       const a0 = c.level < 0 ? 0.55 : 1;
-      if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px, v => v.level > lo && v.level <= c.level, a0, view); }
+      if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px, v => v.level > lo && v.level <= c.level, a0, view, ov.carNumbers); }
       prev = c.level;
     });
-    if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px, v => v.level > lo, 1, view); }
+    if (sim && showVehicles) { const lo = prev; drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px, v => v.level > lo, 1, view, ov.carNumbers); }
     if (sim && showVehicles && compiled.parking.length) drawParked(ctx, pal, compiled, sim, px);
   }
 
@@ -609,7 +611,7 @@ export function drawScene(
       ctx.setLineDash([]);
       }
     }
-    if (ov.maskRoads && showVehicles) drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px);
+    if (ov.maskRoads && showVehicles) drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px, undefined, 1, undefined, ov.carNumbers);
     if (sv) {
       const q = sim.pose(sv);
       ctx.strokeStyle = pal.select; ctx.lineWidth = px * 2;
@@ -1225,7 +1227,7 @@ function drawLinkHandles(ctx: CanvasRenderingContext2D, cam: Camera, pal: Palett
   if (!(l.c1 && l.c2)) { m.x += (b.y - a.y) === 0 && (b.x - a.x) === 0 ? 0 : 0; }
 }
 
-function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, bySpeed: boolean, blinkers: boolean, px: number, only?: (v: Vehicle) => boolean, alpha = 1, view?: { minX: number; minY: number; maxX: number; maxY: number }) {
+function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, bySpeed: boolean, blinkers: boolean, px: number, only?: (v: Vehicle) => boolean, alpha = 1, view?: { minX: number; minY: number; maxX: number; maxY: number }, carNumbers?: boolean) {
   // blink on wall-clock time so it looks right at any simulation speed
   const blinkOn = Math.floor(performance.now() / 380) % 2 === 0;
   // one path per colour (speed colours in 16 steps), one for windows, one for turn signals: a few
@@ -1240,6 +1242,7 @@ function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, byS
     ctx.globalAlpha = 1;
     bodies = new Map(); windows = new Path2D(); signals = new Path2D(); inBatch = 0;
   };
+  const labels: { x: number; y: number; text: string }[] = [];
   const quad = (p: Path2D, cx: number, cy: number, ux: number, uy: number, x0: number, x1: number, y0: number, y1: number) => {
     // local x along the vehicle, y to its right (the normal (-uy, ux))
     p.moveTo(cx + ux * x0 - uy * y0, cy + uy * x0 + ux * y0); p.lineTo(cx + ux * x1 - uy * y0, cy + uy * x1 + ux * y0);
@@ -1273,9 +1276,19 @@ function drawVehicles(ctx: CanvasRenderingContext2D, pal: Palette, sim: Sim, byS
     if (v.kind === "car") quad(windows, cx, cy, ux, uy, L * 0.08, L * 0.28, -w * 0.38, w * 0.38);
     else if (v.kind === "truck") quad(windows, cx, cy, ux, uy, L * 0.28, L * 0.32, -hw, hw);
     else quad(windows, cx, cy, ux, uy, L * 0.4, L * 0.46, -w * 0.4, w * 0.4);
+    if (carNumbers) labels.push({ x: cx, y: cy - hw - px * 3, text: String(v.id) });
     if (++inBatch >= 64) flush();
   }
   flush();
+  if (labels.length) {
+    ctx.globalAlpha = alpha;
+    ctx.font = `600 ${Math.max(0.9, px * 11)}px ${pal.sans}`;
+    ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    ctx.fillStyle = pal.fg;
+    ctx.strokeStyle = "rgba(0,0,0,0.65)"; ctx.lineWidth = Math.max(0.15, px * 2);
+    for (const { x, y, text } of labels) { ctx.strokeText(text, x, y); ctx.fillText(text, x, y); }
+    ctx.globalAlpha = 1;
+  }
 }
 
 /**

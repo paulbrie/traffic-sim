@@ -1903,6 +1903,30 @@ function offsetPolyline(pts: Pt[], o: number): Pt[] {
     return { x: p.x + ((c.y - a.y) / l) * o, y: p.y - ((c.x - a.x) / l) * o };
   });
 }
+/**
+ * A road's middle line, for its name (ticket #42): its lead lane's line moved over to halfway between the road's outer
+ * edges (its lanes beside it, either way), in the lead lane's direction. Null: no lane. Kept while the road and its lanes are the same.
+ */
+export function roadMiddle(sk: Sketch, road: SketchRoad): Pt[] | null {
+  const lanes = road.lanes.map(id => laneById(sk, id)).filter((l): l is SketchLane => !!l), kept = roadMiddles.get(road);
+  if (kept && kept.lanes.length === lanes.length && kept.lanes.every((l, i) => l === lanes[i])) return kept.pts;
+  const lead = lanes[0];
+  let pts: Pt[] | null = null;
+  if (lead) {
+    const al = lanes.length > 1 ? alignmentOf(sk, road) : undefined, off = new Map((al?.lanes ?? []).map(x => [x.id, x.offset]));
+    let lo = -lead.width / 2, hi = lead.width / 2;
+    for (const l of lanes) { const o = l === lead ? 0 : off.get(l.id) ?? 0; lo = Math.min(lo, o - l.width / 2); hi = Math.max(hi, o + l.width / 2); }
+    const shift = (lo + hi) / 2, line = samples(lead.shape, 1);
+    // (to the lane's left as it runs, as `alignmentOf` measures)
+    pts = line.map((p, i) => {
+      const a = line[Math.max(0, i - 1)], b = line[Math.min(line.length - 1, i + 1)], d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      return { x: p.x + ((b.y - a.y) / d) * shift, y: p.y - ((b.x - a.x) / d) * shift };
+    });
+  }
+  roadMiddles.set(road, { lanes, pts });
+  return pts;
+}
+const roadMiddles = new WeakMap<SketchRoad, { lanes: SketchLane[]; pts: Pt[] | null }>();
 // (a road's markings, kept while the road and its lanes are the same: an edit works out only the roads it changed)
 const roadMarks = new WeakMap<SketchRoad, { lanes: SketchLane[]; out: Marking[] }>();
 export function roadMarkings(sk: Sketch): Marking[] {

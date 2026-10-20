@@ -13,14 +13,16 @@ export interface CarAt { edge: string; pos: number; exit: string | null; dest: s
 export interface CarWay {
   /** the line from where it is to its way out */
   pts: Pt[];
-  /** the roads (or lanes in no road) on it in order, each with its metres; and in all, the metres and seconds at the limits left */
-  roads: { name: string; m: number }[]; length: number; freeTime: number;
-  /** its way out: the lane, and its road's name */
-  dest: string; destName: string;
+  /** the roads (or lanes in no road) on it in order, each with its id (`road`, or null: `lane`, its first lane) and metres; and in all, the metres and seconds at the limits left */
+  roads: WayRoad[]; length: number; freeTime: number;
+  /** its way out: the lane, and its road (null: in no road) and that road's name */
+  dest: string; destRoad: string | null; destName: string;
 }
 
+export interface WayRoad { name: string; road: string | null; lane: string; m: number }
+
 const idOf = (key: string) => key.slice(key.indexOf(":") + 1);
-interface Plan { key: string; first: RouteStep; restPts: Pt[]; restLen: number; restTime: number; roads: { name: string; m: number }[] }
+interface Plan { key: string; first: RouteStep; restPts: Pt[]; restLen: number; restTime: number; roads: WayRoad[] }
 let last: { sk: Sketch; plan: Plan } | null = null;
 
 /** a stretch's line: a lane from `a` to `b` metres, or a connector from `a` metres along it */
@@ -68,12 +70,12 @@ export function carWay(sk: Sketch, car: CarAt): CarWay | null {
     const restPts: Pt[] = [];
     for (const x of steps.slice(1)) restPts.push(...stretch(sk, x));
     // (the roads in order, each with its metres; lane changes and connectors to the road they lead onto)
-    const roads: { name: string; m: number }[] = [];
+    const roads: WayRoad[] = [];
     for (const x of steps) {
       if (x.kind !== "lane") continue;
-      const name = sk.roads.find(rd => rd.lanes.includes(x.id))?.name ?? `lane ${x.id}`, m = Math.max(0, x.to - x.from);
+      const rd = sk.roads.find(r => r.lanes.includes(x.id)), name = rd?.name ?? `lane ${x.id}`, m = Math.max(0, x.to - x.from);
       const prev = roads[roads.length - 1];
-      if (prev?.name === name) prev.m += m; else roads.push({ name, m });
+      if (prev?.name === name) prev.m += m; else roads.push({ name, road: rd?.id ?? null, lane: x.id, m });
     }
     const v0 = (sk.traffic?.speed ?? 50) / 3.6;
     const restTime = r.route.freeTime + head.filter(x => x.kind === "connector").reduce((a, x) => a + lenOf(stretch(sk, x)) / v0, 0);
@@ -83,12 +85,12 @@ export function carWay(sk: Sketch, car: CarAt): CarWay | null {
   // (the first stretch cut to where it is now)
   const head = stretch(sk, plan.first, car.pos), pts = [...head, ...plan.restPts], length = lenOf(head) + plan.restLen;
   const firstLimit = plan.first.kind === "lane" ? (speedLimitOf(sk, plan.first.id) ?? sk.traffic?.speed ?? 50) / 3.6 : (sk.traffic?.speed ?? 50) / 3.6;
-  const destLane = laneById(sk, car.dest);
+  const destLane = laneById(sk, car.dest), destRoad = sk.roads.find(r => r.lanes.includes(car.dest!));
   // (the first road's metres: from where it is)
   const done = plan.first.kind === "lane" ? Math.max(0, car.pos - plan.first.from) : 0;
   const roads = done ? plan.roads.map((r, i) => (i ? r : { ...r, m: Math.max(0, r.m - done) })) : plan.roads;
   return {
-    pts, roads, length, freeTime: plan.restTime + lenOf(head) / firstLimit, dest: car.dest,
-    destName: sk.roads.find(r => r.lanes.includes(car.dest!))?.name ?? (destLane ? `lane ${car.dest}` : car.dest),
+    pts, roads, length, freeTime: plan.restTime + lenOf(head) / firstLimit, dest: car.dest, destRoad: destRoad?.id ?? null,
+    destName: destRoad?.name ?? (destLane ? `lane ${car.dest}` : car.dest),
   };
 }

@@ -1,4 +1,4 @@
-import type { CLine, CNode, Conn, Edge, LanePiece, Piece } from "../compile";
+import type { CLine, CNode, Conn, Edge, LanePiece, Piece, RingPiece } from "../compile";
 import { laneAllowed, zips, ZIPT } from "../compile";
 import { DT, LOOK, NO_PIECES, type Dest, type Vehicle } from "./base";
 import { SimJunctions } from "./junctions";
@@ -264,6 +264,9 @@ export abstract class SimMotion extends SimJunctions {
     v.gap = gap; v.leader = leader;
 
     v.wait = v.v < 0.3 ? v.wait + DT : 0;
+    // stopped long at or in a junction or roundabout: another way out, or back (the turn-around rule, ticket #35)
+    const T = this.P.turnAroundAfter;
+    if (T > 0 && v.wait >= T && this.tick - (v.unstickAt ?? -Infinity) >= T / DT && this.unstick(v, pendConn, pendD, leader, gap)) return;
     // junction request
     if (pendConn) {
       // (a junction drawn by hand takes every request at its leading node: one queue, in arrival order)
@@ -752,6 +755,127 @@ export abstract class SimMotion extends SimJunctions {
     this.problem({ kind: "stuck", veh: v.id, vkind: v.kind, x: at.x, y: at.y, at: this.placeOf(v), detail: detail() });
   }
   /** a car that couldn't get to its bay: the bay is free again, and it drives to the nearest exit it can reach */
+  /**
+   * The turn-around rule (ticket #35): a vehicle stopped `turnAroundAfter` s at the head of a junction's or roundabout's
+   * line, or on a roundabout's ring at the head of its queue, tries another way out. On the ring: on round to another
+   * exit (back the way it came too). At a junction's line: another turn its lane allows (a U-turn where the junction has
+   * one), towards where it is going, else towards any way out it can reach, each turn once; with none left, and
+   * `turnAroundAnywhere`, it turns round on the spot into the road's lanes the other way (so too at a roundabout's line,
+   * where another exit wouldn't get it in). Tried again every `turnAroundAfter` s while it stays stopped. True: it took another way.
+   */
+  protected unstick(v: Vehicle, pendConn: Conn | null, pendD: number, leader: Vehicle | null, gap: number): boolean {
+    v.unstickAt = this.tick;
+    // (a bus keeps to its line; a car parking, or by its bay, to its bay)
+    if (v.kind === "bus" || v.park || v.parkWait || v.dwell > 0) return false;
+    const p = v.piece;
+    if (p.kind === "ring") return this.roundAgain(v, p);
+    // (in a junction, on its way across, its way out full: with Anywhere, back the way it came, freeing the junction)
+    if (p.kind === "conn" && p.role === "turn" && !p.node.ring) return this.P.turnAroundAnywhere >= 0.5 && this.turnOnTheSpot(v, p.inEdge.lanes[p.inLane], p, true);
+    // (at the line with its go but no room to go into, the road beyond full: as if still waiting for it)
+    if (p.kind === "lane" && !pendConn && v.granted && v.conn?.role === "turn" && v.conn.inEdge === p.edge) { pendConn = v.conn; pendD = p.len - v.s; }
+    // (at the head of its lane's queue, at the line: the ones behind wait for it, they don't each turn round)
+    if (p.kind !== "lane" || !pendConn || pendD > 8 || (leader && leader.piece === p && gap < 12)) return false;
+    if (!pendConn.node.ring && this.otherTurn(v, pendConn)) return true;
+    return this.P.turnAroundAnywhere >= 0.5 && this.turnOnTheSpot(v, p, pendConn);
+  }
+  /** a way on from `start` (its first road one of `outs`): towards the destination, else any way out of the plan (which becomes it) */
+  private wayOut(v: Vehicle, start: Edge, outs?: Set<Edge>): { rest: Edge[]; dest: Dest } | null {
+    const rest = this.plan(start, v.dest, { firstOuts: outs });
+    if (rest) return { rest, dest: v.dest };
+    for (const g of this.shuffled(this.gateways)) {
+      const d: Dest = { kind: "gateway", node: g };
+      const r = this.plan(start, d, { firstOuts: outs });
+      if (r) return { rest: r, dest: d };
+    }
+    return null;
+  }
+  /** at a junction's line: another turn from the lane it is in (a U-turn only where the junction has one), each one once */
+  private otherTurn(v: Vehicle, c: Conn): boolean {
+    const e = c.inEdge, node = c.node, cur = v.route[v.ri + 1];
+    if (v.unstickTried?.at !== e) v.unstickTried = { at: e, outs: [] };
+    if (cur) v.unstickTried.outs.push(cur);
+    const tried = v.unstickTried.outs;
+    const outs = new Set((node.moves.get(e.idx) ?? []).filter(m => !tried.includes(m.out) && !m.out.busOnly && laneAllowed(m, v.lane)).map(m => m.out));
+    if (!outs.size) return false;
+    const w = this.wayOut(v, e, outs);
+    if (!w) return false;
+    const m = this.moveOf(e, w.rest[0]), elsewhere = w.dest !== v.dest, waited = v.wait;
+    v.dest = w.dest; v.route = [...v.route.slice(0, v.ri + 1), ...w.rest]; v.reroutes++;
+    v.granted = false; v.conn = null; v.reqFor = null; v.stoppedAt = null; v.rerouteAt = e; v.early = null; v.splits?.delete(e.idx);
+    const back = m?.turn === "U";
+    this.ev(node, v, back ? "turn-around" : "reroute", `stopped ${waited.toFixed(0)} s for ${this.mv(c.move)}; ${back ? "turns back:" : "takes"} ${m ? this.mv(m, v.lane) : "another way"}${elsewhere ? " (to another way out of the plan)" : ""}`);
+    return true;
+  }
+  /** a roundabout's ring in driving order (each piece the one after it), and its exits with the ring piece each leaves from */
+  private ringWays = new WeakMap<CNode, { next: Map<Piece, Piece>; exits: { conn: Conn; from: Piece }[] }>();
+  private ringWaysOf(n: CNode) {
+    let r = this.ringWays.get(n);
+    if (r) return r;
+    const next = new Map<Piece, Piece>(), exits = new Map<Conn, Piece>();
+    for (const list of n.moves.values()) for (const m of list) for (let a = 0; a < m.in.n; a++) for (let b = 0; b < m.out.n; b++) {
+      const cr = this.net.crossing(m, a, b);
+      for (let i = 1; i < cr.length; i++) {
+        const p = cr[i - 1], q = cr[i];
+        if (p.kind === "ring" && q.kind === "ring") next.set(p, q);
+        else if (p.kind === "ring" && q.kind === "conn" && q.role === "exit") exits.set(q, p);
+      }
+    }
+    this.ringWays.set(n, (r = { next, exits: [...exits].map(([conn, from]) => ({ conn, from })) }));
+    return r;
+  }
+  /** on a roundabout's ring, next off it but its exit blocked: on round to the nearest other exit with a way on (back the way it came too) */
+  private roundAgain(v: Vehicle, at: RingPiece): boolean {
+    const ex = v.queue[0], e = v.route[v.ri];
+    // (the one at the head of the ring's queue, its exit next: those behind it wait for it)
+    if (v.queue.length !== 1 || ex?.kind !== "conn" || ex.role !== "exit" || !e) return false;
+    const { next, exits } = this.ringWaysOf(at.node), path: Piece[] = [], tried = new Set<Edge>([ex.outEdge]);
+    for (let p: Piece | undefined = at, i = 0; p && i < 200; p = next.get(p), i++) {
+      if (i > 0 && p === at) break;
+      if (i > 0) path.push(p);
+      for (const x of exits) {
+        const out = x.conn.outEdge;
+        if (x.from !== p || tried.has(out) || out.busOnly) continue;
+        tried.add(out);
+        const w = this.wayOut(v, out);
+        if (!w) continue;
+        const was = ex.outEdge.link.name || ex.outEdge.link.id, elsewhere = w.dest !== v.dest, back = out.link === e.link;
+        v.dest = w.dest; v.route = [...v.route.slice(0, v.ri + 1), out, ...w.rest]; v.queue = [...path, x.conn]; v.reroutes++;
+        this.ev(at.node, v, back ? "turn-around" : "reroute", `stopped ${v.wait.toFixed(0)} s on the roundabout, its exit to ${was} blocked; goes on round ${back ? "and back the way it came" : `to the exit to ${out.link.name || out.link.id}`}${elsewhere ? " (to another way out of the plan)" : ""}`);
+        return true;
+      }
+    }
+    return false;
+  }
+  /** no other way: round on the spot into the lanes of its road the other way (one with room, the one by the middle first) */
+  private turnOnTheSpot(v: Vehicle, p: LanePiece, c: Conn, inJunction = false): boolean {
+    const e = p.edge, back = this.net.edgeByKey.get(`${e.link.id}:${-e.dir}`);
+    if (!back || !back.lanes.length || back.busOnly) return false;
+    // (the through lanes first, by the middle first: where it turns, at that road's start, there are no turn bays)
+    const bay = (k: number) => Number(k < back.left || k >= back.left + back.thru);
+    const lanes = [...Array(back.n).keys()].sort((x, y) => bay(x) - bay(y) || x - y);
+    let full = false;
+    for (const k of lanes) {
+      const lp = back.lanes[k];
+      // (its front where its rear was, across the road; from in the junction, at that road's start)
+      const front = inJunction ? p.len : v.s, s = Math.max(v.len, Math.min(lp.len, lp.len * (1 - (front - v.len) / p.len)));
+      if ((this.index.get(lp.id) ?? []).some(u => !u.dead && u.s > s - v.len - 2 && u.s - u.len < s + 2)) { full = true; continue; }
+      const w = this.wayOut(v, back), waited = v.wait;
+      const was = this.pose(v), elsewhere = !!w && w.dest !== v.dest;
+      if (w) v.dest = w.dest;
+      v.piece = lp; v.s = s; v.lane = k; v.route = [back, ...(w?.rest ?? [])]; v.ri = 0; v.queue = []; v.trail = [];
+      v.conn = null; v.granted = false; v.reqFor = null; v.stoppedAt = null; v.fixedAt = null; v.rerouteAt = null; v.early = null;
+      v.v = 0; v.acc = 0; v.lcT = 0; v.lcOff = 0; v.wait = 0; v.enterT = this.tick; v.reroutes++;
+      this.index.add(lp.id, v);
+      // (eased over a second from where it stood: seen turning round, not jumping)
+      const now = this.pose(v);
+      v.blend = { fx: was.fx - now.fx, fy: was.fy - now.fy, rx: was.rx - now.rx, ry: was.ry - now.ry }; v.blendT = 1;
+      this.ev(c.node, v, "turn-around", `stopped ${waited.toFixed(0)} s ${inJunction ? "in the junction on its way" : "for"} ${this.mv(c.move)}, no other way; turns round on the spot ${inJunction ? "back" : ""} into ${back.link.name || back.link.id} lane ${k + 1}${elsewhere ? " (to another way out of the plan)" : ""}`.replace("spot  into", "spot into"));
+      return true;
+    }
+    // (no room just now, traffic going by: it looks again in a couple of seconds, not a whole wait later)
+    if (full) v.unstickAt = this.tick - Math.max(0, this.P.turnAroundAfter - 2) / DT;
+    return false;
+  }
   protected giveUpBay(v: Vehicle) {
     const e = (v.piece as LanePiece).edge, park = v.park!, st = this.parks[park.row];
     let best: Edge[] | null = null, gate: CNode | null = null, len = Infinity;
