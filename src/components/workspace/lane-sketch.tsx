@@ -16,7 +16,7 @@ import {
   addStop, updateStop, deleteStop, type SketchStop,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
-  alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve,
+  alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve, roadMiddle,
   type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
 import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
@@ -47,6 +47,7 @@ import { paintZoneDraft, paintZones, zoneAt, zoneEditAt } from "@/components/v2/
 import { addZone, deleteZone, formatArea, insertZoneCorner, moveZoneCorner, nextZoneColor, removeZoneCorner, zoneArea, zoneLabelPoint } from "@/lib/sketch-zones";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
+import { streetLabel, streetLabelSize } from "@/render/street-label";
 import { describeHover, SketchHoverCard, type HoverHit } from "@/components/v2/sketch-hover-card";
 import { View3DV2, type View3DApi } from "@/components/v2/view-3d-v2";
 import { RoutePanel } from "@/components/v2/route-panel";
@@ -4015,13 +4016,19 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     if (p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
     st.labels?.push({ kind: "zone", id: z.id, ...label(z.name, p, z.color) });
   }
-  // (a road's name once on the screen, a street cut into several roads named once)
-  const named = new Set<string>();
-  for (const r of st.layers.names && v.scale >= 1.5 ? sk.roads : []) {
-    const l = laneById(sk, r.lanes[0]), p = l && pointAt(l.shape, laneLength(l.shape) / 2).p;
-    if (!p || named.has(r.name) || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
-    named.add(r.name);
-    st.labels?.push({ kind: "road", id: r.id, ...label(r.name, p, col.text) });
+  // roads' names as on the plan's map (V1, ticket #42): along each road's middle, letter by letter, where they fit
+  if (st.layers.names && v.scale >= 0.35) {
+    ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const size = streetLabelSize(v.scale), toPx = (p: Pt) => ({ x: (p.x - v.cx) * v.scale + w / 2, y: (p.y - v.cy) * v.scale + h / 2 });
+    for (const r of sk.roads) {
+      const pts = roadMiddle(sk, r);
+      if (!pts) continue;
+      const mid = pts[pts.length >> 1], m = 0.1 * (x1 - x0);
+      if (mid.x < x0 - m || mid.x > x1 + m || mid.y < y0 - m || mid.y > y1 + m) continue;
+      const box = streetLabel(ctx, pts.map(toPx), r.name, size, pal.sans);
+      if (box) st.labels?.push({ kind: "road", id: r.id, ...box });
+    }
+    ctx.restore();
   }
   for (const j of st.layers.names && v.scale >= 3 ? sk.junctions : []) {
     const top = j.outline.reduce((a, p) => (p.y < a.y ? p : a), j.outline[0]);
