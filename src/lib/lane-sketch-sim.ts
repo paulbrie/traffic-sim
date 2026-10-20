@@ -1488,9 +1488,10 @@ export class SketchSim {
     return n ? this.across(n, w.pos) : null;
   }
 
-  /** a two-lane roundabout's ring nearly full, with `more` metres more on it: its cars (each its length and a gap) over three quarters of where a car can stand on it (not in its crossings) */
-  private ringFull(L: Edge, byEdge: Map<Edge, SimVehicle[]>, more: number) {
-    return (byEdge.get(L) ?? NO_VEHICLES).reduce((a, w) => a + w.len + S0, more) > 0.75 * (L.len - L.runs.reduce((a, r) => a + r.e - r.s, 0));
+  /** a two-lane roundabout's ring nearly full, with `more` metres more on it: its cars (each its length and a gap) over
+   * `frac` of where a car can stand on it (not in its crossings; three quarters, unless eased by patience) */
+  private ringFull(L: Edge, byEdge: Map<Edge, SimVehicle[]>, more: number, frac = 0.75) {
+    return (byEdge.get(L) ?? NO_VEHICLES).reduce((a, w) => a + w.len + S0, more) > frac * (L.len - L.runs.reduce((a, r) => a + r.e - r.s, 0));
   }
 
   /** the cars on a lane or beside it (turning off it, joining it, or just changed lane off it), and where along it */
@@ -1514,24 +1515,27 @@ export class SketchSim {
    */
   private room(v: SimVehicle, n: Neighbor, byEdge: Map<Edge, SimVehicle[]>, ghosts: Map<Edge, { w: SimVehicle; pos: number }[]>, patience = 1) {
     const m = this.across(n, v.pos), L = n.lane, W = v.id === this.watchId;
-    // (eases the comfort margin it wants (not the hard, never-eased `gap < 1` overlap check) the longer it has wanted
-    // to get onto a ring and never found room: a ring hop never stops to wait for one (comment above, T172), so simply
-    // circulating forever, never braking, never caught by the usual "stuck changing lane" give-up either; ticket #56)
-    const safe = n.round ? B_SAFE / patience : B_SAFE;
+    // (eases both the comfort margin it wants and how full a ring may be and still let it in (not the hard, never-eased
+    // `gap < 1` overlap check) the longer it has wanted to get onto one and never found room: a ring hop never stops to
+    // wait for one (comment above, T172), so simply circulating forever, never braking, never caught by the usual
+    // "stuck changing lane" give-up either; ticket #56)
+    const safe = n.round ? B_SAFE / patience : B_SAFE, full = n.round ? Math.min(0.95, 0.75 + (1 - patience) * 0.25) : 0.75;
     if (W) this.roomNo = null;
     // (onto a ring nearly full, no; but keeping its ring (`ringKeepLane`), moving out to its way off is as leaving: only the cars there count)
     const out = n.round && this.tuning.ringKeepLane >= 0.5 && L.len > v.edge.len;
-    if (m === null || (!L.ring && (m < v.len || m > L.len - 1)) || (n.round && !out && this.ringFull(L, byEdge, v.len + S0))) return null;
+    if (m === null || (!L.ring && (m < v.len || m > L.len - 1)) || (n.round && !out && this.ringFull(L, byEdge, v.len + S0, full))) return null;
     // (how far on from there: round a ring, ahead or behind whichever is nearer)
     const rel = (s: number) => (L.ring ? ((((s - m) % L.len) + L.len * 1.5) % L.len) - L.len / 2 : s - m);
     // (round two rings, a crossing no one is in or coming up to is no bar: else, on a busy two-lane roundabout, nowhere is)
     const near = (k: Conflict, w: SimVehicle, pos: number) => pos - w.len < k.otherAt + k.otherAfter && pos > k.otherAt - k.otherBefore - (w.v > 0.5 ? 2 + 2 * w.v : 0);
     const inUse = (k: Conflict) => !n.round || k.other.ring || (byEdge.get(k.other) ?? NO_VEHICLES).some(w => near(k, w, w.pos)) || (this.tails.get(k.other) ?? NO_PLACES).some(t => near(k, t.w, t.pos));
     for (const k of L.conflicts) if (rel(k.at - k.before) < 2 && rel(k.at + k.after) > -v.len - 2 && inUse(k)) return null;
-    // (roundabout driving: not over to the other ring beside where one is about to come onto it, within 4 s)
+    // (roundabout driving: not over to the other ring beside where one is about to come onto it, within 4 s - eased
+    // the same way, down to a quarter of its usual caution, the longer it has waited; on a busy enough roundabout
+    // there is always someone joining somewhere, else this would never let a car in at all; ticket #56)
     if (n.round && RING_DRIVE) for (const o of L.ins) {
       if (o.conn.from!.lane.ring) continue;
-      for (const w of byEdge.get(o.conn) ?? NO_VEHICLES) { const d = rel(o.s); if ((o.conn.len - w.pos) / Math.max(w.v, 1) < 4 && d > -(v.len + 8) && d < 15) return null; }
+      for (const w of byEdge.get(o.conn) ?? NO_VEHICLES) { const d = rel(o.s); if ((o.conn.len - w.pos) / Math.max(w.v, 1) < 4 * patience && d > -(v.len + 8) && d < 15 * patience) return null; }
     }
     // (each one there, as occupants() has them, looked at in place: whoever it is, any one too close is enough)
     let ahead = Infinity;
