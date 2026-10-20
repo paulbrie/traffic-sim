@@ -2277,6 +2277,9 @@ export class SketchSim {
                 if (past < w.len + S0 + 2 && w.v < 3 && (t.lane.ring || w.pos > t.s)) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
                 const u = this.along(t.lane, w.pos, t.s);
                 if (!t.lane.ring && w.pos > t.s) { if (w.pos - t.s < w.len + 1) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "just past where it joins", car: w.id, edge: t.lane.key } } : {}) }); break; } continue; }
+                // (nor beside the joining stretch, standing, even one about to turn off before where this joins: this one would stop
+                // behind it there, on a two-lane roundabout across the outer ring, the ring then locked (ticket #50))
+                if (t.lane.ring && w.v < 3 && u < laneZone) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
                 if (u > 70) continue;
                 // (it leaves before getting here)
                 if (w.exit && this.along(t.lane, w.pos, this.exitS(w.exit)) < u) continue;
@@ -2323,12 +2326,13 @@ export class SketchSim {
             const O = k.other, mine = r.off + r.edge.len - r.a;
             if (mine > 80) continue;
             // (one nearly standing well back from the join is no car to keep a gap to yet: up to where the two run together, and waiting
-            // there, not stopping short anywhere on the way, maybe in another's path (T195); told to go, it doesn't wait)
+            // there, not stopping short anywhere on the way, maybe in another's path (T195); nor round a ring, where stopping short
+            // stops the ring where others join it (ticket #50); told to go, it doesn't wait)
             const hold = r.off + ahead(k.at - k.before) - 0.5;
             const zip = (w: SimVehicle, theirs: number) => {
               if (w === v || forced || !(theirs < mine || (theirs === mine && w.id < v.id))) return;
               const g = mine - theirs - w.len;
-              behind(w.v < 1 && v.blocking ? Math.max(g, hold) : g, w.v, `merge ${O.to!.lane.key} for car ${w.id}`, W ? { kind: "merge", detail: "zip", car: w.id, edge: O.to!.lane.key } : null);
+              behind(w.v < 1 && (v.blocking || v.edge.ring) ? Math.max(g, hold) : g, w.v, `merge ${O.to!.lane.key} for car ${w.id}`, W ? { kind: "merge", detail: "zip", car: w.id, edge: O.to!.lane.key } : null);
             };
             for (const w of byEdge.get(O) ?? []) zip(w, O.len - w.pos);
             // (and one about to take it, still on the lane into it)
