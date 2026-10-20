@@ -1,7 +1,8 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 import { junctionRefs } from "@/engine/refs";
+import type { Compiled } from "@/engine/compile";
 import type { Vec } from "@/engine/types";
 import { network$, select, type Selection } from "@/state/store";
 import { simController } from "@/state/sim-controller";
@@ -28,28 +29,82 @@ export function resolve(token: string): { sel: Selection; at: Vec | null; pts: V
   return null;
 }
 
-/** a message with the ids in it as links: a click selects the thing and brings it into view */
-export function LinkedText({ text }: { text: string }) {
-  const parts: (string | { token: string })[] = [];
+/** where a road, junction point or stop is (null: not on the plan any more) */
+function place(sel: Selection): Vec | null {
+  if (sel.kind === "node") return simController.compiled.nodeById.get(sel.id)?.pos ?? null;
+  if (sel.kind === "link") return resolve(sel.id)?.at ?? null;
+  if (sel.kind === "stop") {
+    const st = network$.getValue().stops.find(x => x.id === sel.id), e = st && simController.compiled.edges.find(x => x.link.id === st.link);
+    return e ? e.center.at(e.center.len * st.pos) : null;
+  }
+  return null;
+}
+
+/** selects the thing and brings it into view */
+function go(sel: Selection, at: Vec | null) {
+  select(sel);
+  if (at) sendView("focus", at.x, at.y);
+}
+
+const LINK = "underline decoration-dotted underline-offset-2 hover:text-foreground hover:decoration-solid";
+
+/** a road, junction or stop by name, as a link: a click selects it and brings it into view */
+export function PlaceLink({ sel, children, className }: { sel: Selection; children: ReactNode; className?: string }) {
+  return (
+    <button type="button" className={`${LINK} text-right ${className ?? ""}`} title="Select it and go to it"
+      onClick={e => { e.stopPropagation(); go(sel, place(sel)); }}>{children}</button>
+  );
+}
+
+/**
+ * The names of the roads at a junction (and the points of its cluster), each to its road's id: what a junction event
+ * ("enter L from Strada X lane 1 to Strada Y lane 2") names, for `LinkedText`
+ */
+export function roadNamesAt(node: string | undefined): Map<string, string> | undefined {
+  const c = simController.compiled, n = node ? c.nodeById.get(node) : undefined;
+  if (!n) return undefined;
+  // (kept while the plan compiled stays the same: the logs ask for them a few times a second)
+  let byNode = namesCache.get(c);
+  if (!byNode) namesCache.set(c, (byNode = new Map()));
+  let out = byNode.get(n.def.id);
+  if (!out) {
+    out = new Map();
+    for (const m of [n, ...n.cluster]) for (const a of m.arms) if (a.link.name && !out.has(a.link.name)) out.set(a.link.name, a.link.id);
+    byNode.set(n.def.id, out);
+  }
+  return out;
+}
+const namesCache = new WeakMap<Compiled, Map<string, Map<string, string>>>();
+
+const escape = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * a message with the ids in it as links: a click selects the thing and brings it into view; `names` (a road's name
+ * to its id): those names too, shown as they are
+ */
+export function LinkedText({ text, names }: { text: string; names?: Map<string, string> }) {
+  const parts: (string | { token: string; label: string })[] = [];
+  // (the longer names first, so "Strada Mare" isn't taken for "Strada")
+  const lower = names && new Map([...names].map(([k, v]) => [k.toLowerCase(), v]));
+  const named = names?.size ? [...names.keys()].sort((a, b) => b.length - a.length).map(escape).join("|") : "";
+  const re = named ? new RegExp(`${ID.source}|(?<![\\p{L}\\p{N}])(?:${named})(?![\\p{L}\\p{N}])`, "giu") : ID;
   let last = 0;
-  for (const m of text.matchAll(ID)) {
+  for (const m of text.matchAll(re)) {
     if (m.index! > last) parts.push(text.slice(last, m.index));
-    parts.push({ token: m[0] });
+    parts.push({ token: lower?.get(m[0].toLowerCase()) ?? m[0], label: m[0] });
     last = m.index! + m[0].length;
   }
   if (last < text.length) parts.push(text.slice(last));
   return (
     <>
       {parts.map((p, i) => typeof p === "string" ? <Fragment key={i}>{p}</Fragment> : (
-        <button key={i} type="button" className="font-mono text-[0.95em] underline decoration-dotted underline-offset-2 hover:text-foreground hover:decoration-solid"
-          title={`Select ${p.token} and go to it`}
+        <button key={i} type="button" className={p.label === p.token ? `font-mono text-[0.95em] ${LINK}` : LINK}
+          title={`Select ${p.label} and go to it`}
           onClick={e => {
             e.stopPropagation();
             const r = resolve(p.token);
-            if (!r) return;
-            select(r.sel);
-            if (r.at) sendView("focus", r.at.x, r.at.y);
-          }}>{p.token}</button>
+            if (r) go(r.sel, r.at);
+          }}>{p.label}</button>
       ))}
     </>
   );

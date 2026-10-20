@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 import { toast } from "sonner";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import { ArrowLeftRight, Footprints, Group, Merge, Minus, Plus, Spline, TrafficCone, Trash2, TriangleAlert, Minus as StraightIcon } from "lucide-react";
@@ -24,7 +24,7 @@ import { SignalGroupSection } from "./signal-groups";
 import { PhaseEditor } from "./phase-editor";
 import { FlowsSection } from "./flows";
 import { ConnectorInspector, LaneInspector } from "./object-inspectors";
-import { LinkedText } from "./linked-text";
+import { LinkedText, PlaceLink, roadNamesAt } from "./linked-text";
 import { ZonePicker, ZonesSection } from "./zones";
 import { LaneArrowsEditor, SignPicker } from "./lane-arrows";
 import { mergeSelectedRoads, smoothSelectedJoin } from "@/state/merge-roads";
@@ -964,15 +964,17 @@ function VehicleInspector({ id }: { id: string }) {
       {recording && <Section title="Event log"><VehicleEventLog vehId={Number(id)} /></Section>}
     </div>
   );
-  const rows: [string, string][] = [
+  const refs = junctionRefs(simController.compiled);
+  const onRoad = v.at.kind === "link" ? <PlaceLink sel={v.at}>{v.road}</PlaceLink> : <PlaceLink sel={v.at}>{v.road}{refs.has(v.at.id) ? ` ${refs.get(v.at.id)}` : ""}</PlaceLink>;
+  const rows: [string, ReactNode][] = [
     ["Speed", `${(v.v * 3.6).toFixed(1)} km/h`],
     ["Desired here", `${(v.v0 * 3.6).toFixed(0)} km/h`],
     ...(v.aggressive ? [["Driver", `aggressive: up to ${Math.round((v.pref - 1) * 100)}% over the limit`] as [string, string]] : []),
     ["Acceleration", `${v.acc.toFixed(2)} m/s²`],
     ["Gap ahead", Number.isFinite(v.gap) && v.gap < 100 ? `${v.gap.toFixed(1)} m` : "clear"],
-    ["Road", v.road],
+    ["Road", onRoad],
     ["Lane", v.lane !== null && v.lanes !== null ? `${v.lane + 1} of ${v.lanes}` : "–"],
-    ["Heading to", v.heading],
+    ["Heading to", v.to ? <PlaceLink sel={v.to}>{v.heading}</PlaceLink> : v.heading],
     ["Waiting", `${v.wait.toFixed(0)} s`],
     ["Driving for", minSec(v.trip)],
     ["In traffic", `${minSec(v.jam)}${v.trip > 0 ? ` (${Math.round((100 * v.jam) / v.trip)}%)` : ""}`],
@@ -984,9 +986,9 @@ function VehicleInspector({ id }: { id: string }) {
   if (v.kind === "bus") rows.push(["Passengers", `${v.pax} / ${v.cap}`]);
   const nt = v.nextTurn;
   if (nt) {
-    const ref = junctionRefs(simController.compiled).get(nt.node);
+    const ref = refs.get(nt.node);
     const turn = ({ L: "left", S: "ahead", R: "right", U: "U-turn" } as const)[nt.turn];
-    rows.splice(6, 0, ["Next turn", `${turn}${ref ? ` at ${ref}` : ""}`], ["Lanes for it", nt.lo === nt.hi ? `${nt.lo + 1}` : `${nt.lo + 1}–${nt.hi + 1}`]);
+    rows.splice(6, 0, ["Next turn", <>{turn}{ref && <> at <PlaceLink sel={{ kind: "node", id: nt.node }}>{ref}</PlaceLink></>}</>], ["Lanes for it", nt.lo === nt.hi ? `${nt.lo + 1}` : `${nt.lo + 1}–${nt.hi + 1}`]);
   }
   const myEvents = sim!.events.filter(x => x.veh === v.id).slice(-12).reverse();
   return (
@@ -1009,8 +1011,8 @@ function VehicleInspector({ id }: { id: string }) {
             {myEvents.map((x, i) => (
               <div key={i} className="grid grid-cols-[3.2rem_2rem_1fr] gap-1.5">
                 <span className="text-muted-foreground tabular">{x.t.toFixed(1)}s</span>
-                <span>{junctionRefs(simController.compiled).get(x.node) ?? ""}</span>
-                <span>{x.kind} {x.detail}</span>
+                <span>{refs.has(x.node) && <PlaceLink sel={{ kind: "node", id: x.node }}>{refs.get(x.node)}</PlaceLink>}</span>
+                <span>{x.kind} <LinkedText text={x.detail} names={roadNamesAt(x.node)} /></span>
               </div>
             ))}
           </div>

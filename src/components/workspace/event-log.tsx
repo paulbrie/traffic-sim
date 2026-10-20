@@ -8,6 +8,7 @@ import { stats$, ui } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { junctionRefs } from "@/engine/refs";
 import type { JunctionEvent } from "@/engine/sim";
+import { LinkedText, PlaceLink, roadNamesAt } from "./linked-text";
 
 const csvCell = (v: unknown) => {
   const s = v == null ? "" : String(v);
@@ -87,6 +88,13 @@ export function VehicleEventLog({ vehId }: { vehId: number }) {
   );
 }
 
+/** the road names an event's text may have, to their roads: those at its junction, or its road's */
+function namesOf(e: JunctionEvent): Map<string, string> | undefined {
+  if (e.node) return roadNamesAt(e.node);
+  const name = e.link ? simController.compiled.edges.find(x => x.link.id === e.link)?.link.name : undefined;
+  return name ? new Map([[name, e.link!]]) : undefined;
+}
+
 function LogBox({ on, disabled, label, file, events, where, toggle, hint }: {
   on: boolean; disabled?: boolean; label: string; file?: string; events: JunctionEvent[];
   /** second column: where it happened (vehicle logs) instead of which vehicle */
@@ -110,8 +118,9 @@ function LogBox({ on, disabled, label, file, events, where, toggle, hint }: {
             {latest.length === 0 ? <p className="p-1 text-muted-foreground">Recording… run traffic to see events here.</p> : latest.map((e, i) => (
               <div key={i} className={`grid ${where ? "grid-cols-[3.2rem_5.5rem_1fr]" : "grid-cols-[3.2rem_2.6rem_1fr]"} gap-1.5 border-b border-border/40 py-0.5 last:border-0`}>
                 <span className="text-muted-foreground tabular">{e.t.toFixed(1)}s</span>
-                {where ? <span className="truncate" title={e.link ?? e.node}>{where(e)}</span> : <span className="tabular">{e.veh != null ? `#${e.veh}` : ""}</span>}
-                <span><span className={KIND_STYLE[e.kind] ?? ""}>{e.kind}</span> {e.detail}</span>
+                {where ? <span className="truncate" title={e.link ?? e.node}>{e.node || e.link ? <PlaceLink sel={e.node ? { kind: "node", id: e.node } : { kind: "link", id: e.link! }} className="text-left">{where(e)}</PlaceLink> : where(e)}</span>
+                  : <span className="tabular">{e.veh != null ? `#${e.veh}` : ""}</span>}
+                <span><span className={KIND_STYLE[e.kind] ?? ""}>{e.kind}</span> <LinkedText text={e.detail} names={namesOf(e)} /></span>
               </div>
             ))}
           </div>

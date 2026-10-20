@@ -72,7 +72,7 @@ import type { JunctionWarning } from "@/lib/junction-warnings";
 import { explainMarks, type CarExplain } from "@/lib/car-explain";
 import { keyForEditor, keyTargetOf, somethingOpen } from "@/lib/editor-keys";
 import { resolveTuning } from "@/lib/sketch-tuning";
-import { CarWhy } from "./car-explain";
+import { CarWhy, EdgeLink, PlaceLink, SketchGoContext, SketchText, type SketchPlace } from "./car-explain";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
@@ -976,8 +976,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     };
     glide.current = requestAnimationFrame(step);
   };
-  /** a search entry chosen (Cmd/Ctrl+K): selected, and the view moved gently to it */
-  const goTo = (to: SearchTarget) => {
+  /** a search entry chosen (Cmd/Ctrl+K): selected, and the view moved gently to it (`keepCar`: the car picked stays so, its panel open, no longer followed) */
+  const goTo = (to: SearchTarget, keepCar = false) => {
     const sk = live.current.sketch, piece = (p: Partial<Piece>): Piece => ({ lanes: p.lanes ?? [], connectors: p.connectors ?? [], junctions: p.junctions ?? [] });
     if (to.kind === "car") {
       setSel(NO_SEL); setSelCar(to.id);
@@ -986,7 +986,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       redraw();
       return;
     }
-    setSelCar(null);
+    if (keepCar) setFollow(false); else setSelCar(null);
     switch (to.kind) {
       case "road": { const r = sk.roads.find(x => x.id === to.id); if (r) { setSel({ ...NO_SEL, lanes: r.lanes, road: r.id }); centerOn(piece({ lanes: r.lanes })); } break; }
       case "lane": setSel({ ...NO_SEL, lanes: [to.id] }); centerOn(piece({ lanes: [to.id] })); break;
@@ -1889,16 +1889,18 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         </div>
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
-            <CarPanel info={carInfo} patience={resolveTuning(params.tune).patience} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
-              onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
-              onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
-              onCopy={async () => {
-                const s = sim.current, info = s?.inspect(selCar);
-                if (!s) return;
-                const { frames, events } = await s.car(selCar);
-                const text = `Lane sketch car ${selCar} at ${clock(s.t)}\n\`\`\`json\n${JSON.stringify({ car: info ? { ...info, route: undefined } : `left the ${store.kind === "scratch" ? "sketch" : "plan"}`, frames, events })}\n\`\`\`\n`;
-                void navigator.clipboard.writeText(text).then(() => toast.success(`Car ${selCar}'s data copied`, { description: "Its state, its last 10 s and what happened to it. Paste it into the conversation." }), () => toast.error("Couldn't copy"));
-              }} />
+            <SketchGoContext.Provider value={{ sketch, go: to => goTo(to, true) }}>
+              <CarPanel info={carInfo} patience={resolveTuning(params.tune).patience} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
+                onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
+                onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
+                onCopy={async () => {
+                  const s = sim.current, info = s?.inspect(selCar);
+                  if (!s) return;
+                  const { frames, events } = await s.car(selCar);
+                  const text = `Lane sketch car ${selCar} at ${clock(s.t)}\n\`\`\`json\n${JSON.stringify({ car: info ? { ...info, route: undefined } : `left the ${store.kind === "scratch" ? "sketch" : "plan"}`, frames, events })}\n\`\`\`\n`;
+                  void navigator.clipboard.writeText(text).then(() => toast.success(`Car ${selCar}'s data copied`, { description: "Its state, its last 10 s and what happened to it. Paste it into the conversation." }), () => toast.error("Couldn't copy"));
+                }} />
+            </SketchGoContext.Provider>
           )}
           {zoneSel ? (
             <ZonePanel sketch={sketch} zone={zoneSel} readOnly={readOnly} onDelete={deleteSel} />
@@ -2032,6 +2034,9 @@ function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> 
   return { id: c.id, truck: !!c.trailer, bus: !!c.bus, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
+/** where a car's way ends: its way out's road, or the lane when it is in none */
+const destOf = (way: CarWay): SketchPlace => (way.destRoad ? { kind: "road", id: way.destRoad } : { kind: "lane", id: way.dest });
+
 function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFollow, onPick, onClose, onCopy, onBreakDown, onTow }: {
   info: ReturnType<SketchSim["inspect"]>; id: number; follow: boolean; running: boolean; replayT: number | null;
   /** why it does what it does (T157), if the sim says */
@@ -2056,10 +2061,10 @@ function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFo
       {!info ? <p className="text-xs text-muted-foreground">{replayT !== null ? `Not on the ${where} at this moment.` : `It has left the ${where}.`}</p> : replayT !== null ? (
         <>
           {row("At", <span className="font-mono tabular">{clock(replayT)} (replay)</span>)}
-          {row("On", <span className="font-mono">{edgeName(info.edge)}</span>)}
+          {row("On", <EdgeLink edge={info.edge} road className="font-mono" />)}
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h</span>)}
-          {info.exit && row("Going", edgeName(info.exit))}
-          {row("Then", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          {info.exit && row("Going", <EdgeLink edge={info.exit} />)}
+          {row("Then", <><SketchText text={reason!.text} />{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
           <CarWhy x={why} live={replayT === null} patience={patience} onPick={onPick} />
           <Button size="sm" variant={follow ? "secondary" : "outline"} className="h-7" aria-pressed={follow} onClick={() => onFollow(!follow)} title="Keep the view on the car while the replay plays">
             <Crosshair /> {follow ? "Following" : "Follow"}
@@ -2068,10 +2073,10 @@ function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFo
       ) : (
         <>
           {info.truck && row("Truck", <span className="font-mono tabular">{info.length.toFixed(1)} m long</span>)}
-          {row("On", <span className="font-mono">{edgeName(info.edge)} · {info.pos.toFixed(1)}{info.ring ? "" : ` of ${info.len.toFixed(1)}`} m</span>)}
+          {row("On", <span><EdgeLink edge={info.edge} road className="font-mono" /> <span className="font-mono">· {info.pos.toFixed(1)}{info.ring ? "" : ` of ${info.len.toFixed(1)}`} m</span></span>)}
           {row("Speed", <span className="font-mono tabular">{info.kmh.toFixed(0)} km/h <span className="text-muted-foreground">of {info.desiredKmh.toFixed(0)}</span></span>)}
-          {info.changeTo && row("Changing to", <span className="font-mono">{edgeName(info.changeTo)}</span>)}
-          {row("Heading for", info.dest ? `the exit at the end of lane ${info.dest}${way ? ` (${way.destName})` : ""}` : "anywhere (no exit it can reach)")}
+          {info.changeTo && row("Changing to", <EdgeLink edge={info.changeTo} className="font-mono" />)}
+          {row("Heading for", info.dest ? <>the exit at the end of <PlaceLink to={{ kind: "lane", id: info.dest }}>lane {info.dest}</PlaceLink>{way && <> (<PlaceLink to={destOf(way)}>{way.destName}</PlaceLink>)</>}</> : "anywhere (no exit it can reach)")}
           {way && (
             <div className="grid gap-0.5 rounded border bg-background/60 px-2 py-1.5 text-xs" aria-label="Its way to the end">
               <div className="flex justify-between gap-2"><span className="text-muted-foreground">Its way on</span>
@@ -2081,14 +2086,15 @@ function CarPanel({ info, why, patience, id, follow, running, replayT, way, onFo
               </div>
               <ol className="grid gap-px">
                 {way.roads.slice(0, 12).map((r, i) => (
-                  <li key={i} className="flex justify-between gap-2"><span className="truncate">{i + 1}. {r.name}</span><span className="shrink-0 font-mono text-muted-foreground tabular">{kmOrM(r.m)}</span></li>
+                  <li key={i} className="flex justify-between gap-2"><span className="truncate">{i + 1}. <PlaceLink to={r.road ? { kind: "road", id: r.road } : { kind: "lane", id: r.lane }}>{r.name}</PlaceLink></span><span className="shrink-0 font-mono text-muted-foreground tabular">{kmOrM(r.m)}</span></li>
                 ))}
-                {way.roads.length > 12 && <li className="text-muted-foreground">… {way.roads.length - 12} more, to {way.destName}</li>}
+                {way.roads.length > 12 && <li className="text-muted-foreground">… {way.roads.length - 12} more, to <PlaceLink to={destOf(way)}>{way.destName}</PlaceLink></li>}
               </ol>
             </div>
           )}
-          {row("Going", info.goal ? (info.goal.startsWith("end:") ? `off the end of ${edgeName(info.goal.slice(4))}` : edgeName(info.goal)) : info.leaves ? `off the end of ${edgeName(info.edge)}` : info.exit ? `${edgeName(info.exit)}, then ${edgeName(info.then ?? "")}` : info.then ? `onto ${edgeName(info.then)}` : "round the ring")}
-          {row("Now", <>{reason!.text}{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
+          {row("Going", info.goal ? (info.goal.startsWith("end:") ? <>off the end of <EdgeLink edge={info.goal.slice(4)} /></> : <EdgeLink edge={info.goal} />)
+            : info.leaves ? <>off the end of <EdgeLink edge={info.edge} /></> : info.exit ? <><EdgeLink edge={info.exit} />, then <EdgeLink edge={info.then ?? ""} /></> : info.then ? <>onto <EdgeLink edge={info.then} /></> : "round the ring")}
+          {row("Now", <><SketchText text={reason!.text} />{reason!.car !== undefined && <> <button className="underline" onClick={() => onPick(reason!.car!)}>{reason!.car}</button></>}</>)}
           <CarWhy x={why} live={replayT === null} patience={patience} onPick={onPick} />
           {Number.isFinite(info.fuel) && row("Fuel so far", <span className="font-mono tabular">{fmtFuel(info.fuel / 1000)}</span>)}
           {info.journey && row("Journey", <span className="font-mono">{info.journey}</span>)}
