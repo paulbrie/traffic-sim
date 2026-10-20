@@ -3775,7 +3775,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   drawCars(split ? carsNow.filter(x => zOfCar(x) >= 0.5) : carsNow);
   // live traffic (TomTom): its road drawn in red/amber by how bad the delay is, a label with what it is and the delay
-  if (D && st.traffic?.length && sk.geo) {
+  if (D && st.layers.traffic && st.traffic?.length && sk.geo) {
     const geo = sk.geo;
     for (const inc of st.traffic) {
       const pts = inc.coordinates.map(c => project(geo, c.lat, c.lon));
