@@ -201,14 +201,17 @@ export function deleteBusLine(sk: Sketch, id: string): Sketch {
  * A zebra crossing, as V1's: from one kerb `a` to the other `b`, `width` metres along the traffic, `peds`
  * pedestrians an hour. They have priority: cars stop before it while they wait or cross (one too close to
  * stop goes first); where a light holds the traffic over it, they walk early in its red.
+ * Its shape may be free (ticket #57): `corners`, as `crossingFrame`'s (a's side 0 and 3, b's 1 and 2), each moved
+ * on its own — `a`, `b` and `width` are then kept as its kerb sides' middles and their mean length; `stripes`
+ * turns its bars (degrees from along the traffic).
  */
-export interface SketchCrossing { id: string; a: Pt; b: Pt; width: number; peds: number }
+export interface SketchCrossing { id: string; a: Pt; b: Pt; width: number; peds: number; corners?: [Pt, Pt, Pt, Pt]; stripes?: number }
 export const CROSSING_WIDTH = 4, CROSSING_PEDS = 300;
 
-/** a crossing's outline (a and b's sides, `width` apart) and its axes: `u` from kerb to kerb, `v` along the traffic */
+/** a crossing's outline (a and b's sides, `width` apart, or its own corners) and its axes: `u` from kerb to kerb, `v` along the traffic */
 export function crossingFrame(x: SketchCrossing) {
   const dx = x.b.x - x.a.x, dy = x.b.y - x.a.y, len = Math.hypot(dx, dy) || 1, u = { x: dx / len, y: dy / len }, v = { x: -u.y, y: u.x }, h = x.width / 2;
-  const corners = [
+  const corners = x.corners ?? [
     { x: x.a.x + v.x * h, y: x.a.y + v.y * h }, { x: x.b.x + v.x * h, y: x.b.y + v.y * h },
     { x: x.b.x - v.x * h, y: x.b.y - v.y * h }, { x: x.a.x - v.x * h, y: x.a.y - v.y * h },
   ];
@@ -216,8 +219,50 @@ export function crossingFrame(x: SketchCrossing) {
 }
 /** is `p` on the crossing (with `pad` metres to spare all round) */
 export function onCrossing(x: SketchCrossing, p: Pt, pad = 0): boolean {
+  if (x.corners) {
+    if (insidePolygon(p, x.corners)) return true;
+    return pad > 0 && x.corners.some((a, i) => {
+      const b = x.corners![(i + 1) % 4], dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+      return Math.hypot(p.x - a.x - dx * t, p.y - a.y - dy * t) <= pad;
+    });
+  }
   const f = crossingFrame(x), qx = p.x - x.a.x, qy = p.y - x.a.y, along = qx * f.u.x + qy * f.u.y, across = qx * f.v.x + qy * f.v.y;
   return along >= -pad && along <= f.len + pad && Math.abs(across) <= x.width / 2 + pad;
+}
+/** which way a crossing's bars run (a unit vector): along the traffic, turned by its `stripes` */
+export function stripeDir(x: SketchCrossing): Pt {
+  const { u, v } = crossingFrame(x), t = ((x.stripes ?? 0) * Math.PI) / 180;
+  return { x: v.x * Math.cos(t) + u.x * Math.sin(t), y: v.y * Math.cos(t) + u.y * Math.sin(t) };
+}
+/** a crossing's white bars: half a metre wide, a metre apart, the run of them centred, each cut to its outline */
+export function crossingStripes(x: SketchCrossing): Pt[][] {
+  const { corners } = crossingFrame(x), d = stripeDir(x), n = { x: -d.y, y: d.x };
+  const at = (p: Pt) => (p.x - x.a.x) * n.x + (p.y - x.a.y) * n.y, s = corners.map(at), lo = Math.min(...s), span = Math.max(...s) - lo;
+  if (span < 0.5) return [];
+  // (the outline cut to one side of a line: s(p) - t kept >= 0, by Sutherland–Hodgman)
+  const cut = (poly: Pt[], f: (p: Pt) => number) => {
+    const out: Pt[] = [];
+    poly.forEach((p, i) => {
+      const q = poly[(i + 1) % poly.length], fp = f(p), fq = f(q);
+      if (fp >= 0) out.push(p);
+      if ((fp >= 0) !== (fq >= 0)) { const k = fp / (fp - fq); out.push({ x: p.x + (q.x - p.x) * k, y: p.y + (q.y - p.y) * k }); }
+    });
+    return out;
+  };
+  const bars: Pt[][] = [], count = Math.floor(span - 0.5 + 1e-6) + 1;
+  for (let i = 0, t = lo + (span - (count - 1) - 0.5) / 2; i < count; i++, t++) {
+    const bar = cut(cut(corners, p => at(p) - t), p => t + 0.5 - at(p));
+    if (bar.length >= 3 && polygonArea(bar) > 0.02) bars.push(bar);
+  }
+  return bars;
+}
+const r2 = (q: Pt) => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 });
+/** a crossing given its own corners: its kerbs and width taken from them */
+function withCorners(x: SketchCrossing, c: [Pt, Pt, Pt, Pt]): SketchCrossing {
+  const corners = c.map(r2) as [Pt, Pt, Pt, Pt], mid = (p: Pt, q: Pt) => r2({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+  const width = Math.round(((dist(corners[0], corners[3]) + dist(corners[1], corners[2])) / 2) * 100) / 100;
+  return { ...x, a: mid(corners[0], corners[3]), b: mid(corners[1], corners[2]), width, corners };
 }
 /** a new crossing from kerb `a` to kerb `b` (the next free id) */
 export function addCrossing(sk: Sketch, a: Pt, b: Pt): [Sketch, SketchCrossing] {
@@ -228,8 +273,34 @@ export function addCrossing(sk: Sketch, a: Pt, b: Pt): [Sketch, SketchCrossing] 
   const x: SketchCrossing = { id: `x${n}`, a: r(a), b: r(b), width: CROSSING_WIDTH, peds: CROSSING_PEDS };
   return [{ ...sk, crossings: [...(sk.crossings ?? []), x] }, x];
 }
-export function updateCrossing(sk: Sketch, id: string, patch: Partial<Omit<SketchCrossing, "id">>): Sketch {
-  return { ...sk, crossings: (sk.crossings ?? []).map(x => (x.id === id ? { ...x, ...patch } : x)) };
+/** a change to a crossing (`corners: null`: back to a plain rectangle) */
+export type CrossingPatch = Partial<Omit<SketchCrossing, "id" | "corners">> & { corners?: [Pt, Pt, Pt, Pt] | null };
+export function updateCrossing(sk: Sketch, id: string, patch: CrossingPatch): Sketch {
+  // (bars along the traffic: no angle kept)
+  const plain = (x: SketchCrossing) => { if (x.stripes) return x; const { stripes: _, ...rest } = x; return rest; };
+  return { ...sk, crossings: (sk.crossings ?? []).map(x => (x.id === id ? plain(patchCrossing(x, patch)) : x)) };
+}
+/**
+ * a crossing changed: its corners given (`null`: square again); or, a free one's kerb moved, its two corners
+ * moved with it, and its width changed, each kerb side stretched about its middle
+ */
+function patchCrossing(x: SketchCrossing, patch: CrossingPatch): SketchCrossing {
+  const { corners, ...rest } = patch;
+  if (corners === null) { const { corners: _, ...square } = x; return { ...square, ...rest }; }
+  if (corners) return withCorners({ ...x, ...rest }, corners);
+  if (!x.corners || (!patch.a && !patch.b && patch.width === undefined)) return { ...x, ...rest };
+  const [c0, c1, c2, c3] = x.corners, a = patch.a ?? x.a, b = patch.b ?? x.b;
+  const by = (p: Pt, from: Pt, to: Pt) => ({ x: p.x + to.x - from.x, y: p.y + to.y - from.y });
+  let next: [Pt, Pt, Pt, Pt] = [by(c0, x.a, a), by(c1, x.b, b), by(c2, x.b, b), by(c3, x.a, a)];
+  if (patch.width !== undefined) {
+    const side = (p: Pt, q: Pt): [Pt, Pt] => {
+      const m = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }, l = dist(p, q) || 1, k = patch.width! / 2 / l;
+      return [{ x: m.x + (p.x - m.x) * 2 * k, y: m.y + (p.y - m.y) * 2 * k }, { x: m.x + (q.x - m.x) * 2 * k, y: m.y + (q.y - m.y) * 2 * k }];
+    };
+    const [n0, n3] = side(next[0], next[3]), [n1, n2] = side(next[1], next[2]);
+    next = [n0, n1, n2, n3];
+  }
+  return withCorners({ ...x, ...rest }, next);
 }
 export function deleteCrossing(sk: Sketch, id: string): Sketch {
   const rest = (sk.crossings ?? []).filter(x => x.id !== id);
@@ -2521,7 +2592,11 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   for (const x of Array.isArray(o.crossings) ? o.crossings : []) {
     const ab = pts([x?.a, x?.b], 2);
     if (!str(x?.id) || !ab || dist(ab[0], ab[1]) < 0.5 || crossings.some(y => y.id === x.id)) continue;
-    crossings.push({ id: x.id, a: ab[0], b: ab[1], width: num(x.width) ? Math.min(12, Math.max(1.5, x.width)) : CROSSING_WIDTH, peds: num(x.peds) ? Math.round(Math.min(5000, Math.max(0, x.peds))) : CROSSING_PEDS });
+    const y: SketchCrossing = { id: x.id, a: ab[0], b: ab[1], width: num(x.width) ? Math.min(12, Math.max(1.5, x.width)) : CROSSING_WIDTH, peds: num(x.peds) ? Math.round(Math.min(5000, Math.max(0, x.peds))) : CROSSING_PEDS };
+    // (a free shape: its kerbs and width as its corners have them, ticket #57)
+    const cs = pts(x.corners, 4), free = cs?.length === 4 ? withCorners(y, cs as [Pt, Pt, Pt, Pt]) : y;
+    if (num(x.stripes) && x.stripes) free.stripes = Math.round(Math.min(90, Math.max(-90, x.stripes)));
+    crossings.push(free);
   }
   // (nothing drawn and nowhere placed: no sketch)
   const journeys: SketchJourney[] = [];

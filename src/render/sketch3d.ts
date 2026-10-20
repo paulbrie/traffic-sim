@@ -13,7 +13,7 @@ import { LEVEL_H } from "@/engine/compile";
 import { junctionSurfaceHoles, nestLoops } from "@/lib/junction-fill";
 import { circlePts, deadEndTurnarounds } from "@/lib/dead-ends";
 import {
-  bandPolygon, crossingFrame, isFullCircle, junctionBands, junctionLevel, laneLevel, laneLength, linkGeometry,
+  bandPolygon, crossingStripes, isFullCircle, junctionBands, junctionLevel, laneLevel, laneLength, linkGeometry,
   outlinePath, densePoints, hasLevels, pointAt, roadMarkings, samples, shownZ, smoothJunction, turnArrows, twoWayOk, twinOf, isTwinId, baseLaneId,
   type JunctionContents, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
@@ -204,14 +204,8 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(() => h), PAINT_W, Y.paint);
     }
     for (const a of turnArrows(sk)) for (const line of arrowLines(a.p, a.d, a.turns)) paint.ribbon(line, line.map(() => a.level * LEVEL_H), 0.18, Y.paint);
-    // zebras: stripes along the traffic, across the road
-    for (const x of sk.crossings ?? []) {
-      const f = crossingFrame(x), hw = x.width / 2;
-      for (let t = 0.3; t + 0.5 <= f.len; t += 1) {
-        const P = (s: number, o: number) => ({ x: x.a.x + f.u.x * s + f.v.x * o, y: x.a.y + f.u.y * s + f.v.y * o });
-        paint.polygon([P(t, -hw), P(t + 0.5, -hw), P(t + 0.5, hw), P(t, hw)], [], Y.paint);
-      }
-    }
+    // zebras: stripes along the traffic (or turned as it says), across the road, cut to its shape
+    for (const x of sk.crossings ?? []) for (const bar of crossingStripes(x)) paint.polygon(bar, [], Y.paint);
   }
   if (layers.signs) {
     // a stop line across a lane's end, a yield its row of triangles
