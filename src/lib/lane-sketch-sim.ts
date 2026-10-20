@@ -178,12 +178,12 @@ const KEEP_REPLAY = 600;
 const REPLAY_BYTES = 320 * 2 ** 20;
 /** at most this many cars and events in a moment copied (the nearest the middle of the view, the nearest in time) */
 const MOMENT_CARS = 400, MOMENT_EVENTS = 1500;
-/** a moment kept to replay: per car [id, x, y, dx, dy, v, share, len] and [edge, exit, why] (indexes into the sim's tags) */
+/** a moment kept to replay: per car [id, x, y, dx, dy, v, share, len, pos] and [edge, exit, why, dest] (indexes into the sim's tags) */
 interface ReplayFrame { t: number; nums: Float32Array; tags: Uint32Array; /** per car [gap ×10, s standing still ×10] (65535: none, or more) */ aux: Uint16Array; /** the record of the car watched then */ explain?: CarExplain; peds?: { ids: Uint32Array; nums: Float32Array }; /** per truck [index, x, y, dx, dy, len] */ trailers?: Float32Array }
 /** a frame's size in memory, about (its arrays, and a little for each object) */
 const frameBytes = (f: ReplayFrame) => f.nums.byteLength + f.tags.byteLength + f.aux.byteLength + (f.explain ? 2000 : 0) + 16 + (f.peds ? f.peds.ids.byteLength + f.peds.nums.byteLength : 0) + (f.trailers?.byteLength ?? 0);
 /** a recorded car, as replayed */
-export interface ReplayCar { id: number; p: Pt; d: Pt; len: number; trailer?: Body; share: number; broken?: boolean; /** turn signal: -1 left, 1 right (`blinker`) */ blink?: -1 | 1; kmh: number; edge: string; exit: string | null; why: string | null; /** the gap it kept to what held it (m), and how long it had stood still (s) */ gap?: number; still?: number; /** a bus (T21) */ bus?: boolean }
+export interface ReplayCar { id: number; p: Pt; d: Pt; len: number; trailer?: Body; share: number; broken?: boolean; /** turn signal: -1 left, 1 right (`blinker`) */ blink?: -1 | 1; kmh: number; edge: string; exit: string | null; why: string | null; /** the gap it kept to what held it (m), and how long it had stood still (s) */ gap?: number; still?: number; /** a bus (T21) */ bus?: boolean; /** where it is along `edge` and its way out, so its planned route can still be drawn once the recording is only replayed (ticket #56) */ pos: number; dest: string | null }
 const r2 = (x: number) => Math.round(x * 100) / 100;
 /** seconds for a vehicle going `v` to cover `d` metres, speeding up as it can (`acc`, up to `vmax`) */
 function timeTo(d: number, v: number, vmax: number, acc = A_MAX) {
@@ -2773,13 +2773,13 @@ export class SketchSim {
     if (!fr.length) return null;
     let lo = 0, hi = fr.length - 1;
     while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (fr[mid].t <= t) lo = mid; else hi = mid - 1; }
-    const f = fr[lo], n = f.tags.length / 3, cars: ReplayCar[] = [];
+    const f = fr[lo], n = f.tags.length / 4, cars: ReplayCar[] = [];
     for (let i = 0; i < n; i++) {
-      const a = f.nums.subarray(i * 8, i * 8 + 8), g = f.tags.subarray(i * 3, i * 3 + 3);
+      const a = f.nums.subarray(i * 9, i * 9 + 9), g = f.tags.subarray(i * 4, i * 4 + 4);
       // (the share slot also holds the turn signal: +10 left, +20 right; a bus: +100 more; -1 broken down)
       const isBus = a[6] >= 100, rest = isBus ? a[6] - 100 : a[6];
       const sig = rest >= 10 ? Math.floor(rest / 10) : 0, share = rest - sig * 10;
-      cars.push({ id: a[0], p: { x: a[1], y: a[2] }, d: { x: a[3], y: a[4] }, len: a[7], kmh: a[5] * 3.6, share: Math.max(0, share), ...(share < 0 ? { broken: true } : {}), ...(sig ? { blink: sig === 1 ? (-1 as const) : (1 as const) } : {}), ...(isBus ? { bus: true as const } : {}), edge: this.tags[g[0]], exit: this.tags[g[1]] || null, why: this.tags[g[2]] || null, ...(f.aux[i * 2] !== 65535 ? { gap: f.aux[i * 2] / 10 } : {}), still: f.aux[i * 2 + 1] / 10 });
+      cars.push({ id: a[0], p: { x: a[1], y: a[2] }, d: { x: a[3], y: a[4] }, len: a[7], kmh: a[5] * 3.6, share: Math.max(0, share), ...(share < 0 ? { broken: true } : {}), ...(sig ? { blink: sig === 1 ? (-1 as const) : (1 as const) } : {}), ...(isBus ? { bus: true as const } : {}), edge: this.tags[g[0]], exit: this.tags[g[1]] || null, why: this.tags[g[2]] || null, pos: a[8], dest: this.tags[g[3]] || null, ...(f.aux[i * 2] !== 65535 ? { gap: f.aux[i * 2] / 10 } : {}), still: f.aux[i * 2 + 1] / 10 });
     }
     const tr = f.trailers;
     if (tr) for (let i = 0; i < tr.length; i += 6) cars[tr[i]].trailer = { p: { x: tr[i + 1], y: tr[i + 2] }, d: { x: tr[i + 3], y: tr[i + 4] }, len: tr[i + 5] };
@@ -2827,15 +2827,15 @@ export class SketchSim {
       this.frames.push({ t: r2(this.t), nums: fnums, refs });
       while (this.frames.length && this.frames[0].t < this.t - KEEP_FRAMES) this.frames.shift();
       // (to replay)
-      const nums = new Float32Array(n * 8), tags = new Uint32Array(n * 3), aux = new Uint16Array(n * 2);
+      const nums = new Float32Array(n * 9), tags = new Uint32Array(n * 4), aux = new Uint16Array(n * 2);
       const trailers: number[] = [];
       this.vehicles.forEach((v, i) => {
         const { p, d, len, trailer: t } = posed.get(v)!;
         // (broken down: its share kept as -1; else the turn signal added to it, +10 left, +20 right; a bus, +100 more: no more bytes)
         const sig = this.blinker(v);
-        nums.set([v.id, p.x, p.y, d.x, d.y, v.v, v.broken !== null ? -1 : Math.min(9, v.v / Math.max(1, v.edge.vmax)) + (sig === -1 ? 10 : sig === 1 ? 20 : 0) + (v.bus ? 100 : 0), len], i * 8);
+        nums.set([v.id, p.x, p.y, d.x, d.y, v.v, v.broken !== null ? -1 : Math.min(9, v.v / Math.max(1, v.edge.vmax)) + (sig === -1 ? 10 : sig === 1 ? 20 : 0) + (v.bus ? 100 : 0), len, v.pos], i * 9);
         if (t) trailers.push(i, t.p.x, t.p.y, t.d.x, t.d.y, t.len);
-        tags.set([this.tag(v.edge.key), this.tag(v.exit?.key ?? null), this.tag(v.why)], i * 3);
+        tags.set([this.tag(v.edge.key), this.tag(v.exit?.key ?? null), this.tag(v.why), this.tag(v.dest)], i * 4);
         aux[i * 2] = Number.isFinite(v.gap) ? Math.min(65534, Math.round(Math.max(0, v.gap) * 10)) : 65535; aux[i * 2 + 1] = Math.min(65535, Math.round(v.still * 10));
       });
       // (the zebras' pedestrians: waiting, crossing, how far across)
@@ -3128,14 +3128,14 @@ export class SketchSim {
     while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (fr[mid].t <= at) lo = mid; else hi = mid - 1; }
     const f = fr[lo];
     if (f.explain?.car === id) return f.explain;
-    const n = f.tags.length / 3, whyOf = new Map<number, string | null>();
+    const n = f.tags.length / 4, whyOf = new Map<number, string | null>();
     let me = -1;
-    for (let i = 0; i < n; i++) { const c = f.nums[i * 8]; whyOf.set(c, this.tags[f.tags[i * 3 + 2]] || null); if (c === id) me = i; }
+    for (let i = 0; i < n; i++) { const c = f.nums[i * 9]; whyOf.set(c, this.tags[f.tags[i * 4 + 2]] || null); if (c === id) me = i; }
     if (me < 0) return null;
     const why = whyOf.get(id) ?? null, r = readWhy(why);
     // (how long the same why, and its whys before: back over the frames kept, up to 2 minutes)
-    const tagOf = (g: ReplayFrame, hint: number) => { const k = hint < g.tags.length / 3 && g.nums[hint * 8] === id ? hint : (() => { for (let i = 0; i < g.tags.length / 3; i++) if (g.nums[i * 8] === id) return i; return -1; })(); return { k, tag: k < 0 ? -1 : g.tags[k * 3 + 2] }; };
-    const now = f.tags[me * 3 + 2], log: CarExplain["log"] = [];
+    const tagOf = (g: ReplayFrame, hint: number) => { const k = hint < g.tags.length / 4 && g.nums[hint * 9] === id ? hint : (() => { for (let i = 0; i < g.tags.length / 4; i++) if (g.nums[i * 9] === id) return i; return -1; })(); return { k, tag: k < 0 ? -1 : g.tags[k * 4 + 2] }; };
+    const now = f.tags[me * 4 + 2], log: CarExplain["log"] = [];
     let since = 0, hint = me, last = now, same = true;
     for (let j = lo - 1; j >= 0 && f.t - fr[j].t <= 120; j--) {
       const { k, tag } = tagOf(fr[j], hint);
@@ -3154,15 +3154,15 @@ export class SketchSim {
     // (an event before the state it led to, at the same time)
     log.sort((a, b) => a.t - b.t || (a.what === "state" ? 1 : 0) - (b.what === "state" ? 1 : 0));
     const gap = f.aux[me * 2] !== 65535 ? f.aux[me * 2] / 10 : null;
-    const speedOf = new Map<number, number>(); for (let i = 0; i < n; i++) speedOf.set(f.nums[i * 8], f.nums[i * 8 + 5]);
+    const speedOf = new Map<number, number>(); for (let i = 0; i < n; i++) speedOf.set(f.nums[i * 9], f.nums[i * 9 + 5]);
     const zw = r?.kind === "zone" ? this.zoneReplayed(f, me, r) : null;
     const { chain, deadlock } = this.chainOf(id, (c: number) => readWhy(whyOf.get(c) ?? null)?.car ?? null, r?.car ?? null, (c: number) => (speedOf.get(c) ?? 0) < 1);
     return {
       car: id, t: f.t, traced: false, why,
       rule: r ? { kind: zw?.kind ?? r.kind, ...(r.edge ? { edge: r.edge } : {}), ...(zw?.detail ?? r.detail ? { detail: zw?.detail ?? r.detail } : {}) } : null,
       speed: null,
-      leader: r?.kind === "follow" && r.car !== undefined && gap !== null ? { car: r.car, gap, kmh: r2((f.nums[[...Array(n).keys()].find(i => f.nums[i * 8] === r.car)! * 8 + 5] ?? 0) * 3.6) } : null,
-      blocker: r && r.car !== undefined && r.kind !== "follow" ? { car: r.car, edge: r.edge ?? (() => { for (let i = 0; i < n; i++) if (f.nums[i * 8] === r.car) return this.tags[f.tags[i * 3]]; return ""; })(),
+      leader: r?.kind === "follow" && r.car !== undefined && gap !== null ? { car: r.car, gap, kmh: r2((f.nums[[...Array(n).keys()].find(i => f.nums[i * 9] === r.car)! * 9 + 5] ?? 0) * 3.6) } : null,
+      blocker: r && r.car !== undefined && r.kind !== "follow" ? { car: r.car, edge: r.edge ?? (() => { for (let i = 0; i < n; i++) if (f.nums[i * 9] === r.car) return this.tags[f.tags[i * 4]]; return ""; })(),
         ...(zw?.theirSec !== undefined ? { theirSec: zw.theirSec, mySec: zw.mySec } : {}), ...(zw?.wantSec !== undefined ? { wantSec: zw.wantSec } : {}), ...(zw?.round !== undefined ? { round: zw.round } : {}) } : null,
       stopAt: null, since: r2(since), chain, deadlock, plan: null, noRoute: null, log: log.slice(-30),
     };
@@ -3176,21 +3176,21 @@ export class SketchSim {
    * it is. Places from where each is drawn; null: no such conflict found.
    */
   private zoneReplayed(f: ReplayFrame, me: number, r: { car?: number; edge?: string }): Won | null {
-    const E = this.edges.get(this.tags[f.tags[me * 3]]), X = this.edges.get(this.tags[f.tags[me * 3 + 1]]), other = r.edge ? this.edges.get(r.edge) : undefined;
+    const E = this.edges.get(this.tags[f.tags[me * 4]]), X = this.edges.get(this.tags[f.tags[me * 4 + 1]]), other = r.edge ? this.edges.get(r.edge) : undefined;
     if (!E || !other) return null;
     const mine = [E, X].find(e => e?.conflicts.some(k => k.other === other));
     const k = mine?.conflicts.find(q => q.other === other);
     if (!mine || !k) return null;
-    const n = f.tags.length / 3, idx = (car: number) => { for (let i = 0; i < n; i++) if (f.nums[i * 8] === car) return i; return -1; };
+    const n = f.tags.length / 4, idx = (car: number) => { for (let i = 0; i < n; i++) if (f.nums[i * 9] === car) return i; return -1; };
     const wi = r.car !== undefined ? idx(r.car) : -1;
     // (where on edge `e` a car is: the nearest of its points every half metre to where it is drawn; within a metre or two of where the
     // step had it, so the seconds below are about those the step reckoned, to a few tenths)
-    const posOn = (e: Edge, i: number) => { const x = f.nums[i * 8 + 1], y = f.nums[i * 8 + 2]; let best = 0, bd = Infinity; for (let s = 0; s <= e.len; s += 0.5) { const p = e.locate(s).p, d = (p.x - x) ** 2 + (p.y - y) ** 2; if (d < bd) { bd = d; best = s; } } return best; };
+    const posOn = (e: Edge, i: number) => { const x = f.nums[i * 9 + 1], y = f.nums[i * 9 + 2]; let best = 0, bd = Infinity; for (let s = 0; s <= e.len; s += 0.5) { const p = e.locate(s).p, d = (p.x - x) ** 2 + (p.y - y) ** 2; if (d < bd) { bd = d; best = s; } } return best; };
     const rules = this.tuning.junctionRules >= 0.5;
     let ws: number | null = null;
     if (wi >= 0) {
-      const wE = this.edges.get(this.tags[f.tags[wi * 3]]);
-      if (wE === other) { let d = other.ring ? this.along(other, posOn(other, wi), k.otherAt) : k.otherAt - posOn(other, wi); if (other.ring && d > other.len - Math.min(f.nums[wi * 8 + 7] + 1 + k.otherAfter, other.len / 2)) d -= other.len; ws = d - k.otherBefore; }
+      const wE = this.edges.get(this.tags[f.tags[wi * 4]]);
+      if (wE === other) { let d = other.ring ? this.along(other, posOn(other, wi), k.otherAt) : k.otherAt - posOn(other, wi); if (other.ring && d > other.len - Math.min(f.nums[wi * 9 + 7] + 1 + k.otherAfter, other.len / 2)) d -= other.len; ws = d - k.otherBefore; }
       else if (wE?.kind === "conn" && wE.to!.lane === other) { const d = (other.ring ? this.along(other, wE.to!.s, k.otherAt) : k.otherAt - wE.to!.s); if (d >= 0) ws = wE.len - posOn(wE, wi) + d - k.otherBefore; }
     }
     const minor = (mine.kind === "conn" && !!mine.minor) || (!!mine.innerOff && other.ring), wMinor = !!other.minor || (!!other.innerOff && mine.ring);
@@ -3198,10 +3198,10 @@ export class SketchSim {
     const detail = ws !== null && ws <= 0 ? "already in the zone" : rules ? k.prioWhy : undefined;
     const out: Won = { kind, car: r.car, edge: other.key, ...(detail ? { detail } : {}) };
     if (ws !== null && ws > 0) {
-      const len = f.nums[me * 8 + 7], wLen = f.nums[wi * 8 + 7], truck = (l: number) => l > LEN + 1;
+      const len = f.nums[me * 9 + 7], wLen = f.nums[wi * 9 + 7], truck = (l: number) => l > LEN + 1;
       const dMe = (mine === E ? 0 : this.exitS(mine) - posOn(E, me)) + k.at - k.before - (mine === E ? posOn(E, me) : 0);
-      out.theirSec = r2(timeTo(ws, f.nums[wi * 8 + 5], other.vmax, truck(wLen) ? TRUCK_A : A_MAX));
-      out.mySec = r2(timeTo(Math.max(0, dMe) + k.after + len + (truck(len) ? SWEEP : 0), f.nums[me * 8 + 5], mine.vmax, truck(len) ? TRUCK_A : A_MAX));
+      out.theirSec = r2(timeTo(ws, f.nums[wi * 9 + 5], other.vmax, truck(wLen) ? TRUCK_A : A_MAX));
+      out.mySec = r2(timeTo(Math.max(0, dMe) + k.after + len + (truck(len) ? SWEEP : 0), f.nums[me * 9 + 5], mine.vmax, truck(len) ? TRUCK_A : A_MAX));
       if (kind === "give-way") out.wantSec = GAP;
       if (other.ring) out.round = r2(ws);
     }

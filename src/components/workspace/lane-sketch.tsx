@@ -1896,7 +1896,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           </div>
           {in3d && (
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed} blinkers={blinkers}
-              selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c && live.current.replayT === null ? carWay(live.current.sketch, c)?.pts ?? null : null; }} carWhy={() => carsShown().why} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
+              selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c ? carWay(live.current.sketch, c)?.pts ?? null : null; }} carWhy={() => carsShown().why} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
           )}
@@ -1931,7 +1931,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
             <SketchGoContext.Provider value={{ sketch, go: to => goTo(to, true) }}>
-              <CarPanel info={carInfo} patience={resolveTuning(params.tune).patience} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
+              <CarPanel info={carInfo} patience={resolveTuning(params.tune).patience} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo ? carWay(sketch, carInfo) : null}
                 onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
                 onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
                 onCopy={async () => {
@@ -2073,7 +2073,7 @@ type KeyLike = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "alt
 
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
-  return { id: c.id, truck: !!c.trailer, bus: !!c.bus, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
+  return { id: c.id, truck: !!c.trailer, bus: !!c.bus, length: c.trailer ? NaN : c.len, edge: c.edge, pos: c.pos, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: c.dest, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
 /** where a car's way ends: its way out's road, or the lane when it is in none */
@@ -3860,8 +3860,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   // the car picked: the way it will go, and a ring round it
   if (D && st.car) {
-    // (its way on to the end of its trip, as V1 shows it but all of it; going nowhere in particular, or replayed: the way just ahead)
-    const { p } = st.car, way = st.replayT === null ? carWay(sk, st.car) : null, route = way?.pts ?? st.car.route;
+    // (its way on to the end of its trip, as V1 shows it but all of it, live or replayed alike, ticket #56; going nowhere in particular: the way just ahead)
+    const { p } = st.car, way = carWay(sk, st.car), route = way?.pts ?? st.car.route;
     if (route.length > 1) {
       path(route); ctx.strokeStyle = col.sel; ctx.lineWidth = 2.5 * px; ctx.setLineDash([6 * px, 4 * px]); ctx.lineCap = "round"; ctx.stroke(); ctx.setLineDash([]);
       const a = route[route.length - 2], b = route[route.length - 1], l = dist(a, b) || 1;
