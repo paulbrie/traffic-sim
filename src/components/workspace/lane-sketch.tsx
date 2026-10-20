@@ -37,6 +37,10 @@ import { BusLinesPanel } from "@/components/v2/bus-lines-panel";
 import { FuelPanel, fmtFuel } from "@/components/v2/fuel-panel";
 import { JunctionLine, JunctionResults } from "@/components/v2/junction-results";
 import { RoadResults } from "@/components/v2/road-results";
+import { LiveTrafficPanel } from "@/components/v2/live-traffic-panel";
+import { liveTraffic$, logTrafficPull } from "@/state/live-traffic";
+import { basePath } from "@/lib/base-path";
+import { trafficColor, TRAFFIC_NO_DATA, type TrafficMatch } from "@/lib/tomtom";
 import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
@@ -286,6 +290,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [carNumbers] = useUiPath<boolean>("display/carNumbers");
   const [liveTraffic] = useUiPath<boolean>("display/liveTraffic");
   const [traffic, setTraffic] = useState<TrafficIncident[] | null>(null);
+  // (TomTom's roads' speeds, once fetched in the Live traffic panel for this plan (its page only), matched onto the lanes)
+  const [planId] = useDeepSubject(ui, "planId");
+  const [liveAll] = useSubject(liveTraffic$);
+  const liveTr = page && liveAll?.plan === planId ? liveAll : null;
+  const flow = useMemo(() => (liveTr && sketch.geo ? liveTr.match(sketch) : null), [liveTr, sketch]);
   // (the plan's editor takes the keys: on opening the page, and when the sketch window over it closes)
   const [sketchOpen] = useDeepSubject(ui, "sketch");
   useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
@@ -338,7 +347,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     } else if ((stats.t < T.t0 && testSeen.current === T.car) || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
   }, [stats, sketch, route.result, route.test, setRoute]);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic, in3d, route: routeShown });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic, flow, in3d, route: routeShown });
   // live traffic (TomTom): polled over the plan's area every couple of minutes while the switch is on; cleared when it's
   // off or the plan isn't placed on Earth (no sketch.geo, so no area to ask TomTom about)
   useEffect(() => {
@@ -354,11 +363,20 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const sw = unproject(sk.geo, { x: b.minX - pad, y: b.maxY + pad }), ne = unproject(sk.geo, { x: b.maxX + pad, y: b.minY - pad });
       const qs = new URLSearchParams({ south: String(Math.min(sw.lat, ne.lat)), north: String(Math.max(sw.lat, ne.lat)), west: String(Math.min(sw.lon, ne.lon)), east: String(Math.max(sw.lon, ne.lon)) });
       try {
-        const r = await fetch(`/api/plans/${planId}/traffic?${qs}`);
-        if (!r.ok || stopped) return;
+        const r = await fetch(`${basePath}/api/plans/${planId}/traffic?${qs}`);
+        if (stopped) return;
+        if (!r.ok) {
+          const why = await r.json().then((d: { error?: string }) => d.error, () => null);
+          logTrafficPull({ what: "incidents", plan: planId, error: `${r.status}${why ? `: ${why}` : ""}` });
+          return;
+        }
         const data = (await r.json()) as { incidents: TrafficIncident[] };
+        logTrafficPull({ what: "incidents", plan: planId, count: data.incidents.length });
         if (!stopped) setTraffic(data.incidents);
-      } catch { /* offline or a blip: keep showing the last traffic fetched */ }
+      } catch (e) {
+        // (offline or a blip: keep showing the last traffic fetched)
+        if (!stopped) logTrafficPull({ what: "incidents", plan: planId, error: e instanceof Error ? e.message : String(e) });
+      }
     };
     poll();
     const id = setInterval(poll, 120_000);
@@ -599,8 +617,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const shownBy = useRef<unknown[]>([]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/immutability -- `live` is a deliberate escape hatch (see its declaration): handlers and drawing read it kept current outside React's render cycle
-    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic, in3d, route: routeShown };
-    const now = [sketch, sel, tool, contents, selPt, selCorner, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown];
+    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic, flow, in3d, route: routeShown };
+    const now = [sketch, sel, tool, contents, selPt, selCorner, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown, flow];
     const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
     shownBy.current = now;
     redraw(changed);
@@ -1939,6 +1957,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           )}
           {canTest && hasSel(sel) && <TestInSketchPanel options={tis} setOptions={setTis} onTest={() => testInSketch()} />}
           {page && <BackgroundPanel sketch={sketch} sat={sat} setSat={setSat} viewNow={viewNow} calib={calib} setCalib={setCalib} readOnly={readOnly} />}
+          {page && <LiveTrafficPanel planId={planId} sketch={sketch} live={liveTr} match={flow} readOnly={readOnly} />}
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun}
             experiment={ek === "scratch" ? { on: expOn, rays: showRays !== false, stats: expStats, roundabout: expRoundabout,
               set: on => { setRunning(false); exp.current?.terminate(); exp.current = null; setExpStats(null); setExperiment(on ? "spatial" : null); redraw(false); },
@@ -1946,7 +1965,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <DisplayOptionsPanel canSyncTraffic={!!(page && sketch.geo)} />
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
-          {stats ? <RoadResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "road", id })} /> : null}
+          {stats ? <RoadResults sketch={sketch} stats={stats} traffic={flow} onGo={id => goTo({ kind: "road", id })} /> : null}
           {page && <RoutePanel sketch={sketch} onGo={x => goTo({ kind: x.kind, id: x.id })} onSendTest={() => sendTestCar().catch((e: Error) => toast.error("No test car", { description: e.message }))} />}
           <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} heldBack={stats?.heldBackBy}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
@@ -3198,6 +3217,8 @@ interface PaintState {
   peds: PedView[] | null;
   /** the layers shown */
   layers: Layers;
+  /** TomTom's roads' speeds matched onto the lanes (the "Live traffic" layer, with the incidents; null: none fetched) */
+  flow: TrafficMatch | null;
   /** what each junction takes in */
   contents: Map<string, JunctionContents>;
   /** filled with the names drawn and where (the kept image's), for clicks and the pointer on them */
@@ -3630,6 +3651,19 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         ctx.moveTo(p.x - d.x * k - d.y * k, p.y - d.y * k + d.x * k); ctx.lineTo(p.x, p.y); ctx.lineTo(p.x - d.x * k + d.y * k, p.y - d.y * k - d.x * k);
         ctx.stroke();
       }
+    }
+    // live traffic (TomTom): each lane it covers in the colour of its speed now against its free-flow speed, over the lane's middle;
+    // the others grey (their green lane line would read as free flow)
+    if (S && st.layers.traffic && st.flow) {
+      const m = st.flow;
+      ctx.lineCap = "butt"; ctx.lineJoin = "round"; ctx.globalAlpha = 0.85;
+      for (const l of sk.lanes) {
+        const t = m.lanes.get(l.id), c = t ? trafficColor(t) : l.bike ? null : TRAFFIC_NO_DATA;
+        if (!c || !vis.lanes.has(l.id) || !lIn(l)) continue;
+        path(samples(l.shape, far ? 2 : 0.5)); if (isFullCircle(l.shape)) ctx.closePath();
+        ctx.strokeStyle = c; ctx.lineWidth = Math.max(l.width * 0.6, 3 * px); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     }
     // turn arrows near the ends of the lanes leading into junctions, painted on the road (over the lanes' lines), close up
     if (S && !far && st.layers.markings && v.scale >= 3) {
