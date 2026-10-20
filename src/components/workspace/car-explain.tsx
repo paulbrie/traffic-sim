@@ -5,7 +5,7 @@ import { ClipboardCopy, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { crossingWords, edgeName, explainText, headline, movingLoop, noRouteText, patienceNote, RULE_WORDS, tagWords, type CarExplain } from "@/lib/car-explain";
-import type { Sketch } from "@/lib/lane-sketch";
+import { baseLaneId, type Sketch } from "@/lib/lane-sketch";
 
 /** a place on the sketch a car's panel names: a road, a lane or a connector */
 export type SketchPlace = { kind: "road" | "lane" | "connector"; id: string };
@@ -16,8 +16,9 @@ const LINK = "underline decoration-dotted underline-offset-2 hover:decoration-so
 
 /** an edge key ("lane:l5", "conn:c7") or a bare lane / connector id, as the place it is (null: not on the sketch) */
 function placeOf(sk: Sketch, key: string): SketchPlace | null {
-  const id = key.slice(key.indexOf(":") + 1);
-  if (!key.startsWith("conn:") && sk.lanes.some(l => l.id === id)) return { kind: "lane", id };
+  const id = key.slice(key.indexOf(":") + 1), lane = baseLaneId(id);
+  // (a lane both ways' way back: its lane, ticket #53)
+  if (!key.startsWith("conn:") && sk.lanes.some(l => l.id === lane)) return { kind: "lane", id: lane };
   if (!key.startsWith("lane:") && sk.connectors.some(c => c.id === id)) return { kind: "connector", id };
   return null;
 }

@@ -13,7 +13,7 @@
  * junction, rings, lanes following a lead (merge their roads instead), or two that would make a loop. Framework-free.
  */
 import {
-  arcToPoints, connectorPts, contentsOf, dist, isFullCircle, laneById, laneLength, leadOf, linkEnd, pointAt, settle,
+  arcToPoints, connectorPts, contentsOf, dist, isFullCircle, laneById, laneLength, leadOf, linkEnd, pointAt, settle, twoWayOk,
   type LaneAt, type Pt, type Sketch, type SketchConnector, type SketchLane,
 } from "./lane-sketch";
 
@@ -37,10 +37,27 @@ function joinOf(sk: Sketch, a: string, b: string): { via: SketchConnector | null
   return dist(pointAt(A.shape, LA).p, pointAt(B.shape, 0).p) <= MEET ? { via: null } : null;
 }
 
+/** two lanes both ways (ticket #53): the connectors their ways back carry on by, from the second's start to the first's end, where they meet */
+function backVias(sk: Sketch, first: string, second: string): SketchConnector[] {
+  const A = laneById(sk, first), B = laneById(sk, second);
+  if (!A || !B || !twoWayOk(A) || !twoWayOk(B)) return [];
+  const LA = laneLength(A.shape);
+  return sk.connectors.filter(c => c.from.lane === second && c.from.s <= AT_END && c.to.lane === first && c.to.s >= LA - AT_END);
+}
+
 /** why `first` and `second` (in that order) can't be merged where they meet; null if they can */
 function blocked(sk: Sketch, first: string, second: string, via: SketchConnector | null): string | null {
-  const A = laneById(sk, first)!, LA = laneLength(A.shape);
+  const A = laneById(sk, first)!, LA = laneLength(A.shape), B = laneById(sk, second)!;
   if (joinOf(sk, second, first)) return `Lanes ${first} and ${second} meet at both ends: merged, the lane would lead into itself`;
+  // (one lane both ways, ticket #53: with another the same, its way back carrying on by one connector at most)
+  if (twoWayOk(A) !== twoWayOk(B)) return `Lane ${twoWayOk(A) ? first : second} is one lane both ways and lane ${twoWayOk(A) ? second : first} isn't: make them the same first`;
+  if (twoWayOk(A) && A.twoWay !== B.twoWay) return `Lanes ${first} and ${second} are both ways by different rules: make them the same first`;
+  const back = backVias(sk, first, second);
+  if (back.length > 1) return `Their ways back carry on by ${back.length} connectors (${back.map(c => c.id).join(", ")}): only by one, or none`;
+  if (twoWayOk(A)) {
+    const other = sk.connectors.find(c => !back.includes(c) && c !== via && ((c.from.lane === second && c.from.s <= AT_END) || (c.to.lane === first && c.to.s >= LA - AT_END)));
+    if (other) return `Connector ${other.id} also leaves or joins their ways back where they meet: another way goes off or comes in there (a junction), so they don't just carry on`;
+  }
   const out = sk.connectors.find(c => c !== via && c.from.lane === first && c.from.s >= LA - AT_END);
   if (out) return `Connector ${out.id} also leaves lane ${first} where they meet: another way goes off there (a junction), so they don't just carry on`;
   const into = sk.connectors.find(c => c !== via && c.to.lane === second && c.to.s <= AT_END);
@@ -70,6 +87,10 @@ function differences(a: SketchLane, b: SketchLane, endOfA: SketchLane, startOfB:
   if (endOfA.control) out.push(`the ${endOfA.control} line at the end of lane ${endOfA.id} (now partway along)`);
   if (startOfB.inRate !== undefined) out.push(`lane ${startOfB.id}'s traffic coming in (${startOfB.inRate}/h)`);
   if (endOfA.outWeight !== undefined) out.push(`lane ${endOfA.id}'s share of the trips out`);
+  // (both ways: its way back's, the other way round)
+  if (startOfB.backControl) out.push(`the ${startOfB.backControl} line at the start of lane ${startOfB.id}, for its way back (now partway along)`);
+  if (endOfA.backInRate !== undefined) out.push(`lane ${endOfA.id}'s way back's traffic coming in (${endOfA.backInRate}/h)`);
+  if (startOfB.backOutWeight !== undefined) out.push(`lane ${startOfB.id}'s way back's share of the trips out`);
   return out;
 }
 
@@ -114,7 +135,10 @@ function joinLanes(sk0: Sketch, first: string, second: string, via: SketchConnec
     ...(base.level !== undefined ? { level: base.level } : {}), ...(base.speed !== undefined ? { speed: base.speed } : {}),
     ...(a0.inRate !== undefined ? { inRate: a0.inRate } : {}),
     ...(b0.control ? { control: b0.control } : {}), ...(b0.outWeight !== undefined ? { outWeight: b0.outWeight } : {}),
+    // (both ways: its way back's traffic coming in the second's, at its end; its sign and share out the first's, at its start)
+    ...(twoWayOk(a0) ? { twoWay: a0.twoWay, ...(b0.backInRate !== undefined ? { backInRate: b0.backInRate } : {}), ...(a0.backControl ? { backControl: a0.backControl } : {}), ...(a0.backOutWeight !== undefined ? { backOutWeight: a0.backOutWeight } : {}) } : {}),
   };
+  const back = new Set(backVias(sk0, first, second).map(c => c.id));
   const dropped = differences(base, keep === first ? b0 : a0, a0, b0);
   // (connectors on the first as far from its start as they were; on the second as far from its end)
   const place = (x: LaneAt): LaneAt => (x.lane === first ? { lane: keep, s: r2(Math.min(x.s, L)) } : x.lane === second ? { lane: keep, s: r2(Math.max(0, L - (LB - x.s))) } : x);
@@ -122,7 +146,7 @@ function joinLanes(sk0: Sketch, first: string, second: string, via: SketchConnec
   sk = {
     ...sk,
     lanes: sk.lanes.flatMap(l => (l.id === keep ? [lane] : l.id === gone ? [] : [l])),
-    connectors: sk.connectors.filter(c => c !== via && c.id !== via?.id).map(c => (c.from.lane === first || c.from.lane === second || c.to.lane === first || c.to.lane === second ? { ...c, from: place(c.from), to: place(c.to) } : c)),
+    connectors: sk.connectors.filter(c => c !== via && c.id !== via?.id && !back.has(c.id)).map(c => (c.from.lane === first || c.from.lane === second || c.to.lane === first || c.to.lane === second ? { ...c, from: place(c.from), to: place(c.to) } : c)),
     roads: sk.roads.map(r => (r.lanes.includes(gone) ? { ...r, lanes: r.lanes.filter(x => x !== gone) } : r)).filter(r => r.lanes.length),
     ...(sk.journeys ? { journeys: sk.journeys.map(j => ({ ...j, from: rename(j.from), to: rename(j.to) })) } : {}),
     junctions: sk.junctions.map(j => (j.splits?.some(s => s.from === `lane:${gone}` || `lane:${gone}` in s.shares)

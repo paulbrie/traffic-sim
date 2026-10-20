@@ -5,7 +5,7 @@
  * appear or vanish there); a way on joining a lane (a ring, say) within a car length after a way off leaves it, the two
  * connectors running through each other (T177). Framework-free.
  */
-import { connectorPts, contentsOf, laneLength, samples, type Pt, type Sketch, type SketchLane } from "./lane-sketch";
+import { baseLaneId, connectorPts, contentsOf, laneLength, samples, waysBack, type Pt, type Sketch, type SketchLane } from "./lane-sketch";
 
 export type JunctionWarningKind = "loop-no-way-out" | "on-after-off" | "across-ring" | "entry-no-give-way" | "entry-two-places" | "crosses-many" | "no-way-in" | "no-way-out";
 /** one warning: what kind, on which junction (null: on none), the lanes and connectors it is about (ids), the words */
@@ -32,6 +32,9 @@ const box = (P: Pt[]) => P.reduce((b, p) => ({ x0: Math.min(b.x0, p.x), y0: Math
 
 /** the sketch's junction warnings, by junction, worst first */
 export function junctionWarnings(sk: Sketch): JunctionWarning[] {
+  // (by the ways traffic takes: a lane both ways' way back a lane of its own, its sign at the lane's start; told by its lane, ticket #53)
+  const both = waysBack(sk) !== sk;
+  sk = waysBack(sk);
   const out: JunctionWarning[] = [];
   const cs = contentsOf(sk), onJ = new Map<string, string>();
   for (const j of sk.junctions) for (const id of [...(cs.get(j.id)?.connectors ?? []), ...(cs.get(j.id)?.lanes ?? [])]) onJ.set(id, j.id);
@@ -138,7 +141,7 @@ export function junctionWarnings(sk: Sketch): JunctionWarning[] {
     const ends = A.conn ? new Set([A.conn.from.lane, A.conn.to.lane]) : new Set<string>();
     const hit: string[] = [];
     for (const B of items) {
-      if (B.id === A.id || ends.has(B.id) || B.b.x0 > A.b.x1 || B.b.x1 < A.b.x0 || B.b.y0 > A.b.y1 || B.b.y1 < A.b.y0) continue;
+      if (B.id === A.id || baseLaneId(B.id) === baseLaneId(A.id) || ends.has(B.id) || B.b.x0 > A.b.x1 || B.b.x1 < A.b.x0 || B.b.y0 > A.b.y1 || B.b.y1 < A.b.y0) continue;
       // (connectors sharing a lane at either end fan out from or into it: not a crossing)
       if (A.conn && B.conn && (A.conn.from.lane === B.conn.from.lane || A.conn.to.lane === B.conn.to.lane)) continue;
       if (crosses(A.P, B.P)) hit.push(B.id);
@@ -154,5 +157,6 @@ export function junctionWarnings(sk: Sketch): JunctionWarning[] {
     if (!outs.has(l.id)) out.push({ kind: "no-way-out", junction: j, items: [l.id], text: `lane ${l.id} on the junction has no way out: cars on it vanish at its end` });
   }
   const rank: Record<JunctionWarningKind, number> = { "loop-no-way-out": -1, "on-after-off": -0.5, "across-ring": 0, "no-way-in": 1, "no-way-out": 1, "crosses-many": 2, "entry-two-places": 3, "entry-no-give-way": 4 };
-  return out.sort((a, b) => rank[a.kind] - rank[b.kind] || (a.junction ?? "").localeCompare(b.junction ?? ""));
+  const told = both ? out.map(w => ({ ...w, items: [...new Set(w.items.map(baseLaneId))], text: w.text.replace(/\b(\S+)~back\b/g, "$1 (way back)") })) : out;
+  return told.sort((a, b) => rank[a.kind] - rank[b.kind] || (a.junction ?? "").localeCompare(b.junction ?? ""));
 }

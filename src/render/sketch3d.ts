@@ -14,7 +14,7 @@ import { junctionSurfaceHoles, nestLoops } from "@/lib/junction-fill";
 import { circlePts, deadEndTurnarounds } from "@/lib/dead-ends";
 import {
   bandPolygon, crossingFrame, isFullCircle, junctionBands, junctionLevel, laneLevel, laneLength, linkGeometry,
-  outlinePath, densePoints, hasLevels, pointAt, roadMarkings, samples, shownZ, smoothJunction, turnArrows,
+  outlinePath, densePoints, hasLevels, pointAt, roadMarkings, samples, shownZ, smoothJunction, turnArrows, twoWayOk, twinOf, isTwinId, baseLaneId,
   type JunctionContents, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
 
@@ -215,9 +215,10 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
   }
   if (layers.signs) {
     // a stop line across a lane's end, a yield its row of triangles
-    for (const l of sk.lanes) {
+    // (a lane both ways' way back's too, at the lane's start, ticket #53)
+    for (const l of sk.lanes.flatMap(x => (twoWayOk(x) ? [x, twinOf(x)] : [x]))) {
       if (!l.control || isFullCircle(l.shape)) continue;
-      const L = laneLength(l.shape), { p, d } = pointAt(l.shape, L), n = { x: -d.y, y: d.x }, hw = l.width / 2, h = shownZ(sk, l.id, L) * LEVEL_H + Y.paint;
+      const L = laneLength(l.shape), { p, d } = pointAt(l.shape, L), n = { x: -d.y, y: d.x }, hw = l.width / 2, h = (isTwinId(l.id) ? shownZ(sk, baseLaneId(l.id), 0) : shownZ(sk, l.id, L)) * LEVEL_H + Y.paint;
       if (l.control === "stop") {
         const A = { x: p.x - d.x * 0.5, y: p.y - d.y * 0.5 };
         paint.polygon([{ x: A.x + n.x * hw, y: A.y + n.y * hw }, { x: p.x + n.x * hw, y: p.y + n.y * hw }, { x: p.x - n.x * hw, y: p.y - n.y * hw }, { x: A.x - n.x * hw, y: A.y - n.y * hw }], [], h);

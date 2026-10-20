@@ -12,7 +12,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { connectorPts, junctionLevel, shownCarZ, shownZ, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
+import { baseLaneId, isTwinId, wayFrom, connectorPts, junctionLevel, shownCarZ, shownZ, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
 import { LEVEL_H } from "@/engine/compile";
 import { speedColor } from "@/render/palette";
 import { buildSketch3D, type Sketch3D } from "@/render/sketch3d";
@@ -272,11 +272,12 @@ export function View3DV2(props: View3DProps) {
         let n = 0;
         for (const plan of signalPlans(sk)) {
           const held = new Map<string, string[]>();
-          for (const id of plan.controlled) { const c = sk.connectors.find(x => x.id === id); if (c) held.set(c.from.lane, [...(held.get(c.from.lane) ?? []), id]); }
+          // (a lane both ways' way back by its own id, its pole at the lane's start: ticket #53)
+          for (const id of plan.controlled) { const c = sk.connectors.find(x => x.id === id), w = c && wayFrom(sk, c).lane; if (w) held.set(w, [...(held.get(w) ?? []), id]); }
           for (const [lane, conns] of held) {
             const l = laneById(sk, lane);
             if (!l || n >= 2000) continue;
-            const L = laneLength(l.shape), e = pointAt(l.shape, L), r = { x: e.d.y, y: -e.d.x }, o = l.width / 2 + 0.6, h = shownZ(sk, lane, L) * LEVEL_H;
+            const L = laneLength(l.shape), e = pointAt(l.shape, L), r = { x: e.d.y, y: -e.d.x }, o = l.width / 2 + 0.6, h = (isTwinId(lane) ? shownZ(sk, baseLaneId(lane), 0) : shownZ(sk, lane, L)) * LEVEL_H;
             const x = e.p.x + r.x * o, z = e.p.y + r.y * o;
             P.set(x, h, z); S.set(1, 4.2, 1); M.compose(P, Q.identity(), S); poles.setMatrixAt(n, M);
             put(heads, n, x, h + 4.2, z, -Math.atan2(e.d.y, e.d.x), 0.35, 0.9, 0.35);

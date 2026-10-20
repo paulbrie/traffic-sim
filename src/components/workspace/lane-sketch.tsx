@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { project, unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
-  addStop, updateStop, deleteStop, type SketchStop, setTwoWay, twoWayOk, backTo, type TwoWay,
+  addStop, updateStop, deleteStop, type SketchStop, setTwoWay, twoWayOk, twinOf, twinId, baseLaneId, connectorEnd, wayFrom, wayTo, type TwoWay,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve, roadMiddle,
@@ -212,10 +212,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [route, setRoute] = useEditorState(ek, "route");
   const routeShown = useMemo(() => {
     if (!route.result?.ok) return null;
-    const lanes = new Set(route.result.steps.flatMap(x => (x.kind === "lane" ? [x.id] : []))), conns = new Set(route.result.steps.flatMap(x => (x.kind === "connector" ? [x.id] : [])));
+    // (a lane both ways' way back: its lane, ticket #53)
+    const lanes = new Set(route.result.steps.flatMap(x => (x.kind === "lane" ? [baseLaneId(x.id)] : []))), conns = new Set(route.result.steps.flatMap(x => (x.kind === "connector" ? [x.id] : [])));
     // (the test car's way, where it went another: what it drove off the traced way)
     const keys = route.test?.otherWay ? offRoute(sketch, route.result.steps, route.test.path) : [];
-    return { lanes, conns, driven: { lanes: new Set(keys.filter(k => k.startsWith("lane:")).map(k => k.slice(5))), conns: new Set(keys.filter(k => k.startsWith("conn:")).map(k => k.slice(5))) } };
+    return { lanes, conns, driven: { lanes: new Set(keys.filter(k => k.startsWith("lane:")).map(k => baseLaneId(k.slice(5)))), conns: new Set(keys.filter(k => k.startsWith("conn:")).map(k => k.slice(5))) } };
   }, [sketch, route.result, route.test]);
   const in3d = page && mode === "3d";
   /** the 3D view's canvas while it shows (the bridge's screenshot), and what its keys and buttons ask of it */
@@ -2232,12 +2233,13 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover, now, onPick 
   const label = (id: string) => {
     const c = sketch.connectors.find(x => x.id === id);
     if (!c) return id;
-    const a = at(sketch, c.from), b = at(sketch, c.to), to = roadOf(sketch, c.to.lane)?.name ?? `lane ${c.to.lane}`;
+    // (on a lane both ways, leaving or joining its way back: that way, ticket #53)
+    const a = connectorEnd(sketch, c.from, "from"), b = connectorEnd(sketch, c.to, "to"), to = roadOf(sketch, c.to.lane)?.name ?? `lane ${wayTo(sketch, c).lane}`;
     const ang = a && b ? Math.atan2(a.d.x * b.d.y - a.d.y * b.d.x, a.d.x * b.d.x + a.d.y * b.d.y) : 0;
     const turn = Math.abs(ang) < 0.5 ? "straight" : Math.abs(ang) > 2.6 ? "U-turn" : ang > 0 ? "right" : "left";
-    return `${c.from.lane} → ${to} (${turn})`;
+    return `${wayFrom(sketch, c).lane} → ${to} (${turn})`;
   };
-  const byWay = junctionApproaches(sketch, contents).map(w => ({ w, conns: plan.controlled.filter(id => w.lanes.includes(sketch.connectors.find(x => x.id === id)!.from.lane)) }));
+  const byWay = junctionApproaches(sketch, contents).map(w => ({ w, conns: plan.controlled.filter(id => w.lanes.includes(wayFrom(sketch, sketch.connectors.find(x => x.id === id)!).lane)) }));
   return (
     <div className="grid gap-2">
       <div className="grid grid-cols-3 gap-2">
@@ -2704,7 +2706,7 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
               <ToggleGroupItem value="forward" className="h-7 flex-1 px-1 text-xs" title="One lane, both ways, one way at a time: those coming in at its start (along the lane) first; the other way goes only in a gap long enough to get through">Along first</ToggleGroupItem>
               <ToggleGroupItem value="back" className="h-7 flex-1 px-1 text-xs" title="One lane, both ways, one way at a time: those coming in at its end (against the lane) first; the other way goes only in a gap long enough to get through">Back first</ToggleGroupItem>
             </ToggleGroup>
-            {lane.twoWay && <p className="text-[11px] text-muted-foreground">Connectors joining it past its middle, and leaving it before, are the way back&apos;s.</p>}
+            {lane.twoWay && <p className="text-[11px] text-muted-foreground">Connectors joining it past its middle, and leaving it before, are the way back&apos;s: draw them from its start and to its end as to any lane.{lane.twoWay !== "turns" && " By a roundabout, give the priority to the way leaving it (or take turns): the other way round, cars waiting to leave can fill the ring."}</p>}
           </div>
         )}
         {sh.kind === "arc" && !lead && (
@@ -2719,6 +2721,17 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
               <ToggleGroupItem value="none" className="h-7 flex-1 text-xs" title="No sign: where paths cross, the first there goes first">Nothing</ToggleGroupItem>
               <ToggleGroupItem value="yield" className="h-7 flex-1 text-xs" title="Yield: cars leaving here come up slowly and give way to traffic without a sign">Yield</ToggleGroupItem>
               <ToggleGroupItem value="stop" className="h-7 flex-1 text-xs" title="Stop: cars leaving here stop at the line, then give way to traffic without a sign">Stop</ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+        )}
+        {!isFullCircle(sh) && twoWayOk(lane) && (
+          <div className="grid gap-1">
+            <span className="text-xs text-muted-foreground">At its start, for the way back</span>
+            <ToggleGroup type="single" value={lane.backControl ?? "none"} aria-label="Sign at the lane's start, for its way back" className="w-full"
+              onValueChange={v => v && editSketch(s => setControl(s, twinId(lane.id), v === "none" ? null : (v as LaneControl)))}>
+              <ToggleGroupItem value="none" className="h-7 flex-1 text-xs" title="No sign: where paths cross, the first there goes first">Nothing</ToggleGroupItem>
+              <ToggleGroupItem value="yield" className="h-7 flex-1 text-xs" title="Yield: cars leaving the lane's start, going back, come up slowly and give way to traffic without a sign">Yield</ToggleGroupItem>
+              <ToggleGroupItem value="stop" className="h-7 flex-1 text-xs" title="Stop: cars leaving the lane's start, going back, stop at the line, then give way to traffic without a sign">Stop</ToggleGroupItem>
             </ToggleGroup>
           </div>
         )}
@@ -3653,10 +3666,11 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       const laneState = (lane: string) => {
         if (st.simT === null) return null;
         if (!ctl) return signalAt(plan, lane, st.simT);
-        const ss = plan.controlled.filter(id => sk.connectors.find(x => x.id === id)?.from.lane === lane).map(id => ctl.stateAt(id, st.simT!));
+        const ss = plan.controlled.filter(id => { const c = sk.connectors.find(x => x.id === id); return !!c && wayFrom(sk, c).lane === lane; }).map(id => ctl.stateAt(id, st.simT!));
         return ss.includes("green") ? "green" : ss.includes("amber") ? "amber" : ss.length ? "red" : null;
       };
-      const held = [...new Set(plan.controlled.map(id => sk.connectors.find(x => x.id === id)?.from.lane).filter((x): x is string => !!x))];
+      // (a lane both ways' way back by its own id, its light at the lane's start: ticket #53)
+      const held = [...new Set(plan.controlled.map(id => { const c = sk.connectors.find(x => x.id === id); return c && wayFrom(sk, c).lane; }).filter((x): x is string => !!x))];
       // (by way in: their road, or each lane in none)
       const ways = new Map<string, string[]>();
       for (const id of held) { const k = roadOf(sk, id)?.id ?? id; ways.set(k, [...(ways.get(k) ?? []), id]); }
@@ -3685,8 +3699,10 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     }
     // the signs, as on the plan's map, on the kerb beside the line (one for lanes side by side with the
     // same sign: by the one on the right): a red octagon, a give-way triangle pointing to the junction
-    for (const l of st.layers.signs && S ? sk.lanes : []) {
-      if (!l.control || isFullCircle(l.shape) || !vis.lanes.has(l.id) || !lIn(l)) continue;
+    // (a lane both ways' way back too, its sign at the lane's start: ticket #53)
+    const signWays = st.layers.signs && S ? sk.lanes.flatMap(l => (twoWayOk(l) ? [l, twinOf(l)] : [l])) : [];
+    for (const l of signWays) {
+      if (!l.control || isFullCircle(l.shape) || !vis.lanes.has(baseLaneId(l.id)) || !lIn(l)) continue;
       const { p, d } = pointAt(l.shape, laneLength(l.shape)), n = { x: -d.y, y: d.x }, road = roadOf(sk, l.id);
       const besideRight = road?.lanes.some(id => {
         const o = laneById(sk, id);
@@ -3708,8 +3724,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       }
     }
     // the lines across the lanes' ends
-    for (const l of st.layers.signs && S ? sk.lanes : []) {
-      if (!l.control || isFullCircle(l.shape) || !vis.lanes.has(l.id) || !lIn(l)) continue;
+    for (const l of signWays) {
+      if (!l.control || isFullCircle(l.shape) || !vis.lanes.has(baseLaneId(l.id)) || !lIn(l)) continue;
       const { p, d } = pointAt(l.shape, laneLength(l.shape)), n = { x: -d.y, y: d.x }, hw = l.width / 2;
       if (st.layers.surfaces) {
         ctx.strokeStyle = pal.mark; ctx.lineWidth = 0.5; ctx.lineCap = "butt"; ctx.setLineDash(l.control === "yield" ? [0.9, 0.7] : []);
@@ -3744,8 +3760,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       ctx.strokeStyle = phase && !on ? pal.go : on || over ? col.sel : col.conn; ctx.lineWidth = wd; ctx.stroke();
       ctx.fillStyle = ctx.strokeStyle;
       // (joining a lane both ways' way back: the other way, ticket #53)
-      const to = at(sk, cn.to)!.d, tl = laneById(sk, cn.to.lane);
-      arrowHead(pts[pts.length - 1], tl && backTo(tl, cn.to.s) ? { x: -to.x, y: -to.y } : to, 8 * px);
+      arrowHead(pts[pts.length - 1], connectorEnd(sk, cn.to, "to")!.d, 8 * px);
       dot(pts[0], 2.5 * px, ctx.strokeStyle);
     }
     // zebra crossings: white bars from kerb to kerb, a bar every metre; selected or under the pointer, outlined, its kerb ends to drag
@@ -3966,7 +3981,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     } else if (cur) { ctx.beginPath(); ctx.arc(d.c.x, d.c.y, dist(d.c, cur.p), 0, Math.PI * 2); ctx.stroke(); }
   } else if (d?.kind === "connector") {
     // (in yellow over a dark edge, to be seen over the imagery and the lanes, its start and bends marked so: until placed)
-    const a = at(sk, d.from), to = cur && !cur.alt ? placeOn(cur.p) : null, b = to ? at(sk, to) : null;
+    // (on a lane both ways, leaving or joining its way back: the other way, ticket #53)
+    const a = connectorEnd(sk, d.from, "from"), to = cur && !cur.alt ? placeOn(cur.p) : null, b = to ? connectorEnd(sk, to, "to") : null;
     if (a) {
       const last = d.via[d.via.length - 1] ?? a.p;
       const end = b ?? (cur ? { p: cur.p, d: (() => { const l = dist(last, cur.p) || 1; return { x: (cur.p.x - last.x) / l, y: (cur.p.y - last.y) / l }; })() } : null);
