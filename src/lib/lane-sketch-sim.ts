@@ -1512,8 +1512,12 @@ export class SketchSim {
    * Can car `v` change to neighbour `n` now: not in a crossing there, and neither it nor the car coming up behind it there
    * has to brake hard; and the gap ahead of it there (Infinity: none within 80 m)
    */
-  private room(v: SimVehicle, n: Neighbor, byEdge: Map<Edge, SimVehicle[]>, ghosts: Map<Edge, { w: SimVehicle; pos: number }[]>) {
+  private room(v: SimVehicle, n: Neighbor, byEdge: Map<Edge, SimVehicle[]>, ghosts: Map<Edge, { w: SimVehicle; pos: number }[]>, patience = 1) {
     const m = this.across(n, v.pos), L = n.lane, W = v.id === this.watchId;
+    // (eases the comfort margin it wants (not the hard, never-eased `gap < 1` overlap check) the longer it has wanted
+    // to get onto a ring and never found room: a ring hop never stops to wait for one (comment above, T172), so simply
+    // circulating forever, never braking, never caught by the usual "stuck changing lane" give-up either; ticket #56)
+    const safe = n.round ? B_SAFE / patience : B_SAFE;
     if (W) this.roomNo = null;
     // (onto a ring nearly full, no; but keeping its ring (`ringKeepLane`), moving out to its way off is as leaving: only the cars there count)
     const out = n.round && this.tuning.ringKeepLane >= 0.5 && L.len > v.edge.len;
@@ -1538,11 +1542,11 @@ export class SketchSim {
         // (never onto a lane only to stop behind one broken down there)
         if (w.broken !== null && d < 60) return false;
         const gap = d - w.len;
-        if (gap < 1 || this.idm(v.v, L.vmax, gap, w.v, accOf(v), hwOf(v)) < -B_SAFE) { if (W) this.roomNo = { car: w.id, gap: r2(Math.max(0, gap)), need: this.needGap(v.v, L.vmax, w.v, accOf(v), hwOf(v)) }; return false; }
+        if (gap < 1 || this.idm(v.v, L.vmax, gap, w.v, accOf(v), hwOf(v)) < -safe) { if (W) this.roomNo = { car: w.id, gap: r2(Math.max(0, gap)), need: this.needGap(v.v, L.vmax, w.v, accOf(v), hwOf(v)) }; return false; }
         if (gap < 80) ahead = Math.min(ahead, gap);
       } else {
         const gap = -d - v.len;
-        if (gap < 1 || this.idm(w.v, L.vmax, gap, v.v, accOf(w), hwOf(w)) < -B_SAFE) { if (W) this.roomNo = { car: w.id, gap: r2(Math.max(0, gap)), need: this.needGap(w.v, L.vmax, v.v, accOf(w), hwOf(w)) }; return false; }
+        if (gap < 1 || this.idm(w.v, L.vmax, gap, v.v, accOf(w), hwOf(w)) < -safe) { if (W) this.roomNo = { car: w.id, gap: r2(Math.max(0, gap)), need: this.needGap(w.v, L.vmax, v.v, accOf(w), hwOf(w)) }; return false; }
       }
       return true;
     };
@@ -2537,7 +2541,7 @@ export class SketchSim {
           const x = v.goal?.conn, m = this.across(h.n, v.pos);
           if (x && m !== null && x.from!.lane === h.n.lane && this.along(h.n.lane, m, this.exitS(x)) > (1.6 * h.n.lane.len) / TAU) continue;
         }
-        const q = this.room(v, h.n, byEdge, ghosts);
+        const q = this.room(v, h.n, byEdge, ghosts, Math.max(JOIN_FLOOR, 1 - Math.max(0, wanted - JOIN_PATIENCE) / JOIN_EASE));
         if (v.id === this.watchId && !q && this.roomNo) {
           const no = this.roomNo, last = this.watchRejected[this.watchRejected.length - 1];
           if (!last || last.edge !== h.n.lane.key || last.car !== no.car || this.t - last.t >= 1) {
