@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { project, unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
-  addStop, updateStop, deleteStop, type SketchStop,
+  addStop, updateStop, deleteStop, type SketchStop, setTwoWay, twoWayOk, backTo, type TwoWay,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve, roadMiddle,
@@ -2694,6 +2694,19 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
             <ToggleGroupItem value="bike" className="h-7 px-2 text-xs" title="A bike lane (2 m): no vehicles run on it for now, and the cars leave it and its connectors out">Bike</ToggleGroupItem>
           </ToggleGroup>
         </div>
+        {!isFullCircle(sh) && !lane.bike && (
+          <div className="grid gap-1">
+            <span className="text-xs text-muted-foreground" id={`sk-two-${lane.id}`}>Traffic</span>
+            <ToggleGroup type="single" aria-labelledby={`sk-two-${lane.id}`} className="w-full" value={lane.twoWay ?? "one"}
+              onValueChange={v => v && editSketch(s => setTwoWay(s, lane.id, v === "one" ? null : (v as TwoWay)))}>
+              <ToggleGroupItem value="one" className="h-7 flex-1 px-1 text-xs" title="One way, along the lane">One way</ToggleGroupItem>
+              <ToggleGroupItem value="turns" className="h-7 flex-1 px-1 text-xs" title="One lane, both ways, one way at a time (a narrow bridge, a lane past roadworks): each way in turn, a few cars one way, then a few the other, when both have cars waiting">Take turns</ToggleGroupItem>
+              <ToggleGroupItem value="forward" className="h-7 flex-1 px-1 text-xs" title="One lane, both ways, one way at a time: those coming in at its start (along the lane) first; the other way goes only in a gap long enough to get through">Along first</ToggleGroupItem>
+              <ToggleGroupItem value="back" className="h-7 flex-1 px-1 text-xs" title="One lane, both ways, one way at a time: those coming in at its end (against the lane) first; the other way goes only in a gap long enough to get through">Back first</ToggleGroupItem>
+            </ToggleGroup>
+            {lane.twoWay && <p className="text-[11px] text-muted-foreground">Connectors joining it past its middle, and leaving it before, are the way back&apos;s.</p>}
+          </div>
+        )}
         {sh.kind === "arc" && !lead && (
           <Button size="sm" variant="outline" title="Make it curved points along the same circle, to drag, add and curve like a drawn lane (a ring stays a ring); its connectors stay where they are"
             onClick={() => editSketch(s => arcToPoints(s, lane.id))}><Spline /> Edit as points</Button>
@@ -3595,10 +3608,11 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       if (l.bike) { ctx.strokeStyle = pal.bike; ctx.globalAlpha = 0.35; ctx.lineWidth = l.width; ctx.stroke(); ctx.strokeStyle = col.lane; }
       ctx.globalAlpha = 0.12; ctx.lineWidth = l.width; ctx.stroke(); ctx.globalAlpha = 1;
       ctx.lineWidth = Math.max(0.2, 2 * px); ctx.stroke();
-      const L = laneLength(l.shape), gap = Math.max(6, 60 * px), k = Math.max(0.5, 5 * px);
+      const L = laneLength(l.shape), gap = Math.max(6, 60 * px), k = Math.max(0.5, 5 * px), both = twoWayOk(l);
       ctx.lineWidth = Math.max(0.15, 1.5 * px); ctx.lineCap = "round";
-      for (let a = gap / 2; a < L; a += gap) {
-        const { p, d } = pointAt(l.shape, a);
+      // (one lane both ways, ticket #53: every other chevron the other way)
+      for (let a = gap / 2, i = 0; a < L; a += gap, i++) {
+        const { p, d: d0 } = pointAt(l.shape, a), d = both && i % 2 ? { x: -d0.x, y: -d0.y } : d0;
         ctx.beginPath();
         ctx.moveTo(p.x - d.x * k - d.y * k, p.y - d.y * k + d.x * k); ctx.lineTo(p.x, p.y); ctx.lineTo(p.x - d.x * k + d.y * k, p.y - d.y * k - d.x * k);
         ctx.stroke();
@@ -3729,7 +3743,9 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       if (!on && !over) { ctx.strokeStyle = col.connEdge; ctx.lineWidth = wd + 1.5 * px; ctx.stroke(); }
       ctx.strokeStyle = phase && !on ? pal.go : on || over ? col.sel : col.conn; ctx.lineWidth = wd; ctx.stroke();
       ctx.fillStyle = ctx.strokeStyle;
-      arrowHead(pts[pts.length - 1], at(sk, cn.to)!.d, 8 * px);
+      // (joining a lane both ways' way back: the other way, ticket #53)
+      const to = at(sk, cn.to)!.d, tl = laneById(sk, cn.to.lane);
+      arrowHead(pts[pts.length - 1], tl && backTo(tl, cn.to.s) ? { x: -to.x, y: -to.y } : to, 8 * px);
       dot(pts[0], 2.5 * px, ctx.strokeStyle);
     }
     // zebra crossings: white bars from kerb to kerb, a bar every metre; selected or under the pointer, outlined, its kerb ends to drag

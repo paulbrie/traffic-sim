@@ -39,7 +39,24 @@ export interface SketchLane {
   bus?: true;
   /** a bike lane (ticket #20): drawn and kept with the plan, no vehicle on it for now (the simulation leaves it out, see `drivable`) */
   bike?: true;
+  /**
+   * One lane, both ways (ticket #53): traffic runs along it and back, one way at a time (a narrow bridge, a lane past
+   * roadworks), by `TwoWay`'s rule. Connectors joining it past its middle, and leaving it before, are its way back's (see
+   * `drivable`, which gives the way back a lane of its own, `twinId`).
+   */
+  twoWay?: TwoWay;
+  /** a lane both ways: its way back's traffic coming in (veh/h) and share of the trips out, where it is a way in or out */
+  backInRate?: number;
+  backOutWeight?: number;
 }
+/**
+ * Who goes onto a lane both ways (ticket #53), once the cars going the other way are off it: `turns`, each way in
+ * turn (round robin: a few cars one way, then a few the other, when both have cars waiting); `forward`, those
+ * coming in at its start first (the other way going only in a gap of them long enough to get through); `back`,
+ * those coming in at its end first.
+ */
+export type TwoWay = "turns" | "forward" | "back";
+export const TWO_WAYS: readonly unknown[] = ["turns", "forward", "back"];
 /** a place on a lane, `s` metres from its start */
 export interface LaneAt { lane: string; s: number }
 export interface SketchConnector { id: string; from: LaneAt; to: LaneAt; /** bend points it goes through, in order */ via?: Pt[]; /** straight from end to end (through its bends, a corner at each), not curved to its lanes' directions */ straight?: true }
@@ -436,19 +453,24 @@ export class LastFew<K extends object, V> {
 
 const laneIndex = new LastFew<Sketch, { lanes: SketchLane[]; n: number; map: Map<string, SketchLane> }>();
 const roadIndex = new LastFew<Sketch, { roads: SketchRoad[]; n: number; map: Map<string, SketchRoad> }>();
-export const laneById = (sk: Sketch, id: string) => {
+/** (a lane both ways' way back, `twinId`, found too: what the simulation and the routes call it, see `drivable`) */
+export const laneById = (sk: Sketch, id: string): SketchLane | undefined => {
   let x = laneIndex.get(sk);
   if (!x || x.lanes !== sk.lanes || x.n !== sk.lanes.length) laneIndex.set(sk, (x = { lanes: sk.lanes, n: sk.lanes.length, map: new Map(sk.lanes.map(l => [l.id, l])) }));
-  return x.map.get(id);
+  const l = x.map.get(id);
+  if (l || !isTwinId(id)) return l;
+  const b = x.map.get(baseLaneId(id));
+  return b && twoWayOk(b) ? twinOf(b) : undefined;
 };
-export const roadOf = (sk: Sketch, lane: string) => {
+export const roadOf = (sk: Sketch, lane: string): SketchRoad | undefined => {
   let x = roadIndex.get(sk);
   if (!x || x.roads !== sk.roads || x.n !== sk.roads.reduce((a, r) => a + r.lanes.length, 0)) {
     const map = new Map<string, SketchRoad>();
     for (const r of sk.roads) for (const l of r.lanes) if (!map.has(l)) map.set(l, r);
     roadIndex.set(sk, (x = { roads: sk.roads, n: sk.roads.reduce((a, r) => a + r.lanes.length, 0), map }));
   }
-  return x.map.get(lane);
+  // (a lane both ways' way back: its lane's road)
+  return x.map.get(lane) ?? (isTwinId(lane) ? x.map.get(baseLaneId(lane)) : undefined);
 };
 /** where a connector end is, and the direction of travel there; null if its lane is gone */
 export function at(sk: Sketch, a: LaneAt) {
@@ -464,6 +486,9 @@ export function connectorPts(sk: Sketch, c: SketchConnector): Pt[] | null {
   const k = curves.get(c);
   if (k && k.a === la && k.b === lb) return k.pts;
   const a = pointAt(la.shape, c.from.s), b = pointAt(lb.shape, c.to.s);
+  // (a lane both ways' way back: leaving it before its middle, joining it past, the cars there run the other way)
+  if (backFrom(la, c.from.s)) a.d = { x: -a.d.x, y: -a.d.y };
+  if (backTo(lb, c.to.s)) b.d = { x: -b.d.x, y: -b.d.y };
   const pts = c.straight ? [a.p, ...(c.via ?? []), b.p] : curveThrough(a, c.via ?? [], b);
   curves.set(c, { a: la, b: lb, pts });
   return pts;
@@ -1028,10 +1053,75 @@ export function setLaneUse(sk: Sketch, id: string, use: LaneUse): Sketch {
  */
 const drivables = new LastFew<Sketch, Sketch>();
 export function drivable(sk: Sketch): Sketch {
-  if (!sk.lanes.some(l => l.bike)) return sk;
+  if (isDrivable(sk)) return sk;
   let x = drivables.get(sk);
-  if (!x) drivables.set(sk, (x = remove(sk, { lanes: sk.lanes.filter(l => l.bike).map(l => l.id) })));
+  if (!x) {
+    x = sk.lanes.some(l => l.bike) ? remove(sk, { lanes: sk.lanes.filter(l => l.bike).map(l => l.id) }) : sk;
+    if (x.lanes.some(twoWayOk)) x = withWaysBack(x);
+    drivables.set(sk, x);
+    madeDrivable.add(x);
+  }
   return x;
+}
+/** sketches `drivable` made (made again from one, it is itself: its ways back are lanes already) */
+const madeDrivable = new WeakSet<Sketch>();
+const isDrivable = (sk: Sketch) => madeDrivable.has(sk) || !sk.lanes.some(l => l.bike || twoWayOk(l));
+
+// ---------------------------------------------------------------- one lane, both ways (ticket #53)
+
+/** a lane both ways' way back, as `drivable` makes it a lane: its lane's id and this */
+export const TWIN_SUFFIX = "~back";
+export const twinId = (lane: string) => lane + TWIN_SUFFIX;
+export const isTwinId = (id: string) => id.endsWith(TWIN_SUFFIX);
+/** the lane drawn: a way back's lane, any other lane itself */
+export const baseLaneId = (id: string) => (isTwinId(id) ? id.slice(0, -TWIN_SUFFIX.length) : id);
+/** a lane both ways (not round in a circle, nor a bike lane: those have no way back) */
+export const twoWayOk = (l: SketchLane) => !!l.twoWay && !l.bike && !isFullCircle(l.shape) && !isTwinId(l.id);
+/** a connector leaving lane `l` at `s` leaves its way back (a lane both ways, before its middle) */
+export const backFrom = (l: SketchLane, s: number) => twoWayOk(l) && s < laneLength(l.shape) / 2;
+/** a connector joining lane `l` at `s` joins its way back (a lane both ways, past its middle) */
+export const backTo = (l: SketchLane, s: number) => twoWayOk(l) && s > laneLength(l.shape) / 2;
+const twins = new WeakMap<SketchLane, SketchLane>();
+/** a lane both ways' way back: the same lane run the other way (no line at its end; its own traffic in and share out) */
+export function twinOf(l: SketchLane): SketchLane {
+  let t = twins.get(l);
+  if (!t) {
+    t = {
+      id: twinId(l.id), shape: reversed(l.shape), width: l.width, twoWay: l.twoWay,
+      ...(l.backInRate !== undefined ? { inRate: l.backInRate } : {}), ...(l.backOutWeight !== undefined ? { outWeight: l.backOutWeight } : {}),
+      ...(l.level !== undefined ? { level: l.level } : {}), ...(l.speed !== undefined ? { speed: l.speed } : {}), ...(l.bus ? { bus: true as const } : {}),
+    };
+    twins.set(l, t);
+  }
+  return t;
+}
+/** the sketch with every lane both ways' way back a lane of its own (`twinOf`), in its lane's road, the connectors that are the way back's moved onto it */
+function withWaysBack(sk: Sketch): Sketch {
+  const both = new Map(sk.lanes.filter(twoWayOk).map(l => [l.id, l]));
+  const len = new Map([...both.values()].map(l => [l.id, laneLength(l.shape)]));
+  const back = (a: LaneAt, isBack: (l: SketchLane, s: number) => boolean): LaneAt => {
+    const l = both.get(a.lane);
+    return l && isBack(l, a.s) ? { lane: twinId(l.id), s: Number(Math.max(0, len.get(l.id)! - a.s).toFixed(3)) } : a;
+  };
+  return {
+    ...sk,
+    lanes: sk.lanes.flatMap(l => (both.has(l.id) ? [l, twinOf(l)] : [l])),
+    connectors: sk.connectors.map(c => { const f = back(c.from, backFrom), t = back(c.to, backTo); return f === c.from && t === c.to ? c : { ...c, from: f, to: t }; }),
+    roads: sk.roads.map(r => (r.lanes.some(id => both.has(id)) ? { ...r, lanes: r.lanes.flatMap(id => (both.has(id) ? [id, twinId(id)] : [id])) } : r)),
+  };
+}
+/** a lane made one lane both ways by `rule` (null: one way again, its way back's traffic in and share out dropped) */
+export function setTwoWay(sk: Sketch, id: string, rule: TwoWay | null): Sketch {
+  return {
+    ...sk,
+    lanes: sk.lanes.map(l => {
+      if (l.id !== id || (l.twoWay ?? null) === rule) return l;
+      const next = { ...l };
+      if (rule) next.twoWay = rule;
+      else { delete next.twoWay; delete next.backInRate; delete next.backOutWeight; }
+      return next;
+    }),
+  };
 }
 
 /**
@@ -2068,6 +2158,8 @@ export class RouteTable {
       const A = this.lanes.get(a), Bl = this.lanes.get(b);
       // (a bus lane is no lane for an ordinary car's route to change into; leaving one is fine; a bus may change into one)
       if (!A || !Bl || a === b || A.ring !== Bl.ring || (Bl.lane.bus && !A.lane.bus && !this.bus)) continue;
+      // (nor onto or off a lane both ways: onto it only where it starts, as its rule lets cars on, ticket #53)
+      if (A.lane.twoWay || Bl.lane.twoWay) continue;
       // (rings: beside all the way round, as the simulation has them)
       const near = (f: number) => { const m = pointAt(A.lane.shape, A.len * f), q = nearestOn(Bl.lane.shape, m.p), d = pointAt(Bl.lane.shape, q.s).d; return q.d <= (A.lane.width + Bl.lane.width) / 2 + 0.75 && m.d.x * d.x + m.d.y * d.y >= 0.5; };
       if (!(A.ring ? [0, 1, 2, 3, 4, 5, 6, 7].every(k => near(k / 8)) : near(0.5))) continue;
@@ -2170,18 +2262,35 @@ function demandWaysOf(sk: Sketch): { entries: DemandWay[]; exits: DemandWay[] } 
       const g = road && out.find(w => w.key.startsWith(`${road.id}@`) && dist(w.at, p) < 4 * LANE_WIDTH);
       if (g) { g.lanes.push(l.id); continue; }
       const n = road ? out.filter(w => w.key.startsWith(`${road.id}@`)).length : 0;
-      out.push({ key: road ? `${road.id}@${n}` : `lane:${l.id}`, name: road ? road.name + (n ? ` (${n + 1})` : "") : `Lane ${l.id}`, lanes: [l.id], at: p });
+      out.push({ key: road ? `${road.id}@${n}` : `lane:${l.id}`, name: road ? road.name + (n ? ` (${n + 1})` : "") : isTwinId(l.id) ? `Lane ${baseLaneId(l.id)} (way back)` : `Lane ${l.id}`, lanes: [l.id], at: p });
     }
     return out;
   };
   return { entries: group(entryLanes(sk), false), exits: group(exitLanes(sk), true) };
 }
 /** traffic set on lanes: vehicles per hour coming in spread evenly over them (null: back to the sketch's rate), or a share of trips out on each */
+// (a lane both ways' way back, `twinId`: kept on its lane, as `backInRate` / `backOutWeight`)
 export function setInRate(sk: Sketch, lanes: string[], total: number | null): Sketch {
-  return { ...sk, lanes: sk.lanes.map(l => { if (!lanes.includes(l.id)) return l; const n = { ...l }; if (total === null) delete n.inRate; else n.inRate = Number((total / lanes.length).toFixed(1)); return n; }) };
+  const each = total === null ? null : Number((total / lanes.length).toFixed(1));
+  return { ...sk, lanes: sk.lanes.map(l => {
+    const own = lanes.includes(l.id), back = lanes.includes(twinId(l.id));
+    if (!own && !back) return l;
+    const n = { ...l };
+    if (own) { if (each === null) delete n.inRate; else n.inRate = each; }
+    if (back) { if (each === null) delete n.backInRate; else n.backInRate = each; }
+    return n;
+  }) };
 }
 export function setOutWeight(sk: Sketch, lanes: string[], weight: number | null): Sketch {
-  return { ...sk, lanes: sk.lanes.map(l => { if (!lanes.includes(l.id)) return l; const n = { ...l }; if (weight === null || weight === 1) delete n.outWeight; else n.outWeight = weight; return n; }) };
+  const w = weight === null || weight === 1 ? null : weight;
+  return { ...sk, lanes: sk.lanes.map(l => {
+    const own = lanes.includes(l.id), back = lanes.includes(twinId(l.id));
+    if (!own && !back) return l;
+    const n = { ...l };
+    if (own) { if (w === null) delete n.outWeight; else n.outWeight = w; }
+    if (back) { if (w === null) delete n.backOutWeight; else n.backOutWeight = w; }
+    return n;
+  }) };
 }
 
 /** the traffic coming in on an entry lane (veh/h): its own, or the sketch's for every entry */
@@ -2304,7 +2413,10 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
       // (its own speed limit, km/h, as the traffic's speed is kept)
       ...(num(l.speed) ? { speed: Math.min(130, Math.max(10, l.speed)) } : {}),
       ...(l.bus === true && l.bike !== true ? { bus: true as const } : {}),
-      ...(l.bike === true ? { bike: true as const } : {}) });
+      ...(l.bike === true ? { bike: true as const } : {}),
+      // (one lane both ways, ticket #53: not a bike lane, nor a ring; its way back's traffic in and share out with it)
+      ...(TWO_WAYS.includes(l.twoWay) && l.bike !== true && !isFullCircle(shape) && !isTwinId(l.id) ? { twoWay: l.twoWay as TwoWay,
+        ...(num(l.backInRate) && l.backInRate >= 0 ? { backInRate: Math.min(5000, l.backInRate) } : {}), ...(num(l.backOutWeight) && l.backOutWeight >= 0 ? { backOutWeight: Math.min(100, l.backOutWeight) } : {}) } : {}) });
   }
   const ids = new Set(lanes.map(l => l.id));
   // (a place a hair before a lane's start, from rounding, is its start)
@@ -2586,9 +2698,15 @@ export function turnArrows(sk: Sketch): TurnArrow[] {
   x = [];
   const outs = new Map<string, SketchConnector[]>();
   for (const c of sk.connectors) (outs.get(c.from.lane) ?? outs.set(c.from.lane, []).get(c.from.lane)!).push(c);
-  for (const l of sk.lanes) {
-    const cs = outs.get(l.id);
-    if (!cs || isFullCircle(l.shape) || (l.shape.kind === "line" && l.shape.closed)) continue;
+  // (a lane both ways, ticket #53: its way back's too, at its start, from the connectors leaving it there)
+  const ways = sk.lanes.flatMap(l => {
+    const cs = outs.get(l.id) ?? [];
+    if (!twoWayOk(l)) return [{ l, cs }];
+    const L = laneLength(l.shape);
+    return [{ l, cs }, { l: twinOf(l), cs: cs.filter(c => backFrom(l, c.from.s)).map(c => ({ ...c, from: { lane: twinId(l.id), s: L - c.from.s } })) }];
+  });
+  for (const { l, cs } of ways) {
+    if (!cs.length || isFullCircle(l.shape) || (l.shape.kind === "line" && l.shape.closed)) continue;
     const L = laneLength(l.shape);
     if (L < 12) continue;
     const atEnd = cs.filter(c => c.from.s >= L - EXIT_CLEAR);
@@ -2597,12 +2715,12 @@ export function turnArrows(sk: Sketch): TurnArrow[] {
     for (const c of atEnd) {
       const to = laneById(sk, c.to.lane);
       if (!to) continue;
-      const b = pointAt(to.shape, c.to.s).d, ang = Math.atan2(end.x * b.y - end.y * b.x, end.x * b.x + end.y * b.y);
+      const b0 = pointAt(to.shape, c.to.s).d, b = backTo(to, c.to.s) ? { x: -b0.x, y: -b0.y } : b0, ang = Math.atan2(end.x * b.y - end.y * b.x, end.x * b.x + end.y * b.y);
       set.add(Math.abs(ang) < 0.5 ? "S" : Math.abs(ang) > 2.6 ? "U" : ang > 0 ? "R" : "L");
     }
     if (!set.size) continue;
     const at = pointAt(l.shape, L - 6);
-    x.push({ lane: l.id, p: at.p, d: at.d, turns: ["L", "S", "R", "U"].filter(t => set.has(t)).join(""), level: l.level ?? 0 });
+    x.push({ lane: baseLaneId(l.id), p: at.p, d: at.d, turns: ["L", "S", "R", "U"].filter(t => set.has(t)).join(""), level: l.level ?? 0 });
   }
   arrowsKept.set(sk, x);
   return x;

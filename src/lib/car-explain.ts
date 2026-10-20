@@ -6,7 +6,7 @@
 import type { Pt } from "./lane-sketch";
 
 /** the rule holding a car back (or "follow": a car ahead; none: a free road) */
-export type ExplainRule = "follow" | "give-way" | "priority" | "stop" | "signal" | "merge" | "ring-full" | "zone" | "zebra" | "keep-clear" | "letting-in" | "lane-change" | "broken" | "forced";
+export type ExplainRule = "follow" | "give-way" | "priority" | "stop" | "signal" | "merge" | "ring-full" | "zone" | "zebra" | "keep-clear" | "letting-in" | "lane-change" | "broken" | "forced" | "two-way";
 
 /** the sim's account of one car at one moment (lane-sketch-sim's `explain`); edges are keys ("lane:l5", "conn:c7") */
 export interface CarExplain {
@@ -42,9 +42,10 @@ export interface CarExplain {
   log: { t: number; what: string; text: string; car?: number }[];
 }
 
-export const edgeName = (key: string) => key.replace(/^lane:/, "lane ").replace(/^conn:/, "connector ");
+// (a lane both ways' way back, ticket #53: its lane's, the other way)
+export const edgeName = (key: string) => key.replace(/^lane:(\S+)~back$/, "lane $1 (way back)").replace(/^lane:/, "lane ").replace(/^conn:/, "connector ");
 /** the sim's own words (a `why`), with the edges named as above */
-export const tagWords = (why: string) => why.replace(/\blane:(\S+)/g, "lane $1").replace(/\bconn:(\S+)/g, "connector $1");
+export const tagWords = (why: string) => why.replace(/\blane:(\S+?)~back\b/g, "lane $1 (way back)").replace(/\blane:(\S+)/g, "lane $1").replace(/\bconn:(\S+)/g, "connector $1");
 const m1 = (x: number) => `${x.toFixed(1)} m`;
 const s1 = (x: number) => `${x.toFixed(1)} s`;
 const kmh = (x: number) => x.toFixed(0);
@@ -53,6 +54,7 @@ const kmh = (x: number) => x.toFixed(0);
 export const RULE_WORDS: Record<ExplainRule, string> = {
   follow: "following", "give-way": "give way", priority: "priority", stop: "stop line", signal: "traffic light", merge: "merging", "ring-full": "ring full", zone: "first come, first served",
   zebra: "zebra crossing", "keep-clear": "keeping the junction clear", "letting-in": "letting a car in", "lane-change": "changing lane", broken: "broken down", forced: "let go (deadlock)",
+  "two-way": "one lane, both ways",
 };
 
 /**
@@ -138,6 +140,7 @@ export function headline(x: CarExplain): { text: string; car?: number } {
   if (r === "zebra") return { text: `Stopping for pedestrians${x.rule?.detail ? ` at ${x.rule.detail}` : ""}, ${s1(x.since)}` };
   if (r === "broken") return { text: `Broken down, ${s1(x.since)}` };
   if (r === "forced") return { text: "Let go by the deadlock breaker: it goes without giving way" };
+  if (r === "two-way") return { text: `Waiting to go onto ${edgeName(x.rule?.edge ?? "")}, one lane both ways${x.rule?.detail ? `: ${x.rule.detail}` : ""} (${s1(x.since)})` };
   return { text: `${RULE_WORDS[r].charAt(0).toUpperCase()}${RULE_WORDS[r].slice(1)}${on(x.rule?.edge)}${b ? `, car ${b.car}` : ""} (${s1(x.since)})`, car: b?.car };
 }
 
