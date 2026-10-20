@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Bike, BusFront, Car, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Bike, BusFront, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -314,7 +314,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [hand, setHand] = useState<"" | "grab" | "grabbing">("");
   // the menu a right click opens, where it was clicked, and the lanes it is for
   const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null; /** the place on the lane clicked a point can go (a line lane, not following a lead) */ add: { lane: string; p: Pt } | null;
-    /** on a selected junction's corner: that corner (its own items) */ corner?: { junction: string; i: number; curved: boolean } | null } | null>(null);
+    /** on a selected junction's corner: that corner (its own items) */ corner?: { junction: string; i: number; curved: boolean } | null;
+    /** right-clicked a junction's surface, off any corner: that junction */ junction?: string | null } | null>(null);
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
@@ -1185,13 +1186,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const lanes = l ? (s.lanes.includes(l.id) ? s.lanes : [l.id]) : s.lanes;
     // (where on Earth, the sketch placed on the map: the spot to open in Google Maps, as in V1)
     const geo = sk.geo ? unproject(sk.geo, raw) : null;
-    if (!lanes.length && !geo) return;
+    // (off any lane: a junction's surface under the pointer, for its own menu)
+    const junctionHit = !l ? pick(raw) : null, junction = junctionHit && "junction" in junctionHit ? junctionHit.junction : null;
+    if (!lanes.length && !geo && !junction) return;
     if (l && !s.lanes.includes(l.id)) setSel({ ...NO_SEL, lanes: [l.id] });
     const can = lanes.some(id => { const sh = laneById(sk, id)?.shape; return sh?.kind === "line" && !sh.closed && sh.pts.length > 2 && !leadOf(sk, id); });
     const r = e.currentTarget.getBoundingClientRect();
     const ring = lanes.some(id => { const sh = laneById(sk, id)?.shape; return sh?.kind === "line" && !!sh.closed && !leadOf(sk, id); });
     const add = l && l.shape.kind === "line" && !leadOf(sk, l.id) ? { lane: l.id, p: (q => ({ x: Number(q.x.toFixed(2)), y: Number(q.y.toFixed(2)) }))(pointAt(l.shape, nearestOn(l.shape, raw).s).p) } : null;
-    setMenu({ x: e.clientX - r.left, y: e.clientY - r.top, lanes, straightenable: can, ring, geo, add });
+    setMenu({ x: e.clientX - r.left, y: e.clientY - r.top, lanes: junction ? [] : lanes, straightenable: can, ring, geo, add, junction });
   };
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     panel.current?.focus();
@@ -1790,6 +1793,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                     <Trash2 /> Take out this corner <span className="ml-auto text-[11px] text-muted-foreground">Del · double-click</span>
                   </DropdownMenuItem>
                 </>}
+                {menu.junction && <>
+                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{sketch.junctions.find(j => j.id === menu.junction)?.name ?? menu.junction}</DropdownMenuLabel>
+                  <DropdownMenuItem onSelect={() => goTo({ kind: "junction", id: menu.junction! })}>
+                    <ChartColumn /> Show stats
+                  </DropdownMenuItem>
+                </>}
                 {menu.lanes.length > 0 && <>
                   <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{menu.lanes.length === 1 ? `Lane ${menu.lanes[0]}` : `${menu.lanes.length} lanes`}</DropdownMenuLabel>
                   <DropdownMenuItem disabled={readOnly || !menu.add} onSelect={() => addPointAt(menu.add!)}>
@@ -1833,7 +1842,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                   </DropdownMenuItem>
                 </>}
                 {menu.geo && <>
-                  {menu.lanes.length > 0 && <DropdownMenuSeparator />}
+                  {(menu.lanes.length > 0 || menu.junction) && <DropdownMenuSeparator />}
                   <DropdownMenuItem asChild>
                     <a href={`https://www.google.com/maps/search/?api=1&query=${menu.geo.lat.toFixed(6)},${menu.geo.lon.toFixed(6)}`} target="_blank" rel="noopener noreferrer">
                       <MapPin /> Open in Google Maps
@@ -1851,7 +1860,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <div className={cn("pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm", in3d && "hidden")}>
             {tool === "select" && sel.junctions.length === 1 && !sel.connectors.some(c => !contents.get(sel.junctions[0])?.connectors.includes(c))
               ? <><span className="font-medium text-foreground">Junction shape:</span> {JUNCTION_HINT} · </>
-              : <><span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · </>}scroll zooms, right-drag or Space-drag pans, right-click a lane for its menu (anywhere: open the spot in Google Maps)
+              : <><span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · </>}scroll zooms, right-drag or Space-drag pans, right-click a lane or a junction for its menu (anywhere: open the spot in Google Maps)
           </div>
           {in3d && (
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed} blinkers={blinkers}
