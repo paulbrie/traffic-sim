@@ -5,7 +5,7 @@
  * another lane or connector, has chosen another connector, or is going elsewhere (a reroute); between, the first stretch
  * only is cut to where it is. Framework-free.
  */
-import { connectorPts, dist, laneById, pointAt, speedLimitOf, type Pt, type Sketch } from "./lane-sketch";
+import { connectorPts, dist, drivable, laneById, pointAt, speedLimitOf, type Pt, type Sketch } from "./lane-sketch";
 import { routeTableOf, traceRoute, type RouteStep } from "./route-trace";
 
 /** what the car's panel and the map need of the car (what `inspect` gives) */
@@ -49,6 +49,8 @@ const lenOf = (pts: Pt[]) => pts.slice(1).reduce((a, p, i) => a + dist(pts[i], p
 
 /** the car's way to the end of its trip; null if it has no way out to go to (wandering) or none is found from where it is */
 export function carWay(sk: Sketch, car: CarAt): CarWay | null {
+  // (as the cars see it: a lane both ways' way back a lane of its own, ticket #53)
+  sk = drivable(sk);
   if (!car.dest || !Number.isFinite(car.pos)) return null;
   const key = `${car.edge}|${car.exit}|${car.dest}`;
   let plan = last && last.sk === sk && last.plan.key === key ? last.plan : null;

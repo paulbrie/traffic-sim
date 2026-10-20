@@ -22,6 +22,7 @@
     "explain-text:check": "tsx scripts/car-explain-check.ts",
     "keys:check": "tsx scripts/editor-keys-check.ts",
     "osm:check": "tsx scripts/osm-check.ts",
+    "streets:check": "tsx scripts/streets-check.ts",
     "restore:check": "tsx scripts/restore-file-check.ts",
     "patch:submit": "tsx scripts/patch-submit.ts",
     "patch:check": "tsx scripts/agent-patch-check.ts",
@@ -35,6 +36,7 @@
     "bike:check": "tsx scripts/bike-lane-check.ts",
     "plan:check": "tsx scripts/plan-fallback-check.ts",
     "bus-support:check": "tsx scripts/bus-support-check.ts",
+    "two-way:check": "tsx scripts/two-way-check.ts",
     "tomtom:check": "tsx scripts/tomtom-check.ts",
     "engine:baseline": "tsx scripts/engine-baseline.ts",
     "audit": "tsx scripts/junction-audit.ts"

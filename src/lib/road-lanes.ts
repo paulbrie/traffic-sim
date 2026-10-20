@@ -5,11 +5,12 @@
  * on any delete, what named a lane or road that is gone let go: journeys from or to it, turning shares from or to it.
  * Framework-free; the caller settles the sketch (the roads side by side laid out again).
  */
-import { remove, type Sketch } from "./lane-sketch";
+import { remove, twinId, twoWayOk, type Sketch } from "./lane-sketch";
 
 /** journeys and turning shares naming lanes or roads that are no longer in the sketch let go (the sketch as it was if none) */
 export function dropDangling(sk: Sketch): Sketch {
-  const lanes = new Set(sk.lanes.map(l => l.id)), roads = new Set(sk.roads.map(r => r.id));
+  // (a lane both ways' way back, `twinId`, a way in and out of its own: there while its lane is both ways, ticket #53)
+  const lanes = new Set(sk.lanes.flatMap(l => (twoWayOk(l) ? [l.id, twinId(l.id)] : [l.id]))), roads = new Set(sk.roads.map(r => r.id));
   // (a turning share's way: a road's id, or `lane:<id>` for a lane in no road)
   const way = (k: string) => (k.startsWith("lane:") ? lanes.has(k.slice(5)) : roads.has(k));
   const journeys = sk.journeys?.filter(j => lanes.has(j.from) && lanes.has(j.to));

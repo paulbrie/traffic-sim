@@ -10,7 +10,7 @@ import { useEffect, useMemo } from "react";
 import { Car, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { demandWays, type Sketch } from "@/lib/lane-sketch";
+import { baseLaneId, demandWays, roadOf, type Sketch } from "@/lib/lane-sketch";
 import { traceRoute, traceToWay } from "@/lib/route-trace";
 import { useEditorKind, useUiPath, type RouteUi } from "@/state/sketch-ui";
 import { compassNames } from "./compass-names";
@@ -76,7 +76,7 @@ export function RoutePanel({ sketch, onGo, onSendTest }: {
               <li key={i}>
                 {x.kind === "change"
                   ? <span className="px-1 text-muted-foreground">↷ change to {x.to}</span>
-                  : <button type="button" className="w-full truncate rounded px-1 text-left hover:bg-muted" onClick={() => onGo(x)}>{x.kind === "lane" ? "lane" : "connector"} {x.id}{x.kind === "lane" && sketch.roads.find(r => r.lanes.includes(x.id)) ? ` · ${sketch.roads.find(r => r.lanes.includes(x.id))!.name}` : ""}</button>}
+                  : <button type="button" className="w-full truncate rounded px-1 text-left hover:bg-muted" onClick={() => onGo({ ...x, id: x.kind === "lane" ? baseLaneId(x.id) : x.id })}>{x.kind === "lane" ? "lane" : "connector"} {x.id}{x.kind === "lane" && roadOf(sketch, x.id) ? ` · ${roadOf(sketch, x.id)!.name}` : ""}</button>}
               </li>
             ))}
           </ol>

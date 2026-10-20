@@ -43,8 +43,8 @@
  */
 import { speedLimitOf,
   CHANGE_COST, drivable, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
-  onCrossing, crossingFrame,
-  type LaneControl, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
+  onCrossing, crossingFrame, twinId, twoWayOk,
+  type LaneControl, type TwoWay, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
 } from "./lane-sketch";
 import { resolveTuning, type Tuning } from "./sketch-tuning";
 import { FUEL_STILL, fuelRate, hasStopStart } from "../engine/fuel";
@@ -199,6 +199,33 @@ function timeTo(d: number, v: number, vmax: number, acc = A_MAX) {
  */
 /** a roundabout: its rings (inner first), middle, which way round (+1: the angle grows), and its ways off with where they leave */
 interface RingGroup { rings: Edge[]; c: Pt; sign: 1 | -1; exits: { conn: Edge; ang: number }[] }
+/**
+ * One lane, both ways (ticket #53): the lane and its way back (`ways`, the lane drawn first), on top of one another, and
+ * the rule for who goes on. Cars come onto it only the way that is `open`, and that only once none going the other way
+ * are on it (nor too close to stop before it); a way is closed to change over (`TwoWay`): taking turns, after
+ * `TURN_CARS` cars or `TURN_MAX` s while the other way has cars waiting (or none more coming this way); by priority, the
+ * other way goes only in a gap of those that have it long enough to get through.
+ */
+interface TwoWayPair {
+  ways: [Edge, Edge]; rule: TwoWay;
+  /** the way cars may come onto it now; null: neither (it clears for the other way) */
+  open: Edge | null;
+  /** when that way opened, the cars gone onto it since, and the way that had the turn before */
+  since: number; served: Set<number>; last: Edge | null;
+  /** ways it is a way in at, where a car due to come in at the start was held this step (it waits there) */
+  due: Set<Edge>;
+  /** for a way not open: why, in words (for the cars held there) */
+  why: Map<Edge, string>;
+  /** the ways with a car on them now (both, only after an edit: see the route loop in `step`) */
+  taken: Set<Edge>;
+}
+/** taking turns on a lane both ways: the cars one way before the other way's turn (when it has cars waiting), and the longest turn (s) */
+const TURN_CARS = 6, TURN_MAX = 45;
+/** a car coming to a lane both ways within this many seconds wants a turn there */
+const TURN_LOOK = 8;
+/** seconds a car waits on a ring at its way off onto a lane both ways not open its way, before it goes round again (to the nearest
+ * other way out): standing there longer it would hold up the ring behind it, maybe those it waits for (ticket #53) */
+const RING_WAIT = 15;
 /** a lane of the same road running beside this one the same way: along this one from `a0` to `a1`, and the place beside it there (every metre from `a0`) */
 interface Neighbor { lane: Edge; a0: number; a1: number; map: number[]; /** two rings round one middle (a two-lane roundabout): beside all the way round, places on both wrapping round */ round?: boolean }
 // (join: two connectors running together into the same place on a lane, see the zip in step)
@@ -255,6 +282,8 @@ interface Edge {
   atRing?: boolean;
   /** a lane (or a connector leaving/joining one): a bus lane, closed to ordinary cars */
   bus: boolean;
+  /** lanes: one lane both ways' (ticket #53), the lane or its way back: who may come onto it now */
+  twoWay?: TwoWayPair;
   /** where it crosses other lanes and connectors (or, connectors, ends where another does) */
   conflicts: Conflict[];
   /** connectors: stretches of it in reach of other paths (crossing zones overlapping one another as one; not joins): one in there is committed */
@@ -546,6 +575,7 @@ export function readWhy(why: string | null): { kind: ExplainRule; car?: number; 
   if ((m = /^stop (\S+)/.exec(why))) return { kind: "stop", edge: m[1] };
   if ((m = /^signal (\S+) (\w+)/.exec(why))) return { kind: "signal", edge: m[1], detail: m[2] };
   if ((m = /^pedestrians at (\S+)/.exec(why))) return { kind: "zebra", detail: m[1] };
+  if ((m = /^one lane (\S+)(?: \((.*)\))?$/.exec(why))) return { kind: "two-way", edge: m[1], ...(m[2] ? { detail: m[2] } : {}) };
   if (why === "broken down") return { kind: "broken" };
   return null;
 }
@@ -582,6 +612,8 @@ export class SketchSim {
   /** a roundabout's rings (one, or two-lane, rings beside each other all the way round; inner first), its middle, which way round
    * cars go (+1: the angle grows), and its ways off with where they leave (the angle); by each way on (T172) */
   private ringOn = new Map<Edge, RingGroup>();
+  /** the lanes both ways (ticket #53) */
+  private pairs: TwoWayPair[] = [];
   private exitWeights = new Map<string, number>();
   /** an exit lane's way out: it and the lanes of its road ending beside it (as the Demand panel groups them). A car going to
    * one leaves by whichever it is on: no changing lane at the sketch's edge for nothing (T194) */
@@ -729,6 +761,20 @@ export class SketchSim {
       from.outs.push({ conn: e, s: e.from!.s });
       to.ins.push({ conn: e, s: e.to!.s });
     }
+    // one lane both ways (ticket #53): the lane and its way back (`drivable` made it a lane), who may go on carried on as it was
+    {
+      const old = new Map(this.pairs.map(p => [p.ways[0].key, p]));
+      this.pairs = [];
+      for (const l of sk.lanes) {
+        if (!twoWayOk(l)) continue;
+        const A = edges.get(`lane:${l.id}`), B = edges.get(`lane:${twinId(l.id)}`);
+        if (!A || !B) continue;
+        const was = old.get(A.key), same = (e: Edge | null | undefined) => (e ? (e.key === A.key ? A : e.key === B.key ? B : null) : null);
+        const P: TwoWayPair = { ways: [A, B], rule: l.twoWay!, open: same(was?.open), since: was?.since ?? this.t, served: was?.served ?? new Set(), last: same(was?.last), due: new Set(), why: new Map(), taken: new Set() };
+        A.twoWay = B.twoWay = P;
+        this.pairs.push(P);
+      }
+    }
     // (where a connector is beside the lanes it leaves and joins)
     for (const e of edges.values()) {
       if (e.kind !== "conn") continue;
@@ -758,6 +804,8 @@ export class SketchSim {
         // (geometric neighbours only here, whatever their `bus` flags: who may actually change into whom is for the
         // vehicle-aware code that reads `neighbors` to say, not this one-off-per-sketch graph)
         if (A === B || A.ring !== B.ring) continue;
+        // (nor onto or off a lane both ways: cars come onto one only at its start, as its rule lets them, ticket #53)
+        if (A.twoWay || B.twoWay) continue;
         const pb = paths.get(B.key)!, cb = polyline(pb).cum, far = (width.get(A.key)! + width.get(B.key)!) / 2 + 0.75;
         if (A.ring) {
           const map: number[] = [];
@@ -792,6 +840,8 @@ export class SketchSim {
       && X.locate(X.len).d.x * Y.locate(0).d.x + X.locate(X.len).d.y * Y.locate(0).d.y > 0.7);
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
       let A = all[i], B = all[j];
+      // (a lane both ways and its way back, one on top of the other: never on it together, its rule sees to that)
+      if (A.twoWay && A.twoWay === B.twoWay) continue;
       // (the connector first, where one is attached to the other)
       if (attached(B, A)) [A, B] = [B, A];
       const ba = boxes.get(A)!, bb = boxes.get(B)!;
@@ -1537,6 +1587,62 @@ export class SketchSim {
   }
 
   /** the stretches a car will drive next: its edge from where it is, then its connector, then the lane that joins */
+  /**
+   * Who may come onto a lane both ways now (ticket #53, see `TwoWayPair`): the way open closed when its rule says so, the
+   * other opened once no car is on the lane, nor too close to stop before it, going the way it closes.
+   */
+  private stepTwoWay(P: TwoWayPair, byEdge: Map<Edge, SimVehicle[]>, tailOn: Map<Edge, SimVehicle[]>, toward: Map<Edge, SimVehicle[]>) {
+    const [A, B] = P.ways, other = (X: Edge) => (X === A ? B : A), first = P.rule === "forward" ? A : P.rule === "back" ? B : null;
+    // (on it: its front, or its back still)
+    const on = (X: Edge) => (byEdge.get(X)?.length ?? 0) > 0 || (tailOn.get(X) ?? NO_VEHICLES).some(w => {
+      for (let t = w.trail, run = w.run; t && run < w.len + 0.5; run += t.run, t = t.before) if (t.edge === X) return true;
+      return false;
+    });
+    // (those coming onto it, on the connector into it or the lane before: how far from the connector, where they wait, and
+    // the seconds to get there; one on the connector, or too close and fast to stop before it, as the car itself sees it, is
+    // committed)
+    const coming = (X: Edge) => {
+      const out: { w: SimVehicle; d: number; eta: number; committed: boolean }[] = [];
+      for (const w of toward.get(X) ?? NO_VEHICLES) {
+        const d = w.edge.kind === "conn" ? (w.edge.to!.lane === X ? 0 : null)
+          : w.edge !== X && w.exit && w.exit.to!.lane === X ? this.along(w.edge, w.pos, this.exitS(w.exit)) : null;
+        if (d === null || d < -0.01) continue;
+        // (round a ring, one only takes it open: else it goes round again, see the moving in `step`)
+        out.push({ w, d, eta: timeTo(d, w.v, w.edge.vmax * w.vf, accOf(w)), committed: w.edge.kind === "conn" || (d < Math.max(0.1, (w.v * w.v) / 8 - 1) && !(w.edge.ring && P.open !== X)) });
+      }
+      return out;
+    };
+    const cs = new Map([A, B].map(X => [X, coming(X)]));
+    const busy = (X: Edge) => on(X) || cs.get(X)!.some(c => c.committed);
+    const wants = (X: Edge, within: number) => P.due.has(X) || cs.get(X)!.some(c => c.eta <= within);
+    // (the seconds one going on `X` now takes to be off it again, and some to spare)
+    const clearT = (X: Edge) => (X.len + LEN) / Math.max(3, X.vmax) + 2;
+    // (someone on it the other way after all, an edit put there: neither way, until it is clear)
+    if (P.open && busy(other(P.open))) P.open = null;
+    if (P.open) {
+      const D = P.open, O = other(D);
+      for (const w of byEdge.get(D) ?? NO_VEHICLES) P.served.add(w.id);
+      const end = first === null
+        ? wants(O, TURN_LOOK) && (!wants(D, TURN_LOOK) || P.served.size >= TURN_CARS || this.t - P.since >= TURN_MAX)
+        // (by priority: the way that has it closes for the other in a gap long enough for that one to get through; the other closes once one with it comes)
+        : D === first ? wants(O, TURN_LOOK) && !wants(first, clearT(O)) : wants(first, clearT(D));
+      if (end) { P.last = D; P.open = null; }
+    }
+    if (!P.open) {
+      let pick: Edge | null;
+      if (first === null) { const wa = wants(A, TURN_LOOK), wb = wants(B, TURN_LOOK); pick = wa && wb ? (P.last === A ? B : A) : wa ? A : wb ? B : null; }
+      else { const second = other(first); pick = wants(first, clearT(second)) ? first : wants(second, TURN_LOOK) ? second : wants(first, TURN_LOOK) ? first : null; }
+      if (pick && !busy(other(pick))) { P.open = pick; P.since = this.t; P.served = new Set(); }
+    }
+    for (const X of [A, B]) {
+      if (X === P.open) { P.why.delete(X); continue; }
+      const O = other(X);
+      P.why.set(X, P.open !== O || on(O) ? "cars on it the other way" : first === null ? "the other way's turn" : "giving way to the other way");
+    }
+    P.due.clear();
+    P.taken = new Set([A, B].filter(on));
+  }
+
   private route(v: SimVehicle) {
     const e = v.edge, out: { edge: Edge; a: number; b: number; off: number }[] = [];
     if (e.kind === "conn") {
@@ -1834,6 +1940,8 @@ export class SketchSim {
     for (const s of this.sources) {
       const jw = s.wait?.[0];
       if (this.t < s.next && !jw) continue;
+      // (onto a lane both ways only the way that is open, ticket #53: the one due waits, wanting its turn)
+      if (s.lane.twoWay && s.lane.twoWay.open !== s.lane) { s.lane.twoWay.due.add(s.lane); continue; }
       // (one just changed lane off it still partly over it)
       // (or one just turned off it, its back still on it)
       // (a truck or a car: drawn once, kept until it comes in; nothing drawn while there are no trucks, so runs stay as they were)
@@ -1949,6 +2057,7 @@ export class SketchSim {
       else if (w.exit) { mark(w.exit, w); mark(w.exit.to!.lane, w); }
     }
     const NONE: SimVehicle[] = [];
+    for (const P of this.pairs) this.stepTwoWay(P, byEdge, tailOn, toward);
 
     const acc = new Map<SimVehicle, number>(), held = new Map<SimVehicle, { gap: number; lead: number }>();
     // (what each was waiting for as this step began: those decided before another in it mustn't change what that one sees)
@@ -2019,6 +2128,19 @@ export class SketchSim {
       }
       for (const r of route) {
         const ahead = (pos: number) => (r.edge.ring ? this.along(r.edge, r.a, pos) : pos - r.a);
+        // one lane both ways (ticket #53): onto it only the way that is open, stopping short of the connector into it, not on
+        // it, where it would stand across the way of those coming off it (told to go or not: the cars the other way are no
+        // cars in its way to it, it would meet them head on); too close to stop, or on the connector, on it goes
+        // (on a ring, waiting there at most RING_WAIT s: then it goes round again, see the moving below)
+        const X2 = r.edge.kind === "conn" ? r.edge.to!.lane : null, P2 = X2?.twoWay;
+        if (P2 && r.edge !== v.edge && P2.open !== X2 && canStopBefore(r.off) && !(r.edge.from!.lane.ring && v.edge === r.edge.from!.lane && v.still > RING_WAIT)) {
+          const why2 = P2.why.get(X2!) ?? "";
+          yields.push({ at: r.off, why: `one lane ${X2!.key}${why2 ? ` (${why2})` : ""}`, ...(W ? { info: { kind: "two-way" as const, edge: X2!.key, ...(why2 ? { detail: why2 } : {}) } } : {}) });
+        }
+        // (on the connector into it and cars on it the other way after all, an edit put them there: at the end of the connector)
+        const P3 = r.edge.twoWay;
+        if (P3 && v.edge.kind === "conn" && v.edge.to!.lane === r.edge && P3.taken.has(P3.ways[0] === r.edge ? P3.ways[1] : P3.ways[0]) && canStopBefore(r.off))
+          yields.push({ at: r.off, why: `one lane ${r.edge.key} (cars on it the other way)`, ...(W ? { info: { kind: "two-way" as const, edge: r.edge.key, detail: "cars on it the other way" } } : {}) });
         // the car ahead…
         for (const w of byEdge.get(r.edge) ?? []) {
           if (w === v) continue;
@@ -2160,6 +2282,9 @@ export class SketchSim {
                 if (past < w.len + S0 + 2 && w.v < 3 && (t.lane.ring || w.pos > t.s)) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
                 const u = this.along(t.lane, w.pos, t.s);
                 if (!t.lane.ring && w.pos > t.s) { if (w.pos - t.s < w.len + 1) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "just past where it joins", car: w.id, edge: t.lane.key } } : {}) }); break; } continue; }
+                // (onto an inner ring across the outer one, nor one beside the joining stretch, standing, even about to turn off before
+                // where this joins: this one would stop behind it there, across the outer ring, the ring then locked (ticket #50))
+                if (t.lane.ring && xs.length && w.v < 3 && u < laneZone) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
                 if (u > 70) continue;
                 // (it leaves before getting here)
                 if (w.exit && this.along(t.lane, w.pos, this.exitS(w.exit)) < u) continue;
@@ -2206,12 +2331,13 @@ export class SketchSim {
             const O = k.other, mine = r.off + r.edge.len - r.a;
             if (mine > 80) continue;
             // (one nearly standing well back from the join is no car to keep a gap to yet: up to where the two run together, and waiting
-            // there, not stopping short anywhere on the way, maybe in another's path (T195); told to go, it doesn't wait)
+            // there, not stopping short anywhere on the way, maybe in another's path (T195); nor round a ring, where stopping short
+            // stops the ring where others join it (ticket #50); told to go, it doesn't wait)
             const hold = r.off + ahead(k.at - k.before) - 0.5;
             const zip = (w: SimVehicle, theirs: number) => {
               if (w === v || forced || !(theirs < mine || (theirs === mine && w.id < v.id))) return;
               const g = mine - theirs - w.len;
-              behind(w.v < 1 && v.blocking ? Math.max(g, hold) : g, w.v, `merge ${O.to!.lane.key} for car ${w.id}`, W ? { kind: "merge", detail: "zip", car: w.id, edge: O.to!.lane.key } : null);
+              behind(w.v < 1 && (v.blocking || v.edge.ring) ? Math.max(g, hold) : g, w.v, `merge ${O.to!.lane.key} for car ${w.id}`, W ? { kind: "merge", detail: "zip", car: w.id, edge: O.to!.lane.key } : null);
             };
             for (const w of byEdge.get(O) ?? []) zip(w, O.len - w.pos);
             // (and one about to take it, still on the lane into it)
@@ -2282,7 +2408,7 @@ export class SketchSim {
       // (zones overlapping one another are one: past the first it is in the next); or the car ahead held up itself,
       // giving way or at a line: still moving, it is about to stop there, and one following it in would stop in the zone
       const ahead = /^car (-?\d+)$/.exec(why ?? ""), leadWhy = ahead ? whyWas.get(carById(Number(ahead[1]))!) : null;
-      const leadHeld = !!leadWhy && /^(zone |merge |keeping clear|signal |stop |pedestrians)/.test(leadWhy);
+      const leadHeld = !!leadWhy && /^(zone |merge |keeping clear|signal |stop |pedestrians|one lane )/.test(leadWhy);
       // (and, the car ahead on the move or not, a crossing of a way off an inner ring: kept clear unless there's room past it, as a
       // marked box (T190))
       // (hysteresis: already holding for this, a leader easing away only lets it go once plainly moving, not the moment
@@ -2469,7 +2595,23 @@ export class SketchSim {
         if (this.exitBehind(v)) this.plan(v);
         const exitAt = v.exit ? e.outs.find(o => o.conn === v.exit)?.s : undefined;
         const toExit = exitAt === undefined ? Infinity : this.along(e, v.pos, exitAt);
-        if (move >= toExit) {
+        // (round a ring, its way off onto a lane both ways not open its way, ticket #53: past it, round again, to the nearest other way
+        // out (none: round again, to try that way again); not standing on the ring, holding up those behind, maybe those it waits for)
+        const shut = e.ring && !!v.exit?.to!.lane.twoWay && v.exit.to!.lane.twoWay.open !== v.exit.to!.lane;
+        if (move >= toExit && shut) {
+          const rt = this.routes, x = v.exit!;
+          // (the way off it would take round the ring to a way out: not one onto a lane both ways not open its way either)
+          const off = (ex: string) => { let best: Edge | null = null, bd = Infinity; for (const o of e.outs) { const d = this.along(e, v.pos, o.s) + rt!.viaConnector(o.conn.id, ex); if (d < bd) { bd = d; best = o.conn; } } return best; };
+          const shutOff = (c: Edge | null) => !c || (!!c.to!.lane.twoWay && c.to!.lane.twoWay.open !== c.to!.lane);
+          const opts = rt && !v.bus ? rt.exits.filter(ex => (this.exitWeights.get(ex) ?? 1) > 0 && rt.viaConnector(x.id, ex) === Infinity && rt.from(e.id, v.pos, ex) < Infinity && !shutOff(off(ex))) : [];
+          if (opts.length) {
+            const was = v.dest;
+            v.dest = opts.reduce((a, ex) => (rt!.from(e.id, v.pos, ex) < rt!.from(e.id, v.pos, a) ? ex : a));
+            this.plan(v); v.reroutes++; this.reroutes++;
+            this.note({ what: "reroute", car: v.id, from: x.key, to: v.exit?.key ?? `end of ${v.edge.key}`, waited: r2(v.still), gaveUp: was });
+          } else this.note({ what: "round again", car: v.id, exit: x.key });
+        }
+        if (move >= toExit && !shut) {
           { const sc = this.splitOut.get(v.exit!.id); if (sc) this.turnCounts.set(sc.count, (this.turnCounts.get(sc.count) ?? 0) + 1); }
           move -= toExit; v.trail = this.trailOf(v, e, exitAt!); v.edge = v.exit!; v.pos = 0; v.run = 0; v.exit = null; v.goal = null; v.stopped = false;
           { const a = this.jOn.get(v.edge); if (a !== undefined && a !== this.jOn.get(e)) this.jTally[a].through++; }

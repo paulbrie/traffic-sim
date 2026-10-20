@@ -5,7 +5,7 @@
  * the lanes' speed limits (a bend no faster than it can be taken), or why there is none. Framework-free.
  */
 import {
-  CHANGE_COST, LastFew, RouteTable, connectorPts, dist, isFullCircle, laneById, laneLength, nearestOn, pointAt, speedLimitOf,
+  CHANGE_COST, LastFew, RouteTable, connectorPts, dist, drivable, isFullCircle, laneById, laneLength, nearestOn, pointAt, speedLimitOf,
   type Pt, type Sketch,
 } from "./lane-sketch";
 
@@ -52,6 +52,8 @@ const TIE = 5 + 1;
  * off it as short as the traced one, give or take those 5 m (the cars take either). Empty if it kept to the way.
  */
 export function offRoute(sk: Sketch, steps: ({ kind: "lane" | "connector"; id: string } | { kind: "change"; from: string; to: string })[], path: string[]): string[] {
+  // (as the cars see it: a lane both ways' way back a lane of its own, ticket #53)
+  sk = drivable(sk);
   const lanes = new Set<string>(), conns = new Set<string>();
   for (const x of steps) {
     if (x.kind === "change") { lanes.add(x.from); lanes.add(x.to); } else (x.kind === "lane" ? lanes : conns).add(x.id);
@@ -95,8 +97,10 @@ export function routeTableOf(sk: Sketch): RouteTable {
   return table;
 }
 
-/** `start`: metres along `from` it starts (a car on its way: where it is) */
+/** `start`: metres along `from` it starts (a car on its way: where it is); on the sketch as the cars see it, a lane both ways'
+ * way back a lane of its own (`twinId`, ticket #53) */
 export function traceRoute(sk: Sketch, from: string, to: string, table = new RouteTable(sk), start = 0): RouteResult {
+  sk = drivable(sk);
   const name = (id: string) => sk.roads.find(r => r.lanes.includes(id))?.name ?? `lane ${id}`;
   const A = laneById(sk, from), B = laneById(sk, to);
   if (!A) return { ok: false, reason: `no lane ${from}` };

@@ -99,7 +99,7 @@ export function tidySketch(sk0: Sketch, opts: TidyOptions = {}): { sketch: Sketc
       const i = ins.get(l.id) ?? [], o = outs.get(l.id) ?? [];
       if (!i.length || !o.length) return false;
       const road = roadOf(sk, l.id);
-      const why = l.control ? "it has a sign" : l.level ? "it is on a level" : [...i, ...o].some(c => held.has(c.id)) ? "lights hold it" : named.has(l.id) || (road && named.has(road.id)) ? "a journey or turning share names it" : null;
+      const why = l.twoWay ? "it is one lane both ways" : l.control ? "it has a sign" : l.level ? "it is on a level" : [...i, ...o].some(c => held.has(c.id)) ? "lights hold it" : named.has(l.id) || (road && named.has(road.id)) ? "a journey or turning share names it" : null;
       if (why) { if (!report.kept.some(k => k.lane === l.id)) report.kept.push({ lane: l.id, why }); return false; }
       return true;
     });
@@ -143,6 +143,8 @@ export function tidySketch(sk0: Sketch, opts: TidyOptions = {}): { sketch: Sketc
       return mStart ? !ins.get(m.id) : !outs.get(m.id);
     });
     if (!free || members.some(m => m.level || m.shape.kind !== "line")) { report.kept.push({ lane: l.id, why: "something joins its road at that end" }); continue; }
+    // (a lane both ways in it: a way in and out at both ends, the counts above don't say which; left as drawn, ticket #53)
+    if (members.some(m => m.twoWay)) { report.kept.push({ lane: l.id, why: "one lane both ways in its road" }); continue; }
     const shortest = Math.min(...members.map(m => laneLength(m.shape))), grow = MIN_END - shortest;
     if (grow <= 0.01) continue;
     const pts = (lead.shape as Extract<SketchLane["shape"], { kind: "line" }>).pts, curved = (lead.shape as Extract<SketchLane["shape"], { kind: "line" }>).curved;

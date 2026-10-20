@@ -5,7 +5,7 @@
  * turning circle there, a disc of road a little wider than the U-turn's loop, under it; nothing in the plan or the
  * cars changes. Framework-free.
  */
-import { LastFew, connectorPts, contentsOf, dist, laneById, laneLength, pointAt, type Pt, type Sketch } from "./lane-sketch";
+import { LastFew, backFrom, connectorEnd, connectorPts, contentsOf, dist, laneById, laneLength, pointAt, type Pt, type Sketch } from "./lane-sketch";
 
 export interface DeadEnd {
   /** the lane coming in, the U-turn connectors off its end and the lanes they go onto */
@@ -28,7 +28,8 @@ export function deadEndTurnarounds(sk: Sketch): DeadEnd[] {
   const was = kept.get(sk.connectors);
   if (was && was.lanes === sk.lanes) return was.found;
   const outs = new Map<string, Sketch["connectors"]>();
-  for (const c of sk.connectors) (outs.get(c.from.lane) ?? outs.set(c.from.lane, []).get(c.from.lane)!).push(c);
+  // (leaving lanes at their ends: not a lane both ways' way back, at its start, ticket #53)
+  for (const c of sk.connectors) { const f = laneById(sk, c.from.lane); if (!f || !backFrom(f, c.from.s)) (outs.get(c.from.lane) ?? outs.set(c.from.lane, []).get(c.from.lane)!).push(c); }
   const roadOf = new Map(sk.roads.flatMap(r => r.lanes.map(id => [id, r] as const)));
   /** lanes `a` and `b` on the same street: one road, or roads of the same name */
   const same = (a: string, b: string) => { const x = roadOf.get(a), y = roadOf.get(b); return !!x && !!y && (x === y || (!!x.name && x.name === y.name)); };
@@ -40,7 +41,8 @@ export function deadEndTurnarounds(sk: Sketch): DeadEnd[] {
     const back = os.every(c => {
       const t = laneById(sk, c.to.lane);
       if (!t || c.from.s <= L - 1 || !same(l.id, t.id)) return false;
-      const q = pointAt(t.shape, c.to.s);
+      // (joining a lane both ways' way back: going its way)
+      const q = connectorEnd(sk, c.to, "to")!;
       return dist(q.p, end.p) < NEAR && end.d.x * q.d.x + end.d.y * q.d.y < -0.5;
     });
     if (!back) continue;
