@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import type { Sketch } from "@/lib/lane-sketch";
 import type { SimStats } from "@/lib/lane-sketch-sim";
+import type { TrafficMatch } from "@/lib/tomtom";
 import { cn } from "@/lib/utils";
 import { roadNames } from "./compass-names";
 import { InspectorPanel } from "./inspector-panel";
@@ -24,9 +25,9 @@ const COLS: { key: Key; label: string; title: string }[] = [
 /**
  * Each road's results while the cars run, as V1's data tables (the junctions' beside it): vehicles onto it an hour,
  * their mean speed, the delay each had on it, its longest queue; sorted by any of them (slowest first by default);
- * a click takes the view to the road.
+ * a click takes the view to the road. With TomTom's live traffic fetched (ticket #33), its speed now beside the cars' own.
  */
-export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: SimStats; onGo: (id: string) => void }) {
+export function RoadResults({ sketch, stats, traffic, onGo }: { sketch: Sketch; stats: SimStats; traffic?: TrafficMatch | null; onGo: (id: string) => void }) {
   // (by a column, the most first (speed: the slowest); again, the other way; by name, A to Z first)
   // (how it is sorted and how much shows: the editor's, in the V2 UI store)
   const [table, setTable] = useUiPath<TableUi>(`editors/${useEditorKind()}/tables/roads`);
@@ -48,8 +49,9 @@ export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: Si
   });
   const arrow = (k: Key | "name") => (by !== k ? "" : (k === "name" || k === "speed") !== flip ? " ↑" : " ↓");
   const csv = () => {
-    const head = "road,id,vehicles per hour,through,mean speed (km/h),mean delay (s),vehicle-km,queue max";
-    const lines = rows.map(x => [JSON.stringify(name.get(x.r.id) ?? x.r.id), x.r.id, x.rate.toFixed(0), x.r.through, x.speed.toFixed(1), x.delay.toFixed(1), x.r.vehKm.toFixed(2), x.r.queueMax].join(","));
+    const head = `road,id,vehicles per hour,through,mean speed (km/h),mean delay (s),vehicle-km,queue max${traffic ? ",TomTom now (km/h),TomTom free flow (km/h),TomTom coverage" : ""}`;
+    const tt = (id: string) => { const t = traffic?.roads.get(id); return t ? [t.kmh?.toFixed(1) ?? "", t.free?.toFixed(1) ?? "", t.cover.toFixed(2)] : ["", "", ""]; };
+    const lines = rows.map(x => [JSON.stringify(name.get(x.r.id) ?? x.r.id), x.r.id, x.rate.toFixed(0), x.r.through, x.speed.toFixed(1), x.delay.toFixed(1), x.r.vehKm.toFixed(2), x.r.queueMax, ...(traffic ? tt(x.r.id) : [])].join(","));
     void navigator.clipboard.writeText([head, ...lines].join("\n")).then(() => toast.success("Road results copied", { description: `${rows.length} roads, as CSV (paste into a spreadsheet).` }), () => toast.error("Couldn't copy"));
   };
   return (
@@ -67,6 +69,7 @@ export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: Si
                 <button type="button" title={`${c.title} (again: the other way)`} onClick={() => sortBy(c.key)} className={cn("hover:text-foreground", by === c.key && "font-semibold text-foreground")}>{c.label}{arrow(c.key)}</button>
               </th>
             ))}
+            {traffic && <th className="pb-1 text-right font-normal" title="TomTom's speed on it now (km/h), over the lanes it covers: the cars' km/h against it">TomTom</th>}
           </tr>
         </thead>
         <tbody>
@@ -77,12 +80,25 @@ export function RoadResults({ sketch, stats, onGo }: { sketch: Sketch; stats: Si
               <td className={cn("py-0.5 text-right font-mono tabular", x.speed < 15 && "text-amber-700 dark:text-amber-400", x.speed < 5 && "text-destructive")}>{x.speed.toFixed(0)}</td>
               <td className={cn("py-0.5 text-right font-mono tabular", x.delay >= 30 && "text-amber-700 dark:text-amber-400", x.delay >= 60 && "text-destructive")}>{fmtS(x.delay)}</td>
               <td className="py-0.5 text-right font-mono tabular">{x.queue}</td>
+              {traffic && <TomTomCell t={traffic.roads.get(x.r.id)} sim={x.speed} />}
             </tr>
           ))}
         </tbody>
       </table>
       {rows.length > n && <button className="justify-self-start px-1 text-[11px] text-primary hover:underline" onClick={() => setN(k => k + 25)}>Show {Math.min(25, rows.length - n)} more ({rows.length - n} of {rows.length} roads not shown yet)</button>}
     </InspectorPanel>
+  );
+}
+
+/** TomTom's speed now on a road; amber where the cars' differ from it by more than a third */
+function TomTomCell({ t, sim }: { t: ReturnType<TrafficMatch["roads"]["get"]>; sim: number }) {
+  if (!t || t.kmh === null) return <td className="py-0.5 text-right text-muted-foreground" title="TomTom has no data for this road">–</td>;
+  const off = Math.abs(sim - t.kmh) > t.kmh / 3;
+  return (
+    <td className={cn("py-0.5 text-right font-mono tabular", off && "text-amber-700 dark:text-amber-400")}
+      title={`TomTom now: ${t.kmh.toFixed(0)} km/h${t.rel !== null ? `, ${Math.round(t.rel * 100)}% of its free flow` : ""}${t.free !== null ? ` (${t.free.toFixed(0)} km/h)` : ""}, over ${Math.round(t.cover * 100)}% of its lanes; the cars here: ${sim.toFixed(0)} km/h`}>
+      {t.kmh.toFixed(0)}
+    </td>
   );
 }
 
