@@ -32,6 +32,10 @@ export interface SimParams {
   // stuck vehicles
   rerouteAfter: number;
   towAfter: number;
+  /** stopped this long at the head of a junction's or roundabout's line, or on a ring: another way out, or back (s; 0 = never) */
+  turnAroundAfter: number;
+  /** 1: with no other way, it may turn round on the spot into the road's other lanes; 0: only where a U-turn is allowed */
+  turnAroundAnywhere: number;
   // breakdowns
   /** engine failures across the plan, per hour (picked among moving vehicles at random) */
   breakdownsPerHour: number;
@@ -57,6 +61,8 @@ export interface ParamInfo {
   step: number;
   def: number;
   help: string;
+  /** a choice between two, stored as 0 or 1: their labels (shown as a toggle, not a slider) */
+  choice?: [string, string];
 }
 
 export const PARAMS: ParamInfo[] = [
@@ -86,6 +92,8 @@ export const PARAMS: ParamInfo[] = [
   { key: "fuelIdleCar", group: "Fuel", label: "Car idling", unit: "L/h", min: 0.3, max: 2.5, step: 0.05, def: 0.8, help: "Fuel a car burns standing still with its engine running (modern petrol cars about 0.6–1 L/h). Driving adds to this with speed and acceleration." },
   { key: "fuelIdleTruck", group: "Fuel", label: "Truck and bus idling", unit: "L/h", min: 0.5, max: 6, step: 0.1, def: 2.5, help: "Fuel a truck or bus burns standing still with its engine running." },
   { key: "stopStartShare", group: "Fuel", label: "Vehicles with stop-start", unit: "%", min: 0, max: 100, step: 1, def: 0, help: "Share of vehicles whose engine switches off while they stand still (at a red light, in a queue): they burn nothing then." },
+  { key: "turnAroundAfter", group: "Stuck vehicles", label: "Turn back or take another way after", unit: "s", min: 0, max: 600, step: 5, def: 60, help: "A driver stopped this long at the head of a junction's or roundabout's line, or on a roundabout, tries another way out: a later exit, another turn, a U-turn where allowed (or anywhere, below); again every time as long again. 0: never." },
+  { key: "turnAroundAnywhere", group: "Stuck vehicles", label: "Turning back", unit: "", min: 0, max: 1, step: 1, def: 0, choice: ["Where allowed", "Anywhere"], help: "Where allowed: only by a U-turn the junction or its connectors allow. Anywhere: with no other way out, the driver turns round on the spot into the road's lanes the other way, if there is room." },
   { key: "towAfter", group: "Stuck vehicles", label: "Tow away after", unit: "s", min: 30, max: 900, step: 10, def: 150, help: "A vehicle stuck this long is removed (counted as towed)." },
 ];
 

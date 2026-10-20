@@ -1603,3 +1603,29 @@ function alongKerb(input: any): any {
   console.log(`coordinate junctions: in step on their own ${(alone * 100).toFixed(0)}%, grouped (offsets 0) ${grouped}, in step together ${(together * 100).toFixed(0)}%, a road-end junction in once ${ends}, one junction refused ${one} | ok ${ok}`);
   if (!ok) process.exit(1);
 }
+// ticket #35: the turn-around rule. A car broken down for good just past a roundabout's East exit jams the ring: with the
+// rule, the car next off the ring to it goes on round to another exit after 60 s (more trips, fewer stuck). At a
+// two-road junction whose only way on is blocked, "Where allowed" (no U-turn there) can't help; "Anywhere" turns them round
+{
+  type V = { piece: { kind: string; edge?: { link: { id: string }; dir: number } }; s: number; broken: number; brokenAt: number; wait: number };
+  const run = (kind: "ring" | "line", params: Record<string, number>) => {
+    const C = kind === "ring" ? makeNode(0, 0, "roundabout", false) : { ...makeNode(0, 0, "lights", false), junction: true };
+    const arms = kind === "ring" ? [makeNode(-250, 0), makeNode(250, 0), makeNode(0, -250), makeNode(0, 250)] : [makeNode(-250, 0), makeNode(250, 0)];
+    const links = arms.map(a => makeLink(C, a, 1, 1)), east = links[1].id;
+    const net: Network = { version: 1, nodes: [C, ...arms], links, stops: [], lines: [] };
+    const sim = new Sim(compile(net), { cars: 60, trucks: 0, seed: 3, params: { brokenTowAfter: 3600, towAfter: 900, ...params } });
+    const S = sim as unknown as { vehicles: V[]; tick: number; stats: { trips: number } };
+    let broke = false;
+    for (let t = 0; t < 5000; t++) {
+      sim.step();
+      if (!broke && t > 300) for (const v of S.vehicles) if (v.piece.kind === "lane" && v.piece.edge?.link.id === east && v.piece.edge.dir === 1 && v.s > 15 && v.s < 40) { v.broken = 1; v.brokenAt = S.tick; broke = true; break; }
+    }
+    // (stuck outside the blocked road: those on it, behind the broken-down car, can only wait for the tow)
+    return { trips: S.stats.trips, stuck: S.vehicles.filter(v => !v.broken && v.wait > 120 && !(v.piece.kind === "lane" && v.piece.edge?.link.id === east && v.piece.edge.dir === 1)).length };
+  };
+  const off = run("ring", { turnAroundAfter: 0 }), on = run("ring", {}), lineAllowed = run("line", {}), lineAnywhere = run("line", { turnAroundAnywhere: 1 });
+  const ring = on.trips > off.trips * 1.3 && on.stuck < off.stuck, anywhere = lineAllowed.stuck > 0 && lineAnywhere.stuck < lineAllowed.stuck / 2;
+  const ok = ring && anywhere;
+  console.log(`turn-around rule (trips / stuck outside the blocked road): roundabout jammed ${off.trips} / ${off.stuck}, with the rule ${on.trips} / ${on.stuck} ${ring}; blocked junction, where allowed ${lineAllowed.trips} / ${lineAllowed.stuck}, anywhere ${lineAnywhere.trips} / ${lineAnywhere.stuck} ${anywhere} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}

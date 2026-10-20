@@ -82,6 +82,10 @@ export interface Vehicle {
   parkSince?: number;
   /** when the console was last told it has waited very long in a jam (tick) */
   stuckAt?: number;
+  /** when it last tried the turn-around rule (another way out, or back), stopped at or in a junction (tick) */
+  unstickAt?: number;
+  /** the turns tried at that junction's line under the turn-around rule (each once) */
+  unstickTried?: { at: Edge; outs: Edge[] };
   /**
    * On a bay's path (see BayAccess), like a connector: in or out, how far along it (m); `inLane`: part of the
    * car is in the lane (it is in the lane's traffic only then); `go`: pulling out, it has its gap in the lane.
@@ -142,7 +146,7 @@ export interface JunctionEvent {
   link?: string;
   veh: number | null;
   vkind: string | null;
-  kind: "approach" | "request" | "grant" | "deny" | "revoke" | "enter" | "leave" | "lane" | "wrong-lane" | "turn-changed" | "reroute" | "signal" | "towed"
+  kind: "approach" | "request" | "grant" | "deny" | "revoke" | "enter" | "leave" | "lane" | "wrong-lane" | "turn-changed" | "reroute" | "turn-around" | "signal" | "towed"
     | "appear" | "enter-road" | "state" | "leave-road" | "exit" | "arrive" | "reversible" | "breakdown";
   detail: string;
   /** machine-readable bits for analysis (lanes are 1-based) */
