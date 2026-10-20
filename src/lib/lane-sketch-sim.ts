@@ -226,11 +226,13 @@ const TURN_LOOK = 8;
 /** seconds a car waits on a ring at its way off onto a lane both ways not open its way, before it goes round again (to the nearest
  * other way out): standing there longer it would hold up the ring behind it, maybe those it waits for (ticket #53) */
 const RING_WAIT = 15;
-/** seconds waiting to join a ring before a car starts taking a smaller gap than it would at first, down to a floor still
- * safe (`RING_JOIN_FLOOR`), as a driver kept waiting (with no one to let it in, unlike other merges) would push in; fully
- * reached after this many more seconds waiting still (ticket #56: stuck merging for good past a ring with no gap ever
- * quite comfortable enough, even once the car named in its way had long gone) */
-const RING_JOIN_PATIENCE = 15, RING_JOIN_EASE = 20, RING_JOIN_FLOOR = 0.25;
+/** seconds waiting to join a lane part-way (a ring or not) before a car starts taking a smaller gap than it would at
+ * first, down to a floor still safe (`JOIN_FLOOR`), as a driver kept waiting would push in; fully eased after this many
+ * more seconds waiting still. Without this, a car stopped dead at the merge needs the full accelerate-from-a-stop gap
+ * forever (the time it itself would take to reach the merge, from a standing start, only grows the longer it waits) even
+ * where the raw distance ahead is plenty: a livelock no amount of following traffic moving off ever broke on its own
+ * (ticket #56) */
+const JOIN_PATIENCE = 15, JOIN_EASE = 20, JOIN_FLOOR = 0.25;
 /** a lane of the same road running beside this one the same way: along this one from `a0` to `a1`, and the place beside it there (every metre from `a0`) */
 interface Neighbor { lane: Edge; a0: number; a1: number; map: number[]; /** two rings round one middle (a two-lane roundabout): beside all the way round, places on both wrapping round */ round?: boolean }
 // (join: two connectors running together into the same place on a lane, see the zip in step)
@@ -2272,9 +2274,9 @@ export class SketchSim {
               const arrive = tMe(dMerge), onLane = byEdge.get(t.lane) ?? [];
               // (how far back along the lane the joining stretch reaches)
               const laneZone = Math.max(0, this.diff(t.lane, this.beside(r.edge.onTo, r.edge.len - r.edge.mergeBefore), t.s), jb ? this.diff(t.lane, jb.at, t.s) : 0);
-              // (kept waiting to join a ring, with no zipper there to let it in (unlike other merges): eases the gap it
-              // wants, down to a floor still safe, the longer it waits, as a driver kept out would push in; ticket #56)
-              const ringPatience = t.lane.ring ? Math.max(RING_JOIN_FLOOR, 1 - Math.max(0, v.still - RING_JOIN_PATIENCE) / RING_JOIN_EASE) : 1;
+              // (kept waiting to join: eases the gap it wants, down to a floor still safe, the longer it waits, as a
+              // driver kept out would push in; ticket #56)
+              const joinPatience = Math.max(JOIN_FLOOR, 1 - Math.max(0, v.still - JOIN_PATIENCE) / JOIN_EASE);
               if (!forced && t.lane.ring && onLane.reduce((a, w) => a + w.len + S0, 0) > 0.75 * t.lane.len) yields.push({ at: mh, why: `merge ${t.lane.key}: ring nearly full`, ...(W ? { info: { kind: "ring-full", edge: t.lane.key } } : {}) });
               // (or, a two-lane roundabout's, the ring beside it, cars on this one having to get over to that one: waited for before
               // the connector crosses anything (the other ring), not standing across it; once in there, on)
@@ -2298,7 +2300,7 @@ export class SketchSim {
                 if (w.exit && this.along(t.lane, w.pos, this.exitS(w.exit)) < u) continue;
                 // (told to go: only one right there stops it)
                 if (forced && u >= laneZone + v.len + 1) continue;
-                if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v) * ringPatience) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, gap: r2(Math.max(0, u - laneZone - w.v * arrive)), need: r2(Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v, v.len + 1) * ringPatience) } } : {}) }); break; }
+                if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v) * joinPatience) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, gap: r2(Math.max(0, u - laneZone - w.v * arrive)), need: r2(Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v, v.len + 1) * joinPatience) } } : {}) }); break; }
               }
               // (roundabout driving: one on another way onto this ring, joining it upstream, counts as on it already: coming up to the line
               // faster, this one would otherwise be past stopping once that one is on)
@@ -2311,7 +2313,7 @@ export class SketchSim {
                   if (w.v < 2) continue;
                   const u = o.conn.len - w.pos + up;
                   if (u > 25) continue;
-                  if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, RING_GAP * w.v) * ringPatience) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "joining it just before" } } : {}) }); break; }
+                  if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, RING_GAP * w.v) * joinPatience) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "joining it just before" } } : {}) }); break; }
                 }
                 if (yields.length) break;
               }
@@ -2325,7 +2327,7 @@ export class SketchSim {
                   if (!x || w.goal!.lane !== t.lane) continue;
                   const m = this.across(back, w.pos)!, u = this.along(t.lane, m, t.s);
                   if (u > 70 || this.along(t.lane, m, this.exitS(x)) > (1.6 * t.lane.len) / TAU || this.along(t.lane, m, this.exitS(x)) < u) continue;
-                  if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, RING_GAP * w.v) * ringPatience) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "moving out from the inner ring" } } : {}) }); break; }
+                  if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, RING_GAP * w.v) * joinPatience) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "moving out from the inner ring" } } : {}) }); break; }
                 }
               }
             }
