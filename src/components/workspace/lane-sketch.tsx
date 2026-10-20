@@ -3432,7 +3432,9 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       drawCars(carsNow.filter(x => zOfCar(x) < 0.5));
       ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(upper!, 0, 0); ctx.restore();
     }
-    if (!S) { /* (the surfaces are in the image kept) */ } else if (st.layers.surfaces) {
+    if (!S) { /* (the surfaces are in the image kept) */ } else {
+      // the surfaces layer off: not hidden, just faded to a tenth, so the roads still read under what's drawn over them
+      const surfAlpha = st.layers.surfaces ? 1 : 0.1;
       // like the roads: one asphalt surface, the union of the road lanes' bands and the junctions (every
       // kerb first, then all the grey over them, so only the outline of the whole shows)
       // (every lane, in a road or not: a lane taken out of its road keeps its asphalt)
@@ -3446,11 +3448,11 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       for (const lv of levels.filter(inPass)) {
         const at = <T,>(xs: T[], f: (x: T) => number) => (leveled ? xs.filter(x => f(x) === lv) : xs);
         const js = at(drawn, jLevel), as = at(autos, jLevel), ks = at(linkGeo, x => kLevel(x.k)), ls = at(roadLanes, laneLevel);
-        ctx.globalAlpha = lv < 0 ? 0.55 : 1;
+        ctx.globalAlpha = (lv < 0 ? 0.55 : 1) * surfAlpha;
         // (its shadow, cast further the higher it is, in a shade of black: its junctions moved by it, its lanes point by
         // point by their height there, none where they come down to the ground; the lanes of one width in one go)
         if (lv > 0 && !far) {
-          ctx.save(); ctx.globalAlpha = 0.28; ctx.strokeStyle = ctx.fillStyle = "#000";
+          ctx.save(); ctx.globalAlpha = 0.28 * surfAlpha; ctx.strokeStyle = ctx.fillStyle = "#000";
           const byWidth = new Map<number, typeof roadLanes>();
           for (const l of ls) byWidth.set(l.width, [...(byWidth.get(l.width) ?? []), l]);
           for (const [wd, lw] of byWidth) {
@@ -3489,13 +3491,13 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
             const tinted = new Map<number, typeof roadLanes>();
             for (const l of ls) if (laneUse(l) === use) tinted.set(l.width, [...(tinted.get(l.width) ?? []), l]);
             if (!tinted.size) continue;
-            ctx.strokeStyle = tint; ctx.globalAlpha = 0.55;
+            ctx.strokeStyle = tint; ctx.globalAlpha = 0.55 * surfAlpha;
             for (const [wd, lw] of tinted) {
               ctx.beginPath();
               for (const l of lw) { samples(l.shape, far ? 2 : 0.5).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); if (isFullCircle(l.shape)) ctx.closePath(); }
               ctx.lineWidth = wd; ctx.stroke();
             }
-            ctx.globalAlpha = 1; ctx.strokeStyle = asphalt;
+            ctx.globalAlpha = (lv < 0 ? 0.55 : 1) * surfAlpha; ctx.strokeStyle = asphalt;
           }
         }
         // the markings, as on the plan's map: dashed lines between lanes, the centre line in its yellow
@@ -3518,34 +3520,6 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         const loops = loopsOf.get(j.id), bands = bandsOf.get(j.id);
         if (loops) { loopsPath(loops); ctx.strokeStyle = col.sel; ctx.globalAlpha = jOn(j) ? 1 : 0.6; ctx.lineWidth = 2 * px; ctx.stroke(); ctx.globalAlpha = 1; }
         else if (bands?.length) bandEdge(bands, col.sel, jOn(j) ? 2 * px : 1.5 * px);
-      }
-    } else {
-      // a tint with a dashed edge (automatic ones: the union of their bands, so overlaps don't darken; links: dashed along their sides)
-      for (const { g, on, over, k } of linkGeo) {
-        if (!inPass(kLevel(k))) continue;
-        path(g.outline); ctx.closePath(); ctx.fillStyle = col.jFill; ctx.fill();
-        ctx.strokeStyle = on || over ? col.sel : col.jLine; ctx.lineWidth = (on ? 2 : over ? 1.5 : 1) * px; ctx.setLineDash(on ? [] : [4 * px, 3 * px]);
-        for (const side of g.sides) { path(side); ctx.stroke(); }
-        ctx.setLineDash([]);
-      }
-      for (const j of drawn) {
-        if (!inPass(jLevel(j))) continue;
-        path(outlinePath(j)); ctx.closePath();
-        ctx.fillStyle = col.jFill; ctx.fill();
-        if (jOn(j)) { ctx.strokeStyle = col.sel; ctx.lineWidth = 2 * px; ctx.setLineDash([]); }
-        else { ctx.strokeStyle = col.jLine; ctx.lineWidth = (jOver(j) ? 2 : 1) * px; ctx.setLineDash([4 * px, 3 * px]); }
-        ctx.lineJoin = "round"; ctx.stroke(); ctx.setLineDash([]);
-      }
-      for (const j of autos) {
-        if (!inPass(jLevel(j))) continue;
-        const loops = loopsOf.get(j.id);
-        if (loops) {
-          loopsPath(loops); ctx.fillStyle = col.jFill; ctx.fill("evenodd");
-          ctx.strokeStyle = jOn(j) || jOver(j) ? col.sel : col.jLine; ctx.lineWidth = (jOn(j) ? 2 : jOver(j) ? 1.5 : 1) * px; ctx.lineJoin = "round"; ctx.stroke();
-          continue;
-        }
-        const bands = bandsOf.get(j.id)!;
-        if (bands.length) bandEdge(bands, jOn(j) || jOver(j) ? col.sel : col.jLine, (jOn(j) ? 2 : jOver(j) ? 1.5 : 1) * px, { color: dark ? "rgb(58,64,71)" : "rgb(74,80,88)", alpha: dark ? 0.55 : 0.16 });
       }
     }
     // (an automatic junction's border, saying what it takes in, shown to edit while it is selected or hovered)
