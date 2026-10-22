@@ -10,6 +10,10 @@ import type { Vehicle } from "../src/engine/sim";
 import { createRoundabout } from "../src/state/roundabouts";
 import { SketchSim } from "../src/lib/lane-sketch-sim";
 import type { Sketch, SketchConnector, SketchLane } from "../src/lib/lane-sketch";
+import type { Edge } from "../src/engine/compile";
+
+// (`moveOf` is protected on Sim: widened public on a subclass to read it from here, not on the real class for one test's sake)
+class TestSim extends Sim { public moveOf(e: Edge, next: Edge) { return super.moveOf(e, next); } }
 
 const sig = (b: number) => (b === -1 ? "L" : b === 1 ? "R" : b === 0 ? "-" : "H");
 // (by car and time through: a car driving through again starts a new run)
@@ -38,7 +42,7 @@ const report = (title: string, seq: Map<number, string[]>, left: Set<number>) =>
 
 // ---- V1: the sample town's roundabout
 {
-  const sim = new Sim(sampleTown(), { cars: 120, trucks: 0, seed: 3 });
+  const sim = new TestSim(sampleTown(), { cars: 120, trucks: 0, seed: 3 });
   const seq = new Map<number, string[]>(), left = new Set<number>();
   for (let t = 0; t < 6000; t++) {
     sim.run(1);
