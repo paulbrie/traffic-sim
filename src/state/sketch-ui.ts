@@ -220,7 +220,9 @@ const CONSOLE_KINDS = ["all", "stuck", "collision", "jump", "deadlock", "breakdo
 const editorFor = (a: Record<string, unknown>): EditorUi => {
   const k = argOf(a, "editor", "string") ?? sketchUi.getValue().active;
   if (k !== "plan" && k !== "scratch") throw new Error(`no editor "${k}": plan or scratch`);
-  if (k === "scratch" && !sketchUi.getValue().sketchWindow.open) throw new Error("the Sketch window isn't open");
+  // (open as a window over a plan (T184, `sketchWindow.open`), or, a V2 plan's, mounted on a page of its own
+  // (`active`, set as soon as it is): either means there is a scratch editor to act on)
+  if (k === "scratch" && !sketchUi.getValue().sketchWindow.open && sketchUi.getValue().active !== "scratch") throw new Error("the Sketch window isn't open");
   return sketchUi.getValue().editors[k];
 };
 /** offered to the bridge while a V2 plan is open (the plan's editor): the state to read, and a few changes to it an agent may ask for (no others) */

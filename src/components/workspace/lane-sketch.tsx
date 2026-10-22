@@ -1768,14 +1768,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
 
   return (
     <EditorKindContext.Provider value={ek}>
-    <div ref={panel} style={page ? undefined : style} role={page ? "region" : "dialog"} aria-modal={store.kind === "scratch" || undefined} aria-label={page ? "Plan editor" : "Lane sketch"} tabIndex={-1} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
+    <div ref={panel} style={page ? undefined : style} role={page ? "region" : "dialog"} aria-modal={!page && store.kind === "scratch" || undefined} aria-label={page ? (store.kind === "scratch" ? "Sketch editor" : "Plan editor") : "Lane sketch"} tabIndex={-1} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
       className={page
         ? "relative flex size-full flex-col overflow-hidden bg-background outline-none"
         : cn("absolute z-30 flex flex-col overflow-hidden rounded-lg border bg-background shadow-xl outline-none", !placed && (store.kind === "scratch" ? "inset-3" : "top-3 right-3 h-[min(640px,calc(100%-1.5rem))] w-[min(1280px,calc(100%-1.5rem))]"))}>
       {!page && <ResizeEdges start={start} />}
       <div className={cn("flex items-center gap-2 border-b px-3 py-1.5 select-none", !page && "cursor-move touch-none")} title={page ? undefined : "Drag to move · double-click to put back"}
         onPointerDown={e => { if (!page && !(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!page && !(e.target as HTMLElement).closest("button")) reset(); }}>
-        {!page && store.kind === "scratch" && <span className="flex items-center gap-1"><SketchPicker view={() => view.current} readOnly={readOnly} /><span className="text-xs text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "ideas apart from the plan, saved with it"}</span></span>}
+        {store.kind === "scratch" && <span className="flex items-center gap-1"><SketchPicker view={() => view.current} readOnly={readOnly} />{!page && <span className="text-xs text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "ideas apart from the plan, saved with it"}</span>}</span>}
         {!page && store.kind !== "scratch" && <span className="text-sm font-medium">Lane sketch <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "saved with the plan"}</span></span>}
         <ToggleGroup type="single" value={tool} onValueChange={v => v && changeTool(v as Tool)} aria-label="Drawing tool" className="ml-2">
           {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={in3d && t.id !== "select" ? "Not in 3D: back to the plan to draw" : tip(t)} disabled={in3d && t.id !== "select"} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
@@ -1789,8 +1789,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <Button size="icon-sm" variant="ghost" aria-label="Clear the cars" title="Take the cars off and start the clock again" disabled={!stats} onClick={resetCars}><RotateCcw /></Button>
           <Button size="icon-sm" variant="ghost" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" onClick={undoSketch}><Undo2 /></Button>
           <Button size="icon-sm" variant="ghost" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Y)" onClick={redoSketch}><Redo2 /></Button>
-          {/* (a V2 plan: the layers are picked in the top bar) */}
-          {!page && (
+          {/* (a V2 plan's own page: the layers are picked in the top bar; the Sketch window, its own page or not, picks them here) */}
+          {(!page || store.kind === "scratch") && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="icon-sm" variant={LAYERS.every(l => layers[l.id]) ? "ghost" : "secondary"} aria-label="Layers" title="Layers: what to show on the sketch"><LayersIcon /></Button>
@@ -3892,6 +3892,21 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   // the car picked: the way it will go, and a ring round it
   if (D && st.car) {
+    // (the driver's real field of view, the sim's own `inView` rule, not a guess: ±60° most places, ±100° at a ring
+    // crossing or joining one (dashed, since which applies can depend on which car is being weighed), out to its
+    // sight distance (25 m + 4 s at its speed) — so a car ruled out for being out of view can be seen to be, right here)
+    {
+      const { p, d, kmh } = st.car, NARROW = Math.PI / 3, WIDE = (100 * Math.PI) / 180;
+      const v = kmh / 3.6, sight = 25 + 4 * v, ang = Math.atan2(d.y, d.x);
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.arc(p.x, p.y, sight, ang - WIDE, ang + WIDE); ctx.closePath();
+      ctx.strokeStyle = dark ? "rgba(148,163,184,0.7)" : "rgba(100,116,139,0.7)"; ctx.lineWidth = 1.2 * px; ctx.setLineDash([5 * px, 4 * px]); ctx.stroke(); ctx.setLineDash([]);
+      const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, sight);
+      grad.addColorStop(0, dark ? "rgba(96,165,250,0.32)" : "rgba(37,99,235,0.24)");
+      grad.addColorStop(1, dark ? "rgba(96,165,250,0)" : "rgba(37,99,235,0)");
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.arc(p.x, p.y, sight, ang - NARROW, ang + NARROW); ctx.closePath();
+      ctx.fillStyle = grad; ctx.fill();
+      ctx.strokeStyle = dark ? "rgba(96,165,250,0.85)" : "rgba(37,99,235,0.85)"; ctx.lineWidth = 1.5 * px; ctx.stroke();
+    }
     // (its way on to the end of its trip, as V1 shows it but all of it, live or replayed alike, ticket #56; going nowhere in particular: the way just ahead)
     const { p } = st.car, way = carWay(sk, st.car), route = way?.pts ?? st.car.route;
     if (route.length > 1) {
@@ -3919,6 +3934,15 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         path([p, b]); ctx.strokeStyle = "#ef4444"; ctx.lineWidth = 2.5 * px; ctx.stroke();
         ctx.fillStyle = "#ef4444"; arrowHead(b, { x: (b.x - p.x) / l, y: (b.y - p.y) / l }, 9 * px);
         ctx.beginPath(); ctx.arc(b.x, b.y, Math.max(3.2, 12 * px), 0, Math.PI * 2); ctx.lineWidth = 2 * px; ctx.stroke();
+      }
+      // (every rule weighed this step, not just the one that won (`w.blocker`, already drawn above): a pin where
+      // each would hold it, dim if it lost out, with a faint line out to the car it's about — the whole picture
+      // behind the one reason given, to debug why a car didn't go when a human watching it would have)
+      for (const rl of w.rules) {
+        const c = rl.won ? "#ef4444" : dark ? "rgba(203,213,225,0.85)" : "rgba(71,85,105,0.85)";
+        if (rl.carP && dist(rl.p, rl.carP) > 1) { path([rl.p, rl.carP]); ctx.setLineDash([3 * px, 3 * px]); ctx.strokeStyle = c; ctx.lineWidth = 1 * px; ctx.stroke(); ctx.setLineDash([]); }
+        dot(rl.p, (rl.won ? 4 : 3) * px, c);
+        label(`${rl.kind}${rl.car !== undefined ? ` ${rl.car}` : ""}${rl.detail ? ` (${rl.detail})` : ""}`, { x: rl.p.x, y: rl.p.y - 14 * px }, rl.won ? "#ef4444" : dark ? "#cbd5e1" : "#475569");
       }
     }
   }
