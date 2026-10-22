@@ -627,6 +627,10 @@ export class SketchSim {
   /** a roundabout's rings (one, or two-lane, rings beside each other all the way round; inner first), its middle, which way round
    * cars go (+1: the angle grows), and its ways off with where they leave (the angle); by each way on (T172) */
   private ringOn = new Map<Edge, RingGroup>();
+  /** the same roundabouts by each of their rings (ticket #58) */
+  private ringOfLane = new Map<Edge, RingGroup>();
+  /** the way off each way on leads to, by destination (`ringExit`) */
+  private ringExits = new Map<string, Edge | null>();
   /** the lanes both ways (ticket #53) */
   private pairs: TwoWayPair[] = [];
   private exitWeights = new Map<string, number>();
@@ -918,7 +922,7 @@ export class SketchSim {
     }
     this.trap = new Set(all.filter(e => !out.has(e)));
     // roundabouts: each ring with the rings beside it all the way round; their ways off, their ways on
-    this.ringOn = new Map();
+    this.ringOn = new Map(); this.ringOfLane = new Map(); this.ringExits.clear();
     const grouped = new Set<Edge>();
     for (const R of all) {
       if (R.kind !== "lane" || !R.ring || grouped.has(R)) continue;
@@ -929,6 +933,7 @@ export class SketchSim {
       const G: RingGroup = { rings, c, sign: ((((a1 - a0 + Math.PI) % TAU) + TAU) % TAU) - Math.PI > 0 ? 1 : -1, exits: [] };
       for (const x of rings) for (const o of x.outs) if (!o.conn.to!.lane.ring) G.exits.push({ conn: o.conn, ang: ang(x.locate(o.s).p) });
       for (const x of rings) for (const o of x.ins) if (!o.conn.from!.lane.ring) this.ringOn.set(o.conn, G);
+      for (const x of rings) this.ringOfLane.set(x, G);
     }
     for (const e of all) {
       const zs = e.conflicts.filter(k => !k.join).map(k => ({ s: k.at - k.before, e: k.at + k.after })).sort((p, q) => p.s - q.s);
@@ -3024,9 +3029,10 @@ export class SketchSim {
   /**
    * A car's turn signal, as V1's (src/engine/sim, `blinker`): -1 left, 1 right, 0 off. Lit while it changes lane
    * (toward the lane it slides to, until it is within half a metre of it; or, still waiting for a gap, toward the
-   * lane it means to), within 45 m before the connector it turns onto, and while it turns along it; never round a
-   * roundabout (a ring, or a connector onto or off one). Broken down: off here (its hazard lights are `broken`).
-   * Reads the car only, so it can't change a run.
+   * lane it means to), within 45 m before the connector it turns onto, and while it turns along it. On a roundabout
+   * (ticket #58): left from the way on and round the ring, right once its way off is at the next arm (from the way on,
+   * and the 45 m up to it, when that is the first) and on the way off. Broken down: off here (its hazard lights are
+   * `broken`). Reads the car only, so it can't change a run.
    */
   blinker(v: SimVehicle): -1 | 0 | 1 {
     if (v.broken !== null) return 0;
@@ -3048,8 +3054,48 @@ export class SketchSim {
         if (r) return r > 0 ? 1 : -1;
       }
     }
-    const c = v.edge.kind === "conn" ? v.edge : v.exit && v.exit.from && v.exit.from.s - v.pos < 45 ? v.exit : null;
-    return c ? this.turnSide(c) : 0;
+    const e = v.edge;
+    // (round a ring: toward the way off it means to take, or round again if none yet)
+    const G = e.kind === "lane" ? this.ringOfLane.get(e) : undefined;
+    if (G) {
+      const off = v.exit ?? v.goal?.conn ?? null;
+      return off && !off.to!.lane.ring && this.nextArm(G, e.locate(v.pos).p, off) ? 1 : -1;
+    }
+    if (e.kind === "conn" && e.from!.lane.ring) return e.to!.lane.ring ? -1 : 1;
+    const c = e.kind === "conn" ? e : v.exit && v.exit.from && v.exit.from.s - v.pos < 45 ? v.exit : null;
+    if (!c) return 0;
+    // (onto a ring, or up to the way on: its way off isn't picked till it is on the ring; the one the shortest way takes)
+    const on = this.ringOn.get(c);
+    if (on) {
+      const off = v.dest ? this.ringExit(on, c, v.dest) : null, first = !!off && this.nextArm(on, c.to!.lane.locate(c.to!.s).p, off);
+      return first ? 1 : c === e ? -1 : 0;
+    }
+    return this.turnSide(c);
+  }
+  /** whether way off `off` is at the roundabout's next arm round from `p` (its ways off more than 0.35 rad apart are other arms) */
+  private nextArm(G: RingGroup, p: Pt, off: Edge): boolean {
+    const a = Math.atan2(p.y - G.c.y, p.x - G.c.x), round = (b: number) => ((((b - a) * G.sign) % TAU) + TAU) % TAU;
+    const ds = G.exits.map(x => ({ conn: x.conn, d: round(x.ang) })).sort((x, y) => x.d - y.d);
+    for (let i = 0; i < ds.length; i++) {
+      if (ds[i].conn === off) return true;
+      if (i + 1 < ds.length && ds[i + 1].d - ds[i].d > 0.35) return false;
+    }
+    return false;
+  }
+  /** the way off a ring a car coming on by `on` takes to `dest` (as `ringByExit` picks it: round the ring, then the shortest way) */
+  private ringExit(G: RingGroup, on: Edge, dest: string): Edge | null {
+    const key = `${on.key}>${dest}`;
+    let best = this.ringExits.get(key);
+    if (best !== undefined) return best;
+    const rt = this.routes, p = on.to!.lane.locate(on.to!.s).p, a = Math.atan2(p.y - G.c.y, p.x - G.c.x), r = G.rings[G.rings.length - 1].len / TAU;
+    let bc = Infinity;
+    best = null;
+    if (rt) for (const x of G.exits) {
+      const c = (((((x.ang - a) * G.sign) % TAU) + TAU) % TAU) * r + rt.viaConnector(x.conn.id, dest);
+      if (c < bc) { bc = c; best = x.conn; }
+    }
+    this.ringExits.set(key, best);
+    return best;
   }
   private turnSides = new WeakMap<Edge, -1 | 0 | 1>();
   /** a connector's turn, as V1 tells its movements apart: its way turns more than 0.52 rad (right +, left -); a U-turn (more than 2.7) signals left; none onto or off a ring */

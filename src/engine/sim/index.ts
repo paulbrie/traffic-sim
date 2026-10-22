@@ -303,28 +303,40 @@ export class Sim extends SimDemand {
   }
 
   // ------------------------------------------------------------ queries for renderers
-  /** front and rear of the vehicle body in world metres (with lane-change smoothing) */
   /**
-   * Turn signal: -1 left, 1 right, 0 off. Lit while changing lane, in the last 45 m before a
-   * junction where the vehicle turns, and while turning through it.
+   * Turn signal: −1 left, 1 right, 2 both (hazard lights, broken down), 0 none. Lit while changing lane, in the
+   * last 45 m before a junction where the vehicle turns, and while turning through it. On a roundabout: left
+   * while going round, right from just past the last way out before its own (from the way in when that is the
+   * first one, and on the way up to it then too).
    */
-  /** turn signal: −1 left, 1 right, 2 both (hazard lights, broken down), 0 none */
   blinker(v: Vehicle): -1 | 0 | 1 | 2 {
     if (v.dead || v.broken === 2) return 0;
     if (v.broken) return 2;
     if (v.lcT > 0.1 && Math.abs(v.lcOff) > 0.5) return v.lcOff < 0 ? 1 : -1;
+    const p = v.piece, route = v.route, ri = v.ri;
+    // (a roundabout junction: passing an arm is still going round; with none left before the way out, right)
+    const passing = (ps: Piece[]) => ps.some(x => x.kind === "ring" && x.part === "pass");
+    if (p.kind === "ring") return p.part === "pass" || passing(v.queue) ? -1 : 1;
+    if (p.kind === "conn" && p.ring) return p.role === "exit" || !passing(v.queue) ? 1 : -1;
+    // (a roundabout of ring roads: whether the route leaves the ring at the end of road i)
+    const leaves = (i: number) => route[i + 1]?.link.ring !== route[i].link.ring;
+    if (p.kind === "lane" && p.edge.link.ring && route[ri] === p.edge) return leaves(ri) ? 1 : -1;
     let m: Movement | null = null;
-    const p = v.piece;
     if (p.kind === "conn") m = p.role === "turn" ? p.move : null;
     else if (p.kind === "lane") {
-      const e = v.route[v.ri], next = v.route[v.ri + 1];
+      const e = route[ri], next = route[ri + 1];
       if (e && next && p.edge === e && p.len - v.s < 45) m = this.moveOf(e, next) ?? null;
     }
-    if (!m || m.node.ring) return 0;
+    if (!m) return 0;
+    // (drawing up to a roundabout: right when taking its first way out, otherwise nothing yet)
+    if (m.node.ring) { const k = m.node.arms.length; return (m.in.inArm - 1 + k) % k === m.out.outArm ? 1 : 0; }
+    if (m.out.link.ring && m.out.link.ring !== m.in.link.ring) return leaves(ri + 1) ? 1 : p.kind === "conn" ? -1 : 0;
+    if (m.in.link.ring) return m.out.link.ring === m.in.link.ring && !leaves(ri + 1) ? -1 : 1;
     return m.turn === "L" || m.turn === "U" ? -1 : m.turn === "R" ? 1 : 0;
   }
   /** blink phase shared by all vehicles (about 1.25 flashes per second) */
   get blinkOn() { return Math.floor(this.tick / 4) % 2 === 0; }
+  /** front and rear of the vehicle body in world metres (with lane-change smoothing) */
   pose(v: Vehicle): { fx: number; fy: number; rx: number; ry: number } {
     // on a bay's path (into the bay, or out of it): the leading end on the path, the car behind it
     const bm = v.bayMove;
