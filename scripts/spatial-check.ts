@@ -18,6 +18,10 @@
  *   (rev 454) 10 minutes without a collision;
  * - (ticket #73) Roundabout 3 as at rev 454 (the same sketch as rev 455, the ticket's revision): cars 3 and 4 hold for each
  *   other at 0:28 close enough to look like a collision, but never touch, and don't stay held.
+ * - (ticket #76) Roundabout 3 as at rev 456 (a lane in drawn with only a right turn from it): its cars for any other way out go
+ *   in from their own line by a line from geometry, not crossing to the lane beside 12 m before it; to 32:44 none stands two
+ *   minutes, next to no locks, no queue held back at the edge (car 885 stood 2 minutes there, its lane behind it: 8 locks, 80
+ *   cars held back).
  * npm run spatial:check
  */
 import { readFileSync } from "fs";
@@ -136,6 +140,27 @@ function fieldsReach(sk: Sketch, z: Zone) {
     check(st.collisions <= 2, `${name}: next to no collisions in 10 min (${st.collisions})`);
     check(st.deadlocks <= 3, `${name}: next to no locks cleared in 10 min (${st.deadlocks})`);
   }
+}
+
+// (ticket #76) Roundabout 3 at rev 456: in from a lane with only a right turn drawn from it, to 32:44 (the ticket's moment)
+{
+  const sk = load("spatial-roundabout-3-rev456.json");
+  const sim = new SpatialSim(sk, { speed: sk.traffic?.speed ?? 50, rate: sk.traffic?.rate ?? 50, seed: 1, gap: 2, opts: OPTS });
+  const was = new Map<number, string>();
+  let own = 0, early = 0, longest = 0;
+  for (let t = 0; t < 1964.6; t += 0.1) {
+    sim.step(0.1);
+    for (const v of sim.vehicles) {
+      // (handed over from l3246 for a way out other than its right turn's (l2973): at its line, or crossing over before it)
+      if (v.mode === "spatial" && was.get(v.id) === "lane" && v.from?.id === "l3246" && v.goal?.lane.id !== "l2973") { if (v.entered < -0.5) early++; else own++; }
+      was.set(v.id, v.mode);
+      longest = Math.max(longest, v.still);
+    }
+  }
+  const st = sim.stats();
+  check(own >= 50 && early === 0, `Roundabout 3 (rev 456): cars on the lane with only a right turn go in from its own line for other ways out (${own} did, ${early} crossed over before it)`);
+  check(longest < 120, `Roundabout 3 (rev 456): no car stands two minutes in 32:44 (at most ${longest.toFixed(0)} s)`);
+  check(st.deadlocks <= 2 && st.heldBack <= 20, `Roundabout 3 (rev 456): next to no locks, no queue held back at 32:44 (${st.deadlocks} locks, ${st.heldBack} held back; 8 and 80 before)`);
 }
 
 // (ticket #72) Roundabout 3 at rev 454: the ring never fills all the way round
