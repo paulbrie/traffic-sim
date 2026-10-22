@@ -52,8 +52,13 @@ export class SpatialSimClient {
         for (const r of p.rays) { ctx.strokeStyle = r.car ? "rgba(239,68,68,0.45)" : "rgba(96,165,250,0.3)"; ctx.beginPath(); ctx.moveTo(p.from.x, p.from.y); ctx.lineTo(r.x, r.y); ctx.stroke(); }
       }
     }
-    // (the car picked: the path it wants to take, and where its way out starts)
+    // (the car picked: its trajectory guide (its route's lanes and connectors, dashed), the path it wants to take, and where its
+    // way out starts)
     const sel = this.car();
+    if (sel?.guide && sel.guide.length > 1) {
+      ctx.setLineDash([3 * px, 3 * px]); ctx.strokeStyle = "rgba(217,70,239,0.7)"; ctx.lineWidth = 1.5 * px;
+      ctx.beginPath(); sel.guide.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.stroke(); ctx.setLineDash([]);
+    }
     if (sel && sel.path.length > 1) {
       ctx.lineJoin = "round"; ctx.lineCap = "round";
       ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = 4 * px; ctx.beginPath(); sel.path.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.stroke();

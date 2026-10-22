@@ -2932,7 +2932,7 @@ function ExperimentRow({ x }: { x: NonNullable<Parameters<typeof TrafficPanel>[0
   const row = (label: string, value: React.ReactNode) => <div className="flex justify-between gap-2 text-xs"><span className="text-muted-foreground">{label}</span><span className="font-mono tabular">{value}</span></div>;
   return (
     <div className={cn("grid gap-1 rounded-md border p-2", x.on && "border-amber-400 bg-amber-50/60 dark:bg-amber-950/40")}>
-      <label className="flex items-center justify-between gap-2 text-xs" title="Run an experimental engine instead of the main one: in a junction (a roundabout or not), cars drive by sensing space (rays all round: kerbs, an island, other cars' bodies) along the way over the paving to their way out, not by lanes and connectors, which only tell them their way out. Click a car to see the path it wants to take. Off: the main engine, as always. Takes effect on the next Run or restart; nothing is saved with the plan.">
+      <label className="flex items-center justify-between gap-2 text-xs" title="Run an experimental engine instead of the main one: in a junction (a roundabout or not), cars keep to their route's lanes and connectors as a guide, but whether they move, give way or go round something standing is decided by sensing space (rays all round: kerbs, an island, other cars' bodies). Where no route by connectors keeps to the paving, they drive by sensing alone. Click a car to see its guide and the path it wants to take. Off: the main engine, as always. Takes effect on the next Run or restart; nothing is saved with the plan.">
         <span>Experiment: spatial roundabout</span>
         <Switch checked={x.on} onCheckedChange={x.set} aria-label="Experiment: spatial roundabout" />
       </label>
@@ -2949,10 +2949,11 @@ function ExperimentRow({ x }: { x: NonNullable<Parameters<typeof TrafficPanel>[0
                 <span className="font-medium">Car {x.car.id}</span>
                 <Button size="icon-sm" variant="ghost" className="size-5" aria-label="Unpick the car" title="Unpick it" onClick={x.unpick}><X /></Button>
               </div>
-              <p className="text-[11px] text-muted-foreground">{x.car.doing}; going to {x.car.dest}. Its path, as it wants to take it, is drawn in magenta.</p>
+              <p className="text-[11px] text-muted-foreground">{x.car.doing}; going to {x.car.dest}. Its path, as it wants to take it, is drawn in magenta{x.car.guide ? "; dashed, its route's lanes and connectors, which it keeps to unless something standing is in the way" : ""}.</p>
               {row("Speed", `${Math.round(x.car.v * 3.6)} km/h`)}
               {x.car.still > 1 && row("Standing", `${Math.round(x.car.still)} s`)}
               {x.car.limit && row("Held by", x.car.limit)}
+              {x.car.offset !== 0 && row("Off its lanes", `${Math.abs(x.car.offset)} m ${x.car.offset > 0 ? "one side" : "the other"}, going round`)}
             </div>
           )}
           <p className="text-[11px] text-muted-foreground">Results of the experimental engine, not to be compared with the main one&apos;s below as the same thing.</p>
