@@ -38,10 +38,11 @@ let kept: { t: number; data: Float32Array; sp: Float32Array }[] = [], keptBytes 
 /** (ticket #69) each sensing car's guide, way out and junction, kept once when it takes them (its goal changes) */
 let guides: { t: number; id: number; pts: Float32Array | null; goal: [number, number] | null; zone: string; out: string }[] = [];
 const goalOf = new Map<number, unknown>();
-/** what held a sensing car (its `limit`), packed: kind (0 path end, 1 kerb, 2 a car, 3 one coming, 4 a car at its side), metres, which car */
-const KINDS = ["path end", "kerb", "car", "coming", "car (its side)"];
+/** what held a sensing car (its `limit`), packed: kind (0 path end, 1 kerb, 2 a car, 3 one coming, 4 a car at its side, 5 a queue on
+ * the ring), metres, which car */
+const KINDS = ["path end", "kerb", "car", "coming", "car (its side)", "ring queue"];
 function limitCode(s: string | undefined): [number, number, number] {
-  const m = /^(path end|kerb|coming|car \(its side\)|car (\d+)) at ([\d.]+) m$/.exec(s ?? "");
+  const m = /^(path end|kerb|coming|ring queue|car \(its side\)|car (\d+)) at ([\d.]+) m$/.exec(s ?? "");
   if (!m) return [0, -1, -1];
   return [m[2] ? 2 : KINDS.indexOf(m[1]), Number(m[3]), m[2] ? Number(m[2]) : -1];
 }

@@ -39,6 +39,8 @@ const GUIDE_ON = 15, GUIDE_CHANGE = 10;
 const SIDE_WAIT = 2.5, SIDES = [1.5, 3], SIDE_EVERY = 1;
 /** at its line, a car going round with the ring looked for along it this far ahead (s) (ticket #71) */
 const RING_AHEAD = 2.5;
+/** at its line, it waits while one on the ring this slow (m/s) is less than this far (m) round before where it would join it (#72) */
+const QUEUE_V = 1.5, QUEUE_UP = 10;
 /** (on a guide) who gets to a crossing first: this much sooner (s), else a tie; merging onto a ring, it gives way to one on it
  * getting there up to this much later (s) */
 const TIE = 0.3, MERGE_MARGIN = 1;
@@ -99,6 +101,8 @@ export interface SpatialCar {
   /** (on a guide) how far off it it keeps (m, + to the left): 0 but going round something standing; since when something standing
    * has held it, and when it last looked for a way round */
   offset?: number; heldAt?: number; sideAt?: number;
+  /** (sensing) where its rear is: it trails its front at its length (ticket #72) */
+  rear?: Pt;
 }
 /** a car picked on the page: what it is doing, what holds it (spatial), its speed (m/s), how long it has stood (s), where it is
  * going, the path it wants to take and its way out's start */
@@ -349,6 +353,7 @@ export class SpatialSim {
     const g = best ? pointAt(best.lane.shape, best.s) : null, c = z.island?.c ?? pa.p;
     Object.assign(v, { mode: "spatial", at: null, leave: undefined, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), zone: z, goal: best && g ? { lane: best.lane, s: best.s, p: g.p, d: g.d, D: routeField(z, best.lane, best.s) } : null, entering: true, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - c.y, pa.p.x - c.x),
       guide: guide ? { pts: easedFrom(guide.pts, guide.cum, pa.p, lead || GUIDE_EASE), cum: guide.cum, k: 0, join: guide.join } : null, offset: 0, heldAt: undefined, sideAt: undefined,
+      rear: { x: pa.p.x - pa.d.x * v.len, y: pa.p.y - pa.d.y * v.len },
       // (handed over before its line: its way in counted from the line, as if handed over there)
       entered: -lead });
   }
@@ -638,6 +643,21 @@ export class SpatialSim {
       const rx = o.p.x - isl!.c.x, ry = o.p.y - isl!.c.y, rl = Math.hypot(rx, ry) || 1, sp = Math.hypot(o.vx, o.vy);
       return ((o.vx * -ry + o.vy * rx) / rl) * isl!.sense > 0.7 * sp;
     };
+    // (ticket #72: at its line, not in in front of a queue on the ring: one standing or crawling there within QUEUE_UP m before
+    // where it would join. Those it would cut in front of were counted as no one (not moving), so cars went on in until the
+    // ring was full all the way round, each waiting for the one ahead)
+    // (and as long as it can still stop short of the ring: merging, its front not on it yet; at its line is only the first half
+    // metre, a car coming up at speed is past that in a step)
+    // (round a round island: round an oval, where the ring's way by angle is only rough, it kept entries out for good behind
+    // ones standing there, on the measures (Cluj, the oval); holding back a while only there brought the rings' locks back)
+    if (isl?.polar && v.guide && (going || (merging && !this.inRing(z, v.p, 0)))) {
+      const jp = v.guide.pts[Math.min(v.guide.join, v.guide.pts.length - 1)], aj = Math.atan2(jp.y - isl.c.y, jp.x - isl.c.x);
+      for (const o of v.tracks?.values() ?? []) {
+        if (o.n < 4 || Math.hypot(o.vx, o.vy) >= QUEUE_V || !this.inRing(z, o.p)) continue;
+        const ao = Math.atan2(o.p.y - isl.c.y, o.p.x - isl.c.x), up = ((((aj - ao) * isl.sense) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+        if (up * Math.hypot(o.p.x - isl.c.x, o.p.y - isl.c.y) < QUEUE_UP) { free = 0; leadV = 0; limit = "ring queue"; break; }
+      }
+    }
     for (const [id, o] of v.tracks ?? []) {
       if (o.n < 4 || Math.hypot(o.vx, o.vy) < 0.5) continue;
       if (!going && !this.inRing(z, o.p)) continue;
@@ -849,11 +869,17 @@ export class SpatialSim {
       v.h -= Math.sign(angDiff(want, v.h)) * (BACK_V / R_MIN) * dt;
       const b = dirOf(v.h), step = Math.min(v.backing, BACK_V * dt);
       v.p = { x: v.p.x - b.x * step, y: v.p.y - b.y * step };
+      v.rear = { x: v.p.x - b.x * v.len, y: v.p.y - b.y * v.len };
       v.backing -= step; v.v = 0; v.still = 0;
       return;
     }
     const d = dirOf(v.h);
     v.p = { x: v.p.x + d.x * v.v * dt, y: v.p.y + d.y * v.v * dt };
+    // (its rear drawn after its front, its length behind it: on a turn it follows inside, as a car's rear wheels do; not its
+    // length straight back along its heading, which on a 7 m ring swung its tail over a metre out, into those waiting to come
+    // in (ticket #72))
+    const r = v.rear ?? { x: v.p.x - d.x * v.len, y: v.p.y - d.y * v.len }, rx = v.p.x - r.x, ry = v.p.y - r.y, rl = Math.hypot(rx, ry) || 1;
+    v.rear = { x: v.p.x - (rx / rl) * v.len, y: v.p.y - (ry / rl) * v.len };
     if (v.entering) { v.entered += v.v * dt; if (v.entered > v.len + 1) v.entering = false; }
     const isl = v.zone!.island;
     if (isl) {
@@ -866,14 +892,19 @@ export class SpatialSim {
     const along = g ? (v.p.x - g.p.x) * g.d.x + (v.p.y - g.p.y) * g.d.y : 0, side = g ? Math.abs(-(v.p.x - g.p.x) * g.d.y + (v.p.y - g.p.y) * g.d.x) : 0;
     if (g && along > -1 && side < HAND_D && Math.abs(angDiff(v.h, Math.atan2(g.d.y, g.d.x))) < HAND_A) {
       const s = nearestOn(g.lane.shape, v.p).s;
-      Object.assign(v, { mode: "lane", at: { lane: g.lane, s: Math.max(0.1, s), len: laneLength(g.lane.shape) }, leave: undefined, zone: null, goal: null, rays: null, from: null });
+      Object.assign(v, { mode: "lane", at: { lane: g.lane, s: Math.max(0.1, s), len: laneLength(g.lane.shape) }, leave: undefined, zone: null, goal: null, rays: null, from: null, rear: undefined });
     }
   }
 
   // ---------------------------------------------------------------- bodies, collisions, stuck groups
 
   private front(v: SpatialCar): Pt { return v.mode === "lane" ? pointAt(v.at!.lane.shape, Math.min(v.at!.s, v.at!.len)).p : v.p; }
-  private heading(v: SpatialCar): Pt { if (v.mode === "lane") return pointAt(v.at!.lane.shape, Math.min(v.at!.s, v.at!.len)).d; return dirOf(v.h); }
+  /** its body's way: along its lane; sensing, from its rear to its front (its rear trailing it, see spatialMove) */
+  private heading(v: SpatialCar): Pt {
+    if (v.mode === "lane") return pointAt(v.at!.lane.shape, Math.min(v.at!.s, v.at!.len)).d;
+    if (v.rear) { const x = v.p.x - v.rear.x, y = v.p.y - v.rear.y, l = Math.hypot(x, y); if (l > 1e-6) return { x: x / l, y: y / l }; }
+    return dirOf(v.h);
+  }
   /** its body: middle, direction, length, width */
   body(v: SpatialCar) {
     const f = this.front(v), d = this.heading(v);
