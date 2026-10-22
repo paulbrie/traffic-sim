@@ -37,6 +37,8 @@ const CHANGE_LEAD = 12;
 const GUIDE_ON = 15, GUIDE_CHANGE = 10;
 /** (on a guide) held by something standing this long (s), it tries lines to either side (m off the guide), at most this often (s) */
 const SIDE_WAIT = 2.5, SIDES = [1.5, 3], SIDE_EVERY = 1;
+/** at its line, a car going round with the ring looked for along it this far ahead (s) (ticket #71) */
+const RING_AHEAD = 2.5;
 /** (on a guide) who gets to a crossing first: this much sooner (s), else a tie; merging onto a ring, it gives way to one on it
  * getting there up to this much later (s) */
 const TIE = 0.3, MERGE_MARGIN = 1;
@@ -639,9 +641,13 @@ export class SpatialSim {
     for (const [id, o] of v.tracks ?? []) {
       if (o.n < 4 || Math.hypot(o.vx, o.vy) < 0.5) continue;
       if (!going && !this.inRing(z, o.p)) continue;
+      // (ticket #71: at its line, one going round the island with the ring keeps going round it, not off along its tangent: so
+      // looked for where it will be on the ring, a little way ahead (further, it may leave by an earlier way out). A car at its
+      // line saw no one coming round a 7 m ring, went, and was hit)
+      const ringWise = going && !!isl && this.inRing(z, o.p) && withRing(o);
       if (v.guide && isl && !going && !merging && !withRing(o)) continue;
-      for (let tau = 0.25; tau <= H; tau += 0.25) {
-        const q = { x: o.p.x + o.vx * tau, y: o.p.y + o.vy * tau }, k = reachK(q, WIDTH + MARGIN);
+      for (let tau = 0.25; tau <= (ringWise ? Math.min(H, RING_AHEAD) : H); tau += 0.25) {
+        const q = ringWise ? roundIsland(isl!.c, o, tau) : { x: o.p.x + o.vx * tau, y: o.p.y + o.vy * tau }, k = reachK(q, WIDTH + MARGIN);
         if (k < 0) continue;
         // (it will be across the path k steps on at tau: this one gives way if that one gets there first (going in: within the gap);
         // on a guide, only to one clearly first, a near tie to the lower number: two never wait for each other (ticket #66))
@@ -948,6 +954,12 @@ function easedFrom(pts: Pt[], cum: number[], from: Pt, over: number) {
   const dx = from.x - pts[0].x, dy = from.y - pts[0].y;
   if (Math.hypot(dx, dy) < 0.5) return pts;
   return pts.map((q, i) => { const w = Math.max(0, 1 - cum[i] / over); return w ? { x: q.x + dx * w, y: q.y + dy * w } : q; });
+}
+/** where one at `o.p` moving at (vx, vy) round middle `c` will be in `tau` s, going on round it at the same angular speed */
+function roundIsland(c: Pt, o: { p: Pt; vx: number; vy: number }, tau: number): Pt {
+  const rx = o.p.x - c.x, ry = o.p.y - c.y, r2 = rx * rx + ry * ry || 1, w = (rx * o.vy - ry * o.vx) / r2, a = w * tau;
+  const cos = Math.cos(a), sin = Math.sin(a);
+  return { x: c.x + rx * cos - ry * sin, y: c.y + rx * sin + ry * cos };
 }
 /** a line as points every PATH_STEP m (repeats dropped), with the metres along it to each */
 function resample(raw: Pt[]) {
