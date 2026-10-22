@@ -1258,10 +1258,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       bridgeState.register("view", () => ({ ...view.current })),
       bridgeState.register("run", () => ({ running, speed: simSpeed, t: sim.current?.t ?? 0, replayT: live.current.replayT })),
       bridgeState.register("simT", () => sim.current?.t),
-      // (the Sketch window's experiment (T213): off, or its stats and whether the sketch has a roundabout it drives —
+      // (the Sketch window's experiment (T213): off, or its stats and whether the sketch has a junction it drives —
       // today the accessibility snapshot was the only way to read any of this; ticket #70)
       bridgeState.register("experiment", () => (!expOn ? { on: false } : {
-        on: true, stats: exp.current?.stats() ?? null, hasRoundabout: exp.current?.hasRoundabout() ?? null,
+        on: true, stats: exp.current?.stats() ?? null, hasJunction: exp.current?.hasJunction() ?? null,
       })),
       // (what is at a point of the map, within `r` px: for an annotation)
       bridgeState.register("hitTest", a => {
