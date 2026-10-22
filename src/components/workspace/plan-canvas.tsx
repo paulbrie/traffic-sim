@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { MapPin } from "lucide-react";
+import { Earth, MapPin } from "lucide-react";
 import { batch } from "subjecto";
 import { buildRoadGeo, type RoadGeo } from "@/render/geometry";
 import { MARKER_HEAD, buildPaths, connectorsOf, drawScene, toScreen, toWorld, underlayHandles, type Camera, type Overlay, type PathCache, type UnderlayHandle } from "@/render/draw2d";
@@ -1090,7 +1090,7 @@ export function PlanCanvas() {
         return;
       }
       if (drag?.mode === "pan" && drag.clickSel && !drag.moved) select(null);
-      // right-click without dragging: offer the spot in Google Maps
+      // right-click without dragging: offer the spot in Google Maps and Google Earth
       if (drag?.mode === "pan" && drag.right && !drag.moved && net.geo) {
         const { sx, sy } = local(e), g = unproject(net.geo, toWorld(cam, sx, sy));
         setMenu({ x: Math.max(0, Math.min(sx, cam.w - 216)), y: Math.max(0, Math.min(sy, cam.h - 72)), lat: g.lat, lon: g.lon });
@@ -1389,6 +1389,13 @@ export function PlanCanvas() {
             onClick={() => setMenu(null)}
           >
             <MapPin className="size-4" /> Open in Google Maps
+          </a>
+          <a
+            role="menuitem" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-accent"
+            href={`https://earth.google.com/web/search/${menu.lat.toFixed(6)},${menu.lon.toFixed(6)}`}
+            onClick={() => setMenu(null)}
+          >
+            <Earth className="size-4" /> Open in Google Earth
           </a>
           <div className="px-2 pb-1 font-mono text-[11px] text-muted-foreground tabular">{menu.lat.toFixed(6)}, {menu.lon.toFixed(6)}</div>
         </div>
