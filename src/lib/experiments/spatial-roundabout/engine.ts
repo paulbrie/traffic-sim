@@ -27,9 +27,12 @@ const KERB_NEAR = 1.6;
  * (s), the room it keeps from others (m) */
 /** (on a guide) heading as the guide does this far ahead (m), turned toward it by atan(GUIDE_GAIN × metres off it) */
 const GUIDE_LOOK = 1, GUIDE_GAIN = 0.8;
-/** (on a guide) its start eased over this far (m) from where the car is (going in by the connector of a lane beside its own);
- * nearer the kerb than this (m), turned off it even on the guide */
+/** (on a guide) its start eased over this far (m) from where the car is, if it starts off it; nearer the kerb than this (m),
+ * turned off it even on the guide */
 const GUIDE_EASE = 10, GUIDE_KERB = 0.9;
+/** going in by the connector of a lane beside its own, it is handed over this far (m) before that connector, crossing over to
+ * that lane on the straight way up to it (its guide eased in over those metres, not across the turn after) */
+const CHANGE_LEAD = 12;
 /** (on a guide) the guide's way out's lane taken on this far (m); changing to a ring lane beside costs as many metres as this */
 const GUIDE_ON = 15, GUIDE_CHANGE = 10;
 /** (on a guide) held by something standing this long (s), it tries lines to either side (m off the guide), at most this often (s) */
@@ -110,6 +113,8 @@ export interface SpatialStats {
 /** where a car leaves its lane: into a junction (spatial driving from `s`, by connector `via` as its route has it), onto a
  * connector outside any (on its lane at once), or off its end (zone and connector null) */
 interface Leave { lane: SketchLane; s: number; zone: Zone | null; conn: SketchConnector | null; via?: SketchConnector;
+  /** (going in by a lane beside's connector) how far before its start (m) it is handed over, to cross to that lane */
+  lead?: number;
   /** no way to its way out from here: a way out it can reach is picked again past this */
   lost?: true }
 
@@ -252,7 +257,8 @@ export class SpatialSim {
           const q = pointAt(this.lane(id).shape, c.from.s), here = nearestOn(at.lane.shape, q.p);
           if (here.d > 8 || q.d.x * end.d.x + q.d.y * end.d.y < 0.5 || here.s < at.s) continue;
           const cost = here.s - at.s + Math.min(...dests.map(d => this.routes.viaConnector(c.id, d)));
-          if (cost < bc) { bc = cost; best = { lane: at.lane, s: Math.min(at.len, here.s), zone: z, conn: null, via: c }; }
+          // (handed over CHANGE_LEAD m before, to cross to that lane on the way up to it, not at the line: ticket #66)
+          if (cost < bc) { bc = cost; const sv = Math.min(at.len, here.s), s0 = Math.max(at.s, sv - CHANGE_LEAD); best = { lane: at.lane, s: s0, zone: z, conn: null, via: c, lead: sv - s0 }; }
         }
       }
     }
@@ -275,11 +281,11 @@ export class SpatialSim {
     let gap = Infinity, lead = 0;
     for (const w of this.vehicles) {
       if (w === v) continue;
-      // (the car ahead on its lane; or one waiting at its end to go into the roundabout, or just gone in, its body still over it)
+      // (the car ahead on its lane; or a spatial car whose body is over it)
       let ws: number | null = null;
       if (w.mode === "lane" && w.at!.lane === at.lane && w.at!.s > at.s) ws = w.at!.s;
-      else if (w.mode === "spatial" && w.from === at.lane && w.entered < w.len + 1) ws = this.leaveAt({ ...v }).s + w.entered;
-      // (a spatial car's body over its lane ahead (one stood at its line from another way in, say): its nearer end there)
+      // (a spatial car's body over its lane ahead (one just gone in from it, or stood at its line from another way in): its
+      // nearer end there)
       else if (w.mode === "spatial" && Math.hypot(w.p.x - pointAt(at.lane.shape, at.s).p.x, w.p.y - pointAt(at.lane.shape, at.s).p.y) < 40) {
         const b = this.body(w), lx = -b.d.y * (WIDTH / 2), ly = b.d.x * (WIDTH / 2), fx = b.d.x * (w.len / 2), fy = b.d.y * (w.len / 2);
         for (const [u, l] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
@@ -310,7 +316,7 @@ export class SpatialSim {
   private laneMove(v: SpatialCar, dt: number, gone: Set<SpatialCar>) {
     const at = v.at!, out = this.leaveAt(v);
     at.s += v.v * dt;
-    if (out.zone && at.s >= out.s) { this.handOver(v, out.zone, out.s, out.via); return; }
+    if (out.zone && at.s >= out.s) { this.handOver(v, out.zone, out.s, out.via, out.lead ?? 0); return; }
     if (out.conn && at.s >= out.s) {
       const lane = this.lane(out.conn.to.lane);
       v.at = { lane, s: out.conn.to.s + (at.s - out.s), len: laneLength(lane.shape) }; v.leave = undefined;
@@ -323,11 +329,11 @@ export class SpatialSim {
   }
 
   /** at the end of the lane into a junction: spatial driving from here, its goal the way out its route asks for */
-  private handOver(v: SpatialCar, z: Zone, s: number, via?: SketchConnector) {
+  private handOver(v: SpatialCar, z: Zone, s: number, via?: SketchConnector, lead = 0) {
     const lane = v.at!.lane, pa = pointAt(lane.shape, Math.min(s, laneLength(lane.shape)));
     const rt = this.routes, dests = this.outs(v.dest);
     // (its route through it by connectors and lanes, the line it keeps to; its way out that route's)
-    const guide = via ? this.guideFor(z, via, dests) : null;
+    const guide = via ? this.guideFor(z, via, dests, lead) : null;
     let best: { lane: SketchLane; s: number } | null = guide?.out ?? null, bc = guide ? 0 : Infinity;
     if (!guide) for (const o of (via && this.outsVia(z, via)) || (this.outsOf.get(z) ?? [])) {
       const c = Math.min(...dests.map(d => rt.from(o.lane.id, o.s, d)));
@@ -339,15 +345,17 @@ export class SpatialSim {
       best ??= (this.outsOf.get(z) ?? [])[0] ?? null;
     }
     const g = best ? pointAt(best.lane.shape, best.s) : null, c = z.island?.c ?? pa.p;
-    Object.assign(v, { mode: "spatial", at: null, leave: undefined, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), zone: z, goal: best && g ? { lane: best.lane, s: best.s, p: g.p, d: g.d, D: routeField(z, best.lane, best.s) } : null, entering: true, entered: 0, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - c.y, pa.p.x - c.x),
-      guide: guide ? { pts: easedFrom(guide.pts, guide.cum, pa.p), cum: guide.cum, k: 0, join: guide.join } : null, offset: 0, heldAt: undefined, sideAt: undefined });
+    Object.assign(v, { mode: "spatial", at: null, leave: undefined, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), zone: z, goal: best && g ? { lane: best.lane, s: best.s, p: g.p, d: g.d, D: routeField(z, best.lane, best.s) } : null, entering: true, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - c.y, pa.p.x - c.x),
+      guide: guide ? { pts: easedFrom(guide.pts, guide.cum, pa.p, lead || GUIDE_EASE), cum: guide.cum, k: 0, join: guide.join } : null, offset: 0, heldAt: undefined, sideAt: undefined,
+      // (handed over before its line: its way in counted from the line, as if handed over there)
+      entered: -lead });
   }
   /**
    * (ticket #66) A car's trajectory guide through a junction: from connector `via`, on along the junction's own lanes (a ring's)
    * to the connector leaving them that gets it to its way out soonest (changing to a ring lane beside if its route does), out by
    * it and GUIDE_ON m down the lane out; as a line a point every PATH_STEP m. Null: no such route, or it runs off the paving.
    */
-  private guideFor(z: Zone, via: SketchConnector, dests: string[]): { pts: Pt[]; cum: number[]; join: number; out: { lane: SketchLane; s: number } } | null {
+  private guideFor(z: Zone, via: SketchConnector, dests: string[], lead = 0): { pts: Pt[]; cum: number[]; join: number; out: { lane: SketchLane; s: number } } | null {
     const raw: Pt[] = [], rt = this.routes;
     // (where it joins the junction's own lanes (a ring): its way in up to there)
     let joinAt: Pt | null = null;
@@ -355,6 +363,8 @@ export class SpatialSim {
       const L = laneLength(l.shape), ring = isFullCircle(l.shape), n = Math.max(1, Math.ceil(a / PATH_STEP));
       for (let i = 0; i <= n; i++) { let u = s0 + (a * i) / n; if (ring) u = ((u % L) + L) % L; raw.push(pointAt(l.shape, Math.min(L, u)).p); }
     };
+    // (handed over before it: the lane it leaves, that far up to it)
+    if (lead > 0) stretch(this.lane(via.from.lane), Math.max(0, via.from.s - lead), Math.min(lead, via.from.s));
     let c = via;
     for (let hop = 0; hop < 16; hop++) {
       raw.push(...(connectorPts(this.sk, c) ?? []));
@@ -932,12 +942,12 @@ export class SpatialSim {
   }
 }
 
-/** a guide's points, its start moved to `from` and eased back onto it over GUIDE_EASE m (cars going in by a lane beside theirs
- * start a lane's width off it: else they cross over and turn at once, cutting in) */
-function easedFrom(pts: Pt[], cum: number[], from: Pt) {
+/** a guide's points, its start moved to `from` and eased back onto it over `over` m (cars going in by a lane beside theirs start
+ * a lane's width off it: they cross over on the way up to its connector) */
+function easedFrom(pts: Pt[], cum: number[], from: Pt, over: number) {
   const dx = from.x - pts[0].x, dy = from.y - pts[0].y;
   if (Math.hypot(dx, dy) < 0.5) return pts;
-  return pts.map((q, i) => { const w = Math.max(0, 1 - cum[i] / GUIDE_EASE); return w ? { x: q.x + dx * w, y: q.y + dy * w } : q; });
+  return pts.map((q, i) => { const w = Math.max(0, 1 - cum[i] / over); return w ? { x: q.x + dx * w, y: q.y + dy * w } : q; });
 }
 /** a line as points every PATH_STEP m (repeats dropped), with the metres along it to each */
 function resample(raw: Pt[]) {
