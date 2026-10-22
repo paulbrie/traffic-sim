@@ -1823,7 +1823,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <Button size="sm" variant={running ? "secondary" : "default"} className="mr-0.5 h-7 w-20" onClick={play} title={running ? "Pause the cars (P)" : "Run cars on the sketch (P)"}>
             {running ? <><Pause /> Pause</> : <><Play /> Run</>}
           </Button>
-          <Button size="icon-sm" variant="ghost" aria-label="Clear the cars" title="Take the cars off and start the clock again" disabled={!stats} onClick={resetCars}><RotateCcw /></Button>
+          <Button size="icon-sm" variant="ghost" aria-label="Clear the cars" title="Take the cars off and start the clock again" disabled={expOn ? !expStats : !stats} onClick={resetCars}><RotateCcw /></Button>
           <Button size="icon-sm" variant="ghost" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" onClick={undoSketch}><Undo2 /></Button>
           <Button size="icon-sm" variant="ghost" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Y)" onClick={redoSketch}><Redo2 /></Button>
           {/* (a V2 plan's own page: the layers are picked in the top bar; the Sketch window, its own page or not, picks them here) */}
