@@ -11,7 +11,7 @@
  *   base → routing → signals → junctions → motion → demand → Sim (this file: the tick and
  *   the queries renderers use).
  */
-import type { LanePiece, Movement, Piece } from "../compile";
+import type { LanePiece, Movement, Piece, Turn } from "../compile";
 import { pieceZ } from "../compile";
 import type { Poly } from "../geom";
 import type { PlanSettings } from "../types";
@@ -28,6 +28,8 @@ export { DT, FUEL_APPROACH, REV_STATES, type Kind, type Dest, type Vehicle, type
 export interface FlowStats { sent: number; arrived: number; diverted: number; towed: number; backlog: number; inPlan: number; avgTravel: number; noRoute: number }
 
 /** a traffic counter's readings: vehicles passing so far (by kind), their average speed (km/h), and the recent rate (vehicles per hour, last 5 minutes) */
+/** one road along a vehicle's route (Sim.routeLegs): its road (link id, the last one when it runs on through road joints) and name, metres and expected seconds, and the junction it ends at (lead node id; null: none, or the end of the trip) with the turn there */
+export interface RouteLeg { link: string; name: string; m: number; t: number; node: string | null; turn: Turn | null }
 export interface CounterStats { total: number; cars: number; trucks: number; buses: number; avgSpeed: number; perHour: number }
 /** both directions of a counted road together (null when neither has a reading): speeds averaged over the vehicles, rates added */
 export function sumCounters(list: readonly (CounterStats | null | undefined)[]): CounterStats | null {
@@ -375,6 +377,46 @@ export class Sim extends SimDemand {
       else if (p.kind === "conn") { const np: LanePiece = p.outEdge.lanes[p.outLane]; lane = p.outLane; ri++; p = np; }
       else break;
     }
+    return pts;
+  }
+  /**
+   * The vehicle's whole route as legs, from the road it set off on to the end of its trip: one per road (edges in a
+   * row along one road, through road joints, make one leg; a junction's short inside stretches go with the leg
+   * before), each with its metres, the seconds it is expected to take (at the traffic seen lately, as routes are
+   * planned) and the turn at the junction it ends at. `at`: the leg it is on now.
+   */
+  routeLegs(v: Vehicle): { legs: RouteLeg[]; at: number } {
+    const legs: RouteLeg[] = [];
+    let at = 0;
+    for (let i = 0; i < v.route.length; i++) {
+      const e = v.route[i], next = v.route[i + 1], m = next ? this.moveOf(e, next) : undefined;
+      const t = Math.max(this.freeTime[e.idx], this.ema[e.idx]);
+      const end = e.to.lead ?? e.to, junction = isJunction(e.to) || !!e.to.lead;
+      const prev = legs[legs.length - 1];
+      const inside = !!e.from.lead && e.from.lead === e.to.lead;
+      const along = prev && !prev.node && (prev.link === e.link.id || (!!e.link.name && prev.name === e.link.name));
+      if (prev && (inside || along)) {
+        prev.m += e.length; prev.t += t;
+        if (!inside) prev.link = e.link.id;
+        prev.node = junction && next ? end.def.id : null; prev.turn = m && junction ? m.turn : null;
+      } else {
+        legs.push({ link: e.link.id, name: e.link.name || "unnamed road", m: e.length, t, node: junction && next ? end.def.id : null, turn: m && junction ? m.turn : null });
+      }
+      if (i === v.ri) at = legs.length - 1;
+    }
+    return { legs, at };
+  }
+  /** the line along the roads the vehicle has driven so far on its route (as x, y pairs; their kerb-side lane, joined across junctions) */
+  routeBehind(v: Vehicle): number[] {
+    const pts: number[] = [];
+    for (let i = 0; i < v.ri && i < v.route.length; i++) {
+      const e = v.route[i], lp = e.lanes[e.kerb] ?? e.lanes[0];
+      if (!lp) continue;
+      const P = lp.poly.pts;
+      for (let k = 0; k < P.length; k++) pts.push(P[k]);
+    }
+    const p = v.piece.kind === "lane" ? v.piece.poly.at(Math.max(0, v.s)) : null;
+    if (pts.length && p) pts.push(p.x, p.y);
     return pts;
   }
   vehicleNear(x: number, y: number, radius = 6): Vehicle | null {
