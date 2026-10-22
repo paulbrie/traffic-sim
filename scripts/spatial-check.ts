@@ -13,6 +13,9 @@
  *   waiting for the one ahead, the ring stopped: 7 of them at 8:39 before);
  * - (ticket #74) round a round island a car's line comes from geometry, not its connectors' curves: on Roundabout 3 (rev 454)
  *   every way in to every way out has one, on the paving, and none goes round more than once (4 of 36 did, 417-522°);
+ * - (ticket #75) who goes first by bookings of the junction's cells: Video Demo's plain junctions over 10 minutes, cars through
+ *   and next to no collisions or locks (crossing cars held each other there before, 570 through in 4 × 10 min); Roundabout 3
+ *   (rev 454) 10 minutes without a collision;
  * - (ticket #73) Roundabout 3 as at rev 454 (the same sketch as rev 455, the ticket's revision): cars 3 and 4 hold for each
  *   other at 0:28 close enough to look like a collision, but never touch, and don't stay held.
  * npm run spatial:check
@@ -121,6 +124,18 @@ function fieldsReach(sk: Sketch, z: Zone) {
   }
   check(failed === 0 && made > 40, `Roundabout 3 (rev 454): a line from geometry for every way in to every way out (${made} made, ${failed} not)`);
   check(maxDeg < 360, `Roundabout 3 (rev 454): no line goes round more than once (at most ${Math.round(maxDeg)}°)`);
+}
+
+// (ticket #75) bookings: Video Demo's plain junctions, and Roundabout 3 (rev 454), 10 minutes each
+{
+  for (const [f, name, minThrough] of [["spatial-plain.json", "Video Demo", 250], ["spatial-roundabout-3-rev454.json", "Roundabout 3 (rev 454)", 200]] as const) {
+    const sk = load(f), sim = new SpatialSim(sk, { speed: sk.traffic?.speed ?? 50, rate: sk.traffic?.rate ?? 50, seed: 1, gap: 2, opts: OPTS });
+    for (let t = 0; t < 600; t += 0.1) sim.step(0.1);
+    const st = sim.stats();
+    check(st.finished >= minThrough, `${name}: cars through in 10 min, who goes first by bookings (${st.finished})`);
+    check(st.collisions <= 2, `${name}: next to no collisions in 10 min (${st.collisions})`);
+    check(st.deadlocks <= 3, `${name}: next to no locks cleared in 10 min (${st.deadlocks})`);
+  }
 }
 
 // (ticket #72) Roundabout 3 at rev 454: the ring never fills all the way round

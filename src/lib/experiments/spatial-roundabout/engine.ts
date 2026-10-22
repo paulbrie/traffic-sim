@@ -8,7 +8,7 @@
  * lane they hand back. A separate engine: the main one (lane-sketch-sim.ts) is not used or changed. Plain TypeScript, no framework.
  */
 import { connectorPts, demandWays, entryLanes, isFullCircle, laneInRate, laneLength, laneOutWeight, nearestOn, pointAt, roadOf, RouteTable, type Pt, type Sketch, type SketchConnector, type SketchLane } from "../../lane-sketch";
-import { buildSurface, descend, drivable, edgeDist, exitStart, inCore, routeField, type Island, type Surface, type Zone } from "./surface";
+import { buildSurface, descend, drivable, edgeDist, exitStart, inCore, routeField, zoneCell, type Island, type Surface, type Zone } from "./surface";
 
 // drivers (as the main engine's defaults)
 const A_MAX = 1.5, B_COMF = 2, B_MAX = 6, T_HEAD = 1.2, S0 = 2, CAR_LEN = 4.5, TRUCK_LEN = 12, WIDTH = 1.8;
@@ -45,6 +45,10 @@ const SIDE_WAIT = 2.5, SIDES = [1.5, 3], SIDE_EVERY = 1;
 const RING_AHEAD = 2.5;
 /** at its line, it waits while one on the ring this slow (m/s) is less than this far (m) round before where it would join it (#72) */
 const QUEUE_V = 1.5, QUEUE_UP = 10;
+/** (ticket #75) bookings: the grid's cell (m), the speed a car is taken to rise to (m/s), the time kept clear either side of a
+ * window (s), two cars going this nearly the same way through a cell (cos of the angle) following not crossing, and how far
+ * before a cell booked by an earlier car one stops (m) */
+const BOOK_CELL = 1, BOOK_V = 6, BOOK_GAP = 0.6, BOOK_SAME_WAY = Math.cos((15 * Math.PI) / 180), BOOK_STOP = 1, BOOK_COMMIT = 3, BOOK_NEAR = 1;
 /** (on a guide) who gets to a crossing first: this much sooner (s), else a tie; merging onto a ring, it gives way to one on it
  * getting there up to this much later (s) */
 const TIE = 0.3, MERGE_MARGIN = 1;
@@ -107,6 +111,8 @@ export interface SpatialCar {
   offset?: number; heldAt?: number; sideAt?: number;
   /** (sensing) where its rear is: it trails its front at its length (ticket #72) */
   rear?: Pt;
+  /** (ticket #75) admitted into its junction with this rank (the order cars got in: the lower, the first); the cells it has booked */
+  rank?: number; booked?: number[];
 }
 /** a car picked on the page: what it is doing, what holds it (spatial), its speed (m/s), how long it has stood (s), where it is
  * going, the path it wants to take and its way out's start */
@@ -119,6 +125,9 @@ export interface SpatialStats {
   /** cars that could not get to their way out from where they were (their route changing lane, which the follower doesn't) */
   reroutes: number;
 }
+
+/** (ticket #75) a car's booking of a cell of its junction: from when to when its body is over it, which way it goes there */
+interface Booking { id: number; rank: number; tIn: number; tOut: number; h: number }
 
 /** where a car leaves its lane: into a junction (spatial driving from `s`, by connector `via` as its route has it), onto a
  * connector outside any (on its lane at once), or off its end (zone and connector null) */
@@ -145,6 +154,9 @@ export class SpatialSim {
   private outWay = new Map<string, string[]>();
   /** cars that could not get to their way out from where they were, and picked another */
   private reroutes = 0;
+  /** (ticket #75) the bookings of each junction's cells (a 1 m grid): who, their rank, when they'll be over it, their way there */
+  private books = new Map<Zone, Map<number, Booking[]>>();
+  private nextRank = 1;
   private spawned = 0; private finished = 0; private heldBack = 0; private collisions = 0; private deadlocks = 0; private missed = 0;
   private tripSum = 0;
   private touching = new Set<string>();
@@ -364,6 +376,9 @@ export class SpatialSim {
       const cg = this.guideFor(z, via, dests, lead);
       if (cg) { best = cg.out; line = { pts: easedFrom(cg.pts, cg.cum, pa.p, lead || GUIDE_EASE), cum: cg.cum, join: cg.join }; }
     }
+    // (none by its connectors either (one over unpaved ground): a line from the route field after all, so it books its way with
+    // the others (ticket #75: one without a line took part in no bookings, and met the booked ones nose to nose))
+    if (!line && best) line = this.lineThrough(z, pa.p, h0, best.lane, best.s);
     const g = best ? pointAt(best.lane.shape, best.s) : null, c = z.island?.c ?? pa.p;
     Object.assign(v, { mode: "spatial", at: null, leave: undefined, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), zone: z, goal: best && g ? { lane: best.lane, s: best.s, p: g.p, d: g.d, D: routeField(z, best.lane, best.s) } : null, entering: true, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - c.y, pa.p.x - c.x),
       guide: line ? { pts: line.pts, cum: line.cum, k: 0, join: line.join } : null, offset: 0, heldAt: undefined, sideAt: undefined,
@@ -720,7 +735,8 @@ export class SpatialSim {
     // metre, a car coming up at speed is past that in a step)
     // (round a round island: round an oval, where the ring's way by angle is only rough, it kept entries out for good behind
     // ones standing there, on the measures (Cluj, the oval); holding back a while only there brought the rings' locks back)
-    if (isl?.polar && v.guide && (going || (merging && !this.inRing(z, v.p, 0)))) {
+    // (not once admitted by its bookings (ticket #75): then those say who goes first, and stopping for this it held others out)
+    if (isl?.polar && v.guide && v.rank === undefined && (going || (merging && !this.inRing(z, v.p, 0)))) {
       const jp = v.guide.pts[Math.min(v.guide.join, v.guide.pts.length - 1)], aj = Math.atan2(jp.y - isl.c.y, jp.x - isl.c.x);
       for (const o of v.tracks?.values() ?? []) {
         if (o.n < 4 || Math.hypot(o.vx, o.vy) >= QUEUE_V || !this.inRing(z, o.p)) continue;
@@ -728,7 +744,8 @@ export class SpatialSim {
         if (up * Math.hypot(o.p.x - isl.c.x, o.p.y - isl.c.y) < QUEUE_UP) { free = 0; leadV = 0; limit = "ring queue"; break; }
       }
     }
-    for (const [id, o] of v.tracks ?? []) {
+    // (a car on a guide: who goes first is its bookings' (ticket #75), not this)
+    if (!v.guide) for (const [id, o] of v.tracks ?? []) {
       if (o.n < 4 || Math.hypot(o.vx, o.vy) < 0.5) continue;
       if (!going && !this.inRing(z, o.p)) continue;
       // (ticket #71: at its line, one going round the island with the ring keeps going round it, not off along its tangent: so
@@ -780,6 +797,12 @@ export class SpatialSim {
           if (f1.free >= room && f1.free > free + 3) { v.offset = o; path = p1; ({ free, leadV, limit } = f1); break; }
         }
       }
+    }
+    // (ticket #75: who goes first, decided by booking: at its line it goes in only if the cells it will pass over are free
+    // when it'll be over them; inside, it stops before a cell only for one admitted before it that will be over it then)
+    if (v.guide && v.zone) {
+      const b = this.bookingStep(v);
+      if (b && b.stopAt < free) { free = Math.max(0, b.stopAt); leadV = 0; limit = b.why; }
     }
     v.pathPts = path; v.limit = `${limit} at ${free.toFixed(1)} m`;
     // (standing at a kerb it can't turn away from: a short, slow back-up, only with room behind and nothing coming from there)
@@ -916,6 +939,71 @@ export class SpatialSim {
     return { hit: Infinity, end: { x, y }, endH: h, room, what: "", k0: kFirst };
   }
 
+  /**
+   * (ticket #75) A car's bookings this step. Its windows: the cells of its junction's own paving its body will be over along its
+   * guide (a 1 m grid, its width), each from when its front gets there to when its rear has left, at its speed now rising to
+   * the ring's. Not admitted yet (at its line): admitted, with the next rank, if none of them is booked by another for then,
+   * else it waits at its line. Admitted: booked again as it goes (late, its windows slide), and it stops before a cell only for
+   * one admitted before it that will be over that cell while it would (not one going its way there: following is the rays'),
+   * never in a cell it is in already. A later car never holds an earlier one, so none can hold each other.
+   */
+  private bookingStep(v: SpatialCar): { stopAt: number; why: string } | null {
+    const z = v.zone!, book = this.books.get(z) ?? new Map<number, Booking[]>();
+    this.books.set(z, book);
+    // (not admitted yet: checked as long as it can still stop short (BOOK_COMMIT m past its line; coming up at entry speed it
+    // is past the first half metre in a step); past that, in: admitted, its bookings as they come)
+    const w = this.windowsOf(v), canStop = v.entering && v.entered < BOOK_COMMIT;
+    const clash = (cell: number, x: { tIn: number; tOut: number; h: number }, before?: number) => {
+      for (const b of book.get(cell) ?? []) {
+        if (b.id === v.id || (before !== undefined && b.rank >= before)) continue;
+        if (b.tIn - BOOK_GAP < x.tOut && x.tIn < b.tOut + BOOK_GAP && Math.cos(b.h - x.h) < BOOK_SAME_WAY) return b;
+      }
+      return null;
+    };
+    if (v.rank === undefined) {
+      // (not before it is at its line: handed over further up (crossing to the lane beside), booked from there, a queue ahead of
+      // it would keep its windows sliding, holding others out)
+      if (v.entering && v.entered < -BOOK_NEAR) return null;
+      if (canStop) for (const [cell, x] of w) { const b = clash(cell, x); if (b) return { stopAt: 0, why: `booked by car ${b.id}` }; }
+      v.rank = this.nextRank++;
+    }
+    this.unbook(v);
+    for (const [cell, x] of w) { const l = book.get(cell) ?? []; l.push({ id: v.id, rank: v.rank, tIn: x.tIn, tOut: x.tOut, h: x.h }); book.set(cell, l); }
+    v.booked = [...w.keys()];
+    let stop: { stopAt: number; why: string } | null = null;
+    for (const [cell, x] of w) {
+      if (x.d <= 0 || (stop && x.d - BOOK_STOP >= stop.stopAt)) continue;
+      // (but not for one its own body is holding up (that one's rays show it in its way): that one can't go till it does; it is
+      // standing, so going on past it is safe; else each would wait for the other, as on the oval's shallow merges)
+      const b = clash(cell, x, v.rank);
+      if (b && !this.vehicles.find(o => o.id === b.id)?.limit?.startsWith(`car ${v.id} at`)) stop = { stopAt: x.d - BOOK_STOP, why: `booked by car ${b.id}` };
+    }
+    return stop;
+  }
+  /** a car's windows: per cell of its junction's own paving along its guide, when its body is over it, its way, and how far
+   * ahead its front is from the cell (m; 0 or less, in it) */
+  private windowsOf(v: SpatialCar) {
+    const g = v.guide!, z = v.zone!, s0 = g.cum[g.k], out = new Map<number, { tIn: number; tOut: number; h: number; d: number }>();
+    for (let i = Math.max(0, g.k - Math.ceil(v.len / PATH_STEP)); i < g.pts.length; i++) {
+      const q = g.pts[i], zc = zoneCell(z, q);
+      if (zc < 0 || z.kind[zc] !== 1) continue;
+      const d = g.cum[i] - s0, a = g.pts[Math.min(g.pts.length - 1, i + 1)], o = g.pts[Math.max(0, i - 1)], h = Math.atan2(a.y - o.y, a.x - o.x);
+      const tIn = d <= 0 ? this.t : this.t + timeTo(v.v, d), tOut = this.t + timeTo(v.v, Math.max(0, d + v.len));
+      const nx = -Math.sin(h), ny = Math.cos(h);
+      for (const off of [-WIDTH / 2, 0, WIDTH / 2]) {
+        const cell = bookCell(q.x + nx * off, q.y + ny * off), x = out.get(cell);
+        if (!x) out.set(cell, { tIn, tOut, h, d });
+        else { x.tIn = Math.min(x.tIn, tIn); x.tOut = Math.max(x.tOut, tOut); x.d = Math.min(x.d, d); }
+      }
+    }
+    return out;
+  }
+  /** a car's bookings taken off */
+  private unbook(v: SpatialCar) {
+    const book = v.zone ? this.books.get(v.zone) : undefined;
+    if (book && v.booked) for (const cell of v.booked) { const l = book.get(cell); if (l) { const k = l.filter(b => b.id !== v.id); if (k.length) book.set(cell, k); else book.delete(cell); } }
+    v.booked = undefined;
+  }
   /** room to back up: the rays within 30° of straight back free past its own length by the back-up and a metre, and no car seen
    * behind moving toward it */
   private clearBehind(v: SpatialCar, rays: { d: number; car: number }[]) {
@@ -962,7 +1050,8 @@ export class SpatialSim {
     const along = g ? (v.p.x - g.p.x) * g.d.x + (v.p.y - g.p.y) * g.d.y : 0, side = g ? Math.abs(-(v.p.x - g.p.x) * g.d.y + (v.p.y - g.p.y) * g.d.x) : 0;
     if (g && along > -1 && side < HAND_D && Math.abs(angDiff(v.h, Math.atan2(g.d.y, g.d.x))) < HAND_A) {
       const s = nearestOn(g.lane.shape, v.p).s;
-      Object.assign(v, { mode: "lane", at: { lane: g.lane, s: Math.max(0.1, s), len: laneLength(g.lane.shape) }, leave: undefined, zone: null, goal: null, rays: null, from: null, rear: undefined });
+      this.unbook(v);
+      Object.assign(v, { mode: "lane", at: { lane: g.lane, s: Math.max(0.1, s), len: laneLength(g.lane.shape) }, leave: undefined, zone: null, goal: null, rays: null, from: null, rear: undefined, rank: undefined });
     }
   }
 
@@ -1001,6 +1090,7 @@ export class SpatialSim {
       const group = this.vehicles.filter(w => w.mode === "spatial" && Math.hypot(w.p.x - v.p.x, w.p.y - v.p.y) < 20);
       if (group.every(w => w.still >= CLEAR)) {
         const out = group.reduce((a, b) => (b.still > a.still ? b : a));
+        this.unbook(out);
         this.vehicles = this.vehicles.filter(w => w !== out);
         this.deadlocks++;
         return;
@@ -1061,6 +1151,14 @@ function roundIsland(c: Pt, o: { p: Pt; vx: number; vy: number }, tau: number): 
   const rx = o.p.x - c.x, ry = o.p.y - c.y, r2 = rx * rx + ry * ry || 1, w = (rx * o.vy - ry * o.vx) / r2, a = w * tau;
   const cos = Math.cos(a), sin = Math.sin(a);
   return { x: c.x + rx * cos - ry * sin, y: c.y + rx * sin + ry * cos };
+}
+/** (ticket #75) the booking grid's cell at x, y (1 m) as one number */
+const bookCell = (x: number, y: number) => (Math.floor(x / BOOK_CELL) + 50000) * 100000 + (Math.floor(y / BOOK_CELL) + 50000);
+/** seconds to go `d` m from speed `v0`, gathering speed at A_MAX up to BOOK_V */
+function timeTo(v0: number, d: number) {
+  const vt = BOOK_V, v = Math.min(v0, vt), dAcc = (vt * vt - v * v) / (2 * A_MAX);
+  if (d <= dAcc) return (-v + Math.sqrt(v * v + 2 * A_MAX * d)) / A_MAX;
+  return (vt - v) / A_MAX + (d - dAcc) / vt;
 }
 /** a line as points every PATH_STEP m (repeats dropped), with the metres along it to each */
 function resample(raw: Pt[]) {
