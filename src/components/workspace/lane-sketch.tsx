@@ -2976,7 +2976,7 @@ function ExperimentRow({ x }: { x: NonNullable<Parameters<typeof TrafficPanel>[0
                 <span className="font-medium">Car {x.car.id}</span>
                 <Button size="icon-sm" variant="ghost" className="size-5" aria-label="Unpick the car" title="Unpick it" onClick={x.unpick}><X /></Button>
               </div>
-              <p className="text-[11px] text-muted-foreground">{x.car.doing}; going to {x.car.dest}. Its path, as it wants to take it, is drawn in magenta{x.car.guide ? "; dashed, its route's lanes and connectors, which it keeps to unless something standing is in the way" : ""}.</p>
+              <p className="text-[11px] text-muted-foreground">{x.car.doing}{x.car.dest ? `; going to ${x.car.dest}` : ""}.{x.car.path.length > 1 ? ` Its path, as it wants to take it, is drawn in magenta${x.car.guide ? "; dashed, its route's lanes and connectors, which it keeps to unless something standing is in the way" : ""}.` : ""}</p>
               {row("Speed", `${Math.round(x.car.v * 3.6)} km/h`)}
               {x.car.still > 1 && row("Standing", `${Math.round(x.car.still)} s`)}
               {x.car.limit && row("Held by", x.car.limit)}

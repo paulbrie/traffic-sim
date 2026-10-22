@@ -33,7 +33,7 @@ export class SpatialSimClient {
   /** what the replay keeps (null: nothing yet) */
   kept(): ReplayKept | null { return this.last?.kept ?? null; }
   /** the cars at moment `t` of the replay (they come from the worker: drawn when they do) */
-  showAt(t: number) { this.replayT = t; this.send({ type: "replay", t }); }
+  showAt(t: number) { this.replayT = t; this.send({ type: "replay", t, picked: this.picked }); }
   /** back to the cars as they are */
   live() { this.replayT = null; this.replayed = null; }
   /** the cars shown: at the moment replayed, or now */
@@ -44,13 +44,21 @@ export class SpatialSimClient {
   hasJunction() { return this.last?.junction ?? true; }
   /** the car picked (null: none): the worker sends it with each frame */
   picked: number | null = null;
-  select(id: number | null) { this.picked = id; this.send({ type: "select", id }); }
-  /** the picked car as last sent (null: none, or gone); in the replay, where it was then (its path and guide aren't kept) */
+  select(id: number | null) {
+    this.picked = id; this.send({ type: "select", id });
+    // (picked in the replay: the moment asked again, with it)
+    if (this.replayT !== null) this.send({ type: "replay", t: this.replayT, picked: id });
+  }
+  /** the picked car as last sent (null: none, or gone); in the replay, as it was then: where, how fast, and (sensing) its path
+   * as planned then, what held it, its guide and its way out (ticket #69; on a lane, none of those are kept) */
   car(): SpatialCarInfo | null {
     if (this.picked === null) return null;
     if (this.replayT !== null) {
-      const q = this.replayed?.poses.find(c => c.id === this.picked);
-      return q ? { id: q.id, doing: `at ${clock(this.replayed!.t)} of the replay ${q.spatial ? "driving through a junction by sensing" : "on a lane"} (its path and guide are shown live only)`, limit: "", v: q.share * ((this.params.speed || 50) / 3.6), still: 0, dest: "", path: [], goal: null, guide: null, offset: 0 } : null;
+      const r = this.replayed, q = r?.poses.find(c => c.id === this.picked);
+      if (!r || !q) return null;
+      const c = r.car?.id === q.id ? r.car : null, at = `at ${clock(r.t)} of the replay`;
+      const doing = !q.spatial ? `${at}, on a lane` : `${at}, driving through ${c?.zone ?? "a junction"} ${!c?.guide ? "by sensing" : c.offset ? "going round something standing, off its lanes" : "along its lanes and connectors, moving or not by sensing"}${c?.out ? `, out onto ${c.out}` : ""}`;
+      return { id: q.id, doing, limit: c?.limit ?? "", v: q.share * ((this.params.speed || 50) / 3.6), still: 0, dest: c?.out ?? "", path: c?.path ?? [], goal: c?.goal ?? null, guide: c?.guide ?? null, offset: c?.offset ?? 0 };
     }
     return this.last?.car?.id === this.picked ? this.last.car : null;
   }
@@ -68,7 +76,7 @@ export class SpatialSimClient {
 
   /** its cars over the map (`ctx` as the map's canvas, view centre and scale, CSS size): rays thin, goals dashed */
   draw(ctx: CanvasRenderingContext2D, view: { cx: number; cy: number; scale: number }, w: number, h: number, rays: boolean) {
-    // (in the replay the cars as they were: no rays or goals, those aren't kept)
+    // (in the replay the cars as they were: no rays or goal lines, those aren't kept; the one picked's path and guide are)
     const f = this.replayT === null ? this.last : null, cars = this.shown();
     if (!f && !cars.length) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1), px = 1 / view.scale;
