@@ -5,7 +5,7 @@
  * another lane or connector, has chosen another connector, or is going elsewhere (a reroute); between, the first stretch
  * only is cut to where it is. Framework-free.
  */
-import { connectorPts, dist, drivable, laneById, pointAt, speedLimitOf, type Pt, type Sketch } from "./lane-sketch";
+import { connectorPts, dist, drivable, isFullCircle, laneById, laneLength, pointAt, speedLimitOf, type Pt, type Sketch } from "./lane-sketch";
 import { routeTableOf, traceRoute, type RouteStep } from "./route-trace";
 
 /** what the car's panel and the map need of the car (what `inspect` gives) */
@@ -30,9 +30,17 @@ function stretch(sk: Sketch, x: RouteStep, from = 0): Pt[] {
   if (x.kind === "lane") {
     const l = laneById(sk, x.id);
     if (!l) return [];
-    const a = Math.max(x.from, from), b = x.to, pts: Pt[] = [];
-    for (let s = a; s < b; s += 2) pts.push(pointAt(l.shape, s).p);
-    pts.push(pointAt(l.shape, b).p);
+    // (a ring: `to` may run past the lane's length, round it again - wrapped back into [0, len) before locating a point,
+    // or it draws a straight line, cutting across, to wherever that overshoot happens to land past the lane's own end.
+    // `from` (the car's live position) comes back from the engine wrapped into [0, len) too, even once the step itself
+    // has carried it past that mark - unwrapped the same way, onto whichever lap `x.from` is already on, or a stretch
+    // cut to where it now is would stay cut to where it started, drawing a straight line across to its far end instead
+    // of the curve it has actually come round on)
+    const len = laneLength(l.shape), ring = isFullCircle(l.shape), at = (s: number) => (ring ? ((s % len) + len) % len : s);
+    const fromLap = ring ? x.from + (((from - x.from) % len) + len) % len : from;
+    const a = Math.max(x.from, fromLap), b = x.to, pts: Pt[] = [];
+    for (let s = a; s < b; s += 2) pts.push(pointAt(l.shape, at(s)).p);
+    pts.push(pointAt(l.shape, at(b)).p);
     return pts;
   }
   if (x.kind === "connector") {
@@ -64,7 +72,11 @@ export function carWay(sk: Sketch, car: CarAt): CarWay | null {
     } else if (car.exit) {
       const c = sk.connectors.find(x => x.id === idOf(car.exit!));
       if (!c) return null;
-      head = [{ kind: "lane", id: here, from: car.pos, to: c.from.s }, { kind: "connector", id: c.id, len: 0 }]; from = c.to;
+      // (a ring: its connector may be behind where the car now is in the lane's own [0, len) terms, further round
+      // than a lap back, not the straight line across to it that'd draw otherwise; route-trace's `reach` the same way)
+      const l = laneById(sk, here), len = l ? laneLength(l.shape) : 0, ring = !!l && isFullCircle(l.shape);
+      const to = ring && c.from.s < car.pos ? c.from.s + len : c.from.s;
+      head = [{ kind: "lane", id: here, from: car.pos, to }, { kind: "connector", id: c.id, len: 0 }]; from = c.to;
     } else from = { lane: here, s: car.pos };
     const r = traceRoute(sk, from.lane, car.dest, table, from.s);
     if (!r.ok) return null;

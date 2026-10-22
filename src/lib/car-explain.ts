@@ -24,6 +24,9 @@ export interface CarExplain {
   blocker: null | { car: number; edge: string; gap?: number; needGap?: number; theirSec?: number; mySec?: number; /** giving way: the time to spare it wants on top of `mySec` (s) */ wantSec?: number; /** the other on a ring: metres round it to the zone */ round?: number; zone?: { mine: Pt[]; theirs: Pt[] } };
   /** the point it holds for: on `edge` at `s`, `dist` m ahead of its front */
   stopAt: null | { edge: string; s: number; dist: number; why: string };
+  /** every rule weighed this step, not just the one that won (`won`): where each would hold it (`p`, `at` m ahead of its
+   * front), live only (traced) — so a car's whole picture of the road can be shown, not just the reason it was given */
+  rules: { kind: ExplainRule; edge?: string; car?: number; detail?: string; gap?: number; need?: number; at: number; p: Pt; won: boolean }[];
   /** seconds with the same rule and blocker */
   since: number;
   /** its blocker, that car's blocker… (not the car itself); when it loops, the last is the first one repeated */
@@ -173,8 +176,11 @@ export function explainText(x: CarExplain, clock: (t: number) => string, firstCo
   return out.join("\n");
 }
 
-/** the cars to point at on the map: its leader and its blocker (where they are drawn now) */
-export function explainMarks(x: CarExplain | null, at: (car: number) => Pt | null): { leader: Pt | null; blocker: Pt | null; zone: { mine: Pt[]; theirs: Pt[] } | null } | null {
+/** the cars to point at on the map: its leader and its blocker (where they are drawn now); and every rule weighed
+ * this step (`rules`), each with the car it's about where that car is drawn now (`carP`), for a debug view of the
+ * whole picture behind the one reason given */
+export function explainMarks(x: CarExplain | null, at: (car: number) => Pt | null): { leader: Pt | null; blocker: Pt | null; zone: { mine: Pt[]; theirs: Pt[] } | null; rules: (CarExplain["rules"][number] & { carP: Pt | null })[] } | null {
   if (!x) return null;
-  return { leader: x.leader ? at(x.leader.car) : null, blocker: x.blocker ? at(x.blocker.car) : null, zone: x.blocker?.zone ?? null };
+  return { leader: x.leader ? at(x.leader.car) : null, blocker: x.blocker ? at(x.blocker.car) : null, zone: x.blocker?.zone ?? null,
+    rules: x.rules.map(r => ({ ...r, carP: r.car !== undefined ? at(r.car) : null })) };
 }

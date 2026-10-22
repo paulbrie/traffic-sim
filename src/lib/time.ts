@@ -4,7 +4,9 @@ export function timeAgo(d: Date): string {
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   if (s < 86400 * 7) return `${Math.floor(s / 86400)} d ago`;
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  // (a fixed zone, not the runtime's: the server's and the browser's differ, so a date near midnight UTC could
+  // read a day apart between them and fail to hydrate)
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }
 
 /** a duration in seconds as m:ss (h:mm:ss from an hour) */

@@ -2,7 +2,7 @@
 import { strict as assert } from "node:assert";
 import { explainText, headline, noRouteText, patienceNote, type CarExplain } from "../src/lib/car-explain";
 
-const base: CarExplain = { car: 200, t: 125, traced: true, why: null, rule: null, speed: { kmh: 22, desiredKmh: 50, targetKmh: 24, accel: 0.4 }, leader: null, blocker: null, stopAt: null, since: 0, chain: [], deadlock: null, plan: null, log: [] };
+const base: CarExplain = { car: 200, t: 125, traced: true, why: null, rule: null, speed: { kmh: 22, desiredKmh: 50, targetKmh: 24, accel: 0.4 }, leader: null, blocker: null, stopAt: null, rules: [], since: 0, chain: [], deadlock: null, plan: null, log: [] };
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 let ok = 0;
 const t = (name: string, f: () => void) => { f(); ok++; console.log(`ok  ${name}`); };

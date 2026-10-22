@@ -13,7 +13,7 @@ import { StreetNameItems } from "./street-names-menu";
 import { cn } from "@/lib/utils";
 import { project, unproject } from "@/lib/osm/area";
 import {
-  LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
+  LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, crossingStripes, stripeDir, CROSSING_WIDTH, type CrossingPatch, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   addStop, updateStop, deleteStop, type SketchStop, setTwoWay, twoWayOk, twinOf, twinId, baseLaneId, connectorEnd, wayFrom, wayTo, type TwoWay,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
@@ -129,8 +129,8 @@ type Drag =
   | { kind: "handle"; base: Sketch; h: Handle; /** dragged from this (a corner just put in), undone back to `base` */ from?: Sketch }
   | { kind: "box"; a: Pt; b: Pt; add: boolean }
   | { kind: "rotate"; base: Sketch; o: Pt; a0: number; piece: Piece; angle: number }
-  /** a zebra crossing: moved whole, or one kerb end */
-  | { kind: "crossing"; base: Sketch; id: string; part: "move" | "a" | "b"; from: Pt };
+  /** a zebra crossing: moved whole, one kerb end, one corner (0..3), or its bars turned (ticket #57) */
+  | { kind: "crossing"; base: Sketch; id: string; part: "move" | "a" | "b" | 0 | 1 | 2 | 3 | "stripes"; from: Pt };
 
 const isEmpty = (p: Piece) => !p.lanes.length && !p.connectors.length && !p.junctions.length;
 /**
@@ -146,6 +146,12 @@ function rotateHandle(sk: Sketch, piece: Piece, scale: number) {
   return { box: b, o, h: { x: o.x, y: b.minY - 28 / scale } };
 }
 /** where to put a new point in a path so it gets the least longer (between `i - 1` and `i`) */
+/** the knob turning a crossing's bars: out past its outline, the way they run (`px`: metres a pixel) */
+function stripeKnob(x: SketchCrossing, px: number): Pt {
+  const d = stripeDir(x), m = { x: (x.a.x + x.b.x) / 2, y: (x.a.y + x.b.y) / 2 };
+  const reach = Math.max(...crossingFrame(x).corners.map(c => (c.x - m.x) * d.x + (c.y - m.y) * d.y)) + 16 * px;
+  return { x: m.x + d.x * reach, y: m.y + d.y * reach };
+}
 function insertIndex(path: Pt[], p: Pt, closed: boolean) {
   let best = 1, cost = Infinity;
   const n = path.length;
@@ -1239,9 +1245,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           drag.current = { kind: "rotate", base: sk, o: rh.o, a0: Math.atan2(raw.y - rh.o.y, raw.x - rh.o.x), piece: withLeads(sk, turning(s)), angle: 0 };
           return;
         }
-        // (the selected zebra's kerb ends: one moved on its own)
+        // (the selected zebra's corners, kerb ends and the knob turning its bars: one moved on its own, ticket #57)
         const xs = s.crossing ? sk.crossings?.find(x => x.id === s.crossing) : null;
-        if (xs) for (const part of ["a", "b"] as const) if (dist(raw, xs[part]) <= 7 / view.current.scale) { drag.current = { kind: "crossing", base: sk, id: xs.id, part, from: raw }; return; }
+        if (xs) {
+          const near = (p: Pt) => dist(raw, p) <= 7 / view.current.scale, cs = crossingFrame(xs).corners;
+          const part = near(stripeKnob(xs, 1 / view.current.scale)) ? "stripes" : ([0, 1, 2, 3] as const).find(i => near(cs[i])) ?? (["a", "b"] as const).find(k => near(xs[k]));
+          if (part !== undefined) { drag.current = { kind: "crossing", base: sk, id: xs.id, part, from: raw }; return; }
+        }
         const h = handleAt(raw);
         if (h?.kind === "lane") {
           setSelPt({ lane: h.id, i: h.i });
@@ -1501,10 +1511,20 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       const q = (p: Pt) => (e.shiftKey ? { x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100 } : { x: Math.round(p.x * 2) / 2, y: Math.round(p.y * 2) / 2 });
       const x0 = g.base.crossings?.find(x => x.id === g.id);
       if (x0) {
-        const dx = raw.x - g.from.x, dy = raw.y - g.from.y;
-        const patch = g.part === "move" ? (() => { const a = q({ x: x0.a.x + dx, y: x0.a.y + dy }); return { a, b: { x: x0.b.x + a.x - x0.a.x, y: x0.b.y + a.y - x0.a.y } }; })() : { [g.part]: q(raw) };
-        const next = { ...x0, ...patch };
-        if (dist(next.a, next.b) >= 1) dragShow(updateCrossing(g.base, g.id, patch));
+        const dx = raw.x - g.from.x, dy = raw.y - g.from.y, part = g.part;
+        let patch: CrossingPatch;
+        if (part === "move") { const a = q({ x: x0.a.x + dx, y: x0.a.y + dy }); patch = { a, b: { x: x0.b.x + a.x - x0.a.x, y: x0.b.y + a.y - x0.a.y } }; }
+        else if (part === "a" || part === "b") patch = { [part]: q(raw) };
+        else if (part === "stripes") {
+          // (the bars' angle from along the traffic, to 5° — Shift: to the degree; a bar has no front, so within ±90°)
+          const f = crossingFrame(x0), m = { x: (x0.a.x + x0.b.x) / 2, y: (x0.a.y + x0.b.y) / 2 }, w = { x: raw.x - m.x, y: raw.y - m.y };
+          let t = deg(Math.atan2(w.x * f.u.x + w.y * f.u.y, w.x * f.v.x + w.y * f.v.y));
+          t = t > 90 ? t - 180 : t < -90 ? t + 180 : t;
+          t = e.shiftKey ? Math.round(t) : Math.round(t / 5) * 5;
+          patch = { stripes: t === -90 ? 90 : t };
+        } else { const cs = [...crossingFrame(x0).corners] as [Pt, Pt, Pt, Pt]; cs[part] = q(raw); patch = { corners: cs }; }
+        const next = updateCrossing(g.base, g.id, patch), x1 = next.crossings!.find(x => x.id === g.id)!;
+        if (dist(x1.a, x1.b) >= 1 && x1.width >= 0.5) dragShow(next);
       }
     } else if (g?.kind === "box") {
       g.b = raw;
@@ -1748,14 +1768,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
 
   return (
     <EditorKindContext.Provider value={ek}>
-    <div ref={panel} style={page ? undefined : style} role={page ? "region" : "dialog"} aria-modal={store.kind === "scratch" || undefined} aria-label={page ? "Plan editor" : "Lane sketch"} tabIndex={-1} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
+    <div ref={panel} style={page ? undefined : style} role={page ? "region" : "dialog"} aria-modal={!page && store.kind === "scratch" || undefined} aria-label={page ? (store.kind === "scratch" ? "Sketch editor" : "Plan editor") : "Lane sketch"} tabIndex={-1} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
       className={page
         ? "relative flex size-full flex-col overflow-hidden bg-background outline-none"
         : cn("absolute z-30 flex flex-col overflow-hidden rounded-lg border bg-background shadow-xl outline-none", !placed && (store.kind === "scratch" ? "inset-3" : "top-3 right-3 h-[min(640px,calc(100%-1.5rem))] w-[min(1280px,calc(100%-1.5rem))]"))}>
       {!page && <ResizeEdges start={start} />}
       <div className={cn("flex items-center gap-2 border-b px-3 py-1.5 select-none", !page && "cursor-move touch-none")} title={page ? undefined : "Drag to move · double-click to put back"}
         onPointerDown={e => { if (!page && !(e.target as HTMLElement).closest("button")) start(e, null); }} onDoubleClick={e => { if (!page && !(e.target as HTMLElement).closest("button")) reset(); }}>
-        {!page && store.kind === "scratch" && <span className="flex items-center gap-1"><SketchPicker view={() => view.current} readOnly={readOnly} /><span className="text-xs text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "ideas apart from the plan, saved with it"}</span></span>}
+        {store.kind === "scratch" && <span className="flex items-center gap-1"><SketchPicker view={() => view.current} readOnly={readOnly} />{!page && <span className="text-xs text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "ideas apart from the plan, saved with it"}</span>}</span>}
         {!page && store.kind !== "scratch" && <span className="text-sm font-medium">Lane sketch <span className="text-xs font-normal text-muted-foreground">· {readOnly ? "view only: changes here aren't saved" : "saved with the plan"}</span></span>}
         <ToggleGroup type="single" value={tool} onValueChange={v => v && changeTool(v as Tool)} aria-label="Drawing tool" className="ml-2">
           {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={in3d && t.id !== "select" ? "Not in 3D: back to the plan to draw" : tip(t)} disabled={in3d && t.id !== "select"} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
@@ -1769,8 +1789,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <Button size="icon-sm" variant="ghost" aria-label="Clear the cars" title="Take the cars off and start the clock again" disabled={!stats} onClick={resetCars}><RotateCcw /></Button>
           <Button size="icon-sm" variant="ghost" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" onClick={undoSketch}><Undo2 /></Button>
           <Button size="icon-sm" variant="ghost" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Y)" onClick={redoSketch}><Redo2 /></Button>
-          {/* (a V2 plan: the layers are picked in the top bar) */}
-          {!page && (
+          {/* (a V2 plan's own page: the layers are picked in the top bar; the Sketch window, its own page or not, picks them here) */}
+          {(!page || store.kind === "scratch") && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="icon-sm" variant={LAYERS.every(l => layers[l.id]) ? "ghost" : "secondary"} aria-label="Layers" title="Layers: what to show on the sketch"><LayersIcon /></Button>
@@ -1896,7 +1916,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           </div>
           {in3d && (
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed} blinkers={blinkers}
-              selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c && live.current.replayT === null ? carWay(live.current.sketch, c)?.pts ?? null : null; }} carWhy={() => carsShown().why} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
+              selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c ? carWay(live.current.sketch, c)?.pts ?? null : null; }} carWhy={() => carsShown().why} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
           )}
@@ -1931,7 +1951,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l text-sm" aria-label="Sketch details">
           {selCar !== null && (
             <SketchGoContext.Provider value={{ sketch, go: to => goTo(to, true) }}>
-              <CarPanel info={carInfo} patience={resolveTuning(params.tune).patience} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo && replayT === null ? carWay(sketch, carInfo) : null}
+              <CarPanel info={carInfo} patience={resolveTuning(params.tune).patience} why={replayT === null ? explainOf(carInfo) : replayWhyShown?.car === selCar ? replayWhyShown : null} id={selCar} follow={follow} running={running} replayT={replayT} way={carInfo ? carWay(sketch, carInfo) : null}
                 onBreakDown={() => sim.current?.breakDown(selCar)} onTow={() => sim.current?.tow(selCar)}
                 onFollow={setFollow} onPick={setSelCar} onClose={() => { setSelCar(null); setFollow(false); }}
                 onCopy={async () => {
@@ -2073,7 +2093,7 @@ type KeyLike = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "alt
 
 function replayInfo(c: ReplayCar | undefined): ReturnType<SketchSim["inspect"]> {
   if (!c) return null;
-  return { id: c.id, truck: !!c.trailer, bus: !!c.bus, length: c.trailer ? NaN : c.len, edge: c.edge, pos: NaN, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: null, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
+  return { id: c.id, truck: !!c.trailer, bus: !!c.bus, length: c.trailer ? NaN : c.len, edge: c.edge, pos: c.pos, len: NaN, ring: false, kmh: c.kmh, desiredKmh: NaN, exit: c.exit, then: null, leaves: false, dest: c.dest, changeTo: null, goal: null, why: c.why, still: 0, reroutes: 0, journey: null, fuel: NaN, broken: c.broken ? NaN : null, p: c.p, d: c.d, route: [] };
 }
 
 /** where a car's way ends: its way out's road, or the lane when it is in none */
@@ -2826,7 +2846,7 @@ const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60))
 /** a zebra crossing: where its kerbs are, how wide, how busy, and its pedestrians while the cars run (as V1's) */
 function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; readOnly: boolean; onDelete: () => void; live: PedView | null }) {
   const { edit: editSketch } = useSketchStore();
-  const set = (patch: Partial<Omit<SketchCrossing, "id">>) => editSketch(sk => updateCrossing(sk, x.id, patch));
+  const set = (patch: CrossingPatch) => editSketch(sk => updateCrossing(sk, x.id, patch));
   const len = dist(x.a, x.b);
   return (
     <InspectorPanel id="crossing" title={`Zebra crossing ${x.id}`}
@@ -2839,11 +2859,19 @@ function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; rea
         <NumberField id="sk-xay" label="Y (south)" unit="m" value={x.a.y} onCommit={v => set({ a: { ...x.a, y: v } })} />
         <NumberField id="sk-xbx" label="Other kerb: X (east)" unit="m" value={x.b.x} onCommit={v => set({ b: { ...x.b, x: v } })} />
         <NumberField id="sk-xby" label="Y (south)" unit="m" value={x.b.y} onCommit={v => set({ b: { ...x.b, y: v } })} />
+        <NumberField id="sk-xst" label="Stripes (from along the traffic)" unit="°" value={x.stripes ?? 0} min={-90} max={90} step={5} digits={0}
+          onCommit={t => set({ stripes: Math.round(t) })} />
       </div>
+      {!readOnly && (x.corners || x.stripes) ? (
+        <div className="flex flex-wrap gap-2">
+          {x.corners && <Button size="sm" variant="outline" onClick={() => set({ corners: null })}>Make it a rectangle</Button>}
+          {!!x.stripes && <Button size="sm" variant="outline" onClick={() => set({ stripes: 0 })}>Stripes along the traffic</Button>}
+        </div>
+      ) : null}
       <p className="text-[11px] text-muted-foreground">
         Pedestrians have priority: cars stop before it while they wait or cross (one too close to stop goes first). Where traffic lights hold the
-        traffic over it, they walk early in its red. A crossing with a refuge in the middle is two crossings. Drag it to move it, or a square end
-        to move that kerb (Shift: off the half-metre grid).
+        traffic over it, they walk early in its red. A crossing with a refuge in the middle is two crossings. Drag it to move it, a square corner
+        to shape it, a round kerb end to move that kerb, or the knob to turn its stripes (Shift: off the half-metre grid, or to the degree).
       </p>
       {live ? (
         <div className="grid grid-cols-3 gap-2 text-center">
@@ -3797,20 +3825,24 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       arrowHead(pts[pts.length - 1], connectorEnd(sk, cn.to, "to")!.d, 8 * px);
       dot(pts[0], 2.5 * px, ctx.strokeStyle);
     }
-    // zebra crossings: white bars from kerb to kerb, a bar every metre; selected or under the pointer, outlined, its kerb ends to drag
+    // zebra crossings: white bars a metre apart, cut to its shape; selected or under the pointer, outlined; selected, its
+    // corners and kerb ends to drag, and a knob turning its bars (ticket #57)
     for (const x of S && pass < 1 ? sk.crossings ?? [] : []) {
-      const f = crossingFrame(x), on = s.crossing === x.id, over = !!hv && "crossing" in hv && hv.crossing === x.id, h = x.width / 2;
+      const f = crossingFrame(x), on = s.crossing === x.id, over = !!hv && "crossing" in hv && hv.crossing === x.id;
       const xs = f.corners.map(p => p.x), ys = f.corners.map(p => p.y);
       if (Math.max(...xs) < x0 || Math.min(...xs) > x1 || Math.max(...ys) < y0 || Math.min(...ys) > y1) continue;
       ctx.fillStyle = dark ? "rgba(235,238,240,0.85)" : "rgba(255,255,255,0.92)";
-      for (let t = 0.25; t + 0.5 <= f.len + 1e-6; t += 1) {
-        const c0 = { x: x.a.x + f.u.x * t, y: x.a.y + f.u.y * t }, c1 = { x: c0.x + f.u.x * 0.5, y: c0.y + f.u.y * 0.5 };
-        ctx.beginPath(); ctx.moveTo(c0.x + f.v.x * h, c0.y + f.v.y * h); ctx.lineTo(c1.x + f.v.x * h, c1.y + f.v.y * h); ctx.lineTo(c1.x - f.v.x * h, c1.y - f.v.y * h); ctx.lineTo(c0.x - f.v.x * h, c0.y - f.v.y * h); ctx.closePath(); ctx.fill();
-      }
+      for (const bar of crossingStripes(x)) { path(bar); ctx.closePath(); ctx.fill(); }
       if (on || over) {
         path(f.corners); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.lineWidth = (on ? 2 : 1.5) * px; ctx.setLineDash(on ? [] : [5 * px, 3 * px]); ctx.stroke(); ctx.setLineDash([]);
       }
-      if (on) { square(x.a); square(x.b); }
+      if (on) {
+        f.corners.forEach(square);
+        for (const p of [x.a, x.b]) { ctx.beginPath(); ctx.arc(p.x, p.y, 3.5 * px, 0, Math.PI * 2); ctx.fillStyle = col.bg; ctx.fill(); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.stroke(); }
+        const k = stripeKnob(x, px), m = { x: (x.a.x + x.b.x) / 2, y: (x.a.y + x.b.y) / 2 };
+        path([m, k]); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.stroke();
+        ctx.beginPath(); ctx.arc(k.x, k.y, 4.5 * px, 0, Math.PI * 2); ctx.fillStyle = col.sel; ctx.fill();
+      }
     }
     // bus stops: a dot beside the lane, in the colour of the first line serving it (grey: none yet); its name at higher zoom
     if (st.layers.signs && sk.stops?.length) {
@@ -3860,8 +3892,23 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   // the car picked: the way it will go, and a ring round it
   if (D && st.car) {
-    // (its way on to the end of its trip, as V1 shows it but all of it; going nowhere in particular, or replayed: the way just ahead)
-    const { p } = st.car, way = st.replayT === null ? carWay(sk, st.car) : null, route = way?.pts ?? st.car.route;
+    // (the driver's real field of view, the sim's own `inView` rule, not a guess: ±60° most places, ±100° at a ring
+    // crossing or joining one (dashed, since which applies can depend on which car is being weighed), out to its
+    // sight distance (25 m + 4 s at its speed) — so a car ruled out for being out of view can be seen to be, right here)
+    {
+      const { p, d, kmh } = st.car, NARROW = Math.PI / 3, WIDE = (100 * Math.PI) / 180;
+      const v = kmh / 3.6, sight = 25 + 4 * v, ang = Math.atan2(d.y, d.x);
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.arc(p.x, p.y, sight, ang - WIDE, ang + WIDE); ctx.closePath();
+      ctx.strokeStyle = dark ? "rgba(148,163,184,0.7)" : "rgba(100,116,139,0.7)"; ctx.lineWidth = 1.2 * px; ctx.setLineDash([5 * px, 4 * px]); ctx.stroke(); ctx.setLineDash([]);
+      const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, sight);
+      grad.addColorStop(0, dark ? "rgba(96,165,250,0.32)" : "rgba(37,99,235,0.24)");
+      grad.addColorStop(1, dark ? "rgba(96,165,250,0)" : "rgba(37,99,235,0)");
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.arc(p.x, p.y, sight, ang - NARROW, ang + NARROW); ctx.closePath();
+      ctx.fillStyle = grad; ctx.fill();
+      ctx.strokeStyle = dark ? "rgba(96,165,250,0.85)" : "rgba(37,99,235,0.85)"; ctx.lineWidth = 1.5 * px; ctx.stroke();
+    }
+    // (its way on to the end of its trip, as V1 shows it but all of it, live or replayed alike, ticket #56; going nowhere in particular: the way just ahead)
+    const { p } = st.car, way = carWay(sk, st.car), route = way?.pts ?? st.car.route;
     if (route.length > 1) {
       path(route); ctx.strokeStyle = col.sel; ctx.lineWidth = 2.5 * px; ctx.setLineDash([6 * px, 4 * px]); ctx.lineCap = "round"; ctx.stroke(); ctx.setLineDash([]);
       const a = route[route.length - 2], b = route[route.length - 1], l = dist(a, b) || 1;
@@ -3887,6 +3934,15 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
         path([p, b]); ctx.strokeStyle = "#ef4444"; ctx.lineWidth = 2.5 * px; ctx.stroke();
         ctx.fillStyle = "#ef4444"; arrowHead(b, { x: (b.x - p.x) / l, y: (b.y - p.y) / l }, 9 * px);
         ctx.beginPath(); ctx.arc(b.x, b.y, Math.max(3.2, 12 * px), 0, Math.PI * 2); ctx.lineWidth = 2 * px; ctx.stroke();
+      }
+      // (every rule weighed this step, not just the one that won (`w.blocker`, already drawn above): a pin where
+      // each would hold it, dim if it lost out, with a faint line out to the car it's about — the whole picture
+      // behind the one reason given, to debug why a car didn't go when a human watching it would have)
+      for (const rl of w.rules) {
+        const c = rl.won ? "#ef4444" : dark ? "rgba(203,213,225,0.85)" : "rgba(71,85,105,0.85)";
+        if (rl.carP && dist(rl.p, rl.carP) > 1) { path([rl.p, rl.carP]); ctx.setLineDash([3 * px, 3 * px]); ctx.strokeStyle = c; ctx.lineWidth = 1 * px; ctx.stroke(); ctx.setLineDash([]); }
+        dot(rl.p, (rl.won ? 4 : 3) * px, c);
+        label(`${rl.kind}${rl.car !== undefined ? ` ${rl.car}` : ""}${rl.detail ? ` (${rl.detail})` : ""}`, { x: rl.p.x, y: rl.p.y - 14 * px }, rl.won ? "#ef4444" : dark ? "#cbd5e1" : "#475569");
       }
     }
   }
@@ -3997,7 +4053,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   } else if (d?.kind === "crossing") {
     const b = cur?.p ?? d.a;
     if (dist(d.a, b) > 0.1) {
-      const f = crossingFrame({ id: "", a: d.a, b, width: 4, peds: 0 });
+      const f = crossingFrame({ id: "", a: d.a, b, width: CROSSING_WIDTH, peds: 0 });
       path(f.corners); ctx.closePath(); ctx.globalAlpha = 0.25; ctx.fill(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.stroke();
     }
     square(d.a);

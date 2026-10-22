@@ -1,7 +1,6 @@
 "use client";
 
 import { useLayoutEffect, useState } from "react";
-import { useDeepSubject } from "subjecto/react";
 import Link from "next/link";
 import { ArrowLeft, Eye, PenLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,8 +12,8 @@ import { AgentPatchesButton } from "@/components/workspace/agent-patches";
 import { LaneSketch } from "@/components/workspace/lane-sketch";
 import { FrameRate, MemoryGauge, SketchLayerPicker } from "./top-bar-tools";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
-import { loadPlan, ui } from "@/state/store";
-import { planSketch, scratchSketch, SketchStoreContext } from "@/state/lane-sketch";
+import { loadPlan } from "@/state/store";
+import { planSketch, SketchStoreContext } from "@/state/lane-sketch";
 import { useUiPath } from "@/state/sketch-ui";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { startUnderlayImage } from "@/state/underlay-image";
@@ -22,8 +21,8 @@ import { startUnderlayImage } from "@/state/underlay-image";
 /**
  * A plan on the V2 engine: the lane sketch is the plan, its editor the whole page (drawing, the cars,
  * the structure tree and the inspector), saved, versioned and shared as V1 plans are (its V1 network
- * stays empty). Its Sketch button opens V1's sketch window over it, for ideas sketched apart from the plan
- * (saved with it, in the sketch's `scratch`).
+ * stays empty). Its Sketch button goes to a page of its own (src/app/plans/[planId]/sketch), for ideas
+ * sketched apart from the plan (saved with it, in the sketch's `scratch`).
  */
 export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
   // load once per mount (keyed by plan id), before the editor reads the stores: in a layout effect, the page
@@ -31,8 +30,6 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
   // the last one is still up, and loading then put the new sketch under the old plan's header and updated
   // the old editor from this render.)
   const [loaded, setLoaded] = useState(false);
-  // (the Sketch window is a modal (T184): the plan behind it, its header and its editor, take nothing while it's open)
-  const [sketchOpen] = useDeepSubject(ui, "sketch");
   useLayoutEffect(() => {
     loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read", plan.sketch);
     startUnderlayImage();
@@ -46,7 +43,7 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
   return (
     <TooltipProvider>
       <div className="flex h-dvh flex-col overflow-hidden">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background px-2" inert={sketchOpen}>
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background px-2">
           <Button variant="ghost" size="sm" asChild>
             <Link href={`/cities/${plan.cityId}`} aria-label={`Back to ${plan.cityName}`}><ArrowLeft /> <span className="max-w-40 truncate">{plan.cityName}</span></Link>
           </Button>
@@ -60,7 +57,10 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
           <AgentPatchesButton planId={plan.id} canApply={plan.access !== "read"} />
           <Separator orientation="vertical" className="!h-5" />
           <ModeToggle />
-          <SketchButton />
+          <Button variant="ghost" size="sm" className="h-8" asChild
+            title="Sketch: try ideas on a page of their own (lanes, rings, connectors, junctions, cars), apart from the plan; saved with it. Copy and paste between them.">
+            <Link href={`/plans/${plan.id}/sketch`}><PenLine /> Sketch</Link>
+          </Button>
           <SketchLayerPicker />
           <div className="ml-auto flex items-center gap-3">
             <FrameRate />
@@ -69,20 +69,15 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
           </div>
         </header>
         <main className="relative min-h-0 flex-1">
-          {/* (its own stacking context: nothing in the plan's editor rises over the Sketch's backdrop) */}
-          <div className="absolute inset-0 isolate" inert={sketchOpen}>
-            <SketchStoreContext.Provider value={planSketch}>
-              <LaneSketch page />
-            </SketchStoreContext.Provider>
-          </div>
-          <SketchWindow />
+          <SketchStoreContext.Provider value={planSketch}>
+            <LaneSketch page />
+          </SketchStoreContext.Provider>
         </main>
       </div>
     </TooltipProvider>
   );
 }
 
-/** opens the sketch window, as V1's: lanes, rings and connectors drawn freely, apart from the plan */
 /** the plan's map from above or in 3D (the plan's editor's mode, in the V2 UI store) */
 function ModeToggle() {
   const [mode, setMode] = useUiPath<"plan" | "3d">("editors/plan/mode");
@@ -91,33 +86,5 @@ function ModeToggle() {
       <ToggleGroupItem value="plan" className="h-8 px-2.5 text-xs" title="The plan from above">Plan</ToggleGroupItem>
       <ToggleGroupItem value="3d" className="h-8 px-2.5 text-xs" title="The plan in 3D, its cars driving (drag to turn, right-drag to pan, wheel to zoom)">3D</ToggleGroupItem>
     </ToggleGroup>
-  );
-}
-
-function SketchButton() {
-  const [open] = useDeepSubject(ui, "sketch");
-  return (
-    <Button size="sm" variant={open ? "secondary" : "ghost"} className="h-8" aria-pressed={open} onClick={() => { ui.getValue().sketch = !open; }}
-      title="Sketch: try ideas in a window of their own (lanes, rings, connectors, junctions, cars), apart from the plan; saved with it. Copy and paste between them.">
-      <PenLine /> Sketch
-    </Button>
-  );
-}
-
-/**
- * the sketch window over the plan, on the ideas sketched apart: a modal (T184), over a dimmed backdrop that takes the
- * pointer and the wheel from the plan; a click on it keeps the focus in the window and doesn't close it (no work lost
- * by a stray click). Closed by its X or Esc (lane-sketch.tsx).
- */
-function SketchWindow() {
-  const [open] = useDeepSubject(ui, "sketch");
-  if (!open) return null;
-  return (
-    <>
-      <div aria-hidden className="fixed inset-0 z-20 bg-black/40" onPointerDown={e => e.preventDefault()} onContextMenu={e => e.preventDefault()} />
-      <SketchStoreContext.Provider value={scratchSketch}>
-        <LaneSketch />
-      </SketchStoreContext.Provider>
-    </>
   );
 }
