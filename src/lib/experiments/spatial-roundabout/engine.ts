@@ -27,6 +27,9 @@ const KERB_NEAR = 1.6;
  * (s), the room it keeps from others (m) */
 /** (on a guide) heading as the guide does this far ahead (m), turned toward it by atan(GUIDE_GAIN × metres off it) */
 const GUIDE_LOOK = 1, GUIDE_GAIN = 0.8;
+/** (on a guide) its start eased over this far (m) from where the car is (going in by the connector of a lane beside its own);
+ * nearer the kerb than this (m), turned off it even on the guide */
+const GUIDE_EASE = 10, GUIDE_KERB = 0.9;
 /** (on a guide) the guide's way out's lane taken on this far (m); changing to a ring lane beside costs as many metres as this */
 const GUIDE_ON = 15, GUIDE_CHANGE = 10;
 /** (on a guide) held by something standing this long (s), it tries lines to either side (m off the guide), at most this often (s) */
@@ -337,7 +340,7 @@ export class SpatialSim {
     }
     const g = best ? pointAt(best.lane.shape, best.s) : null, c = z.island?.c ?? pa.p;
     Object.assign(v, { mode: "spatial", at: null, leave: undefined, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), zone: z, goal: best && g ? { lane: best.lane, s: best.s, p: g.p, d: g.d, D: routeField(z, best.lane, best.s) } : null, entering: true, entered: 0, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - c.y, pa.p.x - c.x),
-      guide: guide ? { pts: guide.pts, cum: guide.cum, k: 0, join: guide.join } : null, offset: 0, heldAt: undefined, sideAt: undefined });
+      guide: guide ? { pts: easedFrom(guide.pts, guide.cum, pa.p), cum: guide.cum, k: 0, join: guide.join } : null, offset: 0, heldAt: undefined, sideAt: undefined });
   }
   /**
    * (ticket #66) A car's trajectory guide through a junction: from connector `via`, on along the junction's own lanes (a ring's)
@@ -559,7 +562,7 @@ export class SpatialSim {
       const a = alongGuide(g, g.cum[k] + GUIDE_LOOK, offset), b = alongGuide(g, g.cum[k] + GUIDE_LOOK + PATH_STEP, offset);
       const q = alongGuide(g, g.cum[k], offset), q2 = alongGuide(g, g.cum[k] + PATH_STEP, offset), tx = q2.x - q.x, ty = q2.y - q.y, tl = Math.hypot(tx, ty) || 1;
       const e = (-(p.x - q.x) * ty + (p.y - q.y) * tx) / tl;
-      const want = Math.atan2(b.y - a.y, b.x - a.x) - Math.atan(GUIDE_GAIN * e) + (offset ? this.kerbPush(p, h) : 0);
+      const want = Math.atan2(b.y - a.y, b.x - a.x) - Math.atan(GUIDE_GAIN * e) + (offset || edgeDist(this.surface!, p) < GUIDE_KERB ? this.kerbPush(p, h) : 0);
       h += Math.max(-maxTurn, Math.min(maxTurn, angDiff(want, h)));
       p = { x: p.x + Math.cos(h) * PATH_STEP, y: p.y + Math.sin(h) * PATH_STEP };
       out.push(p);
@@ -929,6 +932,13 @@ export class SpatialSim {
   }
 }
 
+/** a guide's points, its start moved to `from` and eased back onto it over GUIDE_EASE m (cars going in by a lane beside theirs
+ * start a lane's width off it: else they cross over and turn at once, cutting in) */
+function easedFrom(pts: Pt[], cum: number[], from: Pt) {
+  const dx = from.x - pts[0].x, dy = from.y - pts[0].y;
+  if (Math.hypot(dx, dy) < 0.5) return pts;
+  return pts.map((q, i) => { const w = Math.max(0, 1 - cum[i] / GUIDE_EASE); return w ? { x: q.x + dx * w, y: q.y + dy * w } : q; });
+}
 /** a line as points every PATH_STEP m (repeats dropped), with the metres along it to each */
 function resample(raw: Pt[]) {
   const pts: Pt[] = [], cum: number[] = [];
