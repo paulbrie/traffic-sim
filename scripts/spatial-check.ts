@@ -9,6 +9,8 @@
  * - (ticket #66) cars keep to their route's lanes and connectors as a guide: on it, within a metre of it on average;
  * - (ticket #71) Roundabout 3 as at rev 454: a car at its line sees one coming round the ring (not off along its tangent) and
  *   waits: no collision in the first two and a half minutes (cars 40 and 41 met at 2:28 before).
+ * - (ticket #73) Roundabout 3 as at rev 454 (the same sketch as rev 455, the ticket's revision): cars 3 and 4 hold for each
+ *   other at 0:28 close enough to look like a collision, but never touch, and don't stay held.
  * npm run spatial:check
  */
 import { readFileSync } from "fs";
@@ -114,6 +116,23 @@ function fieldsReach(sk: Sketch, z: Zone) {
   check(stats.finished >= 15, `Video Demo: cars through its junctions in 4 min (${stats.finished})`);
   check(meanOff < 1, `Video Demo: on their guide, within a metre of it (${meanOff.toFixed(2)} m on average)`);
   check(stats.collisions <= 8, `Video Demo: few collisions (${stats.collisions})`);
+}
+
+// Roundabout 3 at rev 454 again: cars 3 and 4 at 0:28, a near miss reported as a collision (ticket #73)
+{
+  const sk = load("spatial-roundabout-3-rev454.json");
+  const sim = new SpatialSim(sk, { speed: sk.traffic?.speed ?? 50, rate: sk.traffic?.rate ?? 50, seed: 1, gap: 2, opts: OPTS });
+  let held = false, heldPast35 = false;
+  for (let t = 0; t < 40; t += 0.1) {
+    sim.step(0.1);
+    const a = sim.vehicles.find(v => v.id === 3), b = sim.vehicles.find(v => v.id === 4);
+    if (a?.v === 0 && b?.v === 0 && a.limit?.startsWith("car") && b.limit?.startsWith("car")) held = true;
+    if (t > 35 && (a?.v ?? 1) < 0.1 && (b?.v ?? 1) < 0.1) heldPast35 = true;
+  }
+  const st = sim.stats();
+  check(held, "Roundabout 3 (rev 454): cars 3 and 4 do hold for each other near 0:28 (reproduces the ticket's moment)");
+  check(st.collisions === 0, `Roundabout 3 (rev 454): cars 3 and 4 never touch (${st.collisions})`);
+  check(!heldPast35, "Roundabout 3 (rev 454): cars 3 and 4's hold clears within a few seconds, not stuck");
 }
 
 console.log(failed ? `\n${failed} check(s) failed` : "\nall checks passed");
