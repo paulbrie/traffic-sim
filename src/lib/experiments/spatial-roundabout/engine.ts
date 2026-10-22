@@ -268,6 +268,20 @@ export class SpatialSim {
       const cost = c.from.s - at.s + Math.min(...dests.map(d => this.routes.viaConnector(c.id, d)));
       if (cost < bc) { bc = cost; const z = this.zoneOfConn.get(c.id) ?? null; best = { lane: at.lane, s: c.from.s, zone: z, conn: z ? null : c, ...(z ? { via: c } : {}) }; }
     }
+    // (none from its lane gets it there, into a round island: in from its own line all the same, by its line from geometry to a
+    // way out that does (inside, spatial driving keeps to no lane: ticket #74), who goes first at the line the bookings'. Crossing
+    // to the lane beside before the line, it waited there for a gap in that lane's queue for minutes, its own lane standing
+    // behind it (ticket #76: Roundabout 3 at rev 456, a lane in with only a right turn drawn from it))
+    if (!Number.isFinite(bc)) for (const c of conns) {
+      const z = this.zoneOfConn.get(c.id);
+      if (!z?.island?.polar) continue;
+      let o: { lane: SketchLane; s: number } | null = null, oc = Infinity;
+      for (const w of this.outsOf.get(z) ?? []) { const x = Math.min(...dests.map(d => this.routes.from(w.lane.id, w.s, d))); if (x < oc) { oc = x; o = w; } }
+      const pa = pointAt(at.lane.shape, c.from.s);
+      if (!o || !this.lineThrough(z, pa.p, Math.atan2(pa.d.y, pa.d.x), o.lane, o.s)) continue;
+      bc = c.from.s - at.s + oc; best = { lane: at.lane, s: c.from.s, zone: z, conn: null };
+      break;
+    }
     if (!Number.isFinite(bc)) {
       const end = pointAt(at.lane.shape, at.len), road = roadOf(this.sk, at.lane.id);
       for (const id of road?.lanes ?? []) {
