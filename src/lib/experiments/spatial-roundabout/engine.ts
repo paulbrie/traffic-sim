@@ -78,11 +78,15 @@ export interface SpatialCarInfo { id: number; doing: string; limit: string; v: n
 export interface SpatialStats {
   t: number; vehicles: number; spawned: number; finished: number; heldBack: number; collisions: number; deadlocks: number; missed: number;
   stuck: number; meanTrip: number; spatialNow: number;
+  /** cars that could not get to their way out from where they were (their route changing lane, which the follower doesn't) */
+  reroutes: number;
 }
 
 /** where a car leaves its lane: into a junction (spatial driving from `s`, by connector `via` as its route has it), onto a
  * connector outside any (on its lane at once), or off its end (zone and connector null) */
-interface Leave { lane: SketchLane; s: number; zone: Zone | null; conn: SketchConnector | null; via?: SketchConnector }
+interface Leave { lane: SketchLane; s: number; zone: Zone | null; conn: SketchConnector | null; via?: SketchConnector;
+  /** no way to its way out from here: a way out it can reach is picked again past this */
+  lost?: true }
 
 const mulberry32 = (a: number) => () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 /** an angle's whole degree, 0 to 359 (for the per-degree reaches) */
@@ -99,6 +103,8 @@ export class SpatialSim {
   private nextId = 1;
   private sources: { lane: SketchLane; rate: number; next: number; queue: number }[] = [];
   private outWay = new Map<string, string[]>();
+  /** cars that could not get to their way out from where they were, and picked another */
+  private reroutes = 0;
   private spawned = 0; private finished = 0; private heldBack = 0; private collisions = 0; private deadlocks = 0; private missed = 0;
   private tripSum = 0;
   private touching = new Set<string>();
@@ -137,8 +143,10 @@ export class SpatialSim {
   private lane(id: string) { return this.sk.lanes.find(l => l.id === id)!; }
 
   /** a way out for a car coming in on `lane`, drawn by the ways out's shares among those it can reach */
-  private pickDest(lane: string): string | null {
-    const rt = this.routes, opts = rt.exits.filter(ex => laneOutWeight(this.lane(ex)) > 0 && rt.from(lane, 0, ex) < Infinity);
+  private pickDest(lane: string): string | null { return this.pickDestFrom(lane, 0); }
+  /** a way out for a car at `s` on `lane`, drawn by the ways out's shares among those it can reach from there */
+  private pickDestFrom(lane: string, s: number): string | null {
+    const rt = this.routes, opts = rt.exits.filter(ex => laneOutWeight(this.lane(ex)) > 0 && rt.from(lane, s, ex) < Infinity);
     const total = opts.reduce((a, ex) => a + laneOutWeight(this.lane(ex)), 0);
     let r = this.rnd() * total;
     for (const ex of opts) { r -= laneOutWeight(this.lane(ex)); if (r <= 0) return ex; }
@@ -194,7 +202,10 @@ export class SpatialSim {
   /**
    * where a car on a lane leaves it, as its route to its way out has it (worked out once on the lane): the connector further on
    * that gets it there soonest (into a junction: spatial driving from its start; else onto its lane at once), or off the lane's
-   * end if that's its way out; no way on: the first way into a junction, else the end
+   * end if that's its way out. No way on from its lane (its route changes lane first, which the follower doesn't): into the
+   * junction ahead by a connector of a lane beside it going the same way, from about where that one leaves (in the junction a
+   * car keeps to no lane); none, the first way into a junction, else the first connector on, a way out it can reach picked
+   * again there (ticket #59: car 9 stood at a lane's end for good); else the end
    */
   private leaveAt(v: SpatialCar): Leave {
     const at = v.at!;
@@ -206,8 +217,23 @@ export class SpatialSim {
       if (cost < bc) { bc = cost; const z = this.zoneOfConn.get(c.id) ?? null; best = { lane: at.lane, s: c.from.s, zone: z, conn: z ? null : c, ...(z ? { via: c } : {}) }; }
     }
     if (!Number.isFinite(bc)) {
-      const c = conns.filter(c => this.zoneOfConn.has(c.id)).sort((p, q) => p.from.s - q.from.s)[0];
-      if (c) best = { lane: at.lane, s: c.from.s, zone: this.zoneOfConn.get(c.id)!, conn: null, via: c };
+      const end = pointAt(at.lane.shape, at.len), road = roadOf(this.sk, at.lane.id);
+      for (const id of road?.lanes ?? []) {
+        if (id === at.lane.id) continue;
+        for (const c of this.connsFrom.get(id) ?? []) {
+          const z = this.zoneOfConn.get(c.id);
+          if (!z) continue;
+          // (leaving that lane beside its own lane's end, the same way)
+          const q = pointAt(this.lane(id).shape, c.from.s), here = nearestOn(at.lane.shape, q.p);
+          if (here.d > 8 || q.d.x * end.d.x + q.d.y * end.d.y < 0.5 || here.s < at.s) continue;
+          const cost = here.s - at.s + Math.min(...dests.map(d => this.routes.viaConnector(c.id, d)));
+          if (cost < bc) { bc = cost; best = { lane: at.lane, s: Math.min(at.len, here.s), zone: z, conn: null, via: c }; }
+        }
+      }
+    }
+    if (!Number.isFinite(bc)) {
+      const c = conns.filter(c => this.zoneOfConn.has(c.id)).sort((p, q) => p.from.s - q.from.s)[0] ?? conns.sort((p, q) => p.from.s - q.from.s)[0];
+      if (c) { const z = this.zoneOfConn.get(c.id) ?? null; best = { lane: at.lane, s: c.from.s, zone: z, conn: z ? null : c, ...(z ? { via: c } : {}), lost: true }; }
     }
     return (v.leave = best);
   }
@@ -263,6 +289,7 @@ export class SpatialSim {
     if (out.conn && at.s >= out.s) {
       const lane = this.lane(out.conn.to.lane);
       v.at = { lane, s: out.conn.to.s + (at.s - out.s), len: laneLength(lane.shape) }; v.leave = undefined;
+      if (out.lost) { v.dest = this.pickDestFrom(lane.id, v.at.s) ?? v.dest; this.reroutes++; }
       return;
     }
     if (at.s >= at.len) {
@@ -279,7 +306,11 @@ export class SpatialSim {
       const c = Math.min(...dests.map(d => rt.from(o.lane.id, o.s, d)));
       if (c < bc) { bc = c; best = o; }
     }
-    if (!best) { best = (this.outsOf.get(z) ?? [])[0] ?? null; }
+    // (no way out of it gets it to its way out: one that leads somewhere, its way out picked again from there)
+    if (!best) {
+      for (const o of this.outsOf.get(z) ?? []) { const d = this.pickDestFrom(o.lane.id, o.s); if (d) { best = o; v.dest = d; this.reroutes++; break; } }
+      best ??= (this.outsOf.get(z) ?? [])[0] ?? null;
+    }
     const g = best ? pointAt(best.lane.shape, best.s) : null, c = z.island?.c ?? pa.p;
     Object.assign(v, { mode: "spatial", at: null, leave: undefined, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), zone: z, goal: best && g ? { lane: best.lane, s: best.s, p: g.p, d: g.d, D: routeField(z, best.lane, best.s) } : null, entering: true, entered: 0, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - c.y, pa.p.x - c.x) });
   }
@@ -718,7 +749,7 @@ export class SpatialSim {
   }
 
   stats(): SpatialStats {
-    return { t: this.t, vehicles: this.vehicles.length, spawned: this.spawned, finished: this.finished, heldBack: this.heldBack + this.sources.reduce((a, s) => a + s.queue, 0), collisions: this.collisions, deadlocks: this.deadlocks, missed: this.missed, stuck: this.vehicles.filter(v => v.still > STUCK).length, meanTrip: this.finished ? this.tripSum / this.finished : 0, spatialNow: this.vehicles.filter(v => v.mode === "spatial").length };
+    return { t: this.t, vehicles: this.vehicles.length, spawned: this.spawned, finished: this.finished, heldBack: this.heldBack + this.sources.reduce((a, s) => a + s.queue, 0), collisions: this.collisions, deadlocks: this.deadlocks, missed: this.missed, stuck: this.vehicles.filter(v => v.still > STUCK).length, meanTrip: this.finished ? this.tripSum / this.finished : 0, spatialNow: this.vehicles.filter(v => v.mode === "spatial").length, reroutes: this.reroutes };
   }
   /**
    * One car as the page shows it picked (ticket #59): what it is doing, what holds it, where it is going, and the path it wants

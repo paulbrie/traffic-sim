@@ -2962,6 +2962,7 @@ function ExperimentRow({ x }: { x: NonNullable<Parameters<typeof TrafficPanel>[0
               {row("Stuck 60 s+", st.stuck)}
               {row("Locks cleared (a car taken off)", st.deadlocks)}
               {row("Missed their way out", st.missed)}
+              {row("Another way out picked", st.reroutes ?? 0)}
             </div>
           )}
         </>
