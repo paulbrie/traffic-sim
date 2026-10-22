@@ -1,13 +1,14 @@
 /**
- * The spatial roundabout experiment (T213): cars drive through a roundabout as a self-driving car would, sensing space, not
- * following lanes. Outside a roundabout they follow the sketch's lanes (a plain IDM follower); at the end of the lane that leads
- * into one they hand over to spatial driving: a fan of distance rays over the 180° ahead (the surface's edges, the island, other
- * cars' bodies: nothing else, no lanes, no connectors, no one's plans), a field that goes round the island the country's way, a
- * gap-seeking steer toward the way out its route asks for, and a speed from the free distance ahead; at that way out's lane they
- * hand back. A separate engine: the main one (lane-sketch-sim.ts) is not used or changed. Plain TypeScript, no framework.
+ * The spatial driving experiment (T213; any junction, a roundabout or not, since ticket #59): cars drive through a junction as a
+ * self-driving car would, sensing space, not following lanes. Outside junctions they follow the sketch's lanes (a plain IDM
+ * follower, taking the connectors between lanes there as their route has it); where their route takes them into a junction they
+ * hand over to spatial driving: a fan of distance rays all round (the surface's edges, the island, other cars' bodies: nothing
+ * else, no lanes, no connectors, no one's plans), a route field over the paving to the way out its route asks for (round an
+ * island only the country's way), a gap-seeking steer along it, and a speed from the free distance ahead; at that way out's
+ * lane they hand back. A separate engine: the main one (lane-sketch-sim.ts) is not used or changed. Plain TypeScript, no framework.
  */
-import { demandWays, entryLanes, laneInRate, laneLength, laneOutWeight, nearestOn, pointAt, RouteTable, type Pt, type Sketch, type SketchLane } from "../../lane-sketch";
-import { buildSurface, drivable, edgeDist, type Roundabout, type Surface } from "./surface";
+import { connectorPts, demandWays, entryLanes, laneInRate, laneLength, laneOutWeight, nearestOn, pointAt, roadOf, RouteTable, type Pt, type Sketch, type SketchConnector, type SketchLane } from "../../lane-sketch";
+import { buildSurface, descend, drivable, edgeDist, exitStart, inCore, routeField, type Island, type Surface, type Zone } from "./surface";
 
 // drivers (as the main engine's defaults)
 const A_MAX = 1.5, B_COMF = 2, B_MAX = 6, T_HEAD = 1.2, S0 = 2, CAR_LEN = 4.5, TRUCK_LEN = 12, WIDTH = 1.8;
@@ -24,7 +25,9 @@ const KERB = 0.4;
 const KERB_NEAR = 1.6;
 /** the sampling planner: curvatures tried (from full left to full right), the time rolled out and its step (s), how often it plans
  * (s), the room it keeps from others (m) */
-/** turning out: its way out's start no more than this off the ring's heading (rad) */
+/** its aim: this many cells (FCELL m) down its route field */
+const AIM_STEPS = 9;
+/** (round a round island) turning out: its way out's start no more than this off the ring's heading (rad) */
 const EXIT_TURN = 0.87;
 const SAMPLE_K = 9, SAMPLE_H = 2.5, SAMPLE_DT = 0.25, SAMPLE_EVERY = 0.3, SAMPLE_MARGIN = 0.3;
 /** standing at a kerb this long (s), it backs up this far (m), at this speed (m/s), the front swinging toward its way */
@@ -47,17 +50,20 @@ export interface SpatialCar {
   /** following a lane (outside), or driving by sensing (inside a roundabout) */
   mode: "lane" | "spatial";
   at: PathPos | null;
-  /** spatial: its front, heading, the roundabout, the way out's lane and its start (the goal), how far into the ring it has come */
-  p: Pt; h: number; rb: Roundabout | null; goal: { lane: SketchLane; p: Pt; d: Pt } | null; entering: boolean; entered: number;
+  /** spatial: its front, heading, the junction, the way out's lane, where on it (the goal) and the route field there, how far in
+   * it has come */
+  p: Pt; h: number; zone: Zone | null; goal: { lane: SketchLane; s: number; p: Pt; d: Pt; D: Float32Array } | null; entering: boolean; entered: number;
   /** the lane it came in on (it stands at its end while waiting to enter), when it began to wait */
   from: SketchLane | null; waitSince: number;
   /** its rays last step (for the drawing, and closing speeds): each the free distance, what it hit (car id, -1 the edge) */
   rays: { d: number; car: number }[] | null;
-  /** the angle round it has gone so far (for missed exits) */
+  /** (a roundabout) the angle round it has gone so far (for missed exits) */
   round: number; lastA: number; missed: number;
   /** the cars it has tracked by its rays: the nearest point seen, its velocity, when last seen, how often */
   tracks?: Map<number, { p: Pt; vx: number; vy: number; at: number; n: number }>;
-  /** where across the ring it keeps (share of the carriageway's width from the island), chosen going in */
+  /** (on a lane) where it leaves it, as its route has it, worked out when it came onto it */
+  leave?: Leave;
+  /** (round a round island) where across the ring it keeps (share of the carriageway's width from the island), chosen going in */
   lane?: number;
   /** its path ahead last step (for the drawing), and what limited it (for looking into it) */
   pathPts?: Pt[]; limit?: string;
@@ -66,12 +72,21 @@ export interface SpatialCar {
   /** the sampling planner's last choice (acceleration, curvature), when made, and since when nothing ahead was safe */
   plan?: { a: number; k: number; at: number }; blockedSince?: number;
 }
+/** a car picked on the page: what it is doing, what holds it (spatial), its speed (m/s), how long it has stood (s), where it is
+ * going, the path it wants to take and its way out's start */
+export interface SpatialCarInfo { id: number; doing: string; limit: string; v: number; still: number; dest: string; path: Pt[]; goal: Pt | null }
 export interface SpatialStats {
   t: number; vehicles: number; spawned: number; finished: number; heldBack: number; collisions: number; deadlocks: number; missed: number;
   stuck: number; meanTrip: number; spatialNow: number;
 }
 
+/** where a car leaves its lane: into a junction (spatial driving from `s`, by connector `via` as its route has it), onto a
+ * connector outside any (on its lane at once), or off its end (zone and connector null) */
+interface Leave { lane: SketchLane; s: number; zone: Zone | null; conn: SketchConnector | null; via?: SketchConnector }
+
 const mulberry32 = (a: number) => () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+/** an angle's whole degree, 0 to 359 (for the per-degree reaches) */
+const degOf = (a: number) => ((Math.round((a * 180) / Math.PI) % 360) + 360) % 360;
 const angDiff = (a: number, b: number) => { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
 const dirOf = (h: number) => ({ x: Math.cos(h), y: Math.sin(h) });
 
@@ -89,10 +104,11 @@ export class SpatialSim {
   private touching = new Set<string>();
   /** the last collisions (for looking into them) */
   collisionLog: { t: number; a: number; b: number; kinds: string; va: number; vb: number }[] = [];
-  /** the lanes leading into each roundabout's connectors (handover where they leave), and the lanes out of it */
-  private handIn = new Map<string, { rb: Roundabout; s: number }[]>();
-  /** (each way out: its lane, and where on it the roundabout's connectors join it: a road's lane can start inside the junction) */
-  private outsOf = new Map<Roundabout, { lane: SketchLane; s: number }[]>();
+  /** each junction's connectors' zone; the connectors leaving each lane */
+  private zoneOfConn = new Map<string, Zone>();
+  private connsFrom = new Map<string, SketchConnector[]>();
+  /** (each way out of a junction: its lane, and where on it the junction's connectors join it: a road's lane can start inside it) */
+  private outsOf = new Map<Zone, { lane: SketchLane; s: number }[]>();
 
   constructor(private sk: Sketch, private params: SpatialParams) {
     this.rnd = mulberry32(params.seed);
@@ -100,14 +116,15 @@ export class SpatialSim {
     this.surface = buildSurface(sk);
     const ways = demandWays(sk);
     this.outWay = new Map(ways.exits.flatMap(w => w.lanes.map(l => [l, w.lanes])));
-    for (const rb of this.surface?.roundabouts ?? []) {
+    for (const z of this.surface?.zones ?? []) {
       const outs = new Map<string, number>();
-      for (const c of sk.connectors) if (rb.connectors.has(c.id)) {
-        if (!rb.lanes.has(c.from.lane)) { const l = this.handIn.get(c.from.lane) ?? []; if (!l.some(x => x.rb === rb && Math.abs(x.s - c.from.s) < 0.5)) l.push({ rb, s: c.from.s }); this.handIn.set(c.from.lane, l); }
-        if (!rb.lanes.has(c.to.lane)) outs.set(c.to.lane, Math.max(outs.get(c.to.lane) ?? 0, c.to.s));
+      for (const c of sk.connectors) if (z.connectors.has(c.id)) {
+        if (!z.lanes.has(c.from.lane)) this.zoneOfConn.set(c.id, z);
+        if (!z.lanes.has(c.to.lane)) outs.set(c.to.lane, Math.max(outs.get(c.to.lane) ?? 0, c.to.s));
       }
-      this.outsOf.set(rb, [...outs].flatMap(([id, s]) => { const lane = sk.lanes.find(l => l.id === id); return lane ? [{ lane, s }] : []; }));
+      this.outsOf.set(z, [...outs].flatMap(([id, s]) => { const lane = sk.lanes.find(l => l.id === id); return lane ? [{ lane, s: exitStart(z, lane, s) }] : []; }));
     }
+    for (const c of sk.connectors) { const l = this.connsFrom.get(c.from.lane) ?? []; l.push(c); this.connsFrom.set(c.from.lane, l); }
     for (const lane of entryLanes(sk)) { const rate = laneInRate(lane, sk); if (rate > 0) this.sources.push({ lane, rate, next: this.gap(rate), queue: 0 }); }
     for (const j of sk.journeys ?? []) {
       const from = ways.entries.find(w => w.lanes.includes(j.from))?.lanes ?? [], to = ways.exits.find(w => w.lanes.includes(j.to))?.lanes ?? [];
@@ -135,7 +152,7 @@ export class SpatialSim {
     // (room at the lane's start: else it waits to come in)
     if (this.vehicles.some(w => w.mode === "lane" && w.at?.lane === lane && w.at.s - w.len < len + S0)) return false;
     const v0 = Math.min(this.vmax(), 8);
-    this.vehicles.push({ id: this.nextId++, len, truck, v: v0, still: 0, born: this.t, dest, journey, mode: "lane", at: { lane, s: len, len: laneLength(lane.shape) }, p: { x: 0, y: 0 }, h: 0, rb: null, goal: null, entering: false, entered: 0, from: null, waitSince: 0, rays: null, round: 0, lastA: 0, missed: 0 });
+    this.vehicles.push({ id: this.nextId++, len, truck, v: v0, still: 0, born: this.t, dest, journey, mode: "lane", at: { lane, s: len, len: laneLength(lane.shape) }, p: { x: 0, y: 0 }, h: 0, zone: null, goal: null, entering: false, entered: 0, from: null, waitSince: 0, rays: null, round: 0, lastA: 0, missed: 0 });
     this.spawned++;
     return true;
   }
@@ -174,16 +191,36 @@ export class SpatialSim {
 
   // ---------------------------------------------------------------- outside: lanes
 
-  /** where a car on a lane leaves it: into a roundabout (handover at `s`), or its end */
-  private leaveAt(v: SpatialCar): { s: number; rb: Roundabout | null } {
-    const lane = v.at!.lane, hs = this.handIn.get(lane.id);
-    if (hs?.length) return { s: hs[0].s, rb: hs[0].rb };
-    return { s: v.at!.len, rb: null };
+  /**
+   * where a car on a lane leaves it, as its route to its way out has it (worked out once on the lane): the connector further on
+   * that gets it there soonest (into a junction: spatial driving from its start; else onto its lane at once), or off the lane's
+   * end if that's its way out; no way on: the first way into a junction, else the end
+   */
+  private leaveAt(v: SpatialCar): Leave {
+    const at = v.at!;
+    if (v.leave?.lane === at.lane) return v.leave;
+    const dests = this.outs(v.dest), conns = (this.connsFrom.get(at.lane.id) ?? []).filter(c => c.from.s >= at.s - 0.01);
+    let best: Leave = { lane: at.lane, s: at.len, zone: null, conn: null }, bc = dests.includes(at.lane.id) ? at.len - at.s : Infinity;
+    for (const c of conns) {
+      const cost = c.from.s - at.s + Math.min(...dests.map(d => this.routes.viaConnector(c.id, d)));
+      if (cost < bc) { bc = cost; const z = this.zoneOfConn.get(c.id) ?? null; best = { lane: at.lane, s: c.from.s, zone: z, conn: z ? null : c, ...(z ? { via: c } : {}) }; }
+    }
+    if (!Number.isFinite(bc)) {
+      const c = conns.filter(c => this.zoneOfConn.has(c.id)).sort((p, q) => p.from.s - q.from.s)[0];
+      if (c) best = { lane: at.lane, s: c.from.s, zone: this.zoneOfConn.get(c.id)!, conn: null, via: c };
+    }
+    return (v.leave = best);
   }
   private laneAcc(v: SpatialCar) {
     const at = v.at!, out0 = this.leaveAt(v);
-    // (coming up to a roundabout: slow to the speed of a give-way line by its line, as one would)
-    const vm = out0.rb ? Math.min(this.vmax(), Math.sqrt(ENTRY_V * ENTRY_V + 2 * B_COMF * Math.max(0, out0.s - at.s))) : this.vmax();
+    // (coming up to a junction: slow to the speed of a give-way line by its line, as one would; its line on past a connector
+    // outside junctions too, a short lane between two junctions on from it)
+    let dz = out0.zone ? out0.s - at.s : Infinity;
+    if (out0.conn) {
+      const nl = this.lane(out0.conn.to.lane), nx = this.leaveAt({ ...v, at: { lane: nl, s: out0.conn.to.s, len: laneLength(nl.shape) }, leave: undefined });
+      if (nx.zone) dz = out0.s - at.s + nx.s - out0.conn.to.s;
+    }
+    const vm = Number.isFinite(dz) ? Math.min(this.vmax(), Math.sqrt(ENTRY_V * ENTRY_V + 2 * B_COMF * Math.max(0, dz))) : this.vmax();
     let gap = Infinity, lead = 0;
     for (const w of this.vehicles) {
       if (w === v) continue;
@@ -191,39 +228,69 @@ export class SpatialSim {
       let ws: number | null = null;
       if (w.mode === "lane" && w.at!.lane === at.lane && w.at!.s > at.s) ws = w.at!.s;
       else if (w.mode === "spatial" && w.from === at.lane && w.entered < w.len + 1) ws = this.leaveAt({ ...v }).s + w.entered;
+      // (a spatial car's body over its lane ahead (one stood at its line from another way in, say): its nearer end there)
+      else if (w.mode === "spatial" && Math.hypot(w.p.x - pointAt(at.lane.shape, at.s).p.x, w.p.y - pointAt(at.lane.shape, at.s).p.y) < 40) {
+        const b = this.body(w), lx = -b.d.y * (WIDTH / 2), ly = b.d.x * (WIDTH / 2), fx = b.d.x * (w.len / 2), fy = b.d.y * (w.len / 2);
+        for (const [u, l] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+          const q = nearestOn(at.lane.shape, { x: b.c.x + fx * u + lx * l, y: b.c.y + fy * u + ly * l });
+          if (q.d < at.lane.width / 2 + 0.3 && q.s > at.s && (ws === null || q.s + w.len < ws)) ws = q.s + w.len;
+        }
+      }
       if (ws === null) continue;
       const g = ws - w.len - at.s;
       if (g < gap) { gap = g; lead = w.v; }
     }
-    // (into a roundabout: up to its line, where spatial driving takes over)
+    // (into a junction: up to its line, where spatial driving takes over; onto a connector outside one: the car ahead on its lane)
     const out = this.leaveAt(v);
-    const isExit = !out.rb && this.outs(v.dest).includes(at.lane.id);
-    if (!out.rb && !isExit) { const g = at.len - at.s + 1; if (g < gap) { gap = g; lead = 0; } }
+    if (out.conn) {
+      const to = out.conn.to;
+      for (const w of this.vehicles) if (w.mode === "lane" && w.at!.lane.id === to.lane && w.at!.s > to.s - 1) {
+        const g = out.s - at.s + (w.at!.s - w.len - to.s);
+        if (g < gap) { gap = g; lead = w.v; }
+      }
+    } else if (!out.zone && !this.outs(v.dest).includes(at.lane.id)) { const g = at.len - at.s + 1; if (g < gap) { gap = g; lead = 0; } }
     const sStar = S0 + Math.max(0, v.v * T_HEAD + (v.v * (v.v - lead)) / (2 * Math.sqrt(A_MAX * B_COMF)));
-    const a = A_MAX * (1 - (v.v / vm) ** 4 - (gap < Infinity ? (sStar / Math.max(gap, 0.1)) ** 2 : 0));
+    let a = A_MAX * (1 - (v.v / vm) ** 4 - (gap < Infinity ? (sStar / Math.max(gap, 0.1)) ** 2 : 0));
+    // (at a junction's line no faster than ENTRY_V, braking for it as hard as that takes: a car off a short lane between two
+    // junctions comes up to the second fast)
+    if (Number.isFinite(dz) && v.v > ENTRY_V) a = Math.min(a, (ENTRY_V * ENTRY_V - v.v * v.v) / (2 * Math.max(0.5, dz)));
     return Math.max(-B_MAX, a);
   }
   private laneMove(v: SpatialCar, dt: number, gone: Set<SpatialCar>) {
     const at = v.at!, out = this.leaveAt(v);
     at.s += v.v * dt;
-    if (out.rb && at.s >= out.s) { this.handOver(v, out.rb, out.s); return; }
+    if (out.zone && at.s >= out.s) { this.handOver(v, out.zone, out.s, out.via); return; }
+    if (out.conn && at.s >= out.s) {
+      const lane = this.lane(out.conn.to.lane);
+      v.at = { lane, s: out.conn.to.s + (at.s - out.s), len: laneLength(lane.shape) }; v.leave = undefined;
+      return;
+    }
     if (at.s >= at.len) {
       gone.add(v); this.finished++; this.tripSum += this.t - v.born;
     }
   }
 
-  /** at the end of the lane into a roundabout: spatial driving from here, its goal the way out its route asks for */
-  private handOver(v: SpatialCar, rb: Roundabout, s: number) {
+  /** at the end of the lane into a junction: spatial driving from here, its goal the way out its route asks for */
+  private handOver(v: SpatialCar, z: Zone, s: number, via?: SketchConnector) {
     const lane = v.at!.lane, pa = pointAt(lane.shape, Math.min(s, laneLength(lane.shape)));
     const rt = this.routes, dests = this.outs(v.dest);
     let best: { lane: SketchLane; s: number } | null = null, bc = Infinity;
-    for (const o of this.outsOf.get(rb) ?? []) {
+    for (const o of (via && this.outsVia(z, via)) || (this.outsOf.get(z) ?? [])) {
       const c = Math.min(...dests.map(d => rt.from(o.lane.id, o.s, d)));
       if (c < bc) { bc = c; best = o; }
     }
-    if (!best) { best = (this.outsOf.get(rb) ?? [])[0] ?? null; }
-    const g = best ? pointAt(best.lane.shape, best.s) : null;
-    Object.assign(v, { mode: "spatial", at: null, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), rb, goal: best && g ? { lane: best.lane, p: g.p, d: g.d } : null, entering: true, entered: 0, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - rb.c.y, pa.p.x - rb.c.x) });
+    if (!best) { best = (this.outsOf.get(z) ?? [])[0] ?? null; }
+    const g = best ? pointAt(best.lane.shape, best.s) : null, c = z.island?.c ?? pa.p;
+    Object.assign(v, { mode: "spatial", at: null, leave: undefined, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), zone: z, goal: best && g ? { lane: best.lane, s: best.s, p: g.p, d: g.d, D: routeField(z, best.lane, best.s) } : null, entering: true, entered: 0, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - c.y, pa.p.x - c.x) });
+  }
+
+  /** the ways out of a junction its way in has connectors to (at a plain junction: not a turn it has none for); any onto the
+   * junction's own lanes (a ring's): all of them (a car going round by sensing keeps to no ring lane). Null: all of them */
+  private outsVia(z: Zone, via: SketchConnector) {
+    const to = (this.connsFrom.get(via.from.lane) ?? []).filter(c => z.connectors.has(c.id)).map(c => c.to.lane);
+    if (to.some(l => z.lanes.has(l))) return null;
+    const ways = (this.outsOf.get(z) ?? []).filter(o => to.includes(o.lane.id));
+    return ways.length ? ways : null;
   }
 
   // ---------------------------------------------------------------- inside: sensing and planning
@@ -313,32 +380,55 @@ export class SpatialSim {
   }
 
   /**
-   * Where a car at `p` heading `h` wants to go next (an aim point), from the map alone: round the island the ring's way at its own
-   * distance out (inside for a far way out, outside for a near one, as drivers keep to a side), out to the outside before its way
-   * out, then to its way out's lane and along it. No lanes or connectors: the island's middle and reach, and the goal.
+   * Where a car at `p` wants to go next (an aim point), from the map alone: a few metres down its route field (the way over the
+   * paving to its way out's lane, round an island the ring's way, then down the lane), and the metres it still has to go there.
+   * No lanes or connectors: the paving, the island, and the goal.
    */
   private aimFor(v: SpatialCar, p: Pt): { aim: Pt; toGo: number } {
-    const rb = v.rb!, g = v.goal!, alpha = Math.atan2(p.y - rb.c.y, p.x - rb.c.x), r = Math.hypot(p.x - rb.c.x, p.y - rb.c.y);
-    const deg = ((Math.round((alpha * 180) / Math.PI) % 360) + 360) % 360, rIn = rb.rIn[deg], W = Math.max(2.5, Math.min(rb.width, rb.rOut[deg] - rIn));
-    const ga = Math.atan2(g.p.y - rb.c.y, g.p.x - rb.c.x);
-    const toGo = ((((ga - alpha) * rb.sense) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), dGoal = Math.hypot(g.p.x - p.x, g.p.y - p.y);
-    // (its way out about abreast, a little ahead: out to the lane's start, then along it (no cutting across what lies between))
-    // (its way out about abreast, a little ahead: onto its lane's line, aiming a little down it from where it would join it)
+    const isl = v.zone!.island;
+    if (isl?.polar) return this.aimRound(v, p, isl, isl.polar);
+    const g = v.goal!, r = descend(v.zone!, g.D, p, AIM_STEPS);
+    // (off its field, or at the end of the stretch of lane it leads down: on down the lane)
+    if (!r.aim || Math.hypot(r.aim.x - p.x, r.aim.y - p.y) < 1.5) {
+      const L = laneLength(g.lane.shape), s = Math.max(g.s, nearestOn(g.lane.shape, p).s);
+      return { aim: pointAt(g.lane.shape, Math.min(L, s + 6)).p, toGo: r.toGo };
+    }
+    return r as { aim: Pt; toGo: number };
+  }
+  /**
+   * (round a round island, T213) its aim from the island's middle and reach: round it the ring's way at its own distance out
+   * (inside for a far way out, outside for a near one, as drivers keep to a side), out to the outside before its way out, then
+   * to its way out's lane and along it; `toGo` the angle round still to go
+   */
+  private aimRound(v: SpatialCar, p: Pt, isl: Island, rr: NonNullable<Island["polar"]>): { aim: Pt; toGo: number } {
+    const g = v.goal!, alpha = Math.atan2(p.y - isl.c.y, p.x - isl.c.x), r = Math.hypot(p.x - isl.c.x, p.y - isl.c.y);
+    const deg = degOf(alpha), rIn = rr.rIn[deg], W = Math.max(2.5, Math.min(isl.width, rr.rOut[deg] - rIn));
+    const ga = Math.atan2(g.p.y - isl.c.y, g.p.x - isl.c.x);
+    const toGo = ((((ga - alpha) * isl.sense) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), dGoal = Math.hypot(g.p.x - p.x, g.p.y - p.y);
     const o = this.params.opts ?? {};
-    // (its way out ahead within a gentle turn: its lane's start no more than 50° off the ring's way from here (or nearly abreast))
+    // (its way out ahead within a gentle turn: its lane's start no more than 50° off the ring's way from here (or nearly abreast);
+    // or just past it, having gone round some (not the way out beside the way in, at the start of a turn back))
     if (this.exitNow(v, p, toGo) || (toGo > 6 && dGoal < 6 && (!o.uturnAfterRound || v.round > Math.PI))) {
       if (!o.exitLine) return { aim: dGoal > 5 ? g.p : { x: g.p.x + g.d.x * 8, y: g.p.y + g.d.y * 8 }, toGo };
-      const along = (p.x - g.p.x) * g.d.x + (p.y - g.p.y) * g.d.y, sAim = Math.max(3, Math.min(15, along + 5));
+      // (onto its lane's line, aiming a little down it from where it would join it)
+      const along = (p.x - g.p.x) * g.d.x + (p.y - g.p.y) * g.d.y, sAim = Math.max(g.s + 3, Math.min(g.s + 15, along + g.s + 5));
       return { aim: pointAt(g.lane.shape, Math.min(sAim, laneLength(g.lane.shape))).p, toGo };
     }
-    const rT = rIn + W * (toGo < 1.5 ? 0.78 : v.lane!), ahead = Math.min(0.7, 5 / Math.max(r, rT)), b = alpha + rb.sense * ahead;
-    return { aim: { x: rb.c.x + rT * Math.cos(b), y: rb.c.y + rT * Math.sin(b) }, toGo };
+    const rT = rIn + W * (toGo < 1.5 ? 0.78 : v.lane ?? 0.5), ahead = Math.min(0.7, 5 / Math.max(r, rT)), b = alpha + isl.sense * ahead;
+    return { aim: { x: isl.c.x + rT * Math.cos(b), y: isl.c.y + rT * Math.sin(b) }, toGo };
   }
-  /** time to turn out: its way out's lane start ahead the ring's way (within 1.2 rad round) and no more than 50° off the ring's
-   * heading from here, so a gentle turn takes it there; or nearly abreast of it (T213: exits far out down a road as near ones) */
+  /** (round a round island) time to turn out: its way out's lane start ahead the ring's way (within 1.2 rad round) and no more
+   * than 50° off the ring's heading from here, so a gentle turn takes it there; or nearly abreast of it */
   private exitNow(v: SpatialCar, p: Pt, toGo: number) {
-    const rb = v.rb!, g = v.goal!, a = Math.atan2(p.y - rb.c.y, p.x - rb.c.x), tan = Math.atan2(rb.sense * Math.cos(a), -rb.sense * Math.sin(a));
+    const isl = v.zone!.island!, g = v.goal!, a = Math.atan2(p.y - isl.c.y, p.x - isl.c.x), tan = Math.atan2(isl.sense * Math.cos(a), -isl.sense * Math.sin(a));
     return toGo < 0.25 || (toGo < 1.2 && Math.abs(angDiff(Math.atan2(g.p.y - p.y, g.p.x - p.x), tan)) < EXIT_TURN);
+  }
+  /** where the give-way rules hold: round a round island, within the carriageway's reach there (and `slack` m), as since T213;
+   * else the zone's own (its ring, a plain junction's paving) */
+  private inRing(z: Zone, q: Pt, slack = 0.5) {
+    const isl = z.island, rr = isl?.polar;
+    if (!isl || !rr) return inCore(z, q);
+    return Math.hypot(q.x - isl.c.x, q.y - isl.c.y) <= rr.rIn[degOf(Math.atan2(q.y - isl.c.y, q.x - isl.c.x))] + isl.width + slack;
   }
   /** its path ahead, as it would drive it (turning no tighter than it can): points every PATH_STEP m, up to `len` m */
   private pathAhead(v: SpatialCar, len: number): Pt[] {
@@ -385,12 +475,12 @@ export class SpatialSim {
       }
     });
     // (one going to cross its path: who goes first, from where they are, as the rules have it. Going in, it gives way to all that
-    // come round within the gap; on the ring, not to one still outside it (that one gives way), else to one there first)
-    const rb = v.rb!, onRing = (q: Pt) => { const a = Math.atan2(q.y - rb.c.y, q.x - rb.c.x), d = ((Math.round((a * 180) / Math.PI) % 360) + 360) % 360; return Math.hypot(q.x - rb.c.x, q.y - rb.c.y) <= rb.rIn[d] + rb.width + 0.5; };
-    const going = v.entering && v.entered < 0.5;
+    // come within the gap; in the junction (on a roundabout's ring), not to one still outside it (that one gives way), else to one
+    // there first)
+    const z = v.zone!, going = v.entering && v.entered < 0.5;
     for (const o of v.tracks?.values() ?? []) {
       if (o.n < 4 || Math.hypot(o.vx, o.vy) < 0.5) continue;
-      if (!going && !onRing(o.p)) continue;
+      if (!going && !this.inRing(z, o.p)) continue;
       for (let tau = 0.25; tau <= H; tau += 0.25) {
         const q = { x: o.p.x + o.vx * tau, y: o.p.y + o.vy * tau }, k = reachK(q, WIDTH + MARGIN);
         if (k < 0) continue;
@@ -409,7 +499,7 @@ export class SpatialSim {
     const rays = this.sense(v);
     v.rays = rays;
     this.track(v, rays, dt);
-    if (v.lane === undefined) { const { toGo } = this.aimFor({ ...v, lane: 0.5 } as SpatialCar, v.p); v.lane = toGo > Math.PI ? 0.4 : 0.7; }
+    if (v.lane === undefined && v.zone!.island?.polar) { const { toGo } = this.aimFor({ ...v, lane: 0.5 } as SpatialCar, v.p); v.lane = toGo > Math.PI ? 0.4 : 0.7; }
     const len = Math.min(RANGE_MAX, 10 + 3 * v.v + (v.entering ? 10 : 0)), path = this.pathAhead(v, len);
     // (going in: what comes round looked at further ahead, the gap accepted and the time to get in; after 10 s waiting, less)
     const patient = this.t - v.waitSince > 10, H = v.entering ? (patient ? 1.5 : this.params.gap + 2) : 3;
@@ -421,12 +511,12 @@ export class SpatialSim {
       v.kerbSince ??= this.t;
       if (this.t - v.kerbSince > KERB_WAIT && this.clearBehind(v, rays)) { v.backing = BACK_UP; v.kerbSince = undefined; return 0; }
     } else v.kerbSince = undefined;
-    // (not into the ring unless it can get clear in it: room along its path past where it joins the carriageway round the island,
-    // its own length and more, as a driver doesn't stop across the ring (no blocking the box))
+    // (not into the junction unless it can get clear in it: room along its path past where it joins its ring (a plain junction:
+    // its paving), its own length and more, as a driver doesn't stop across the ring (no blocking the box))
     if (v.entering && v.entered < 0.5 && !(this.params.opts?.noBlockBox ?? true)) {
       if (free < Math.min(12, path.length * PATH_STEP - 1)) return this.stopAt(v, 0.3);
     } else if (v.entering && v.entered < 0.5) {
-      const rb = v.rb!, kJoin = path.findIndex(q => { const a = Math.atan2(q.y - rb.c.y, q.x - rb.c.x), d = ((Math.round((a * 180) / Math.PI) % 360) + 360) % 360; return Math.hypot(q.x - rb.c.x, q.y - rb.c.y) < rb.rIn[d] + rb.width * 0.95; });
+      const z = v.zone!, kJoin = path.findIndex(q => this.inRing(z, q, -0.05 * (z.island?.width ?? 0)));
       const sJoin = kJoin < 0 ? 0 : kJoin * PATH_STEP, needIn = Math.min(path.length * PATH_STEP - 1, sJoin + v.len + 6);
       if (free < needIn) return this.stopAt(v, 0.3);
     }
@@ -456,21 +546,20 @@ export class SpatialSim {
     return a;
   }
   private choose(v: SpatialCar, rays: { d: number; car: number }[], path: Pt[]) {
-    const s = this.surface!, rb = v.rb!, going = v.entering && v.entered < 0.5;
-    const onRing = (q: Pt) => { const a = Math.atan2(q.y - rb.c.y, q.x - rb.c.x), d = ((Math.round((a * 180) / Math.PI) % 360) + 360) % 360; return Math.hypot(q.x - rb.c.x, q.y - rb.c.y) <= rb.rIn[d] + rb.width + 0.5; };
+    const s = this.surface!, z = v.zone!, going = v.entering && v.entered < 0.5;
     // (what its rays show of other cars: the points hit, each with how its car was tracked moving)
     const pts: { x: number; y: number; vx: number; vy: number }[] = [];
     rays.forEach((x, i) => {
       if (x.car < 0 || x.d > 25) return;
-      const a = this.rayAngle(v, i), o = v.tracks?.get(x.car), moves = o && o.n >= 4 && Math.hypot(o.vx, o.vy) >= 0.5 && (going || onRing(o.p));
+      const a = this.rayAngle(v, i), o = v.tracks?.get(x.car), moves = o && o.n >= 4 && Math.hypot(o.vx, o.vy) >= 0.5 && (going || this.inRing(z, o.p));
       pts.push({ x: v.p.x + Math.cos(a) * x.d, y: v.p.y + Math.sin(a) * x.d, vx: moves ? o!.vx : 0, vy: moves ? o!.vy : 0 });
     });
     const kMax = 1 / R_MIN, prevK = v.plan?.k ?? 0;
-    // (circling: not going in, not yet turning out to its way out)
-    const { toGo } = this.aimFor(v, v.p);
-    const circling = !v.entering && !this.exitNow(v, v.p, toGo) && toGo <= 6;
-    const a0 = Math.atan2(v.p.y - rb.c.y, v.p.x - rb.c.x), deg0 = ((Math.round((a0 * 180) / Math.PI) % 360) + 360) % 360;
-    const rT = rb.rIn[deg0] + Math.max(2.5, Math.min(rb.width, rb.rOut[deg0] - rb.rIn[deg0])) * (toGo < 1.5 ? 0.78 : v.lane ?? 0.5);
+    // (circling a round island: not going in, not yet turning out to its way out)
+    const isl = z.island, rr = isl?.polar, { toGo } = this.aimFor(v, v.p);
+    const circling = !!rr && !v.entering && !this.exitNow(v, v.p, toGo) && toGo <= 6;
+    const a0 = isl ? Math.atan2(v.p.y - isl.c.y, v.p.x - isl.c.x) : 0, deg0 = degOf(a0);
+    const rT = rr ? rr.rIn[deg0] + Math.max(2.5, Math.min(isl!.width, rr.rOut[deg0] - rr.rIn[deg0])) * (toGo < 1.5 ? 0.78 : v.lane ?? 0.5) : 0;
     let best = { a: -B_MAX, k: 0 }, bestScore = -Infinity, anySafe = false, anyMoves = false;
     const accs = [-B_MAX, -B_COMF, 0, A_MAX];
     for (let ki = 0; ki <= SAMPLE_K; ki++) for (const a of accs) {
@@ -485,11 +574,12 @@ export class SpatialSim {
         if (circling) {
           // (round the ring: progress is the way round it made, at whatever distance out, a little held to its own distance and the
           // ring's heading: a gap round a stopped car beats waiting behind it)
-          const a1 = Math.atan2(r.end.y - rb.c.y, r.end.x - rb.c.x), r1 = Math.hypot(r.end.x - rb.c.x, r.end.y - rb.c.y);
-          const made = angDiff(a1, a0) * rb.sense * r1, tan1 = Math.atan2(rb.sense * Math.cos(a1), -rb.sense * Math.sin(a1));
+          const a1 = Math.atan2(r.end.y - isl!.c.y, r.end.x - isl!.c.x), r1 = Math.hypot(r.end.x - isl!.c.x, r.end.y - isl!.c.y);
+          const made = angDiff(a1, a0) * isl!.sense * r1, tan1 = Math.atan2(isl!.sense * Math.cos(a1), -isl!.sense * Math.sin(a1));
           score = 100 + 1.0 * made - 0.3 * Math.abs(r1 - rT) - 1.0 * Math.abs(angDiff(r.endH, tan1)) + 0.3 * Math.min(r.room, 3) - 0.4 * Math.abs(k - prevK) * R_MIN;
         } else {
-          // (going in or out: progress along its guidance line, the end's distance off it and heading off it, room kept, a steady wheel)
+          // (going in or out, or along a route field: progress along its guidance line, the end's distance off it and heading off
+          // it, room kept, a steady wheel)
           const g = guideAt(path, r.end);
           score = 100 + 1.0 * g.along - 1.5 * g.off - 2.0 * Math.abs(angDiff(r.endH, g.h)) + 0.3 * Math.min(r.room, 3) - 0.4 * Math.abs(k - prevK) * R_MIN;
         }
@@ -575,15 +665,18 @@ export class SpatialSim {
     const d = dirOf(v.h);
     v.p = { x: v.p.x + d.x * v.v * dt, y: v.p.y + d.y * v.v * dt };
     if (v.entering) { v.entered += v.v * dt; if (v.entered > v.len + 1) v.entering = false; }
-    const rb = v.rb!, a = Math.atan2(v.p.y - rb.c.y, v.p.x - rb.c.x);
-    v.round += angDiff(a, v.lastA) * rb.sense; v.lastA = a;
-    if (v.round > 2 * Math.PI + 0.5) { v.missed++; this.missed++; v.round -= 2 * Math.PI; }
+    const isl = v.zone!.island;
+    if (isl) {
+      const a = Math.atan2(v.p.y - isl.c.y, v.p.x - isl.c.x);
+      v.round += angDiff(a, v.lastA) * isl.sense; v.lastA = a;
+      if (v.round > 2 * Math.PI + 0.5) { v.missed++; this.missed++; v.round -= 2 * Math.PI; }
+    }
     // (at its way out, heading along it: back on the lane)
     const g = v.goal;
     const along = g ? (v.p.x - g.p.x) * g.d.x + (v.p.y - g.p.y) * g.d.y : 0, side = g ? Math.abs(-(v.p.x - g.p.x) * g.d.y + (v.p.y - g.p.y) * g.d.x) : 0;
     if (g && along > -1 && side < HAND_D && Math.abs(angDiff(v.h, Math.atan2(g.d.y, g.d.x))) < HAND_A) {
       const s = nearestOn(g.lane.shape, v.p).s;
-      Object.assign(v, { mode: "lane", at: { lane: g.lane, s: Math.max(0.1, s), len: laneLength(g.lane.shape) }, rb: null, goal: null, rays: null, from: null });
+      Object.assign(v, { mode: "lane", at: { lane: g.lane, s: Math.max(0.1, s), len: laneLength(g.lane.shape) }, leave: undefined, zone: null, goal: null, rays: null, from: null });
     }
   }
 
@@ -626,6 +719,31 @@ export class SpatialSim {
 
   stats(): SpatialStats {
     return { t: this.t, vehicles: this.vehicles.length, spawned: this.spawned, finished: this.finished, heldBack: this.heldBack + this.sources.reduce((a, s) => a + s.queue, 0), collisions: this.collisions, deadlocks: this.deadlocks, missed: this.missed, stuck: this.vehicles.filter(v => v.still > STUCK).length, meanTrip: this.finished ? this.tripSum / this.finished : 0, spatialNow: this.vehicles.filter(v => v.mode === "spatial").length };
+  }
+  /**
+   * One car as the page shows it picked (ticket #59): what it is doing, what holds it, where it is going, and the path it wants
+   * to take: in a junction its path ahead as planned, on down its way out's lane; on a lane, the rest of it to where it leaves,
+   * and on (a connector's way, or the next lane). Null: it has left.
+   */
+  inspect(id: number): SpatialCarInfo | null {
+    const v = this.vehicles.find(w => w.id === id);
+    if (!v) return null;
+    const name = (lane: string) => roadOf(this.sk, lane)?.name ?? `lane ${lane}`, along = (l: SketchLane, a: number, b: number) => {
+      const n = Math.max(1, Math.ceil(Math.abs(b - a) / 1));
+      return Array.from({ length: n + 1 }, (_, i) => pointAt(l.shape, a + ((b - a) * i) / n).p);
+    };
+    let path: Pt[], doing: string;
+    if (v.mode === "spatial") {
+      const g = v.goal, L = g ? laneLength(g.lane.shape) : 0;
+      path = [...(v.pathPts ?? [v.p]), ...(g ? along(g.lane, g.s, Math.min(L, g.s + 20)) : [])];
+      doing = `${v.entering && v.entered < 0.5 ? "waiting to go into" : "driving through"} ${v.zone?.name ?? "a junction"} by sensing${g ? `, out onto ${name(g.lane.id)}` : ""}`;
+    } else {
+      const at = v.at!, out = this.leaveAt(v);
+      path = along(at.lane, at.s, out.s);
+      if (out.conn) { const pts = connectorPts(this.sk, out.conn), nl = this.lane(out.conn.to.lane); path.push(...(pts ?? []), ...along(nl, out.conn.to.s, Math.min(laneLength(nl.shape), out.conn.to.s + 20))); }
+      doing = `on ${name(at.lane.id)}, ${out.zone ? `into ${out.zone.name} in ${Math.max(0, out.s - at.s).toFixed(0)} m` : out.conn ? `on to ${name(out.conn.to.lane)} in ${Math.max(0, out.s - at.s).toFixed(0)} m` : "driving off at its end"}`;
+    }
+    return { id, doing, limit: v.mode === "spatial" ? (v.limit ?? "") : "", v: v.v, still: v.still, dest: name(v.dest), path, goal: v.goal?.p ?? null };
   }
   /** what the page draws: each car's body, and for the spatial ones their rays' ends and their goal */
   poses() {
