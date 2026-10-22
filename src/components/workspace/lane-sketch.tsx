@@ -526,13 +526,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
   /** a car's details: as it is, or as it was at the moment replayed */
   const carInfoAt = (id: number, t: number | null) => (t === null ? sim.current?.inspect(id) ?? null : replayInfo(sim.current?.replayAt(t)?.cars.find(c => c.id === id)));
+  /** what the replay keeps: the experiment's while it is on (ticket #69), else the cars' */
+  const replayKept = () => (expUi.current.on ? exp.current?.kept() ?? null : sim.current?.replayRange() ?? null);
   /** the replay at moment `t` (the view kept on the car picked, if following it) */
   const showAt = (t: number) => {
     // (going into the replay: the cars pause, where they are)
-    if (live.current.replayT === null) { setRunning(false); setReplayRange(sim.current?.replayRange() ?? null); }
+    if (live.current.replayT === null) { setRunning(false); setReplayRange(replayKept()); }
     // eslint-disable-next-line react-hooks/immutability -- `live` is a deliberate escape hatch (see its declaration): handlers and drawing read it kept current outside React's render cycle
     live.current.replayT = t;
     setReplayT(t);
+    // (the experiment's: its cars as they were, from its worker)
+    if (expUi.current.on && exp.current) { exp.current.showAt(t); return; }
     const id = live.current.selCar;
     askWhy(id, t);
     if (id === null) return;
@@ -542,12 +546,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
   const goLive = () => {
     setReplayT(null); setReplayPlaying(false); askWhy(null, null);
+    if (expUi.current.on && exp.current) { exp.current.live(); redraw(false); return; }
     const id = live.current.selCar;
     setCarInfo(id !== null ? sim.current?.inspect(id) ?? null : null);
   };
   /** a step through the replay (seconds; stops playing it): from the moment shown, or from now when live */
   const stepReplay = (dt: number) => {
-    const r = sim.current?.replayRange(), t = live.current.replayT;
+    const r = replayKept(), t = live.current.replayT;
     if (!r) return;
     setReplayPlaying(false);
     showAt(Math.min(r.to, Math.max(r.from, (t ?? r.to) + dt)));
@@ -706,7 +711,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (!replayPlaying) return;
     let raf = 0, last = performance.now();
     const tick = (now: number) => {
-      const dt = Math.min(0.1, (now - last) / 1000) * simSpeed, r = sim.current?.replayRange(), t = live.current.replayT;
+      const dt = Math.min(0.1, (now - last) / 1000) * simSpeed, r = replayKept(), t = live.current.replayT;
       last = now;
       if (r && t !== null) {
         const next = Math.min(r.to, t + dt);
@@ -739,14 +744,19 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const play = () => {
     if (expOn) {
       // (its client and worker loaded now, the first time: the normal Run never loads them)
-      if (exp.current) { setRunning(r => !r); return; }
+      // (running carries on from now: out of the replay)
+      if (exp.current) { if (live.current.replayT !== null) goLive(); setRunning(r => !r); return; }
       void import("@/state/spatial-sim-client").then(({ SpatialSimClient }) => {
         let shown = 0;
         exp.current ??= new SpatialSimClient(live.current.sketch, { ...expParams(), opts: { exitLine: true, noBlockBox: true, uturnAfterRound: true } }, () => {
           const now = performance.now();
           // (four times a second; the car picked at once when it is picked or gone)
           const car = exp.current?.car() ?? null;
-          if (now - shown > 250 || car?.id !== expCarShown.current) { shown = now; expCarShown.current = car?.id ?? null; setExpStats(exp.current?.stats() ?? null); setExpJunction(exp.current?.hasJunction() ?? true); setExpCar(car); }
+          if (now - shown > 250 || car?.id !== expCarShown.current) {
+            shown = now; expCarShown.current = car?.id ?? null; setExpStats(exp.current?.stats() ?? null); setExpJunction(exp.current?.hasJunction() ?? true); setExpCar(car);
+            // (the replay bar: what is kept so far, while live)
+            if (live.current.replayT === null) setReplayRange(exp.current?.kept() ?? null);
+          }
           redraw(false);
         });
         setRunning(true);
@@ -769,6 +779,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
   /** the moment shown (replayed, or now) as text to paste into a conversation, like V1's: the cars in view, the lights, a minute's events */
   const copyMoment = async () => {
+    if (expUi.current.on && exp.current) { await copyExpMoment(); return; }
     const s = sim.current, c = canvas.current;
     if (!s || !c) return;
     const v = view.current, m = 20, hw = c.clientWidth / 2 / v.scale + m, hh = c.clientHeight / 2 / v.scale + m;
@@ -787,6 +798,20 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     };
     const text = `Lane sketch replay at ${clock(mo.time)} (${t === null ? "live" : "replay"}) · plan ${u.planId} rev ${u.save.revision}\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n`;
     try { await navigator.clipboard.writeText(text); toast.success("Replay data copied", { description: `${Math.round(text.length / 1024)} kB: paste it into the conversation.` }); }
+    catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
+  };
+  /** (the experiment) the moment shown, its cars in view and its results, as text to paste into a conversation (ticket #69) */
+  const copyExpMoment = async () => {
+    const e = exp.current, c = canvas.current;
+    if (!e || !c) return;
+    const v = view.current, m = 20, hw = c.clientWidth / 2 / v.scale + m, hh = c.clientHeight / 2 / v.scale + m, t = live.current.replayT, u = ui.getValue();
+    const r1 = (x: number) => Math.round(x * 10) / 10, time = t ?? e.last?.t ?? 0;
+    const cars = e.cars().filter(q => Math.abs(q.p.x - v.cx) < hw && Math.abs(q.p.y - v.cy) < hh)
+      .map(q => ({ id: q.id, x: r1(q.p.x), y: r1(q.p.y), heading: Math.round((Math.atan2(q.d.y, q.d.x) * 180) / Math.PI), kmh: Math.round(q.share * (live.current.sketch.traffic?.speed ?? 50)), sensing: q.spatial }));
+    const data = { plan: u.planId, revision: u.save.revision, experiment: "spatial", moment: { time: r1(time), live: t === null, kept: e.kept() },
+      view: { cx: r1(v.cx), cy: r1(v.cy), width: r1(hw * 2), height: r1(hh * 2) }, picked: e.car(), stats: e.stats(), cars };
+    const text = `Spatial experiment ${t === null ? "live" : "replay"} at ${clock(time)} · plan ${u.planId} rev ${u.save.revision}\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n`;
+    try { await navigator.clipboard.writeText(text); toast.success("Replay data copied", { description: `${Math.round(text.length / 1024)} kB: the experiment's cars in view at this moment. Paste it into the conversation.` }); }
     catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
   };
   const resetCars = () => { exp.current?.reset(live.current.sketch, { ...expParams(), opts: { exitLine: true, noBlockBox: true, uturnAfterRound: true } }); setExpStats(null); setExpCar(null); sim.current?.reset(); setStats(sim.current?.stats() ?? null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null); redraw(); };
@@ -1167,7 +1192,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       bridgeApp.register("pause", () => { setRunning(false); return { running: false }; }),
       bridgeApp.register("speed", a => { const v = argOf(a, "speed", "number", true)!; if (!SIM_SPEEDS.includes(v)) throw new Error(`"speed": ${SIM_SPEEDS.join(", ")} (as the speed buttons)`); setSimSpeed(v); return { speed: v }; }),
       bridgeApp.register("replay", a => {
-        if (!sim.current || !replayRange) throw new Error("nothing kept to replay yet: run the cars first");
+        if ((!sim.current && !exp.current) || !replayRange) throw new Error("nothing kept to replay yet: run the cars first");
         const t = Math.max(replayRange.from, Math.min(replayRange.to, argOf(a, "t", "number", true)!));
         showAt(t);
         return { t };
@@ -1998,7 +2023,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <TrafficPanel sketch={sketch} params={params} setParams={setParams} readOnly={readOnly} simSpeed={simSpeed} setSimSpeed={setSimSpeed} stats={stats} onCopy={copyRun}
             experiment={ek === "scratch" ? { on: expOn, rays: showRays !== false, stats: expStats, junction: expJunction, car: expCar,
               unpick: () => { exp.current?.select(null); setExpCar(null); redraw(false); },
-              set: on => { setRunning(false); exp.current?.terminate(); exp.current = null; setExpStats(null); setExpCar(null); setExperiment(on ? "spatial" : null); redraw(false); },
+              set: on => { setRunning(false); exp.current?.terminate(); exp.current = null; setExpStats(null); setExpCar(null); setExperiment(on ? "spatial" : null);
+                // (the replay bar then the other engine's: the main one's kept, or nothing yet)
+                setReplayT(null); setReplayPlaying(false); setReplayRange(on ? null : sim.current?.replayRange() ?? null); redraw(false); },
               setRays: on => { setShowRays(on); redraw(false); } } : null} />
           <DisplayOptionsPanel canSyncTraffic={!!(page && sketch.geo)} />
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
