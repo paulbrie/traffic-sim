@@ -6,7 +6,9 @@
  * - plain junctions (Video Demo, no island): each a zone; cars go through them and on along the lanes between them;
  * - route fields: reach every way in of every zone; round an island they only ever lead the ring's way;
  * - a car picked: what it is doing and the path it wants to take;
- * - (ticket #66) cars keep to their route's lanes and connectors as a guide: on it, within a metre of it on average.
+ * - (ticket #66) cars keep to their route's lanes and connectors as a guide: on it, within a metre of it on average;
+ * - (ticket #71) Roundabout 3 as at rev 454: a car at its line sees one coming round the ring (not off along its tangent) and
+ *   waits: no collision in the first two and a half minutes (cars 40 and 41 met at 2:28 before).
  * npm run spatial:check
  */
 import { readFileSync } from "fs";
@@ -80,6 +82,16 @@ function fieldsReach(sk: Sketch, z: Zone) {
   check(!!picked?.guide && picked.guide.length > 5, "a car picked: its guide through the junction");
   check(stats.collisions <= 5, `Roundabout 3: few collisions (${stats.collisions})`);
   check(!!picked && picked.path.length > 5 && !!picked.goal && picked.doing.includes("Roundabout 3"), `a car picked: its path ahead and its way out (${picked?.doing})`);
+}
+
+// Roundabout 3 at rev 454: cars 40 and 41 (ticket #71)
+{
+  const sk = load("spatial-roundabout-3-rev454.json");
+  const sim = new SpatialSim(sk, { speed: sk.traffic?.speed ?? 50, rate: sk.traffic?.rate ?? 50, seed: sk.traffic?.seed ?? 1, gap: 2, opts: OPTS });
+  for (let t = 0; t < 152; t += 0.1) sim.step(0.1);
+  const st = sim.stats();
+  check(st.collisions === 0, `Roundabout 3 (rev 454): no collision in the first 2:32, cars going in wait for one coming round (${st.collisions})`);
+  check(st.finished >= 30, `Roundabout 3 (rev 454): cars through in 2:32 (${st.finished})`);
 }
 
 // an oval roundabout
