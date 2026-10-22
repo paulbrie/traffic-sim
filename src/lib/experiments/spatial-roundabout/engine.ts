@@ -354,9 +354,11 @@ export class SpatialSim {
       for (const o of this.outsOf.get(z) ?? []) { const d = this.pickDestFrom(o.lane.id, o.s); if (d) { best = o; v.dest = d; this.reroutes++; break; } }
       best ??= (this.outsOf.get(z) ?? [])[0] ?? null;
     }
-    // (the line it keeps to: from geometry, from where it is to its way out (ticket #74); none to be had, its connectors' as drawn)
+    // (the line it keeps to: from geometry, from where it is to its way out (ticket #74), round a round island (at a plain
+    // junction and round an oval the connectors' own curves: lines from the route field did worse there); none to be had, its
+    // connectors' as drawn, and its way out theirs. (The way out by its connectors' route even with a line from geometry: on
+    // Roundabout 3, 1000 cars through in 6 x 10 min down to 791)
     const h0 = Math.atan2(pa.d.y, pa.d.x);
-    // (round a round island; at a plain junction and round an oval its connectors kept: lines from the route field did worse there)
     let line = best && z.island?.polar ? this.lineThrough(z, pa.p, h0, best.lane, best.s) : null;
     if (!line && via) {
       const cg = this.guideFor(z, via, dests, lead);
