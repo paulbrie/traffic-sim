@@ -35,6 +35,10 @@ const GUIDE_EASE = 10, GUIDE_KERB = 0.9;
 const CHANGE_LEAD = 12;
 /** (on a guide) the guide's way out's lane taken on this far (m); changing to a ring lane beside costs as many metres as this */
 const GUIDE_ON = 15, GUIDE_CHANGE = 10;
+/** (ticket #74) a line from geometry: driven at most this many PATH_STEPs, kept this far (m) off the paving's edge */
+const LINE_STEPS = 600, LINE_EDGE = 0.3;
+/** (a line from geometry) its first metres, still going straight on from its lane, not held to the paving's edge (m) */
+const LINE_IN = 6;
 /** (on a guide) held by something standing this long (s), it tries lines to either side (m off the guide), at most this often (s) */
 const SIDE_WAIT = 2.5, SIDES = [1.5, 3], SIDE_EVERY = 1;
 /** at its line, a car going round with the ring looked for along it this far ahead (s) (ticket #71) */
@@ -338,10 +342,10 @@ export class SpatialSim {
   private handOver(v: SpatialCar, z: Zone, s: number, via?: SketchConnector, lead = 0) {
     const lane = v.at!.lane, pa = pointAt(lane.shape, Math.min(s, laneLength(lane.shape)));
     const rt = this.routes, dests = this.outs(v.dest);
-    // (its route through it by connectors and lanes, the line it keeps to; its way out that route's)
-    const guide = via ? this.guideFor(z, via, dests, lead) : null;
-    let best: { lane: SketchLane; s: number } | null = guide?.out ?? null, bc = guide ? 0 : Infinity;
-    if (!guide) for (const o of (via && this.outsVia(z, via)) || (this.outsOf.get(z) ?? [])) {
+    // (its way out: of those its way in may reach by the junction's connectors (round a ring, any), the one that gets it to its
+    // own way out soonest; the connectors say which, not how: ticket #74)
+    let best: { lane: SketchLane; s: number } | null = null, bc = Infinity;
+    for (const o of (via && this.outsVia(z, via)) || (this.outsOf.get(z) ?? [])) {
       const c = Math.min(...dests.map(d => rt.from(o.lane.id, o.s, d)));
       if (c < bc) { bc = c; best = o; }
     }
@@ -350,15 +354,79 @@ export class SpatialSim {
       for (const o of this.outsOf.get(z) ?? []) { const d = this.pickDestFrom(o.lane.id, o.s); if (d) { best = o; v.dest = d; this.reroutes++; break; } }
       best ??= (this.outsOf.get(z) ?? [])[0] ?? null;
     }
+    // (the line it keeps to: from geometry, from where it is to its way out (ticket #74); none to be had, its connectors' as drawn)
+    const h0 = Math.atan2(pa.d.y, pa.d.x);
+    // (round a round island; at a plain junction and round an oval its connectors kept: lines from the route field did worse there)
+    let line = best && z.island?.polar ? this.lineThrough(z, pa.p, h0, best.lane, best.s) : null;
+    if (!line && via) {
+      const cg = this.guideFor(z, via, dests, lead);
+      if (cg) { best = cg.out; line = { pts: easedFrom(cg.pts, cg.cum, pa.p, lead || GUIDE_EASE), cum: cg.cum, join: cg.join }; }
+    }
     const g = best ? pointAt(best.lane.shape, best.s) : null, c = z.island?.c ?? pa.p;
     Object.assign(v, { mode: "spatial", at: null, leave: undefined, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), zone: z, goal: best && g ? { lane: best.lane, s: best.s, p: g.p, d: g.d, D: routeField(z, best.lane, best.s) } : null, entering: true, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - c.y, pa.p.x - c.x),
-      guide: guide ? { pts: easedFrom(guide.pts, guide.cum, pa.p, lead || GUIDE_EASE), cum: guide.cum, k: 0, join: guide.join } : null, offset: 0, heldAt: undefined, sideAt: undefined,
+      guide: line ? { pts: line.pts, cum: line.cum, k: 0, join: line.join } : null, offset: 0, heldAt: undefined, sideAt: undefined,
       rear: { x: pa.p.x - pa.d.x * v.len, y: pa.p.y - pa.d.y * v.len },
       // (handed over before its line: its way in counted from the line, as if handed over there)
       entered: -lead });
   }
   /**
-   * (ticket #66) A car's trajectory guide through a junction: from connector `via`, on along the junction's own lanes (a ring's)
+   * (ticket #74) A car's line through a junction from geometry, not from its connectors' curves (drawn for the main engine's
+   * lanes, they cross, loop, run over the paving's edge): a virtual car driven from where it is, heading as it does, turning no
+   * tighter than R_MIN, to its way out's lane at `s0` and GUIDE_ON m down it. Round a round island it goes round at a share of
+   * the carriageway (inside for a far way out, outside for a near one, out to the outside before its way out) and turns out
+   * when a gentle turn takes it onto its lane; elsewhere (an oval, a plain junction) it goes down the route field (round an
+   * island only the ring's way). Null: it ran off the paving, or didn't get there lined up.
+   */
+  private lineThrough(z: Zone, p0: Pt, h0: number, lane: SketchLane, s0: number): { pts: Pt[]; cum: number[]; join: number } | null {
+    const s = this.surface!, isl = z.island, rr = isl?.polar, L = laneLength(lane.shape), g = pointAt(lane.shape, s0), maxTurn = PATH_STEP / R_MIN;
+    const D = rr ? null : routeField(z, lane, s0);
+    let p = p0, h = h0, round = 0, lastA = isl ? Math.atan2(p.y - isl.c.y, p.x - isl.c.x) : 0, share = -1, out = false;
+    const raw: Pt[] = [p];
+    const toGoOf = (q: Pt) => { const a = Math.atan2(q.y - isl!.c.y, q.x - isl!.c.x), ga = Math.atan2(g.p.y - isl!.c.y, g.p.x - isl!.c.x); return ((((ga - a) * isl!.sense) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI); };
+    for (let n = 0; n < LINE_STEPS; n++) {
+      // (lined up on its way out's lane, past where it joins it: on down the lane, and done)
+      const q = nearestOn(lane.shape, p);
+      if (q.s >= s0 + 1 && q.d < 1 && Math.abs(angDiff(h, Math.atan2(pointAt(lane.shape, q.s).d.y, pointAt(lane.shape, q.s).d.x))) < 0.45) {
+        for (let u = q.s + PATH_STEP; u <= Math.min(L, q.s + GUIDE_ON); u += PATH_STEP) raw.push(pointAt(lane.shape, u).p);
+        const r = resample(raw);
+        // (on the paving all along and off its edge: but on its way out's lane's own band (its start is at the paving's edge, its
+        // far end past what is mapped) and where it came in on its lane, both drawn lanes)
+        const onOut = (x: Pt) => { const q2 = nearestOn(lane.shape, x); return q2.s >= s0 - 1 && q2.d < lane.width / 2 + 0.2; };
+        const bad = r.pts.findIndex((x, i) => r.cum[i] > 2 && !(r.cum[i] < LINE_IN && Math.hypot(x.x - p0.x, x.y - p0.y) < r.cum[i] + 0.5) && !onOut(x) && (!drivable(s, x) || edgeDist(s, x) < LINE_EDGE));
+        if (bad >= 0) { (globalThis as { __why?: string }).__why = `edge at ${r.cum[bad].toFixed(1)} of ${r.cum[r.cum.length - 1].toFixed(1)} m`; return null; }
+        const j = isl ? r.pts.findIndex(x => this.inRing(z, x, -0.5)) : -1;
+        return { ...r, join: j >= 0 ? j : r.pts.length };
+      }
+      let aim: Pt;
+      const along = (p.x - g.p.x) * g.d.x + (p.y - g.p.y) * g.d.y, onLane = pointAt(lane.shape, Math.min(L, Math.max(s0 + 3, Math.min(s0 + 15, s0 + along + 5)))).p;
+      if (rr && isl) {
+        const a = Math.atan2(p.y - isl.c.y, p.x - isl.c.x), rad = Math.hypot(p.x - isl.c.x, p.y - isl.c.y), toGo = toGoOf(p);
+        round += angDiff(a, lastA) * isl.sense; lastA = a;
+        if (share < 0) share = toGo > Math.PI ? 0.4 : 0.7;
+        const tan = Math.atan2(isl.sense * Math.cos(a), -isl.sense * Math.sin(a)), dGoal = Math.hypot(g.p.x - p.x, g.p.y - p.y);
+        // (out: its way out ahead within a gentle turn, or nearly abreast; just past it having gone round some (a turn back))
+        out ||= toGo < 0.25 || (toGo < 1.2 && Math.abs(angDiff(Math.atan2(g.p.y - p.y, g.p.x - p.x), tan)) < EXIT_TURN) || (toGo > 6 && dGoal < 6 && round > Math.PI);
+        if (out) aim = onLane;
+        else {
+          const deg = degOf(a), W = Math.max(2.5, Math.min(isl.width, rr.rOut[deg] - rr.rIn[deg])), rT = rr.rIn[deg] + W * (toGo < 1.5 ? 0.78 : share);
+          const b = a + isl.sense * Math.min(0.7, 5 / Math.max(rad, rT));
+          aim = { x: isl.c.x + rT * Math.cos(b), y: isl.c.y + rT * Math.sin(b) };
+        }
+      } else {
+        const r = descend(z, D!, p, AIM_STEPS);
+        aim = !r.aim || r.toGo < 4 ? onLane : r.aim;
+      }
+      // (and off the kerb, as a driver keeps: turned away from an edge nearer than KERB_NEAR)
+      const want = Math.atan2(aim.y - p.y, aim.x - p.x) + this.kerbPush(p, h);
+      h += Math.max(-maxTurn, Math.min(maxTurn, angDiff(want, h)));
+      p = { x: p.x + Math.cos(h) * PATH_STEP, y: p.y + Math.sin(h) * PATH_STEP };
+      raw.push(p);
+    }
+    (globalThis as { __why?: string }).__why = "not lined up";
+    return null;
+  }
+  /**
+   * (ticket #66; since #74 only when no line from geometry is had) A car's trajectory guide through a junction: from connector `via`, on along the junction's own lanes (a ring's)
    * to the connector leaving them that gets it to its way out soonest (changing to a ring lane beside if its route does), out by
    * it and GUIDE_ON m down the lane out; as a line a point every PATH_STEP m. Null: no such route, or it runs off the paving.
    */

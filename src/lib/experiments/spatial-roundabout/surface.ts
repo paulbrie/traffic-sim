@@ -125,6 +125,7 @@ export function buildSurface(sk: Sketch): Surface | null {
     if (!on) for (const l of lanePolys) if (inBox(p, l.bb) && insidePolygon(p, l.poly)) { on = true; break; }
     s.road[j * nx + i] = on ? 1 : 0;
   }
+  closeSlits(s, own);
   distances(s);
   cands.forEach(({ j, c }, f) => s.zones.push(zoneOf(sk, s, j, c!, rings.get(j.id)!.map(x => x.lane), own, f)));
   return s;
@@ -307,6 +308,32 @@ const bbox = (pts: Pt[], pad: number) => {
 };
 const inBox = (p: Pt, b: { x0: number; y0: number; x1: number; y1: number }) => p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1;
 const densify = (sh: Parameters<typeof laneLength>[0]) => { const L = laneLength(sh), n = Math.max(2, Math.ceil(L / 0.5)); return Array.from({ length: n + 1 }, (_, i) => pointAt(sh, (L * i) / n).p); };
+
+/**
+ * (ticket #74) Slits in the paving closed: ground narrower than SLIT_CLOSE between paved cells (where an arm's lane meets a
+ * junction's drawn border at an angle, say) paved too: grown by half that, then shrunk back. A car's path through one read as a
+ * kerb and held it there. Closed ground taken as its junction's when a neighbour is. Islands and real kerbs are wider and stay.
+ */
+const SLIT_CLOSE = 1;
+function closeSlits(s: Surface, own: Int16Array) {
+  const { nx, ny, road } = s, r = Math.max(1, Math.round(SLIT_CLOSE / 2 / CELL)), N = nx * ny;
+  const grow = (src: Uint8Array, val: 0 | 1) => {
+    // (src cells of value `val` spread `r` cells, square: one pass along rows, one along columns)
+    const a = new Uint8Array(N), out = new Uint8Array(N);
+    for (let j = 0; j < ny; j++) { let last = -Infinity; for (let i = 0; i < nx; i++) { if (src[j * nx + i] === val) last = i; a[j * nx + i] = i - last <= r ? 1 : 0; } last = Infinity; for (let i = nx - 1; i >= 0; i--) { if (src[j * nx + i] === val) last = i; if (last - i <= r) a[j * nx + i] = 1; } }
+    for (let i = 0; i < nx; i++) { let last = -Infinity; for (let j = 0; j < ny; j++) { if (a[j * nx + i]) last = j; out[j * nx + i] = j - last <= r ? 1 : 0; } last = Infinity; for (let j = ny - 1; j >= 0; j--) { if (a[j * nx + i]) last = j; if (last - j <= r) out[j * nx + i] = 1; } }
+    return out;
+  };
+  const grown = grow(road, 1);
+  // (shrunk back: unpaved where some unpaved cell of the grown ground is within r)
+  const hole = new Uint8Array(N); for (let k = 0; k < N; k++) hole[k] = grown[k] ? 0 : 1;
+  const near = grow(hole, 1);
+  for (let k = 0; k < N; k++) if (!road[k] && grown[k] && !near[k]) {
+    road[k] = 1;
+    const i = k % nx;
+    for (const m of [k - 1, k + 1, k - nx, k + nx]) if (m >= 0 && m < N && Math.abs((m % nx) - i) <= 1 && own[m] >= 0) { own[k] = own[m]; break; }
+  }
+}
 
 /** metres to the other kind of ground, per cell (two chamfer passes, 3-4 weights: within a few percent of the true distance) */
 function distances(s: Surface) {
