@@ -576,7 +576,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       if (e.view.cx !== r(v.cx) || e.view.cy !== r(v.cy) || e.view.scale !== r(v.scale)) e.view = { cx: r(v.cx), cy: r(v.cy), scale: r(v.scale) };
       const cam = (live.current.in3d && api3d.current?.camera()) || null, was = e.camera;
       if (cam ? !was || (Object.keys(cam) as (keyof typeof cam)[]).some(k => cam[k] !== was[k]) : was) e.camera = cam;
-      const t = Math.round((sim.current?.t ?? 0) * 10) / 10;
+      // (the experiment's clock while it's on: its own, not the main engine's, which stands still meanwhile; ticket #70)
+      const t = Math.round((expOn ? exp.current?.last?.t ?? 0 : sim.current?.t ?? 0) * 10) / 10;
       if (e.run.t !== t) e.run.t = t;
     };
     m.timer = setTimeout(write, Math.max(0, m.at + 250 - performance.now()));
@@ -1193,6 +1194,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         const x = argOf(a, "x", "number", true)!, y = argOf(a, "y", "number", true)!, scale = argOf(a, "scale", "number");
         if (Math.abs(x) > 1e6 || Math.abs(y) > 1e6) throw new Error("x and y: metres from the plan's origin, within 1,000 km of it");
         if (scale !== undefined && (scale < 0.3 || scale > 80)) throw new Error("scale: pixels a metre, from 0.3 to 80 (the editor's zoom)");
+        // (a car followed moves the view itself, every frame: an asked-for view would lose to it at once; ticket #70)
+        if (live.current.follow) setFollow(false);
         centerOnPts([{ x, y }], scale === undefined);
         if (scale !== undefined) { view.current = { ...view.current, scale }; redraw(); }
       }),
@@ -1209,6 +1212,40 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       bridgeApp.register("restart", () => { resetCars(); return { running }; }),
       // (as the Route panel's button: a test car on the route traced, its trip in editors.<editor>.route.test)
       bridgeApp.register("testCar", async () => ({ car: await sendTestCar() })),
+      // (the Sketch window's experiment switch, as its own Switch does; ticket #70)
+      bridgeApp.register("experiment", a => {
+        const on = argOf(a, "on", "boolean", true)!;
+        if (ek !== "scratch") throw new Error("the experiment is the Sketch window's only");
+        setRunning(false); exp.current?.terminate(); exp.current = null; setExpStats(null); setExperiment(on ? "spatial" : null); redraw(false);
+        return { on };
+      }),
+      // (run at the speed set, however long it takes (25 s real time at most, so one call can't hang past the
+      // bridge's own 30 s): for the experiment too, its own clock; ticket #70)
+      bridgeApp.register("runUntil", async a => {
+        const target = argOf(a, "t", "number", true)!;
+        if (!Number.isFinite(target) || target < 0) throw new Error("t: a sim time in seconds, 0 or more");
+        const getT = () => (expOn ? exp.current?.last?.t : sim.current?.t) ?? 0;
+        if (expOn ? !exp.current : !sim.current) throw new Error("nothing running yet: run the cars first (or switch the experiment on)");
+        if (getT() < target) { if (expOn) exp.current?.run(true, simSpeed); else if (!running) play(); }
+        const start = performance.now();
+        while (getT() < target && performance.now() - start < 25000) await new Promise(res => setTimeout(res, 100));
+        const reached = getT() >= target;
+        if (reached) { if (expOn) exp.current?.run(false, simSpeed); else setRunning(false); }
+        return { t: Math.round(getT() * 10) / 10, reached, ...(reached ? {} : { note: "still running: not there yet after 25 s real time, call again or raise the speed" }) };
+      }),
+      // (cars near a point, in metres, within r (default 10): id, position, what kind and, for the main engine, what
+      // holds it — with select-by-id this replaces guessing one from the map; for whichever engine is on, live or
+      // replayed; ticket #70)
+      bridgeApp.register("carsAt", a => {
+        const x = argOf(a, "x", "number", true)!, y = argOf(a, "y", "number", true)!, r = argOf(a, "r", "number") ?? 10;
+        const near = (px: number, py: number) => Math.hypot(px - x, py - y) <= r, rd = (v: number) => Math.round(v * 100) / 100;
+        if (expOn) {
+          return { cars: (exp.current?.last?.poses ?? []).filter(c => near(c.p.x, c.p.y)).map(c => ({ id: c.id, x: rd(c.p.x), y: rd(c.p.y), kind: c.spatial ? "sensing" : "lane" })) };
+        }
+        if (!sim.current) return { cars: [] };
+        const rt = live.current.replayT, list = rt !== null ? (sim.current.replayAt(rt)?.cars ?? []) : sim.current.poses();
+        return { cars: list.filter(c => near(c.p.x, c.p.y)).map(c => ({ id: c.id, x: rd(c.p.x), y: rd(c.p.y), kind: "lane", why: "why" in c ? c.why : (sim.current!.inspect(c.id) as { why?: string | null } | null)?.why ?? null })) };
+      }),
       bridgeState.register("sketch", () => {
         const s = sk();
         return { lanes: s.lanes.length, connectors: s.connectors.length, roads: s.roads.length, junctions: s.junctions.length, crossings: s.crossings?.length ?? 0, links: s.links?.length ?? 0,
@@ -1221,6 +1258,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       bridgeState.register("view", () => ({ ...view.current })),
       bridgeState.register("run", () => ({ running, speed: simSpeed, t: sim.current?.t ?? 0, replayT: live.current.replayT })),
       bridgeState.register("simT", () => sim.current?.t),
+      // (the Sketch window's experiment (T213): off, or its stats and whether the sketch has a roundabout it drives —
+      // today the accessibility snapshot was the only way to read any of this; ticket #70)
+      bridgeState.register("experiment", () => (!expOn ? { on: false } : {
+        on: true, stats: exp.current?.stats() ?? null, hasRoundabout: exp.current?.hasRoundabout() ?? null,
+      })),
       // (what is at a point of the map, within `r` px: for an annotation)
       bridgeState.register("hitTest", a => {
         const p = { x: Number(a.x), y: Number(a.y) }, s = sk(), tol = (Number(a.r) || 6) / view.current.scale, near = sketchIndex(s).near(p, tol);

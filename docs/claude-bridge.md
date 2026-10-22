@@ -47,20 +47,21 @@ reach, "reconnecting…" and the pairing kept.
 - `POST /api/bridge/agent/command { type, args }` → waits up to 30 s for the page's result → `{ ok, data?, error? }`
   (504 if the page didn't answer; 409 if no page is connected).
 - `GET /api/bridge/agent/events?after=<seq>&wait=25` → long poll: `{ events: Event[], seq }`.
-- `GET /api/bridge/agent/status` → `{ page: { url, title, connected } | null }`.
+- `GET /api/bridge/agent/status` → `{ page: { url, title, connected } | null, pairedUntil }`.
 
 ## Commands (`type`, `args` → `data`)
 
 | type | args | data |
 |---|---|---|
-| `snapshot` | `{ root?: string }` (a CSS selector, default `body`) | `{ url, title, tree }`: the accessibility tree, compact text: one line per node `role "name" [value] {states}`, indented; regions, buttons, inputs, headings, tables (first rows), dialogs, toasts |
-| `screenshot` | `{ target?: "map" \| "page", maxWidth?: number }` | `{ dataUrl }` (PNG; `map`: the editor's canvas, or its 3D view while that shows; `page`: the whole page, best effort) |
-| `state` | `{ keys?: string[] }` (`sketch`, `selection`, `stats`, `problems`, `view`, `run`, `ui`); or `{ path }`; or `{ watch: string[] }` | `{ [key]: value }` (sketch: counts and ids, not the whole JSON; ask `sketchJson` for that); `{ [path]: value }`; `{ watching }` (see "UI state") |
+| `snapshot` | `{ root?: string }` (a CSS selector, default `body`) | `{ url, title, tree }`: the accessibility tree, compact text: one line per node `role "name" [value] {states}`, indented; regions, buttons, inputs, headings, tables (first rows), dialogs, toasts, and a `<p>` or other mixed-content element's own text (not swallowed by its children's) |
+| `screenshot` | `{ target?: "map" \| "page", maxWidth?: number }` | `{ dataUrl }` (PNG; `map`: the editor's canvas, or its 3D view while that shows; `page`: the whole page, best effort) plus `note` if the tab is hidden (`document.visibilityState`): a background tab stops painting, so the picture may be stale |
+| `state` | `{ keys?: string[] }` (`sketch`, `selection`, `stats`, `problems`, `view`, `run`, `experiment`, `visibility`, `ui`; not in the default keys, only by name: `browserConsole`); or `{ path }`; or `{ watch: string[] }` | `{ [key]: value }` (sketch: counts and ids, not the whole JSON; ask `sketchJson` for that; `experiment`: `{ on }`, or on: `{ on, stats, hasRoundabout }`; `visibility`: `{ visible, state }`, `document.visibilityState`; `browserConsole`: the page's last 50 uncaught errors, unhandled rejections and `console.error`/`warn` lines — not a worker's, which don't reach this thread's console); `{ [path]: value }`; `{ watching }` (see "UI state") |
 | `click` | `{ role?, name?, nth?, selector?, text? }` | `{ clicked: "<role> \"<name>\"" }` |
 | `type` | `{ role?, name?, selector?, text, submit?: boolean }` | `{ typed }` |
 | `key` | `{ key: string }` (e.g. `"Control+k"`, `"Escape"`) | `{}` |
-| `navigate` | `{ url }` (same origin) | `{ url }` |
-| `app` | `{ action, args }` (edits too, with the user's leave: see "Edits"): `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }`, `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30, 50, 100), `replay` `{ t }`, `restart`, `testCar` (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
+| `navigate` | `{ url }` (same origin; an absolute path missing the app's base, e.g. `/plans/x`, is still read as under it, not the origin's root; to the page already shown: a real reload, `router.push` being a no-op there) | `{ url }` (always the full URL, base path included) |
+| `reload` | `{}` | `{}` (a real `location.reload()`, not `router.push`: for a dynamically-imported module — a worker, say — still the old code after a merge, that hot reload didn't swap) |
+| `app` | `{ action, args }` (edits too, with the user's leave: see "Edits"): `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }` (clears a car followed first: it would otherwise move the view right back, every frame), `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30, 50, 100), `replay` `{ t }`, `restart`, `testCar`, `runUntil` `{ t }` (runs at the speed set until sim time `t`, or 25 s real time first — then `{ reached: false }`, left running: call again or raise the speed; the Sketch window's experiment's own clock while that's on), `carsAt` `{ x, y, r? }` (r: metres, default 10 — `{ cars: [{ id, x, y, kind: "lane" | "sensing", why? }] }`, `why` the main engine only so far; whichever engine is on, live or replayed), `experiment` `{ on }` (the Sketch window's spatial-roundabout switch, as its own Switch) (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
 | `report` | `{ title, intro?, table?: { columns, rows, highlight?, note? }, findings?: string[] }` (T196, `bridge_report`: plain text and numbers, at most 14 columns, 60 rows, 24 findings) | `{ shown }`: the report in a window over the page, kept in the Claude panel (the last 10) to open again, copied as text from there |
 
 Targets by role and name follow Playwright's `getByRole` (name: case-insensitive substring unless `exact`).
