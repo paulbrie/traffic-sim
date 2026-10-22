@@ -740,7 +740,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
   /** the experiment's settings from the sketch's: its speed limit and rate, the seed, the roundabout gap accepted */
   const expParams = () => { const tr = live.current.sketch.traffic ?? DEFAULT_SIM; return { speed: tr.speed, rate: tr.rate, seed: tr.seed ?? 1, gap: Number((tr.tune as Record<string, number> | undefined)?.ringGap ?? 2) }; };
-  const expCarShown = useRef<number | null>(null);
+  const expCarShown = useRef<number | null>(null), expReplayShown = useRef<unknown>(null);
   const play = () => {
     if (expOn) {
       // (its client and worker loaded now, the first time: the normal Run never loads them)
@@ -750,10 +750,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         let shown = 0;
         exp.current ??= new SpatialSimClient(live.current.sketch, { ...expParams(), opts: { exitLine: true, noBlockBox: true, uturnAfterRound: true } }, () => {
           const now = performance.now();
-          // (four times a second; the car picked at once when it is picked or gone)
-          const car = exp.current?.car() ?? null;
-          if (now - shown > 250 || car?.id !== expCarShown.current) {
-            shown = now; expCarShown.current = car?.id ?? null; setExpStats(exp.current?.stats() ?? null); setExpJunction(exp.current?.hasJunction() ?? true); setExpCar(car);
+          // (four times a second; the car picked at once when it is picked or gone, or a moment of the replay comes)
+          const car = exp.current?.car() ?? null, replayed = exp.current?.replayed ?? null;
+          if (now - shown > 250 || car?.id !== expCarShown.current || replayed !== expReplayShown.current) {
+            shown = now; expCarShown.current = car?.id ?? null; expReplayShown.current = replayed; setExpStats(exp.current?.stats() ?? null); setExpJunction(exp.current?.hasJunction() ?? true); setExpCar(car);
             // (the replay bar: what is kept so far, while live)
             if (live.current.replayT === null) setReplayRange(exp.current?.kept() ?? null);
           }
