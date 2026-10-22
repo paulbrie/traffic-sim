@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Bike, BusFront, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Bike, BusFront, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1210,7 +1210,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     // (on a lane of the selection: all the lanes selected; on another: that one, selected; off any: the lanes selected, if any)
     const lanes = l ? (s.lanes.includes(l.id) ? s.lanes : [l.id]) : s.lanes;
-    // (where on Earth, the sketch placed on the map: the spot to open in Google Maps, as in V1)
+    // (where on Earth, the sketch placed on the map: the spot to open in Google Maps or Google Earth, as in V1)
     const geo = sk.geo ? unproject(sk.geo, raw) : null;
     // (off any lane: a junction's surface under the pointer, for its own menu)
     const junctionHit = !l ? pick(raw) : null, junction = junctionHit && "junction" in junctionHit ? junctionHit.junction : null;
@@ -1888,6 +1888,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                       <MapPin /> Open in Google Maps
                     </a>
                   </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`https://earth.google.com/web/search/${menu.geo.lat.toFixed(6)},${menu.geo.lon.toFixed(6)}`} target="_blank" rel="noopener noreferrer">
+                      <Earth /> Open in Google Earth
+                    </a>
+                  </DropdownMenuItem>
                   <div className="px-2 pb-1 font-mono text-[11px] text-muted-foreground tabular">{menu.geo.lat.toFixed(6)}, {menu.geo.lon.toFixed(6)}</div>
                   {/* the street names near the click, from OpenStreetMap: to name the road under it (ticket #48) */}
                   <DropdownMenuSeparator />
@@ -1912,7 +1917,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           <div className={cn("pointer-events-none absolute inset-x-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm", in3d && "hidden")}>
             {tool === "select" && sel.junctions.length === 1 && !sel.connectors.some(c => !contents.get(sel.junctions[0])?.connectors.includes(c))
               ? <><span className="font-medium text-foreground">Junction shape:</span> {JUNCTION_HINT} · </>
-              : <><span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · </>}scroll zooms, right-drag or Space-drag pans, right-click a lane or a junction for its menu (anywhere: open the spot in Google Maps)
+              : <><span className="font-medium text-foreground">{toolInfo.label}:</span> {toolInfo.hint} · </>}scroll zooms, right-drag or Space-drag pans, right-click a lane or a junction for its menu (anywhere: open the spot in Google Maps or Google Earth)
           </div>
           {in3d && (
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed} blinkers={blinkers}
