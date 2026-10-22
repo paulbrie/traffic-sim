@@ -1037,6 +1037,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const goTo = (to: SearchTarget, keepCar = false) => {
     const sk = live.current.sketch, piece = (p: Partial<Piece>): Piece => ({ lanes: p.lanes ?? [], connectors: p.connectors ?? [], junctions: p.junctions ?? [] });
     if (to.kind === "car") {
+      // (the experiment's car while it is on: picked as a click picks it, as it is now or at the moment replayed)
+      if (expUi.current.on && exp.current) {
+        setSel(NO_SEL); setSelCar(null); exp.current.select(to.id);
+        const c = exp.current.cars().find(x => x.id === to.id);
+        if (c) centerOnPts([c.p]);
+        redraw();
+        return;
+      }
       setSel(NO_SEL); setSelCar(to.id);
       const c = sim.current?.poses().find(x => x.id === to.id);
       if (c) centerOnPts([c.p]);
@@ -1154,7 +1162,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const sk = live.current.sketch;
     if (kind === "car") {
       const id = argOf(a, "id", "number", true)!;
-      if (!sim.current?.poses().some(c => c.id === id)) throw new Error(`no car ${id} on the ${page ? "plan" : "sketch"} now`);
+      const cars = expUi.current.on && exp.current ? exp.current.cars() : sim.current?.poses() ?? [];
+      if (!cars.some(c => c.id === id)) throw new Error(`no car ${id} on the ${page ? "plan" : "sketch"} ${live.current.replayT !== null ? "at the moment replayed" : "now"}`);
       return { kind, id };
     }
     const id = argOf(a, "id", "string", true)!;
