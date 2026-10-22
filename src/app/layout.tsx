@@ -3,6 +3,7 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { Toaster } from "@/components/ui/sonner";
 import { BridgeProvider } from "@/components/bridge/bridge-provider";
+import { DevBar } from "@/components/dev-bar";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,6 +19,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <Toaster />
         {/* (the Claude bridge: idle until an admin pairs the page; see docs/claude-bridge.md) */}
         <BridgeProvider />
+        <DevBar />
       </body>
     </html>
   );
