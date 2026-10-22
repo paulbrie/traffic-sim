@@ -32,6 +32,7 @@ import { junctionRefs } from "@/engine/refs";
 import { minSec } from "@/lib/time";
 import { arrowLetters, LW } from "@/engine/compile";
 import { sumCounters } from "@/engine/sim";
+import type { VehicleDetail } from "@/engine/sim/mirror";
 import { JunctionEventLog, RoadEventLog, VehicleEventLog } from "./event-log";
 import { LaneConnectionsSection } from "./lane-connections";
 import { JunctionShapeSection } from "./junction-shape";
@@ -949,6 +950,38 @@ export function BreakdownButton({ id, state, className }: { id: number; state: s
   );
 }
 
+const kmOrM = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
+
+/** a vehicle's route, road by road from where it set off to the end of its trip (drawn on the map too): the roads behind it faint, the one it is on marked */
+function VehicleRoute({ v, refs }: { v: VehicleDetail; refs: Map<string, string> }) {
+  const ahead = v.legs.slice(v.legAt), left = ahead.reduce((a, l) => a + l.m, 0), time = ahead.reduce((a, l) => a + l.t, 0);
+  const turn = { L: "left", S: "ahead", R: "right", U: "U-turn" } as const;
+  return (
+    <div className="grid gap-1.5">
+      <p className="text-xs text-muted-foreground">
+        {v.legs.length} road{v.legs.length === 1 ? "" : "s"} · {kmOrM(left)} to go, about {minSec(time)} at the traffic lately{v.reroutes > 0 ? ` · re-planned ${v.reroutes}×` : ""}
+      </p>
+      <ol className="grid gap-px text-xs" aria-label="Its route">
+        {v.legs.map((l, i) => {
+          const ref = l.node ? refs.get(l.node) : undefined;
+          return (
+            <li key={i} aria-current={i === v.legAt ? "step" : undefined}
+              className={cn("grid grid-cols-[1.4rem_1fr_auto] items-baseline gap-1.5 rounded px-1 py-0.5", i < v.legAt && "text-muted-foreground opacity-60", i === v.legAt && "bg-primary/10 font-medium")}>
+              <span className="font-mono text-muted-foreground tabular">{i + 1}.</span>
+              <span className="min-w-0">
+                <PlaceLink sel={{ kind: "link", id: l.link }} className="text-left">{l.name}</PlaceLink>
+                {l.turn && <span className="text-muted-foreground"> → {turn[l.turn]}{ref && <> at <PlaceLink sel={{ kind: "node", id: l.node! }}>{ref}</PlaceLink></>}</span>}
+                {i === v.legs.length - 1 && <span className="text-muted-foreground"> → {v.to ? <PlaceLink sel={v.to}>{v.heading}</PlaceLink> : v.heading}</span>}
+              </span>
+              <span className="font-mono text-muted-foreground tabular" title="Length, and the time it is expected to take at the traffic seen lately">{kmOrM(l.m)} · {minSec(l.t)}</span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 function VehicleInspector({ id }: { id: string }) {
   useSubject(stats$); // re-render with the stats cadence (~4×/s)
   const sim = simController.sim;
@@ -1004,6 +1037,7 @@ function VehicleInspector({ id }: { id: string }) {
         </dl>
         <p className="text-[10px] text-muted-foreground">Lanes are counted from 1 = leftmost (next to the centre line).</p>
       </Section>
+      {v.legs.length > 0 && <Section title="Route"><VehicleRoute v={v} refs={refs} /></Section>}
       <Section><VehicleEventLog vehId={v.id} /></Section>
       {!recording && myEvents.length > 0 && (
         <Section title="Junction events">

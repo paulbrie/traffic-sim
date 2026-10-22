@@ -15,7 +15,7 @@ import { DT, type ParkingStats, type JunctionEvent, type SimProblem, type Juncti
 export interface PedView { arm: number; waiting: number; crossing: number; progress: number }
 /** pedestrians at a junction so far: crossed, average wait (s), waiting now */
 export interface PedStats { crossed: number; avgWait: number; waiting: number }
-import type { CounterStats, FlowStats, Sim } from "./index";
+import type { CounterStats, FlowStats, RouteLeg, Sim } from "./index";
 
 const KINDS: Kind[] = ["car", "truck", "bus"];
 /** floats per vehicle in `Snapshot.geo`: front x, y, rear x, y, speed, desired speed, length, width, blinker, level drawn at, elevation */
@@ -42,8 +42,12 @@ export interface VehicleDetail {
   /** fuel burnt (litres), and of it standing still in traffic, when the whole plan's fuel is measured; `partial` = it set off before that was switched on */
   fuel: { total: number; idle: number; partial: boolean } | null;
   nextTurn: { node: string; turn: "L" | "S" | "R" | "U"; lo: number; hi: number } | null;
-  /** route ahead as x, y pairs */
+  /** route ahead as x, y pairs, to the end of its trip */
   route: number[];
+  /** the way it has come along its route so far, as x, y pairs */
+  behind: number[];
+  /** its whole route, road by road (Sim.routeLegs), and the one it is on */
+  legs: RouteLeg[]; legAt: number;
 }
 
 /** what the page wants beyond the vehicles and lights */
@@ -216,6 +220,7 @@ export class SnapshotWriter {
 function vehicleDetail(sim: Sim, v: Vehicle): VehicleDetail {
   const e = v.piece.kind === "lane" ? v.piece.edge : null;
   const nt = sim.nextTurn(v);
+  const { legs, at: legAt } = sim.routeLegs(v);
   return {
     id: v.id, kind: v.kind, state: v.state, v: v.v, v0: v.v0, acc: v.acc, gap: v.gap,
     road: e ? e.link.name || "unnamed" : v.piece.kind === "ring" ? "roundabout" : "junction",
@@ -226,7 +231,9 @@ function vehicleDetail(sim: Sim, v: Vehicle): VehicleDetail {
     wait: v.wait, trip: (sim.tick - v.bornT) * DT, jam: v.jam, laneChanges: v.laneChanges, reroutes: v.reroutes, a: v.a, b: v.b, pax: v.pax, cap: v.cap, aggressive: v.aggressive, pref: v.pref,
     fuel: sim.stats.fuel ? { total: (v.fuel ?? 0) / 1000, idle: (v.fuelIdle ?? 0) / 1000, partial: v.bornT * DT < sim.stats.fuel.since } : null,
     nextTurn: nt ? { node: nt.node.def.id, turn: nt.move.turn, lo: nt.move.lo, hi: nt.move.hi } : null,
-    route: sim.routeAhead(v, 800),
+    route: sim.routeAhead(v, Infinity),
+    behind: sim.routeBehind(v),
+    legs, legAt,
   };
 }
 
@@ -388,4 +395,6 @@ export class SimMirror {
 
   /** route ahead of the watched vehicle as x, y pairs */
   routeAhead(v: VehicleView): number[] { return this.vehicle && this.vehicle.id === v.id ? this.vehicle.route : []; }
+  /** the way the watched vehicle has come so far along its route, as x, y pairs */
+  routeBehind(v: VehicleView): number[] { return this.vehicle && this.vehicle.id === v.id ? this.vehicle.behind : []; }
 }

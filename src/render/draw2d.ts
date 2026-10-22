@@ -604,11 +604,16 @@ export function drawScene(
     }
     const sv = ov.selection?.kind === "vehicle" ? sim.vehicles.find(v => String(v.id) === ov.selection!.id && !v.dead) : null;
     if (sv) {
-      const pts = sim.routeAhead(sv);
+      // its whole route: the way it has come (faint), the way on to the end of its trip (dashed) and where that ends
+      const line = (pts: number[]) => { ctx.beginPath(); ctx.moveTo(pts[0], pts[1]); for (let k = 2; k < pts.length; k += 2) ctx.lineTo(pts[k], pts[k + 1]); ctx.stroke(); };
+      const behind = sim.routeBehind(sv), pts = sim.routeAhead(sv);
+      ctx.strokeStyle = pal.select; ctx.lineWidth = Math.max(0.6, px * 2); ctx.lineCap = "round"; ctx.lineJoin = "round";
+      if (behind.length >= 4) { ctx.globalAlpha = 0.35; line(behind); ctx.globalAlpha = 1; }
       if (pts.length >= 4) {
-      ctx.strokeStyle = pal.select; ctx.lineWidth = Math.max(0.6, px * 2); ctx.setLineDash([2, 1.5]);
-      ctx.beginPath(); ctx.moveTo(pts[0], pts[1]); for (let k = 2; k < pts.length; k += 2) ctx.lineTo(pts[k], pts[k + 1]); ctx.stroke();
-      ctx.setLineDash([]);
+        ctx.setLineDash([2, 1.5]); line(pts); ctx.setLineDash([]);
+        const n = pts.length, r = Math.max(1, px * 5);
+        ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(pts[n - 2], pts[n - 1], r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = pal.select; ctx.beginPath(); ctx.arc(pts[n - 2], pts[n - 1], r * 0.45, 0, Math.PI * 2); ctx.fill();
       }
     }
     if (ov.maskRoads && showVehicles) drawVehicles(ctx, pal, sim, ov.bySpeed, ov.blinkers !== false, px, undefined, 1, undefined, ov.carNumbers);
