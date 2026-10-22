@@ -91,7 +91,8 @@ export class SpatialSim {
   collisionLog: { t: number; a: number; b: number; kinds: string; va: number; vb: number }[] = [];
   /** the lanes leading into each roundabout's connectors (handover where they leave), and the lanes out of it */
   private handIn = new Map<string, { rb: Roundabout; s: number }[]>();
-  private outsOf = new Map<Roundabout, SketchLane[]>();
+  /** (each way out: its lane, and where on it the roundabout's connectors join it: a road's lane can start inside the junction) */
+  private outsOf = new Map<Roundabout, { lane: SketchLane; s: number }[]>();
 
   constructor(private sk: Sketch, private params: SpatialParams) {
     this.rnd = mulberry32(params.seed);
@@ -100,12 +101,12 @@ export class SpatialSim {
     const ways = demandWays(sk);
     this.outWay = new Map(ways.exits.flatMap(w => w.lanes.map(l => [l, w.lanes])));
     for (const rb of this.surface?.roundabouts ?? []) {
-      const outs = new Set<string>();
+      const outs = new Map<string, number>();
       for (const c of sk.connectors) if (rb.connectors.has(c.id)) {
         if (!rb.lanes.has(c.from.lane)) { const l = this.handIn.get(c.from.lane) ?? []; if (!l.some(x => x.rb === rb && Math.abs(x.s - c.from.s) < 0.5)) l.push({ rb, s: c.from.s }); this.handIn.set(c.from.lane, l); }
-        if (!rb.lanes.has(c.to.lane)) outs.add(c.to.lane);
+        if (!rb.lanes.has(c.to.lane)) outs.set(c.to.lane, Math.max(outs.get(c.to.lane) ?? 0, c.to.s));
       }
-      this.outsOf.set(rb, [...outs].map(id => sk.lanes.find(l => l.id === id)!).filter(Boolean));
+      this.outsOf.set(rb, [...outs].flatMap(([id, s]) => { const lane = sk.lanes.find(l => l.id === id); return lane ? [{ lane, s }] : []; }));
     }
     for (const lane of entryLanes(sk)) { const rate = laneInRate(lane, sk); if (rate > 0) this.sources.push({ lane, rate, next: this.gap(rate), queue: 0 }); }
     for (const j of sk.journeys ?? []) {
@@ -215,14 +216,14 @@ export class SpatialSim {
   private handOver(v: SpatialCar, rb: Roundabout, s: number) {
     const lane = v.at!.lane, pa = pointAt(lane.shape, Math.min(s, laneLength(lane.shape)));
     const rt = this.routes, dests = this.outs(v.dest);
-    let best: SketchLane | null = null, bc = Infinity;
+    let best: { lane: SketchLane; s: number } | null = null, bc = Infinity;
     for (const o of this.outsOf.get(rb) ?? []) {
-      const c = Math.min(...dests.map(d => rt.from(o.id, 0, d)));
+      const c = Math.min(...dests.map(d => rt.from(o.lane.id, o.s, d)));
       if (c < bc) { bc = c; best = o; }
     }
     if (!best) { best = (this.outsOf.get(rb) ?? [])[0] ?? null; }
-    const g = best ? pointAt(best.shape, 0) : null;
-    Object.assign(v, { mode: "spatial", at: null, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), rb, goal: best && g ? { lane: best, p: g.p, d: g.d } : null, entering: true, entered: 0, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - rb.c.y, pa.p.x - rb.c.x) });
+    const g = best ? pointAt(best.lane.shape, best.s) : null;
+    Object.assign(v, { mode: "spatial", at: null, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), rb, goal: best && g ? { lane: best.lane, p: g.p, d: g.d } : null, entering: true, entered: 0, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - rb.c.y, pa.p.x - rb.c.x) });
   }
 
   // ---------------------------------------------------------------- inside: sensing and planning

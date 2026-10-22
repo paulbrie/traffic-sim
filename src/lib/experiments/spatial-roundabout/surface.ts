@@ -2,11 +2,13 @@
  * The spatial roundabout experiment (T213): the map a car senses. The sketch's drivable surface round each roundabout (its
  * junction's bands and paving, the lanes near it), rasterised, with a distance to the nearest edge per cell so a ray marches in
  * a few long steps; and each roundabout found from its island (unpaved ground the surface goes all the way round): its middle,
- * how far out the island and the carriageway reach at each angle, and which way round traffic goes (from the arms' roads: the
- * country's side of the road). Read only: built from the sketch with the editor's own geometry helpers, nothing changed.
+ * how far out the island and the carriageway reach at each angle, and which way round traffic goes (its ring lanes' way, else
+ * from the arms' roads: the country's side of the road). A junction's ground is as the editor draws it: a drawn one its border,
+ * an automatic one its bands; inside a ring lane on it (the junction's own or a road's) an island, unpaved (T213, ticket #59).
+ * Read only: built from the sketch with the editor's own geometry helpers, nothing changed.
  * No framework: runs in a worker or headless.
  */
-import { bandPolygon, contentsOf, insidePolygon, junctionBands, laneById, pointAt, laneLength, type Band, type Pt, type Sketch, type SketchJunction } from "../../lane-sketch";
+import { bandPolygon, contentsOf, insidePolygon, isFullCircle, junctionBands, laneById, nearestOn, outlinePath, pointAt, laneLength, samples, type Band, type Pt, type Sketch, type SketchJunction, type SketchLane } from "../../lane-sketch";
 import { junctionSurfaceHoles, nestLoops } from "../../junction-fill";
 
 /** raster cell (m) */
@@ -48,11 +50,27 @@ export const drivable = (s: Surface, p: Pt) => { const k = idx(s, p.x, p.y); ret
 /** metres from p to the edge of the kind of ground it is on (0 off the map) */
 export const edgeDist = (s: Surface, p: Pt) => { const k = idx(s, p.x, p.y); return k >= 0 ? s.edge[k] : 0; };
 
-/** an automatic junction's paved ground: its bands, and the loops paved over and between them (an island stays a hole) */
-function paved(sk: Sketch, j: SketchJunction, bands: Band[]) {
-  const polys = bands.map(b => bandPolygon(b));
-  const loops = nestLoops(junctionSurfaceHoles(sk, j, contentsOf(sk).get(j.id) ?? { lanes: [], connectors: [], roads: [] }));
-  return (p: Pt) => polys.some(q => insidePolygon(p, q)) || loops.some(l => insidePolygon(p, l.outer) && !l.holes.some(h => insidePolygon(p, h)));
+/**
+ * A junction's paved ground: a drawn one's border (the editor fills it), an automatic one's bands and the loops paved over and
+ * between them; either way but the islands its innermost ring lanes go round (junctionHoles leaves only the junction's own rings'
+ * islands: a ring that is a road's lanes, as Roundabout 3's, would be paved over)
+ */
+function paved(sk: Sketch, j: SketchJunction, bands: Band[], rings: { lane: SketchLane; pts: Pt[] }[]) {
+  let on: (p: Pt) => boolean;
+  if (j.shape !== "auto") { const border = outlinePath(j); on = p => insidePolygon(p, border); }
+  else {
+    const polys = bands.map(b => bandPolygon(b));
+    const loops = nestLoops(junctionSurfaceHoles(sk, j, contentsOf(sk).get(j.id) ?? { lanes: [], connectors: [], roads: [] }));
+    on = p => polys.some(q => insidePolygon(p, q)) || loops.some(l => insidePolygon(p, l.outer) && !l.holes.some(h => insidePolygon(p, h)));
+  }
+  const inner = rings.filter(r => !rings.some(o => o !== r && insidePolygon(o.pts[0], r.pts)));
+  return (p: Pt) => on(p) && !inner.some(r => insidePolygon(p, r.pts) && nearestOn(r.lane.shape, p).d > r.lane.width / 2);
+}
+/** the ring lanes on a junction (full circles and closed lines, its own or a road's, mostly inside its border), each's line */
+function ringsOn(sk: Sketch, j: SketchJunction) {
+  const border = outlinePath(j);
+  return sk.lanes.filter(l => isFullCircle(l.shape)).map(lane => ({ lane, pts: samples(lane.shape, 0.5) }))
+    .filter(r => r.pts.filter(p => insidePolygon(p, border)).length >= r.pts.length * 0.8);
 }
 
 /** the map round every roundabout of the sketch (a junction whose surface goes round an island); null: none */
@@ -66,7 +84,8 @@ export function buildSurface(sk: Sketch): Surface | null {
   const nx = Math.ceil((maxX - minX) / CELL), ny = Math.ceil((maxY - minY) / CELL);
   const s: Surface = { x0: minX, y0: minY, nx, ny, road: new Uint8Array(nx * ny), edge: new Float32Array(nx * ny), roundabouts: [] };
   // (each junction's paving; the lanes outside junctions near them as bands)
-  const fills = cands.map(({ j, c }) => ({ j, bb: bbox(j.outline, 3), inside: paved(sk, j, junctionBands(sk, c!)) }));
+  const rings = new Map(cands.map(({ j }) => [j.id, ringsOn(sk, j)]));
+  const fills = cands.map(({ j, c }) => ({ j, bb: bbox(outlinePath(j), 3), inside: paved(sk, j, junctionBands(sk, c!), rings.get(j.id)!) }));
   const inJ = new Set(cands.flatMap(x => x.c!.lanes));
   const near = (b: Band) => b.pts.some(p => p.x > minX && p.x < maxX && p.y > minY && p.y < maxY);
   const lanePolys = sk.lanes.filter(l => !inJ.has(l.id)).map(l => ({ pts: densify(l.shape), width: l.width, closed: false } as Band)).filter(near).map(b => ({ poly: bandPolygon(b), bb: bbox(b.pts, b.width) }));
@@ -78,7 +97,7 @@ export function buildSurface(sk: Sketch): Surface | null {
     s.road[j * nx + i] = on ? 1 : 0;
   }
   distances(s);
-  for (const { j, c } of cands) { const r = roundaboutOf(sk, s, j, c!); if (r) s.roundabouts.push(r); }
+  for (const { j, c } of cands) { const r = roundaboutOf(sk, s, j, c!, rings.get(j.id)!.map(x => x.lane)); if (r) s.roundabouts.push(r); }
   return s.roundabouts.length ? s : null;
 }
 
@@ -119,9 +138,9 @@ function distances(s: Surface) {
  * is on a circulating car's left. Which side that is in the sketch's frame is read off its two-way roads: an arm's lane coming
  * in has the lane going out on its left there, as the island will be.
  */
-function roundaboutOf(sk: Sketch, s: Surface, j: SketchJunction, c: { lanes: string[]; connectors: string[] }): Roundabout | null {
+function roundaboutOf(sk: Sketch, s: Surface, j: SketchJunction, c: { lanes: string[]; connectors: string[] }, rings: SketchLane[]): Roundabout | null {
   // (the island: off-road cells inside the outline, flood-filled; the largest patch not touching the outline's box edge)
-  const b = bbox(j.outline, 0), i0 = Math.max(0, Math.floor((b.x0 - s.x0) / CELL)), i1 = Math.min(s.nx - 1, Math.ceil((b.x1 - s.x0) / CELL));
+  const border = outlinePath(j), b = bbox(border, 0), i0 = Math.max(0, Math.floor((b.x0 - s.x0) / CELL)), i1 = Math.min(s.nx - 1, Math.ceil((b.x1 - s.x0) / CELL));
   const j0 = Math.max(0, Math.floor((b.y0 - s.y0) / CELL)), j1 = Math.min(s.ny - 1, Math.ceil((b.y1 - s.y0) / CELL));
   const seen = new Uint8Array(s.nx * s.ny);
   let best: { n: number; sx: number; sy: number } | null = null;
@@ -129,7 +148,7 @@ function roundaboutOf(sk: Sketch, s: Surface, j: SketchJunction, c: { lanes: str
     const k = jj * s.nx + ii;
     if (s.road[k] || seen[k]) continue;
     const p = { x: s.x0 + (ii + 0.5) * CELL, y: s.y0 + (jj + 0.5) * CELL };
-    if (!insidePolygon(p, j.outline)) continue;
+    if (!insidePolygon(p, border)) continue;
     let n = 0, sx = 0, sy = 0, open = false;
     const stack = [k]; seen[k] = 1;
     while (stack.length) {
@@ -153,10 +172,36 @@ function roundaboutOf(sk: Sketch, s: Surface, j: SketchJunction, c: { lanes: str
     rOut[a] = r; widths.push(rOut[a] - rIn[a]);
   }
   widths.sort((p, q) => p - q);
-  const width = widths[Math.floor(widths.length * 0.3)];
-  // (where the arms run past the ring the paving goes on: the carriageway taken as the usual width there)
+  // (with ring lanes the carriageway is theirs: out to where the outermost one's band ends (a drawn junction's paving can go on
+  // well past it); else where the arms run past the ring the paving goes on: the carriageway taken as the usual width there)
+  let width = widths[Math.floor(widths.length * 0.3)];
+  if (rings.length) {
+    const ringW: number[] = [];
+    for (let a = 0; a < 360; a++) {
+      const ux = Math.cos((a * Math.PI) / 180), uy = Math.sin((a * Math.PI) / 180);
+      let r = rIn[a], last = -1;
+      while (r < rOut[a]) { const p = { x: cx + ux * r, y: cy + uy * r }; if (rings.some(l => nearestOn(l.shape, p).d <= l.width / 2)) last = r; r += CELL; }
+      if (last > rIn[a]) { rOut[a] = Math.min(rOut[a], last + CELL); ringW.push(rOut[a] - rIn[a]); }
+    }
+    if (ringW.length > 180) { ringW.sort((p, q) => p - q); width = ringW[Math.floor(ringW.length / 2)]; }
+  }
   for (let a = 0; a < 360; a++) rOut[a] = Math.min(rOut[a], rIn[a] + width * 1.15);
-  return { junction: j.id, c: ctr, sense: senseOf(sk, c, ctr), rIn, rOut, width, outline: j.outline, connectors: new Set(c.connectors), lanes: new Set(c.lanes) };
+  const sense = senseOfRings(rings, ctr) ?? senseOf(sk, c, ctr);
+  return { junction: j.id, c: ctr, sense, rIn, rOut, width, outline: border, connectors: new Set(c.connectors), lanes: new Set([...c.lanes, ...rings.map(l => l.id)]) };
+}
+
+/** which way round its ring lanes go (the way round their middle they turn, as driven), if it has any */
+function senseOfRings(rings: SketchLane[], ctr: Pt): 1 | -1 | null {
+  let turn = 0;
+  for (const l of rings) {
+    const pts = samples(l.shape, 0.5);
+    for (let k = 1; k < pts.length; k++) {
+      let d = Math.atan2(pts[k].y - ctr.y, pts[k].x - ctr.x) - Math.atan2(pts[k - 1].y - ctr.y, pts[k - 1].x - ctr.x);
+      if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI;
+      turn += d;
+    }
+  }
+  return Math.abs(turn) > Math.PI ? (turn > 0 ? 1 : -1) : null;
 }
 
 /** which way round: the side the lanes going out lie on, seen from the lanes coming in beside them (two-way roads), the island on that side */
