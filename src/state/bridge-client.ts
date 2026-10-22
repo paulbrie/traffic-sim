@@ -14,6 +14,29 @@ import { bridgeApp, bridgeCanvas, bridgeEdit, bridgeState, bridgeUi, type EditPe
 import { parseReport, type BridgeReport } from "@/lib/bridge-report";
 import { describe, find, isBridgeUi, snapshot, type Target } from "@/components/bridge/a11y";
 
+// ---- the browser's own console (ticket #70): uncaught errors, unhandled rejections, console.error/warn, kept for
+// `state { keys: ["browserConsole"] }` — the app's own `problems` is its own console only; a broken page or worker
+// message (the worker's own console calls don't reach this, not being this thread's) would otherwise go unseen.
+// Patched once (T199, as the stream below is kept on globalThis): a hot reload evaluating this module again would
+// otherwise wrap console.error a second time and double every line logged after
+export interface BridgeConsoleEntry { at: number; kind: "error" | "warn" | "uncaught" | "rejection"; text: string }
+const CONSOLE_KEEP = 100;
+const consoleShared = (globalThis as { __trafficsimConsole?: { log: BridgeConsoleEntry[] } }).__trafficsimConsole ??= { log: [] };
+const browserConsole = consoleShared.log;
+function logConsole(kind: BridgeConsoleEntry["kind"], parts: unknown[]) {
+  const text = parts.map(p => (p instanceof Error ? `${p.name}: ${p.message}` : typeof p === "string" ? p : (() => { try { return JSON.stringify(p); } catch { return String(p); } })())).join(" ").slice(0, 2000);
+  browserConsole.push({ at: Date.now(), kind, text });
+  if (browserConsole.length > CONSOLE_KEEP) browserConsole.shift();
+}
+if (typeof window !== "undefined" && !(window as { __trafficsimConsolePatched?: boolean }).__trafficsimConsolePatched) {
+  (window as { __trafficsimConsolePatched?: boolean }).__trafficsimConsolePatched = true;
+  const origError = console.error.bind(console), origWarn = console.warn.bind(console);
+  console.error = (...a: unknown[]) => { logConsole("error", a); origError(...a); };
+  console.warn = (...a: unknown[]) => { logConsole("warn", a); origWarn(...a); };
+  window.addEventListener("error", e => logConsole("uncaught", [e.error ?? e.message]));
+  window.addEventListener("unhandledrejection", e => logConsole("rejection", [e.reason]));
+}
+
 export interface BridgeLogEntry { at: number; type: string; target: string; ok: boolean; error?: string;
   /** a message or note the user sent (T191): its id, and whether an agent has it yet ("sent": queued, waiting to be fetched;
    * "delivered": fetched by `by`; "nobody": no agent was connected to take it) */
@@ -317,7 +340,10 @@ async function exec(type: string, a: Record<string, unknown>, said: (t: string) 
       // (imagery from elsewhere without leave to be read back leaves the map's picture unreadable)
       try { dataUrl = out.toDataURL("image/png"); } catch { throw new Error("the map's picture can't be read back (the background imagery doesn't allow it): turn the imagery off and ask again"); }
       trace("took a picture of the map");
-      return { dataUrl, ...(a.target === "page" ? { note: "the map only: a picture of the whole page isn't available yet" } : {}) };
+      // (a background tab stops painting: the picture taken is however old it was when the tab last had the user's
+      // attention, not now — said plainly rather than left to be found out the hard way; ticket #70)
+      const stale = document.visibilityState !== "visible" ? "tab hidden: the map may be stale" : null;
+      return { dataUrl, ...(stale || a.target === "page" ? { note: [stale, a.target === "page" ? "the map only: a picture of the whole page isn't available yet" : null].filter(Boolean).join("; ") } : {}) };
     }
     case "state": {
       const u = bridgeUi();
@@ -330,10 +356,15 @@ async function exec(type: string, a: Record<string, unknown>, said: (t: string) 
         if (v === undefined) throw noPath(a.path, snap);
         return { [a.path]: v };
       }
-      const keys = Array.isArray(a.keys) && a.keys.length ? a.keys.map(String) : [...bridgeState.names().filter(k => k !== "hitTest" && k !== "sketchJson"), ...(u ? ["ui"] : [])];
+      const keys = Array.isArray(a.keys) && a.keys.length ? a.keys.map(String) : [...bridgeState.names().filter(k => k !== "hitTest" && k !== "sketchJson"), ...(u ? ["ui"] : []), "visibility"];
       const out: Record<string, unknown> = {};
       for (const k of keys) {
         if (k === "ui" && u) { out.ui = u.snapshot(); continue; }
+        // (a background tab stops repainting and, after a pause, delays its own stepping too: not this page's own
+        // state, true of any tab, so answered here rather than asked of an editor; ticket #70)
+        if (k === "visibility") { out.visibility = { visible: document.visibilityState === "visible", state: document.visibilityState }; continue; }
+        // (not in the default keys, as hitTest and sketchJson aren't: only when asked by name)
+        if (k === "browserConsole") { out.browserConsole = browserConsole.slice(-50); continue; }
         const f = bridgeState.get(k); out[k] = f ? await f({}) : { error: "not offered on this page" };
       }
       return out;
@@ -381,15 +412,28 @@ async function exec(type: string, a: Record<string, unknown>, said: (t: string) 
       trace(`pressed ${a.key}`);
       return {};
     }
+    case "reload": {
+      // (a real refresh, not router.push: after a merge, a dynamically-imported module (the experiment's worker, say)
+      // stays the old code until one, and Next's hot reload doesn't swap those; ticket #70)
+      trace("reloaded the page");
+      location.reload();
+      return {};
+    }
     case "navigate": {
-      const u = new URL(String(a.url ?? ""), location.href);
+      const raw = String(a.url ?? "");
+      // (an absolute path missing the base, as this app's own routes are named ("/plans/x"): still under it, not the origin's root; ticket #70)
+      const withBase = basePath && raw.startsWith("/") && !raw.startsWith(basePath) ? basePath + raw : raw;
+      const u = new URL(withBase, location.href);
       if (u.origin !== location.origin) throw new Error("only pages of this app");
       const path = u.pathname.startsWith(basePath) ? u.pathname.slice(basePath.length) || "/" : u.pathname;
       if (path === "/api" || path.startsWith("/api/")) throw new Error("only pages of this app, not its API");
       if (!navigateTo) throw new Error("the page isn't ready to navigate yet");
-      navigateTo(path + u.search + u.hash);
-      trace(`went to ${path}`);
-      return { url: u.href };
+      const full = path + u.search + u.hash;
+      const herePath = location.pathname.startsWith(basePath) ? location.pathname.slice(basePath.length) || "/" : location.pathname;
+      // (router.push to the page already shown is a no-op in Next: a real reload instead, as the user's own refresh would)
+      if (herePath + location.search + location.hash === full) { trace(`reloaded ${path}`); location.reload(); }
+      else { navigateTo(full); trace(`went to ${path}`); }
+      return { url: `${location.origin}${basePath}${full}` };
     }
     case "app": {
       // (an edit, T189: with the leave the server sent along, and only that; the agent's cursor to where it was, with a few

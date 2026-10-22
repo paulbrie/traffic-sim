@@ -313,6 +313,8 @@ export function status(a: Agent) {
     agent: { id: a.id, name: a.name, drivesHub: a.drivesHub },
     page: a.drivesHub && hub?.page ? { ...hub.page, connected: hub.streams.size > 0, pageId: hub.pageId } : null,
     allowTabs: !!hub?.hub?.allowTabs, allowEdits: hub?.hub?.allowEdits ?? { mode: "off" }, tabs: tabsFor(a),
+    // (8 h since the hub's own last call, not a fixed term: any bridge call from either side pushes it out again; ticket #70)
+    pairedUntil: hub ? hub.lastSeen + IDLE : null,
   };
 }
 export const tabsFor = (a: Agent) => [...a.tabs].flatMap(id => { const p = pages.get(id); return p ? [tabView(p)] : []; });

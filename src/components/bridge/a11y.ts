@@ -112,11 +112,15 @@ export function snapshot(root: Element): string {
         if (more > 0) lines.push(`${"  ".repeat(d)}… ${more} more rows`);
         return;
       }
-    } else if (!role && el.children.length === 0) {
-      // (short text on its own: a figure and what it is, in the panels)
-      const t = textOf(el);
-      if (t && t.length <= 80 && !["script", "style", "svg"].includes(el.tagName.toLowerCase())) lines.push(`${"  ".repeat(depth)}text "${t}"`);
-      return;
+    } else if (!role) {
+      // (its own text, not its children's: a figure and what it is, in the panels; a sentence with a word or two
+      // marked up inline (a <b>, a <span>) still has text either side of them, as element children, not caught below
+      // without this — ticket #70)
+      if (!["script", "style", "svg"].includes(el.tagName.toLowerCase())) {
+        const own = squash([...el.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent ?? "").join(" "));
+        if (own) lines.push(`${"  ".repeat(depth)}text "${own.slice(0, 200)}"`);
+      }
+      if (!el.children.length) return;
     }
     for (const c of el.children) walk(c, d);
   };
