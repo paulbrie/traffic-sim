@@ -240,6 +240,9 @@ interface Conflict {
   other: Edge; at: number; otherAt: number; before: number; after: number; otherBefore: number; otherAfter: number; join: boolean;
   /** who goes first where the two meet (T161): 1 this one, -1 the other, 0 neither (first come, first served); and the rule that says so */
   prio: -1 | 0 | 1; prioWhy: PrioWhy;
+  /** two ways onto one roundabout crossing where one of them all but joins the ring (junctionPriority): 1 this one is as
+   * good as on the ring there, -1 it gives way to it as to the ring — first come or not, as `innerOff` at the outer ring */
+  ring?: -1 | 1;
 }
 /** the rules that order two paths where they meet, in the order they are looked at (`junctionPriority`) */
 type PrioWhy = "roundabout" | "give-way line" | "lights" | "main road" | "left turn" | "from the right" | "first come";
@@ -904,7 +907,7 @@ export class SketchSim {
     }
     // (ways off an inner ring, a ring beside it all the way round further out: across that, giving way to it)
     for (const e of all) if (e.kind === "conn" && e.from!.lane.ring && !e.to!.lane.ring && e.from!.lane.neighbors.some(n => n.round && n.lane.len > e.from!.lane.len)) e.innerOff = true;
-    this.junctionPriority(sk, all, paths);
+    this.junctionPriority(sk, all, paths, edges);
     // (what leads out of the sketch, back from the lanes nothing leaves, changing lane over to one counting: the rest is a trap)
     const besideOf = new Map<Edge, Edge[]>();
     for (const e of all) for (const n of e.neighbors) (besideOf.get(n.lane) ?? besideOf.set(n.lane, []).get(n.lane)!).push(e);
@@ -1825,9 +1828,9 @@ export class SketchSim {
    * 6. the car coming from the right goes first;
    * 7. otherwise first come, first served (with the patience of `yieldsTo`).
    */
-  private junctionPriority(sk: Sketch, all: Edge[], paths: Map<string, Pt[]>) {
+  private junctionPriority(sk: Sketch, all: Edge[], paths: Map<string, Pt[]>, edges: Map<string, Edge>) {
     // (the rings, and what passes in among one (inside its outer edge by a metre), joined to it by neither end: across its middle)
-    const rings = sk.lanes.filter(l => l.shape.kind === "arc" && this.edges.get(`lane:${l.id}`)?.ring).map(l => ({ e: this.edges.get(`lane:${l.id}`)!, c: (l.shape as { c: Pt }).c, r: (l.shape as { r: number }).r + l.width / 2 - 1 }));
+    const rings = sk.lanes.filter(l => l.shape.kind === "arc" && edges.get(`lane:${l.id}`)?.ring).map(l => ({ e: edges.get(`lane:${l.id}`)!, c: (l.shape as { c: Pt }).c, r: (l.shape as { r: number }).r + l.width / 2 - 1 }));
     const inside = new Map<Edge, boolean>();
     const across = (e: Edge) => {
       let x = inside.get(e);
@@ -1852,10 +1855,10 @@ export class SketchSim {
     // (how much of a road a path comes in on: its limit, then its lanes going that way)
     const sameWay = new Map<string, number>();
     for (const road of sk.roads) for (const id of road.lanes) {
-      const L = this.edges.get(`lane:${id}`);
+      const L = edges.get(`lane:${id}`);
       if (!L || L.ring) continue;
       const d = L.locate(L.len / 2).d;
-      sameWay.set(id, road.lanes.filter(o => { const M = this.edges.get(`lane:${o}`); if (!M) return false; const q = M.locate(M.len / 2).d; return d.x * q.x + d.y * q.y > 0.5; }).length);
+      sameWay.set(id, road.lanes.filter(o => { const M = edges.get(`lane:${o}`); if (!M) return false; const q = M.locate(M.len / 2).d; return d.x * q.x + d.y * q.y > 0.5; }).length);
     }
     const weight = (e: Edge) => { const L = e.kind === "conn" ? e.from!.lane : e; return Math.round((L.vmax * 3.6) / 5) * 100 + (sameWay.get(L.id) ?? 1); };
     const lit = (e: Edge) => !!(e.kind === "conn" ? e.from!.lane.signal : e.signal);
@@ -1873,12 +1876,30 @@ export class SketchSim {
       if (da.x * db.x + da.y * db.y < 0.5 && Math.abs(side) > 0.5) return [side > 0 ? -1 : 1, "from the right"];
       return [0, "first come"];
     };
+    // (two ways onto one roundabout from two of its arms crossing each other, one all but on the ring there — joining it
+    // within a few metres, the other still some way off its own join further round: that one is as good as on the ring,
+    // ring traffic the other gives way to, whatever `junctionRules` says (`Conflict.ring`). Not "from the right", nor
+    // first come, between two ways in: at a busy entry passing over a quieter one's join on its way to its own just after
+    // it, either kept the quieter one waiting there for good; ticket #56. Two lanes of one arm going on side by side stay
+    // first come: they zip, neither a ring the other gives way to)
+    const ringOf = (e: Edge) => (e.kind === "conn" && e.to!.lane.ring ? rings.find(R => R.e === e.to!.lane) ?? null : null);
+    const roadOf = new Map(sk.roads.flatMap(road => road.lanes.map(id => [id, road.id] as const)));
+    const oneArm = (A: Edge, B: Edge) => { const a = A.from!.lane, b = B.from!.lane; return a === b || a.neighbors.some(n => n.lane === b) || (roadOf.has(a.id) && roadOf.get(a.id) === roadOf.get(b.id)); };
+    const entries = (A: Edge, k: Conflict): -1 | 1 | null => {
+      const ga = ringOf(A), gb = ringOf(k.other);
+      if (!ga || !gb || role(A) !== 1 || role(k.other) !== 1 || Math.hypot(ga.c.x - gb.c.x, ga.c.y - gb.c.y) > 1 || oneArm(A, k.other)) return null;
+      const la = A.len - k.at, lb = k.other.len - k.otherAt;
+      if (Math.min(la, lb) > 3 || Math.abs(la - lb) < 2) return null;
+      return la < lb ? 1 : -1;
+    };
     for (const A of all) for (const k of A.conflicts) {
       if (k.join || k.prioWhy !== "first come" || k.prio !== 0) continue;
       const m = k.other.conflicts.find(x => x.other === A && Math.abs(x.at - k.otherAt) < 1e-6 && Math.abs(x.otherAt - k.at) < 1e-6);
-      const [p, why] = order(A, k.other);
+      const g = entries(A, k);
+      const [p, why] = g ? [g, "roundabout" as const] : order(A, k.other);
       k.prio = p; k.prioWhy = why;
-      if (m) { m.prio = (-p || 0) as -1 | 0 | 1; m.prioWhy = why; }
+      if (g) k.ring = g;
+      if (m) { m.prio = (-p || 0) as -1 | 0 | 1; m.prioWhy = why; if (g) m.ring = -g as -1 | 1; }
     }
   }
 
@@ -2446,8 +2467,9 @@ export class SketchSim {
             if (meIn && !wIn && ws > 0 && ws >= (w.v * w.v) / 8) continue;
             // (one that can't stop any more for this one: past its line, or too close and fast)
             // (a way off an inner ring gives way where it crosses the outer ring, as at a line (art. 107(1¹)))
-            const wMinor = !!k.other.minor || (!!k.other.innerOff && r.edge.ring), committed = w.edge === k.other && ws < Math.max(0.1, (w.v * w.v) / 8 - 1);
-            const here = minor || (!!r.edge.innerOff && k.other.ring);
+            // (two ways onto a roundabout crossing at one's join: the other as ring traffic, `Conflict.ring`)
+            const wMinor = k.ring ? k.ring > 0 : !!k.other.minor || (!!k.other.innerOff && r.edge.ring), committed = w.edge === k.other && ws < Math.max(0.1, (w.v * w.v) / 8 - 1);
+            const here = k.ring ? k.ring < 0 : minor || (!!r.edge.innerOff && k.other.ring);
             // (who goes first by the junction's rules (junctionPriority): after the other, it goes when it would be through before the
             // other gets there, with time to spare, or once it has waited long and the other can still stop; before it, only one that
             // can't stop any more holds it; neither, first come, first served, with patience)
