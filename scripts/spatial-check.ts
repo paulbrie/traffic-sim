@@ -11,6 +11,8 @@
  *   waits: no collision in the first two and a half minutes (cars 40 and 41 met at 2:28 before);
  * - (ticket #72) the same: cars don't go in in front of a queue on the ring, so it never fills all the way round (cars each
  *   waiting for the one ahead, the ring stopped: 7 of them at 8:39 before);
+ * - (ticket #74) round a round island a car's line comes from geometry, not its connectors' curves: on Roundabout 3 (rev 454)
+ *   every way in to every way out has one, on the paving, and none goes round more than once (4 of 36 did, 417-522°);
  * - (ticket #73) Roundabout 3 as at rev 454 (the same sketch as rev 455, the ticket's revision): cars 3 and 4 hold for each
  *   other at 0:28 close enough to look like a collision, but never touch, and don't stay held.
  * npm run spatial:check
@@ -81,7 +83,7 @@ function fieldsReach(sk: Sketch, z: Zone) {
   }
   const { stats, picked, meanOff, guidedShare } = run(sk, 240);
   check(stats.finished >= 15, `Roundabout 3: cars through in 4 min (${stats.finished})`);
-  check(guidedShare > 0.9, `Roundabout 3: cars keep to a guide by its lanes and connectors (${Math.round(guidedShare * 100)}% of the time)`);
+  check(guidedShare > 0.9, `Roundabout 3: cars keep to a guide, a line from geometry or its connectors (${Math.round(guidedShare * 100)}% of the time)`);
   check(meanOff < 1, `Roundabout 3: on their guide, within a metre of it (${meanOff.toFixed(2)} m on average)`);
   check(!!picked?.guide && picked.guide.length > 5, "a car picked: its guide through the junction");
   check(stats.collisions <= 5, `Roundabout 3: few collisions (${stats.collisions})`);
@@ -96,6 +98,29 @@ function fieldsReach(sk: Sketch, z: Zone) {
   const st = sim.stats();
   check(st.collisions === 0, `Roundabout 3 (rev 454): no collision in the first 2:32, cars going in wait for one coming round (${st.collisions})`);
   check(st.finished >= 30, `Roundabout 3 (rev 454): cars through in 2:32 (${st.finished})`);
+}
+
+// (ticket #74) Roundabout 3 at rev 454: lines from geometry for every way in to every way out, none looping
+{
+  const sk = load("spatial-roundabout-3-rev454.json");
+  const sim = new SpatialSim(sk, { speed: 50, rate: 50, seed: 1, gap: 2, opts: OPTS }) as unknown as { surface: { zones: Zone[] }; outsOf: Map<Zone, { lane: { id: string }; s: number }[]>; lineThrough: (z: Zone, p: { x: number; y: number }, h: number, lane: unknown, s: number) => { pts: { x: number; y: number }[] } | null };
+  const z = sim.surface.zones[0], c = z.island!.c;
+  let made = 0, failed = 0, maxDeg = 0;
+  const ins = new Map(sk.connectors.filter(x => z.connectors.has(x.id) && !z.lanes.has(x.from.lane)).map(x => [`${x.from.lane}@${x.from.s.toFixed(0)}`, x]));
+  for (const cn of ins.values()) {
+    const a = pointAt(laneById(sk, cn.from.lane)!.shape, cn.from.s);
+    for (const o of sim.outsOf.get(z) ?? []) {
+      if (o.lane.id === cn.from.lane) continue;
+      const line = sim.lineThrough(z, a.p, Math.atan2(a.d.y, a.d.x), o.lane, o.s);
+      if (!line) { failed++; continue; }
+      made++;
+      let turn = 0;
+      for (let i = 1; i < line.pts.length; i++) { let d = Math.atan2(line.pts[i].y - c.y, line.pts[i].x - c.x) - Math.atan2(line.pts[i - 1].y - c.y, line.pts[i - 1].x - c.x); if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI; turn += d; }
+      maxDeg = Math.max(maxDeg, (Math.abs(turn) * 180) / Math.PI);
+    }
+  }
+  check(failed === 0 && made > 40, `Roundabout 3 (rev 454): a line from geometry for every way in to every way out (${made} made, ${failed} not)`);
+  check(maxDeg < 360, `Roundabout 3 (rev 454): no line goes round more than once (at most ${Math.round(maxDeg)}°)`);
 }
 
 // (ticket #72) Roundabout 3 at rev 454: the ring never fills all the way round
