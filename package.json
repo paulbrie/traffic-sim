@@ -37,6 +37,7 @@
     "crossing:check": "tsx scripts/crossing-shape-check.ts",
     "plan:check": "tsx scripts/plan-fallback-check.ts",
     "bus-support:check": "tsx scripts/bus-support-check.ts",
+    "levels:check": "tsx scripts/levels-check.ts",
     "two-way:check": "tsx scripts/two-way-check.ts",
     "spatial:check": "tsx scripts/spatial-check.ts",
     "tomtom:check": "tsx scripts/tomtom-check.ts",
