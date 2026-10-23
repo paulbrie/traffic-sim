@@ -22,12 +22,14 @@
  *   in from their own line by a line from geometry, not crossing to the lane beside 12 m before it; to 32:44 none stands two
  *   minutes, next to no locks, no queue held back at the edge (car 885 stood 2 minutes there, its lane behind it: 8 locks, 80
  *   cars held back).
+ * - (ticket #78) a bridge over a roundabout (V2 check (Tatiana)): cars at different levels don't see, wait for or meet each
+ *   other, and the bridge is no paving of the roundabout under it (it paved a way across its island before).
  * npm run spatial:check
  */
 import { readFileSync } from "fs";
 import { SpatialSim } from "../src/lib/experiments/spatial-roundabout/engine";
-import { buildSurface, descend, exitStart, routeField, zoneCell, type Zone } from "../src/lib/experiments/spatial-roundabout/surface";
-import { laneById, pointAt, sanitizeSketch, type Sketch } from "../src/lib/lane-sketch";
+import { buildSurface, descend, drivable, exitStart, routeField, zoneCell, type Zone } from "../src/lib/experiments/spatial-roundabout/surface";
+import { contentsOf, junctionLevel, laneById, laneLength, pointAt, sanitizeSketch, zAt, type Sketch } from "../src/lib/lane-sketch";
 
 let failed = 0;
 const check = (ok: boolean, what: string) => { if (!ok) failed++; console.log(`${ok ? "ok  " : "FAIL"} ${what}`); };
@@ -223,6 +225,31 @@ function fieldsReach(sk: Sketch, z: Zone) {
   console.log(`${held ? "ok  " : "note"} Roundabout 3 (rev 454): cars 3 and 4 hold for each other near 0:28 (${held ? "reproduces the ticket's moment" : "moment no longer happens"})`);
   check(st.collisions === 0, `Roundabout 3 (rev 454): cars 3 and 4 never touch (${st.collisions})`);
   check(!heldPast35, "Roundabout 3 (rev 454): cars 3 and 4's hold clears within a few seconds, not stuck");
+}
+
+// (ticket #78) a bridge over a roundabout (V2 check (Tatiana): b1/b2 a level up over Roundabout 2)
+{
+  const sk = load("spatial-levels.json"), s = buildSurface(sk)!, z = s.zones.find(x => x.name === "Roundabout 2")!, b1 = laneById(sk, "b1")!;
+  let over = 0;
+  for (let u = 0; u <= laneLength(b1.shape); u += 1) { const p = pointAt(b1.shape, u).p, q = zoneCell(z, p); if (q >= 0 && drivable(s, p) && z.kind[q] !== 1) over++; }
+  check(over === 0, `levels: the bridge over Roundabout 2 is no paving of it (${over} m of it is)`);
+  const sim = new SpatialSim(sk, { speed: 50, rate: sk.traffic?.rate ?? 200, seed: 1, gap: 2, opts: OPTS });
+  const contents = contentsOf(sk), jLevel = new Map(s.zones.map(x => [x, junctionLevel(sk, contents.get(x.junction)!)]));
+  const levelOf = (v: SpatialSim["vehicles"][number]) => v.mode === "lane" ? zAt(sk, v.at!.lane.id, Math.min(v.at!.s, v.at!.len)) : jLevel.get(v.zone!) ?? 0;
+  let across = 0, seen = 0, crossed = 0;
+  for (let t = 0; t < 180; t += 0.1) {
+    const n = sim.collisionLog.length;
+    sim.step(0.1);
+    const byId = new Map(sim.vehicles.map(v => [v.id, v]));
+    for (const c of sim.collisionLog.slice(n)) { const a = byId.get(c.a), b = byId.get(c.b); if (a && b && Math.abs(levelOf(a) - levelOf(b)) >= 0.5) across++; }
+    for (const v of sim.vehicles) {
+      if (v.mode === "lane" && v.at!.lane === b1) { const p = pointAt(b1.shape, v.at!.s).p; if (Math.hypot(p.x - z.island!.c.x, p.y - z.island!.c.y) < 5) crossed++; }
+      if (v.mode === "spatial" && v.rays) for (const r of v.rays) { const w = r.car >= 0 ? byId.get(r.car) : undefined; if (w && Math.abs(levelOf(w) - levelOf(v)) >= 0.5) seen++; }
+    }
+  }
+  check(crossed > 0, "levels: cars cross the bridge over Roundabout 2");
+  check(across === 0, `levels: no collisions between cars at different levels (${across})`);
+  check(seen === 0, `levels: spatial cars' rays don't see cars at another level (${seen} hits)`);
 }
 
 console.log(failed ? `\n${failed} check(s) failed` : "\nall checks passed");

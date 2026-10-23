@@ -7,7 +7,7 @@
  * island only the country's way), a gap-seeking steer along it, and a speed from the free distance ahead; at that way out's
  * lane they hand back. A separate engine: the main one (lane-sketch-sim.ts) is not used or changed. Plain TypeScript, no framework.
  */
-import { connectorPts, demandWays, entryLanes, isFullCircle, laneInRate, laneLength, laneOutWeight, nearestOn, pointAt, roadOf, RouteTable, type Pt, type Sketch, type SketchConnector, type SketchLane } from "../../lane-sketch";
+import { connectorPts, contentsOf, demandWays, entryLanes, hasLevels, isFullCircle, junctionLevel, laneInRate, laneLength, laneOutWeight, nearestOn, pointAt, roadOf, RouteTable, zAt, type Pt, type Sketch, type SketchConnector, type SketchLane } from "../../lane-sketch";
 import { buildSurface, descend, drivable, edgeDist, exitStart, inCore, routeField, zoneCell, type Island, type Surface, type Zone } from "./surface";
 
 // drivers (as the main engine's defaults)
@@ -167,6 +167,8 @@ export class SpatialSim {
   private connsFrom = new Map<string, SketchConnector[]>();
   /** (each way out of a junction: its lane, and where on it the junction's connectors join it: a road's lane can start inside it) */
   private outsOf = new Map<Zone, { lane: SketchLane; s: number }[]>();
+  /** (ticket #78) each junction's level (a sketch with bridges or tunnels; else none, all on the ground) */
+  private zoneLevel = new Map<Zone, number>();
 
   constructor(private sk: Sketch, private params: SpatialParams) {
     this.rnd = mulberry32(params.seed);
@@ -174,7 +176,10 @@ export class SpatialSim {
     this.surface = buildSurface(sk);
     const ways = demandWays(sk);
     this.outWay = new Map(ways.exits.flatMap(w => w.lanes.map(l => [l, w.lanes])));
+    const contents = hasLevels(sk) ? contentsOf(sk) : null;
     for (const z of this.surface?.zones ?? []) {
+      const jc = contents?.get(z.junction);
+      if (jc) this.zoneLevel.set(z, junctionLevel(sk, jc));
       const outs = new Map<string, number>();
       for (const c of sk.connectors) if (z.connectors.has(c.id)) {
         if (!z.lanes.has(c.from.lane)) this.zoneOfConn.set(c.id, z);
@@ -322,7 +327,7 @@ export class SpatialSim {
       if (w.mode === "lane" && w.at!.lane === at.lane && w.at!.s > at.s) ws = w.at!.s;
       // (a spatial car's body over its lane ahead (one just gone in from it, or stood at its line from another way in): its
       // nearer end there)
-      else if (w.mode === "spatial" && Math.hypot(w.p.x - pointAt(at.lane.shape, at.s).p.x, w.p.y - pointAt(at.lane.shape, at.s).p.y) < 40) {
+      else if (w.mode === "spatial" && !this.apart(v, w) && Math.hypot(w.p.x - pointAt(at.lane.shape, at.s).p.x, w.p.y - pointAt(at.lane.shape, at.s).p.y) < 40) {
         const b = this.body(w), lx = -b.d.y * (WIDTH / 2), ly = b.d.x * (WIDTH / 2), fx = b.d.x * (w.len / 2), fy = b.d.y * (w.len / 2);
         for (const [u, l] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
           const q = nearestOn(at.lane.shape, { x: b.c.x + fx * u + lx * l, y: b.c.y + fy * u + ly * l });
@@ -520,7 +525,8 @@ export class SpatialSim {
   /** the rays: from its front, all round, each to the surface's edge or another car's body (nothing else known; its own body not seen) */
   private sense(v: SpatialCar) {
     const s = this.surface!, range = Math.min(RANGE_MAX, RANGE0 + RANGE_PER_MS * v.v), out: { d: number; car: number }[] = [];
-    const others = this.vehicles.filter(w => w !== v && Math.hypot(this.front(w).x - v.p.x, this.front(w).y - v.p.y) < range + w.len + 2);
+    // (ticket #78: not cars at another level, on a bridge over it or in a tunnel under it)
+    const others = this.vehicles.filter(w => w !== v && Math.hypot(this.front(w).x - v.p.x, this.front(w).y - v.p.y) < range + w.len + 2 && !this.apart(v, w));
     const bodies = others.map(w => ({ id: w.id, ...this.body(w) }));
     for (let i = 0; i < RAYS; i++) {
       const a = this.rayAngle(v, i), ux = Math.cos(a), uy = Math.sin(a);
@@ -1071,6 +1077,10 @@ export class SpatialSim {
 
   // ---------------------------------------------------------------- bodies, collisions, stuck groups
 
+  /** (ticket #78) its level: on a lane the lane's there (its ramps too), in a junction the junction's (as the main engine's) */
+  private levelOf(v: SpatialCar) { return v.mode === "lane" ? zAt(this.sk, v.at!.lane.id, Math.min(v.at!.s, v.at!.len)) : (v.zone && this.zoneLevel.get(v.zone)) ?? 0; }
+  /** (ticket #78) at different levels (half a level or more apart, as the main engine has it): neither sees, meets or waits for the other */
+  private apart(a: SpatialCar, b: SpatialCar) { return this.zoneLevel.size > 0 && Math.abs(this.levelOf(a) - this.levelOf(b)) >= 0.5; }
   private front(v: SpatialCar): Pt { return v.mode === "lane" ? pointAt(v.at!.lane.shape, Math.min(v.at!.s, v.at!.len)).p : v.p; }
   /** its body's way: along its lane; sensing, from its rear to its front (its rear trailing it, see spatialMove) */
   private heading(v: SpatialCar): Pt {
@@ -1090,6 +1100,8 @@ export class SpatialSim {
       if (Math.hypot(A.b.c.x - B.b.c.x, A.b.c.y - B.b.c.y) > (A.v.len + B.v.len) / 2 + 2) continue;
       // (two on the same lane, one behind the other: the follower keeps its gap, their boxes on a bend may just touch)
       if (A.v.mode === "lane" && B.v.mode === "lane" && A.v.at!.lane === B.v.at!.lane) continue;
+      // (one passing over the other, on a bridge)
+      if (this.apart(A.v, B.v)) continue;
       if (!boxesOverlap(A.b, B.b, 0.15)) continue;
       const k = `${Math.min(A.v.id, B.v.id)}-${Math.max(A.v.id, B.v.id)}`;
       now.add(k);
@@ -1101,7 +1113,7 @@ export class SpatialSim {
   private clearLocks() {
     const stuck = this.vehicles.filter(v => v.mode === "spatial" && v.still >= CLEAR);
     for (const v of stuck) {
-      const group = this.vehicles.filter(w => w.mode === "spatial" && Math.hypot(w.p.x - v.p.x, w.p.y - v.p.y) < 20);
+      const group = this.vehicles.filter(w => w.mode === "spatial" && Math.hypot(w.p.x - v.p.x, w.p.y - v.p.y) < 20 && !this.apart(v, w));
       if (group.every(w => w.still >= CLEAR)) {
         const out = group.reduce((a, b) => (b.still > a.still ? b : a));
         this.unbook(out);
