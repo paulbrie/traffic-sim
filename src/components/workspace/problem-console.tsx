@@ -14,10 +14,10 @@ import { simController } from "@/state/sim-controller";
 import { sendView } from "@/state/commands";
 import { LinkedText } from "./linked-text";
 
-const LABEL: Record<SimProblem["kind"], string> = { towed: "Towed", breakdown: "Breakdown", wreck: "Wreck", removed: "Removed", overlap: "Overlap", stuck: "Stuck" };
+const LABEL: Record<SimProblem["kind"], string> = { towed: "Towed", breakdown: "Breakdown", wreck: "Wreck", removed: "Removed", overlap: "Overlap", stuck: "Stuck", lock: "Lock" };
 const TONE: Record<SimProblem["kind"], string> = {
   towed: "bg-red-500/15 text-red-700 dark:text-red-300", removed: "bg-red-500/15 text-red-700 dark:text-red-300",
-  overlap: "bg-amber-500/20 text-amber-800 dark:text-amber-300", stuck: "bg-amber-500/20 text-amber-800 dark:text-amber-300", breakdown: "bg-muted text-muted-foreground", wreck: "bg-muted text-muted-foreground",
+  overlap: "bg-amber-500/20 text-amber-800 dark:text-amber-300", stuck: "bg-amber-500/20 text-amber-800 dark:text-amber-300", lock: "bg-amber-500/20 text-amber-800 dark:text-amber-300", breakdown: "bg-muted text-muted-foreground", wreck: "bg-muted text-muted-foreground",
 };
 type Show = "all" | "gone" | "overlap";
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;

@@ -1529,6 +1529,43 @@ export function exitLane(move: Movement, a: number, isBus: boolean): number {
 
 /** conflict test between two connectors at the same junction (cached) */
 const confCache = new Map<number, boolean>();
+/** how close two paths' centre lines may come before they conflict (m) */
+const CONFLICT = 2;
+/** squared distance from point (x, y) to segment p–q */
+function pointSegD2(x: number, y: number, px: number, py: number, qx: number, qy: number) {
+  const dx = qx - px, dy = qy - py, l = dx * dx + dy * dy, t = l > 0 ? Math.max(0, Math.min(1, ((x - px) * dx + (y - py) * dy) / l)) : 0;
+  const ex = px + dx * t - x, ey = py + dy * t - y;
+  return ex * ex + ey * ey;
+}
+/** squared distance from point (x, y) to a polyline (flat x,y list) */
+function pointPolyD2(x: number, y: number, b: ArrayLike<number>) {
+  let m = Infinity;
+  for (let j = 0; j + 3 < b.length; j += 2) m = Math.min(m, pointSegD2(x, y, b[j], b[j + 1], b[j + 2], b[j + 3]));
+  return b.length === 2 ? (x - b[0]) ** 2 + (y - b[1]) ** 2 : m;
+}
+/**
+ * do two polylines (flat x,y lists) come within `d` m of each other, segment to segment (ticket #86: vertex to vertex, as
+ * before, two paths crossing between their points, 3-4 m apart on a long connector, were no conflict)
+ */
+function polylinesWithin(a: ArrayLike<number>, b: ArrayLike<number>, d: number) {
+  const d2 = d * d;
+  for (let i = 0; i + 3 < a.length; i += 2) {
+    const ax = a[i], ay = a[i + 1], bx = a[i + 2], by = a[i + 3];
+    for (let j = 0; j + 3 < b.length; j += 2) {
+      const cx = b[j], cy = b[j + 1], ex = b[j + 2], ey = b[j + 3];
+      // (far apart: their boxes more than d apart)
+      if (Math.min(ax, bx) - Math.max(cx, ex) > d || Math.min(cx, ex) - Math.max(ax, bx) > d || Math.min(ay, by) - Math.max(cy, ey) > d || Math.min(cy, ey) - Math.max(ay, by) > d) continue;
+      // (crossing)
+      const rx = bx - ax, ry = by - ay, sx = ex - cx, sy = ey - cy, den = rx * sy - ry * sx;
+      if (Math.abs(den) > 1e-12) {
+        const t = ((cx - ax) * sy - (cy - ay) * sx) / den, u = ((cx - ax) * ry - (cy - ay) * rx) / den;
+        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return true;
+      }
+      if (pointSegD2(ax, ay, cx, cy, ex, ey) < d2 || pointSegD2(bx, by, cx, cy, ex, ey) < d2 || pointSegD2(cx, cy, ax, ay, bx, by) < d2 || pointSegD2(ex, ey, ax, ay, bx, by) < d2) return true;
+    }
+  }
+  return false;
+}
 export function conflicts(A: Conn, B: Conn): boolean {
   if (A === B) return false;
   if (A.inEdge === B.inEdge && A.inLane === B.inLane) return false;
@@ -1538,15 +1575,7 @@ export function conflicts(A: Conn, B: Conn): boolean {
   let c: boolean;
   if (A.outEdge === B.outEdge && A.outLane === B.outLane) c = true;
   else if (A.ring && B.ring) c = A.inEdge !== B.inEdge && (A.mask & B.mask) !== 0;
-  else {
-    c = false;
-    const a = A.poly.pts, b = B.poly.pts;
-    outer: for (let p = 0; p < a.length; p += 2) for (let q = 0; q < b.length; q += 2) {
-      const dx = a[p] - b[q]; if (dx > 2 || dx < -2) continue;
-      const dy = a[p + 1] - b[q + 1]; if (dy > 2 || dy < -2) continue;
-      if (dx * dx + dy * dy < 4) { c = true; break outer; }
-    }
-  }
+  else c = polylinesWithin(A.poly.pts, B.poly.pts, CONFLICT);
   confCache.set(key, c);
   return c;
 }
@@ -1568,10 +1597,8 @@ export function conflictEnd(A: Conn, B: Conn): number {
     let along = 0, last = -1;
     for (let p = 0; p < a.length; p += 2) {
       if (p > 0) along += Math.hypot(a[p] - a[p - 2], a[p + 1] - a[p - 1]);
-      for (let q = 0; q < b.length; q += 2) {
-        const dx = a[p] - b[q], dy = a[p + 1] - b[q + 1];
-        if (dx * dx + dy * dy < CLEAR * CLEAR) { last = along; break; }
-      }
+      // (to B's line, not just its points: ticket #86)
+      if (pointPolyD2(a[p], a[p + 1], b) < CLEAR * CLEAR) last = along;
     }
     // the samples are a few metres apart: count up to the next one
     if (last >= 0) end = Math.min(A.len, last + A.len / Math.max(1, a.length / 2 - 1));

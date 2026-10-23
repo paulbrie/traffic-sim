@@ -110,7 +110,7 @@ export interface CrossOn { k: number; piece: Piece; s0: number; s1: number }
  * in a jam (left where it is), or two vehicles overlapping. `x`, `y` where (world m), `at` on what (a road or a junction).
  */
 export interface SimProblem {
-  t: number; kind: "towed" | "breakdown" | "wreck" | "removed" | "overlap" | "stuck";
+  t: number; kind: "towed" | "breakdown" | "wreck" | "removed" | "overlap" | "stuck" | "lock";
   veh: number; vkind: Vehicle["kind"]; other?: number; x: number; y: number; at: string; detail: string;
 }
 /** a stretch (from s0 to s1, m along it) of a lane or junction path that a car's body sweeps on a bay's path */
@@ -398,6 +398,17 @@ export abstract class SimBase {
   protected exitWanted = new Map<number, number>();
   /** why the junction ahead last said no, for every vehicle (logged or not): told in the console when one is towed */
   protected denyWhy = new Map<number, string>();
+  /**
+   * (ticket #86) who the junction ahead last held each vehicle up for (its id), when (tick), and whether only by order or a
+   * promise (`soft`: one ahead of it in the queue, a go given to one not in the junction yet, priority traffic on its way) or by
+   * a body in the way (one in the junction, the exit lane full): a lock is a ring of these and of vehicles queued behind others
+   */
+  protected holdBy = new Map<number, { by: number; at: number; soft: boolean }>();
+  /** (ticket #86) vehicles let go through a lock: till when (tick) the junction ahead overlooks holds by order or promise, of the
+   * lock's own vehicles (by id) */
+  protected lockPass = new Map<number, { until: number; of: Set<number> }>();
+  /** (ticket #86) locks found so far (each told in the console once) */
+  locks = 0;
   /** vehicles that took each movement so far, keyed "inEdgeIdx>outEdgeIdx" */
   turnCounts = new Map<string, number>();
   /** vehicles that entered through each entry point so far (by node id) */
@@ -749,7 +760,7 @@ export abstract class SimBase {
   /** `detail`: why, for the console (`false`: not a problem — a bus no longer needed on its line) */
   protected kill(v: Vehicle, why: "exit" | "arrived" | "towed" | "removed" | "destroyed", detail?: string | false) {
     if (v.dead) return;
-    this.denyWhy.delete(v.id);
+    this.denyWhy.delete(v.id); this.holdBy.delete(v.id); this.lockPass.delete(v.id);
     if ((why === "towed" || why === "removed" || why === "destroyed") && detail !== false) {
       const at = v.piece.poly.at(Math.min(v.piece.len, Math.max(0, v.s)));
       const kind = why === "destroyed" ? "wreck" : why === "removed" ? "removed" : v.broken ? "breakdown" : "towed";
@@ -786,7 +797,8 @@ export abstract class SimBase {
       else if (why === "towed" || why === "destroyed") f.towed++;
     }
   }
-  protected exitRoom(st: NodeState, c: Conn, v: Vehicle) {
+  /** room on `c`'s exit lane for `v` (and for those let in before it, not in the junction yet: but those of `pass`, ticket #86) */
+  protected exitRoom(st: NodeState, c: Conn, v: Vehicle, pass?: Set<number>) {
     const out = c.outEdge.lanes[c.outLane];
     let rear = Infinity;
     const list = this.index.get(out.id);
@@ -794,7 +806,15 @@ export abstract class SimBase {
     // (only when it has free road ahead of it: one about to stop at a queue frees nothing)
     if (list) for (const u of list) rear = Math.min(rear, u.s - u.len + (u.v > 1.5 ? u.v * 2 : 0));
     let need = v.len + 1.5;
-    for (const k of st.node.cluster) for (const o of this.ns[k.idx].occ) if (!o.entered && o.conn.outEdge === c.outEdge && o.conn.outLane === c.outLane) need += o.v.len + 2;
+    for (const k of st.node.cluster) for (const o of this.ns[k.idx].occ) if (!o.entered && o.conn.outEdge === c.outEdge && o.conn.outLane === c.outLane && !pass?.has(o.v.id)) need += o.v.len + 2;
     return rear >= need || out.len < need;
+  }
+  /** (ticket #86) who takes up the room on `c`'s exit lane: the last one on it (in the way), else one let in before `v` (a promise) */
+  protected exitHolder(st: NodeState, c: Conn, v: Vehicle): { v: Vehicle; soft: boolean } | null {
+    let last: Vehicle | null = null;
+    for (const u of this.index.get(c.outEdge.lanes[c.outLane].id) ?? []) if (!u.dead && (!last || u.s - u.len < last.s - last.len)) last = u;
+    if (last && last.s - last.len < v.len + 1.5) return { v: last, soft: false };
+    for (const k of st.node.cluster) for (const o of this.ns[k.idx].occ) if (!o.entered && o.v !== v && o.conn.outEdge === c.outEdge && o.conn.outLane === c.outLane) return { v: o.v, soft: true };
+    return last ? { v: last, soft: false } : null;
   }
 }
