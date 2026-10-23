@@ -49,6 +49,10 @@ const QUEUE_V = 1.5, QUEUE_UP = 10;
  * window (s), two cars going this nearly the same way through a cell (cos of the angle) following not crossing, and how far
  * before a cell booked by an earlier car one stops (m) */
 const BOOK_CELL = 1, BOOK_V = 6, BOOK_GAP = 0.6, BOOK_SAME_WAY = Math.cos((15 * Math.PI) / 180), BOOK_STOP = 1, BOOK_COMMIT = 3, BOOK_NEAR = 1;
+/** (ticket #77) a way out up to this much further (m) taken if no line can be had to the nearest */
+const OUT_SPARE = 30;
+/** (ticket #77) a booking not stopped for if the car it is for is held by this one, through at most this many cars */
+const HELD_CHAIN = 6;
 /** (on a guide) who gets to a crossing first: this much sooner (s), else a tie; merging onto a ring, it gives way to one on it
  * getting there up to this much later (s) */
 const TIE = 0.3, MERGE_MARGIN = 1;
@@ -169,6 +173,8 @@ export class SpatialSim {
   private outsOf = new Map<Zone, { lane: SketchLane; s: number }[]>();
   /** (ticket #78) each junction's level (a sketch with bridges or tunnels; else none, all on the ground) */
   private zoneLevel = new Map<Zone, number>();
+  /** (ticket #77) a ring's own drawn lanes from the inside out, each its radius (two or more, concentric with the island), else null */
+  private ringRadii = new Map<Zone, { id: string; r: number }[] | null>();
 
   constructor(private sk: Sketch, private params: SpatialParams) {
     this.rnd = mulberry32(params.seed);
@@ -280,11 +286,9 @@ export class SpatialSim {
     if (!Number.isFinite(bc)) for (const c of conns) {
       const z = this.zoneOfConn.get(c.id);
       if (!z?.island?.polar) continue;
-      let o: { lane: SketchLane; s: number } | null = null, oc = Infinity;
-      for (const w of this.outsOf.get(z) ?? []) { const x = Math.min(...dests.map(d => this.routes.from(w.lane.id, w.s, d))); if (x < oc) { oc = x; o = w; } }
-      const pa = pointAt(at.lane.shape, c.from.s);
-      if (!o || !this.lineThrough(z, pa.p, Math.atan2(pa.d.y, pa.d.x), o.lane, o.s)) continue;
-      bc = c.from.s - at.s + oc; best = { lane: at.lane, s: c.from.s, zone: z, conn: null };
+      const pa = pointAt(at.lane.shape, c.from.s), lo = this.lineOut(z, pa.p, Math.atan2(pa.d.y, pa.d.x), at.lane, dests, this.outsOf.get(z) ?? []);
+      if (!lo) continue;
+      bc = c.from.s - at.s + lo.cost; best = { lane: at.lane, s: c.from.s, zone: z, conn: null };
       break;
     }
     if (!Number.isFinite(bc)) {
@@ -390,14 +394,18 @@ export class SpatialSim {
     // connectors' as drawn, and its way out theirs. (The way out by its connectors' route even with a line from geometry: on
     // Roundabout 3, 1000 cars through in 6 x 10 min down to 791)
     const h0 = Math.atan2(pa.d.y, pa.d.x);
-    let line = best && z.island?.polar ? this.lineThrough(z, pa.p, h0, best.lane, best.s) : null;
+    let line = best && z.island?.polar ? this.lineThrough(z, pa.p, h0, best.lane, best.s, lane) : null;
     if (!line && via) {
       const cg = this.guideFor(z, via, dests, lead);
       if (cg) { best = cg.out; line = { pts: easedFrom(cg.pts, cg.cum, pa.p, lead || GUIDE_EASE), cum: cg.cum, join: cg.join }; }
     }
+    // (none by its connectors (none drawn from its lane to its way out: ticket #76), round a round island a line to a way out a
+    // little further on (ticket #77: from the outside ring lane, the far one of two lanes out too sharp a turn); on Sketch 1 taken
+    // before its connectors' curves, 967 cars through in 4 x 10 min down to 811)
+    if (!line && best && z.island?.polar) { const lo = this.lineOut(z, pa.p, h0, lane, dests, (via && this.outsVia(z, via)) || (this.outsOf.get(z) ?? [])); if (lo) { best = lo.out; line = lo.line; } }
     // (none by its connectors either (one over unpaved ground): a line from the route field after all, so it books its way with
     // the others (ticket #75: one without a line took part in no bookings, and met the booked ones nose to nose))
-    if (!line && best) line = this.lineThrough(z, pa.p, h0, best.lane, best.s);
+    if (!line && best) line = this.lineThrough(z, pa.p, h0, best.lane, best.s, lane);
     const g = best ? pointAt(best.lane.shape, best.s) : null, c = z.island?.c ?? pa.p;
     Object.assign(v, { mode: "spatial", at: null, leave: undefined, p: pa.p, h: Math.atan2(pa.d.y, pa.d.x), zone: z, goal: best && g ? { lane: best.lane, s: best.s, p: g.p, d: g.d, D: routeField(z, best.lane, best.s) } : null, entering: true, from: lane, waitSince: this.t, rays: null, tracks: new Map(), lane: undefined, round: 0, lastA: Math.atan2(pa.p.y - c.y, pa.p.x - c.x),
       guide: line ? { pts: line.pts, cum: line.cum, k: 0, join: line.join } : null, offset: 0, heldAt: undefined, sideAt: undefined,
@@ -413,8 +421,14 @@ export class SpatialSim {
    * when a gentle turn takes it onto its lane; elsewhere (an oval, a plain junction) it goes down the route field (round an
    * island only the ring's way). Null: it ran off the paving, or didn't get there lined up.
    */
-  private lineThrough(z: Zone, p0: Pt, h0: number, lane: SketchLane, s0: number): { pts: Pt[]; cum: number[]; join: number } | null {
+  private lineThrough(z: Zone, p0: Pt, h0: number, lane: SketchLane, s0: number, from?: SketchLane): { pts: Pt[]; cum: number[]; join: number } | null {
     const s = this.surface!, isl = z.island, rr = isl?.polar, L = laneLength(lane.shape), g = pointAt(lane.shape, s0), maxTurn = PATH_STEP / R_MIN;
+    // (ticket #77: a ring with lanes drawn, round it in the middle of one: the one its lane in leads to (the arm's lanes in, from
+    // the one furthest back the ring's way, to the ring's from the inside out), else the inside one for a far way out; the
+    // outside one before its way out. At a share of the carriageway it went round on the line between the two, a car on two
+    // lanes. (Out of the inside one straight to its way out, where a connector is drawn so, it crossed the outside lane's cars
+    // there: on Roundabout 3, 1200 cars through in 4 x 10 min down to 1054)
+    const rl = rr ? this.ringLanesOf(z) : null, mine = rl && from ? this.ringLaneFor(z, from, rl.length) : undefined;
     const D = rr ? null : routeField(z, lane, s0);
     let p = p0, h = h0, round = 0, lastA = isl ? Math.atan2(p.y - isl.c.y, p.x - isl.c.x) : 0, share = -1, out = false;
     const raw: Pt[] = [p];
@@ -444,9 +458,12 @@ export class SpatialSim {
         out ||= toGo < 0.25 || (toGo < 1.2 && Math.abs(angDiff(Math.atan2(g.p.y - p.y, g.p.x - p.x), tan)) < EXIT_TURN) || (toGo > 6 && dGoal < 6 && round > Math.PI);
         if (out) aim = onLane;
         else {
-          const deg = degOf(a), W = Math.max(2.5, Math.min(isl.width, rr.rOut[deg] - rr.rIn[deg])), rT = rr.rIn[deg] + W * (toGo < 1.5 ? 0.78 : share);
-          const b = a + isl.sense * Math.min(0.7, 5 / Math.max(rad, rT));
-          aim = { x: isl.c.x + rT * Math.cos(b), y: isl.c.y + rT * Math.sin(b) };
+          const deg = degOf(a), W = Math.max(2.5, Math.min(isl.width, rr.rOut[deg] - rr.rIn[deg]));
+          const rT = rl ? rl[toGo < 1.5 ? rl.length - 1 : (mine ?? (share < 0.5 ? 0 : rl.length - 1))].r : rr.rIn[deg] + W * (toGo < 1.5 ? 0.78 : share);
+          // (aimed at a point that far round, it settles where that point is dead ahead: rT × cos of it, inside. Round a ring with
+          // lanes, aimed that much further out, so it keeps to the lane's middle (the outside lane's line ran on the line between))
+          const da = Math.min(0.7, 5 / Math.max(rad, rT)), b = a + isl.sense * da, rA = rl ? rT / Math.cos(da) : rT;
+          aim = { x: isl.c.x + rA * Math.cos(b), y: isl.c.y + rA * Math.sin(b) };
         }
       } else {
         const r = descend(z, D!, p, AIM_STEPS);
@@ -460,6 +477,35 @@ export class SpatialSim {
     }
     (globalThis as { __why?: string }).__why = "not lined up";
     return null;
+  }
+  /** (ticket #77) round a round island, its line to the way out (of `outs`) that gets it to its own soonest; none to be had to
+   * that one, to the next that gets it there within OUT_SPARE m more (from the outside ring lane, the far one of two lanes out
+   * was too sharp a turn: those cars crossed to the lane beside before their line again, and stood there) */
+  private lineOut(z: Zone, p: Pt, h: number, from: SketchLane, dests: string[], outs: { lane: SketchLane; s: number }[]) {
+    const ranked = outs.map(o => ({ o, cost: Math.min(...dests.map(d => this.routes.from(o.lane.id, o.s, d))) })).filter(x => Number.isFinite(x.cost)).sort((a, b) => a.cost - b.cost);
+    for (const x of ranked) {
+      if (x.cost > ranked[0].cost + OUT_SPARE) break;
+      const line = this.lineThrough(z, p, h, x.o.lane, x.o.s, from);
+      if (line) return { out: x.o, line, cost: x.cost };
+    }
+    return null;
+  }
+  private ringLanesOf(z: Zone) {
+    if (!this.ringRadii.has(z)) {
+      const c = z.island!.c, r = [...z.lanes].flatMap(id => { const sh = this.lane(id).shape; return sh.kind === "arc" && Math.hypot(sh.c.x - c.x, sh.c.y - c.y) < 1 ? [{ id, r: sh.r }] : []; }).sort((a, b) => a.r - b.r);
+      this.ringRadii.set(z, r.length >= 2 ? r : null);
+    }
+    return this.ringRadii.get(z)!;
+  }
+  /** (ticket #77) the ring lane (0 the inside one) a lane in leads to: of its road's lanes into the junction, ordered by where
+   * they meet it the ring's way, the one furthest back the inside, the furthest on the outside; its road's only lane in: none */
+  private ringLaneFor(z: Zone, from: SketchLane, n: number) {
+    const isl = z.island!, road = roadOf(this.sk, from.id);
+    const ins = (road?.lanes ?? [from.id]).filter(id => (this.connsFrom.get(id) ?? []).some(c => z.connectors.has(c.id)));
+    if (ins.length < 2 || !ins.includes(from.id)) return undefined;
+    const along = (id: string) => { const l = this.lane(id), e = pointAt(l.shape, laneLength(l.shape)).p; return Math.atan2(e.y - isl.c.y, e.x - isl.c.x) * isl.sense; };
+    const a0 = along(from.id), rank = ins.filter(id => angDiff(along(id), a0) < 0).length;
+    return Math.round((rank * (n - 1)) / (ins.length - 1));
   }
   /**
    * (ticket #66; since #74 only when no line from geometry is had) A car's trajectory guide through a junction: from connector `via`, on along the junction's own lanes (a ring's)
@@ -975,7 +1021,9 @@ export class SpatialSim {
     const w = this.windowsOf(v), canStop = v.entering && v.entered < BOOK_COMMIT;
     const clash = (cell: number, x: { tIn: number; tOut: number; h: number }, before?: number) => {
       for (const b of book.get(cell) ?? []) {
-        if (b.id === v.id || (before !== undefined && b.rank >= before)) continue;
+        // (one admitted later, not stopped for: but where its body is now, yes (ticket #77: an earlier car turning out swung its
+        // side into a later one standing in the outside lane by its way out))
+        if (b.id === v.id || (before !== undefined && b.rank >= before && b.tIn > this.t + 1e-6)) continue;
         if (b.tIn - BOOK_GAP < x.tOut && x.tIn < b.tOut + BOOK_GAP && Math.cos(b.h - x.h) < BOOK_SAME_WAY) return b;
       }
       return null;
@@ -984,7 +1032,8 @@ export class SpatialSim {
       // (not before it is at its line: handed over further up (crossing to the lane beside), booked from there, a queue ahead of
       // it would keep its windows sliding, holding others out)
       if (v.entering && v.entered < -BOOK_NEAR) return null;
-      if (canStop) for (const [cell, x] of w) { const b = clash(cell, x); if (b) return { stopAt: 0, why: `booked by car ${b.id}` }; }
+      // (but not for one it is holding up, its nose already in that one's way at its line: ticket #77)
+      if (canStop) for (const [cell, x] of w) { const b = clash(cell, x); if (b && !this.heldBy(b.id, v.id)) return { stopAt: 0, why: `booked by car ${b.id}` }; }
       v.rank = this.nextRank++;
     }
     this.unbook(v);
@@ -996,9 +1045,19 @@ export class SpatialSim {
       // (but not for one its own body is holding up (that one's rays show it in its way): that one can't go till it does; it is
       // standing, so going on past it is safe; else each would wait for the other, as on the oval's shallow merges)
       const b = clash(cell, x, v.rank);
-      if (b && !this.vehicles.find(o => o.id === b.id)?.limit?.startsWith(`car ${v.id} at`)) stop = { stopAt: x.d - BOOK_STOP, why: `booked by car ${b.id}` };
+      if (b && !this.heldBy(b.id, v.id)) stop = { stopAt: x.d - BOOK_STOP, why: `booked by car ${b.id}` };
     }
     return stop;
+  }
+  /** whether car `id` is held, by its limit, by car `by`: straight, or through others each holding the next (ticket #77: on a
+   * ring with two lanes kept, 154 waited for 148's booking, 148 stood behind 153, 153 waited for 154's: none moved again) */
+  private heldBy(id: number, by: number) {
+    for (let n = 0, cur: number | undefined = id; n < HELD_CHAIN && cur !== undefined; n++) {
+      const m = /^(?:booked by )?car (\d+) at/.exec(this.vehicles.find(o => o.id === cur)?.limit ?? "");
+      cur = m ? Number(m[1]) : undefined;
+      if (cur === by) return true;
+    }
+    return false;
   }
   /** a car's windows: per cell of its junction's own paving along its guide, when its body is over it, its way, and how far
    * ahead its front is from the cell (m; 0 or less, in it) */
