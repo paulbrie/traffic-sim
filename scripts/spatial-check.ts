@@ -22,6 +22,9 @@
  *   in from their own line by a line from geometry, not crossing to the lane beside 12 m before it; to 32:44 none stands two
  *   minutes, next to no locks, no queue held back at the edge (car 885 stood 2 minutes there, its lane behind it: 8 locks, 80
  *   cars held back).
+ * - (ticket #77) Roundabout 3 as at rev 461 (two ring lanes): a car goes round in the middle of a ring lane, the one its lane in
+ *   leads to as the connectors are drawn, not on the line between the two (a fifth of the time before); cars through, next to
+ *   no collisions or locks.
  * npm run spatial:check
  */
 import { readFileSync } from "fs";
@@ -161,6 +164,30 @@ function fieldsReach(sk: Sketch, z: Zone) {
   check(own >= 50 && early === 0, `Roundabout 3 (rev 456): cars on the lane with only a right turn go in from its own line for other ways out (${own} did, ${early} crossed over before it)`);
   check(longest < 120, `Roundabout 3 (rev 456): no car stands two minutes in 32:44 (at most ${longest.toFixed(0)} s)`);
   check(st.deadlocks <= 2 && st.heldBack <= 20, `Roundabout 3 (rev 456): next to no locks, no queue held back at 32:44 (${st.deadlocks} locks, ${st.heldBack} held back; 8 and 80 before)`);
+}
+
+// (ticket #77) Roundabout 3 at rev 461: round its two ring lanes in the middle of one
+{
+  const sk = load("spatial-roundabout-3-rev461.json");
+  const sim = new SpatialSim(sk, { speed: sk.traffic?.speed ?? 50, rate: sk.traffic?.rate ?? 50, seed: 1, gap: 2, opts: OPTS });
+  const inner = sim as unknown as { surface: { zones: Zone[] }; ringLaneFor: (z: Zone, l: unknown, n: number) => number | undefined; inRing: (z: Zone, p: { x: number; y: number }) => boolean; body: (v: unknown) => { c: { x: number; y: number } } };
+  const z = inner.surface.zones.find(x => x.island)!, c = z.island!.c;
+  // (the ring lanes from the inside out; each lane in drawn onto one, the one it is taken to)
+  const ring = [...z.lanes].map(id => laneById(sk, id)!).filter(l => l.shape.kind === "arc").sort((a, b) => (a.shape as { r: number }).r - (b.shape as { r: number }).r);
+  const drawn = sk.connectors.filter(x => z.connectors.has(x.id) && !z.lanes.has(x.from.lane) && ring.some(l => l.id === x.to.lane));
+  const wrong = drawn.filter(x => ring[inner.ringLaneFor(z, laneById(sk, x.from.lane), ring.length) ?? -1]?.id !== x.to.lane);
+  check(drawn.length >= 4 && !wrong.length, `Roundabout 3 (rev 461): each lane in taken to the ring lane it is drawn onto (${drawn.length - wrong.length} of ${drawn.length})`);
+  // (once a second, cars on the ring: on the line between the two lanes, their body over it)
+  const mid = ring.slice(1).map((l, i) => ((l.shape as { r: number }).r + (ring[i].shape as { r: number }).r) / 2);
+  let on = 0, over = 0;
+  for (let t = 0; t < 600; t += 0.1) {
+    sim.step(0.1);
+    if (Math.round(sim.t * 10) % 10) continue;
+    for (const v of sim.vehicles) if (v.mode === "spatial" && v.zone === z && inner.inRing(z, v.p)) { const b = inner.body(v).c, r = Math.hypot(b.x - c.x, b.y - c.y); on++; if (mid.some(m => Math.abs(r - m) < 0.9)) over++; }
+  }
+  const st = sim.stats();
+  check(over / on < 0.14, `Roundabout 3 (rev 461): on the ring, a car over the line between its lanes ${((100 * over) / on).toFixed(0)}% of the time (18% before)`);
+  check(st.finished >= 300 && st.collisions <= 2 && st.deadlocks <= 2, `Roundabout 3 (rev 461): cars through in 10 min, next to no collisions or locks (${st.finished}, ${st.collisions}, ${st.deadlocks})`);
 }
 
 // (ticket #72) Roundabout 3 at rev 454: the ring never fills all the way round
