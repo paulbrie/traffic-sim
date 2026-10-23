@@ -76,7 +76,8 @@ export class SpatialSimClient {
 
   /** its cars over the map (`ctx` as the map's canvas, view centre and scale, CSS size): rays thin, goals dashed */
   draw(ctx: CanvasRenderingContext2D, view: { cx: number; cy: number; scale: number }, w: number, h: number, rays: boolean) {
-    // (in the replay the cars as they were: no rays or goal lines, those aren't kept; the one picked's path and guide are)
+    // (in the replay the cars as they were: no rays for all of them, those aren't kept; the one picked's, recast
+    // from the bodies that are kept, ticket #85 — and its path and guide, kept for it)
     const f = this.replayT === null ? this.last : null, cars = this.shown();
     if (!f && !cars.length) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1), px = 1 / view.scale;
@@ -87,6 +88,8 @@ export class SpatialSimClient {
       for (const p of f?.poses ?? []) if ("rays" in p && p.rays && p.from) {
         for (const r of p.rays) { ctx.strokeStyle = r.car ? "rgba(239,68,68,0.45)" : "rgba(96,165,250,0.3)"; ctx.beginPath(); ctx.moveTo(p.from.x, p.from.y); ctx.lineTo(r.x, r.y); ctx.stroke(); }
       }
+      const pr = this.replayT !== null ? this.replayed?.car?.rays : null;
+      if (pr) for (const r of pr.hits) { ctx.strokeStyle = r.car ? "rgba(239,68,68,0.45)" : "rgba(96,165,250,0.3)"; ctx.beginPath(); ctx.moveTo(pr.from.x, pr.from.y); ctx.lineTo(r.x, r.y); ctx.stroke(); }
     }
     // (the car picked: its trajectory guide (its route's lanes and connectors, dashed), the path it wants to take, and where its
     // way out starts)

@@ -7,7 +7,7 @@
  */
 import { roadOf, type Sketch } from "@/lib/lane-sketch";
 import type { ReplayKept } from "@/components/v2/sketch-replay-bar";
-import { SpatialSim, type SpatialCarInfo, type SpatialParams, type SpatialStats } from "@/lib/experiments/spatial-roundabout/engine";
+import { SpatialSim, WIDTH, type SpatialCarInfo, type SpatialParams, type SpatialStats } from "@/lib/experiments/spatial-roundabout/engine";
 
 export type ToSpatialWorker =
   | { type: "init"; sketch: Sketch; params: SpatialParams }
@@ -21,8 +21,9 @@ export type SpatialFrame = { type: "frame"; t: number; poses: ReturnType<Spatial
 /** a car as kept for the replay: its body (middle, direction, length), its speed's share of the limit, and if it was sensing */
 export type ReplayPose = { id: number; p: { x: number; y: number }; d: { x: number; y: number }; len: number; share: number; spatial: boolean };
 /** (ticket #69) the car picked as kept at that moment: (sensing) its path as planned (a point every 2 m), what held it, how far
- * off its guide it kept, its guide, its way out's start, the junction and the road out (none of those on a lane) */
-export type ReplayCar = { id: number; path: { x: number; y: number }[]; limit: string; offset: number; guide: { x: number; y: number }[] | null; goal: { x: number; y: number } | null; zone: string; out: string };
+ * off its guide it kept, its guide, its way out's start, the junction and the road out (none of those on a lane); and (ticket
+ * #85) its rays recast from the bodies kept for that moment (not kept themselves: there isn't room to, for every car) */
+export type ReplayCar = { id: number; path: { x: number; y: number }[]; limit: string; offset: number; guide: { x: number; y: number }[] | null; goal: { x: number; y: number } | null; zone: string; out: string; rays: { from: { x: number; y: number }; hits: { x: number; y: number; car: boolean }[] } | null };
 /** the cars at a moment of the replay (`t`: the moment kept nearest the one asked), and the one picked */
 export type SpatialReplay = { type: "replay"; t: number; poses: ReplayPose[]; car: ReplayCar | null };
 export type FromSpatialWorker = SpatialFrame | SpatialReplay;
@@ -101,7 +102,18 @@ function replayAt(t: number, picked: number | null): SpatialReplay | null {
       let g: (typeof guides)[number] | null = null;
       for (const x of guides) if (x.id === picked && x.t <= at + 1e-6 && (!g || x.t >= g.t)) g = x;
       const gp = g?.pts ? Array.from({ length: g.pts.length / 2 }, (_, k) => ({ x: g!.pts![2 * k], y: g!.pts![2 * k + 1] })) : null;
-      car = { id, path, limit: lim, offset: sp[i + 4], guide: gp, goal: g?.goal ? { x: g.goal[0], y: g.goal[1] } : null, zone: g?.zone ?? "a junction", out: g?.out ?? "" };
+      // (ticket #85) its rays, recast from the bodies kept for this moment: not kept themselves (every car, every
+      // step, would be too much), but recoverable from its own body (front = centre + half its length along its
+      // direction) and the other cars' kept bodies, against the surface (unchanged since the run began)
+      const pose = sim && poses.find(x => x.id === picked);
+      const rays = pose?.spatial
+        ? (() => {
+            const h = Math.atan2(pose.d.y, pose.d.x), p = { x: pose.p.x + (pose.d.x * pose.len) / 2, y: pose.p.y + (pose.d.y * pose.len) / 2 };
+            const vmax = Math.max(1, (limit || 50) / 3.6), out = sim!.senseFrom(p, h, pose.share * vmax, poses.filter(x => x.id !== picked).map(x => ({ id: x.id, c: x.p, d: x.d, len: x.len, w: WIDTH })));
+            return { from: p, hits: out.map((r, k) => { const a = h + (2 * Math.PI * k) / out.length; return { x: p.x + Math.cos(a) * r.d, y: p.y + Math.sin(a) * r.d, car: r.car >= 0 }; }) };
+          })()
+        : null;
+      car = { id, path, limit: lim, offset: sp[i + 4], guide: gp, goal: g?.goal ? { x: g.goal[0], y: g.goal[1] } : null, zone: g?.zone ?? "a junction", out: g?.out ?? "", rays };
       break;
     }
     i += 6 + 2 * n;

@@ -29,6 +29,8 @@
  *   no collisions or locks.
  * - (ticket #81) handed back onto its lane, a car is drawn easing onto it, not turned or moved at once (up to 45° from one frame to
  *   the next before); as driven and met, still on its lane.
+ * - (ticket #85) a picked car's rays, recast for the replay from a position, heading and the other cars' bodies (senseFrom), match
+ *   sense()'s own, cast live for the same car.
  * npm run spatial:check
  */
 import { readFileSync } from "fs";
@@ -304,6 +306,31 @@ function fieldsReach(sk: Sketch, z: Zone) {
   check(crossed > 0, "levels: cars cross the bridge over Roundabout 2");
   check(across === 0, `levels: no collisions between cars at different levels (${across})`);
   check(seen === 0, `levels: spatial cars' rays don't see cars at another level (${seen} hits)`);
+}
+
+// (ticket #85) senseFrom: the rays recast for the replay (from a position and heading, against bodies given) match
+// sense()'s own, cast live, for the same car among the same other cars — the replay isn't kept its rays, only what
+// senseFrom needs to recast them: a car's body (its own and the others') and the surface, both already kept.
+// (compared within the same instant, nothing stepped in between: v.rays itself is a snapshot from partway through
+// a step, by then stale against other cars moved later in it)
+{
+  const sk = load("spatial-roundabout-3.json");
+  const sim = new SpatialSim(sk, { speed: sk.traffic?.speed ?? 50, rate: sk.traffic?.rate ?? 50, seed: 1, gap: 2, opts: OPTS });
+  const sense = (sim as unknown as { sense: (v: SpatialSim["vehicles"][number]) => { d: number; car: number }[] }).sense.bind(sim);
+  let checked = 0, mismatched = 0;
+  for (let t = 0; t < 60 && checked < 20; t += 0.1) {
+    sim.step(0.1);
+    for (const v of sim.vehicles) {
+      if (checked >= 20 || v.mode !== "spatial") continue;
+      const live = sense(v);
+      const others = sim.vehicles.filter(w => w !== v).map(w => ({ id: w.id, ...sim.body(w) }));
+      const recast = sim.senseFrom(v.p, v.h, v.v, others);
+      checked++;
+      if (recast.length !== live.length || recast.some((r, i) => Math.abs(r.d - live[i].d) > 1e-6 || r.car !== live[i].car)) mismatched++;
+    }
+  }
+  check(checked >= 10, `senseFrom: enough sensing cars seen to compare (${checked})`);
+  check(mismatched === 0, `senseFrom: matches sense()'s own rays, cast live (${mismatched} of ${checked} differ)`);
 }
 
 console.log(failed ? `\n${failed} check(s) failed` : "\nall checks passed");

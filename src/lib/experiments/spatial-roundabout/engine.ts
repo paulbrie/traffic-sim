@@ -11,7 +11,9 @@ import { connectorPts, contentsOf, demandWays, entryLanes, hasLevels, isFullCirc
 import { buildSurface, descend, drivable, edgeDist, exitStart, inCore, routeField, zoneCell, type Island, type Surface, type Zone } from "./surface";
 
 // drivers (as the main engine's defaults)
-const A_MAX = 1.5, B_COMF = 2, B_MAX = 6, T_HEAD = 1.2, S0 = 2, CAR_LEN = 4.5, TRUCK_LEN = 12, WIDTH = 1.8;
+const A_MAX = 1.5, B_COMF = 2, B_MAX = 6, T_HEAD = 1.2, S0 = 2, CAR_LEN = 4.5, TRUCK_LEN = 12;
+/** a car's body, all of them (for the replay's bodies too, kept without it: ticket #85) */
+export const WIDTH = 1.8;
 /** spatial driving: rays all the way round (the user's choice, 2026-10-12: as a self-driving car's sensors), every 5°; range (m) */
 export const RAYS = 72;
 const RANGE0 = 15, RANGE_PER_MS = 3, RANGE_MAX = 45;
@@ -581,21 +583,30 @@ export class SpatialSim {
 
   /** the rays: from its front, all round, each to the surface's edge or another car's body (nothing else known; its own body not seen) */
   private sense(v: SpatialCar) {
-    const s = this.surface!, range = Math.min(RANGE_MAX, RANGE0 + RANGE_PER_MS * v.v), out: { d: number; car: number }[] = [];
+    const range = Math.min(RANGE_MAX, RANGE0 + RANGE_PER_MS * v.v);
     // (ticket #78: not cars at another level, on a bridge over it or in a tunnel under it)
     const others = this.vehicles.filter(w => w !== v && Math.hypot(this.front(w).x - v.p.x, this.front(w).y - v.p.y) < range + w.len + 2 && !this.apart(v, w));
-    const bodies = others.map(w => ({ id: w.id, ...this.body(w) }));
+    return this.senseFrom(v.p, v.h, v.v, others.map(w => ({ id: w.id, ...this.body(w) })));
+  }
+  /**
+   * The rays from a point, facing a heading, as `sense` casts them, but against bodies given rather than
+   * `this.vehicles`': for the replay, a picked car's rays at a moment kept, among the other cars as they were then,
+   * not as they are now (ticket #85 — the replay doesn't keep rays themselves, only what it takes to recast them:
+   * the cars' bodies, already kept for the replay bar).
+   */
+  senseFrom(p: Pt, h: number, v: number, others: { id: number; c: Pt; d: Pt; len: number; w: number }[]): { d: number; car: number }[] {
+    const s = this.surface!, range = Math.min(RANGE_MAX, RANGE0 + RANGE_PER_MS * v), out: { d: number; car: number }[] = [];
     for (let i = 0; i < RAYS; i++) {
-      const a = this.rayAngle(v, i), ux = Math.cos(a), uy = Math.sin(a);
+      const a = h + (2 * Math.PI * i) / RAYS, ux = Math.cos(a), uy = Math.sin(a);
       // (along the ray, in steps as long as the ground allows: to where it leaves the drivable surface)
       let t = 0.2, hit = range;
       while (t < range) {
-        const q = { x: v.p.x + ux * t, y: v.p.y + uy * t };
+        const q = { x: p.x + ux * t, y: p.y + uy * t };
         if (!drivable(s, q)) { hit = t; break; }
         t += Math.max(0.15, edgeDist(s, q));
       }
       let car = -1;
-      for (const b of bodies) { const tc = rayBox(v.p, ux, uy, b); if (tc !== null && tc < hit) { hit = tc; car = b.id; } }
+      for (const b of others) { const tc = rayBox(p, ux, uy, b); if (tc !== null && tc < hit) { hit = tc; car = b.id; } }
       out.push({ d: hit, car });
     }
     return out;
