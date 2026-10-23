@@ -21,7 +21,7 @@ export interface CarExplain {
   /** the car ahead on its path: bumper gap (m) and its speed (km/h) */
   leader: null | { car: number; gap: number; kmh: number };
   /** the car holding it (give way, merge, zone…): the gap seen and needed (m), seconds to the zone (theirs) and to clear it (mine), the conflict zone on both paths */
-  blocker: null | { car: number; edge: string; gap?: number; needGap?: number; theirSec?: number; mySec?: number; /** giving way: the time to spare it wants on top of `mySec` (s) */ wantSec?: number; /** the other on a ring: metres round it to the zone */ round?: number; zone?: { mine: Pt[]; theirs: Pt[] } };
+  blocker: null | { car: number; edge: string; /** the other car's own edge, left out when it's already on `edge` */ carEdge?: string; gap?: number; needGap?: number; theirSec?: number; mySec?: number; /** giving way: the time to spare it wants on top of `mySec` (s) */ wantSec?: number; /** the other already on the ring: metres round it to the zone */ round?: number; zone?: { mine: Pt[]; theirs: Pt[] } };
   /** the point it holds for: on `edge` at `s`, `dist` m ahead of its front */
   stopAt: null | { edge: string; s: number; dist: number; why: string };
   /** every rule weighed this step, not just the one that won (`won`): where each would hold it (`p`, `at` m ahead of its
@@ -113,6 +113,9 @@ export function crossingWords(b: NonNullable<CarExplain["blocker"]>): { where: s
 /** the explanation's headline in plain words, with the car it is about (to link); no route leads it unless something else holds the car */
 export function headline(x: CarExplain): { text: string; car?: number } {
   const r = x.rule?.kind, b = x.blocker, on = (e?: string) => (e ? ` on ${edgeName(e)}` : "");
+  // (the car held for: "on" the crossing's lane once it's there, "heading to" it while it's still on its own, so a
+  // car not in the junction yet isn't said to be on it; ticket #80)
+  const heldOn = (bb: typeof b) => (bb?.edge ? ` ${bb.carEdge ? "heading to" : "on"} ${edgeName(bb.edge)}` : "");
   const speedNow = x.speed ? `${kmh(x.speed.kmh)} of ${kmh(x.speed.desiredKmh)} km/h` : null;
   if (x.deadlock) return { text: `${x.deadlock.includes(x.car) ? "Deadlock" : "Waiting on a deadlock"}: ${x.deadlock.join(" → ")} → ${x.deadlock[0]} all wait on each other`, car: x.deadlock[0] };
   const lost = noRouteText(x);
@@ -132,11 +135,11 @@ export function headline(x: CarExplain): { text: string; car?: number } {
     // (a give-way with the numbers: where the other is, round a ring or not, and what this car needs)
     const cw = crossingWords(b);
     if (r === "give-way" && (cw.where.length || cw.need))
-      return { text: `Giving way to car ${b.car}${on(b.edge)}${cw.where.map((w) => `, ${w}`).join("")}${cw.need ? `; needs ${cw.need}` : ""} (${d ? `${why}, ` : ""}${s1(x.since)})`, car: b.car };
-    return { text: `Waiting for car ${b.car} crossing its path${on(b.edge)} (${why}, ${s1(x.since)})`, car: b.car };
+      return { text: `Giving way to car ${b.car}${heldOn(b)}${cw.where.map((w) => `, ${w}`).join("")}${cw.need ? `; needs ${cw.need}` : ""} (${d ? `${why}, ` : ""}${s1(x.since)})`, car: b.car };
+    return { text: `Waiting for car ${b.car} crossing its path${heldOn(b)} (${why}, ${s1(x.since)})`, car: b.car };
   }
   if (b && (r === "keep-clear" || r === "ring-full"))
-    return { text: `Waiting for car ${b.car} crossing its path${on(b.edge)} (${RULE_WORDS[r]}, ${s1(x.since)})`, car: b.car };
+    return { text: `Waiting for car ${b.car} crossing its path${heldOn(b)} (${RULE_WORDS[r]}, ${s1(x.since)})`, car: b.car };
   if (r === "letting-in" && b) return { text: `Letting car ${b.car} in (${s1(x.since)})`, car: b.car };
   if (r === "signal") return { text: `At the light${on(x.rule?.edge)}${x.rule?.detail ? ` (${x.rule.detail})` : ""}, ${s1(x.since)}` };
   if (r === "stop") return { text: `At the stop line${on(x.rule?.edge)}, ${s1(x.since)}` };
@@ -160,7 +163,7 @@ export function explainText(x: CarExplain, clock: (t: number) => string, firstCo
   if (x.leader) out.push(`Leader: car ${x.leader.car}, ${m1(x.leader.gap)} ahead at ${kmh(x.leader.kmh)} km/h`);
   if (x.blocker) {
     const b = x.blocker, cw = crossingWords(b), extra = [b.gap !== undefined ? `gap ${m1(b.gap)}` : "", b.needGap !== undefined ? `needs ${m1(b.needGap)}` : "", ...cw.where, cw.need ? `this one needs ${cw.need}` : ""].filter(Boolean);
-    out.push(`Held by: car ${b.car} on ${edgeName(b.edge)}${extra.length ? ` (${extra.join(", ")})` : ""}`);
+    out.push(`Held by: car ${b.car}${b.carEdge ? " heading to" : " on"} ${edgeName(b.edge)}${extra.length ? ` (${extra.join(", ")})` : ""}`);
   }
   if (x.stopAt) out.push(`Holding for: ${tagWords(x.stopAt.why)}, ${m1(x.stopAt.dist)} ahead (${edgeName(x.stopAt.edge)} at ${m1(x.stopAt.s)})`);
   if (x.chain.length) out.push(`Blocking chain: ${[x.car, ...x.chain].join(" → ")}${x.deadlock ? `  DEADLOCK ring: ${x.deadlock.join(", ")}` : movingLoop(x) ? "  (a loop, still moving: not a deadlock)" : ""}`);

@@ -75,4 +75,15 @@ t("a give-way's numbers (T171b): round the ring, seconds to the crossing, what i
   assert.ok(explainText(gw({ round: 23, theirSec: 4.5, mySec: 3.3, wantSec: 1.5 }), clock).includes("Held by: car 128 on lane l3257 (23 m round the ring, 4.5 s from the crossing, this one needs 3.3 s + 1.5 s to spare)"));
 });
 
+t("a give-way to one not on the ring yet (ticket #80): \"heading to\", not \"on\", and no round-the-ring distance for it", () => {
+  const gw = (b: Partial<NonNullable<CarExplain["blocker"]>>) => ({ ...base, rule: { kind: "give-way" as const }, blocker: { car: 306, edge: "lane:l3278", ...b }, since: 0.5 });
+  // (still on its own lane, projected to reach l3278: no "round" sent by the sim for it, carEdge says so)
+  assert.equal(headline(gw({ carEdge: "lane:l1757", theirSec: 3.2, mySec: 3.4, wantSec: 1.5 })).text,
+    "Giving way to car 306 heading to lane l3278, 3.2 s from the crossing; needs 3.4 s + 1.5 s to spare (0.5 s)");
+  assert.ok(explainText(gw({ carEdge: "lane:l1757", theirSec: 3.2, mySec: 3.4, wantSec: 1.5 }), clock).includes("Held by: car 306 heading to lane l3278 (3.2 s from the crossing, this one needs 3.4 s + 1.5 s to spare)"));
+  // (already on the ring lane: as before, "on" and the round-the-ring distance)
+  assert.equal(headline(gw({ round: 21, theirSec: 3.2, mySec: 3.4, wantSec: 1.5 })).text,
+    "Giving way to car 306 on lane l3278, 21 m round the ring, 3.2 s from the crossing; needs 3.4 s + 1.5 s to spare (0.5 s)");
+});
+
 console.log(`car-explain: ${ok} checks passed`);

@@ -101,7 +101,7 @@ export function CarWhy({ x, live, patience: firstCome, onPick }: {
       {x.leader && row("Leader", <>car {car(x.leader.car)} <span className="font-mono tabular">{one(x.leader.gap)} m ahead, {x.leader.kmh.toFixed(0)} km/h</span></>)}
       {x.rule && row("Rule", <>{RULE_WORDS[x.rule.kind]}{x.rule.edge && <> · <EdgeLink edge={x.rule.edge} /></>}{x.rule.detail ? ` (${x.rule.detail})` : ""} <span className="font-mono text-muted-foreground tabular">{one(x.since)} s</span></>)}
       {x.blocker && row("Held by", (
-        <>car {car(x.blocker.car)} on <span className="font-mono"><EdgeLink edge={x.blocker.edge} /></span>
+        <>car {car(x.blocker.car)} {x.blocker.carEdge ? "heading to" : "on"} <span className="font-mono"><EdgeLink edge={x.blocker.edge} /></span>
           {(() => {
             const b = x.blocker, cw = crossingWords(b);
             const parts = [b.gap !== undefined ? `gap ${one(b.gap)} m` : "", b.needGap !== undefined ? `needs ${one(b.needGap)} m` : "", ...cw.where, cw.need ? `needs ${cw.need}` : ""].filter(Boolean);
