@@ -1,6 +1,10 @@
-import { conflicts, conflictEnd, throughConns, zipFrom, zips, ZIPT, type CNode, type Conn, type Edge, type Piece } from "../compile";
+import { conflicts, conflictEnd, throughConns, zipFrom, zips, ZIPT, type CNode, type Conn, type Edge, type Piece, type RingArm } from "../compile";
 import { DT, type Vehicle, type Occ, type NodeState, type PedCross, type Req, type CrossInfo } from "./base";
 import { SimReversible } from "./reversible";
+
+/** (ticket #86) locks: looked for from a vehicle standing this long (s), through ones standing at least LOCK_LINK s; the one let
+ * go overlooks holds by order or promise for LOCK_PASS s; a lock told again after LOCK_AGAIN s */
+const LOCK_WAIT = 20, LOCK_LINK = 10, LOCK_PASS = 5, LOCK_AGAIN = 60;
 
 
 /** Junctions: who may enter (reservations of conflicting paths, stop and give-way signs, lights), roundabout entry, per-junction statistics. */
@@ -183,6 +187,7 @@ export abstract class SimJunctions extends SimReversible {
    */
   protected majorTraffic(node: CNode): Conn[] {
     const out: Conn[] = [];
+    this.majorBy.clear();
     // (joining a roundabout's ring of roads: the gap a driver accepts there, as at a roundabout point)
     const horizon = node.cluster.some(k => k.arms.some(a => a.link.ring)) ? this.P.ringGap : this.P.priorityHorizon;
     for (const arm of node.cluster.length === 1 ? node.arms : node.cluster.flatMap(k => k.arms)) {
@@ -198,7 +203,7 @@ export abstract class SimJunctions extends SimReversible {
           const dist = lp.len - u.s, eta = dist / Math.max(u.v, 2);
           if (dist > 70 || eta > horizon) continue;
           const cross = this.crossingFor(u, u.ri, u.lane);
-          if (cross && cross[0].kind === "conn") out.push(cross[0] as Conn);
+          if (cross && cross[0].kind === "conn") { out.push(cross[0] as Conn); this.majorBy.set(cross[0] as Conn, u); }
         }
       }
     }
@@ -207,35 +212,98 @@ export abstract class SimJunctions extends SimReversible {
   /** gap acceptance for joining a roundabout ring at entry `c` */
   protected canEnterRing(v: Vehicle, c: Conn): boolean {
     // (a two-lane roundabout: the lane this entry joins)
-    const n = c.node, lane = c.ringLane ?? 0, ring = lane ? n.ring2! : n.ring!, m = ring.length, k = c.arm;
+    const n = c.node, lane = c.ringLane ?? 0, ring = lane ? n.ring2! : n.ring!, k = c.arm;
+    // (ticket #86: who it waits for, for finding locks)
+    const held = (u: Vehicle | null) => { if (u) this.holdBy.set(v.id, { by: u.id, at: this.tick, soft: false }); else this.holdBy.delete(v.id); return false; };
     // only the front vehicle of its lane may commit
-    for (const u of this.index.get(v.piece.id) || []) if (u !== v && u.s > v.s) return false;
+    for (const u of this.index.get(v.piece.id) || []) if (u !== v && u.s > v.s) return held(null);
     // one vehicle at a time per arm (and ring lane): nobody else entering or committed to enter here
     for (const u of this.ringClaims.get(n) ?? []) {
       if (u === v || u.dead) continue;
-      if (u.piece.kind === "conn" && u.piece.role === "entry" && u.piece.node === n && u.piece.arm === k && (u.piece.ringLane ?? 0) === lane) return false;
-      if (u.granted && u.conn && u.conn.role === "entry" && u.conn.node === n && u.conn.arm === k && (u.conn.ringLane ?? 0) === lane && u.piece.kind === "lane") return false;
+      if (u.piece.kind === "conn" && u.piece.role === "entry" && u.piece.node === n && u.piece.arm === k && (u.piece.ringLane ?? 0) === lane) return held(u);
+      if (u.granted && u.conn && u.conn.role === "entry" && u.conn.node === n && u.conn.arm === k && (u.conn.ringLane ?? 0) === lane && u.piece.kind === "lane") return held(u);
     }
     // keep the ring from filling up (it would lock itself)
     let onRing = 0, circ = 0;
     for (const ra of ring) { circ += ra.pass.len + ra.between.len; onRing += (this.index.get(ra.pass.id)?.length || 0) + (this.index.get(ra.between.id)?.length || 0); }
-    if (onRing + 1 > Math.max(2, Math.floor(circ / 11))) return false;
-    const pass = ring[k].pass, prevBetween = ring[(k + 1) % m].between;
+    if (onRing + 1 > Math.max(2, Math.floor(circ / 11))) return held(null);
+    const u = this.ringGapAt(ring, k, v.len + 2);
+    if (u) return held(u);
+    // (ticket #86) onto the inner lane: across the outer one too, as the spatial experiment found (its cars crossing from one ring
+    // lane to the other were most of its collisions there): a gap in it where the way in crosses it, and none just in from this
+    // arm abreast of it
+    const w = lane ? this.ringGapAt(n.ring!, k, 2) : null;
+    if (w) return held(w);
+    this.holdBy.delete(v.id);
+    return true;
+  }
+  /** who is in the way of one joining a ring lane at arm k (null: a gap): one coming round within 8 m or ringGap s (but those
+   * leaving at k), one within `room` m past where it joins */
+  private ringGapAt(ring: RingArm[], k: number, room: number): Vehicle | null {
+    const m = ring.length, pass = ring[k].pass, prevBetween = ring[(k + 1) % m].between;
     const critical = this.P.ringGap;
     for (const u of this.index.get(pass.id) || []) {
       const d = pass.len - u.s;
-      if (d < 8 || d / Math.max(u.v, 1) < critical) return false;
+      if (d < 8 || d / Math.max(u.v, 1) < critical) return u;
     }
     for (const u of this.index.get(prevBetween.id) || []) {
       const nextPiece = u.queue[0];
       if (nextPiece && nextPiece.kind === "conn" && nextPiece.role === "exit" && nextPiece.arm === k) continue; // leaving before us
       const d = prevBetween.len - u.s + pass.len;
-      if (d < 8 || d / Math.max(u.v, 1) < critical) return false;
+      if (d < 8 || d / Math.max(u.v, 1) < critical) return u;
     }
     // room just after the merge point
     const between = ring[k].between;
-    for (const u of this.index.get(between.id) || []) if (u.s - u.len < v.len + 2) return false;
-    return true;
+    for (const u of this.index.get(between.id) || []) if (u.s - u.len < room) return u;
+    return null;
+  }
+  /** (ticket #86) priority traffic's crossings as majorTraffic last found them: who is on its way on each */
+  private majorBy = new Map<Conn, Vehicle>();
+  /** (ticket #86) each lock last told (its vehicles' ids, in order), when (tick) */
+  private lockSeen = new Map<string, number>();
+  /**
+   * (ticket #86, as the spatial experiment does) Locks: vehicles each held up by the next, round to the first, all standing
+   * (held by the junction ahead, as it last said, or queued close behind one). One of them held up only by order or a promise
+   * (one ahead of it in the queue, a go given to one not in the junction yet, priority traffic on its way) is let go, the one
+   * that has waited longest: for LOCK_PASS s its junction overlooks such holds by the lock's vehicles (others' still count: one
+   * let go through anyone's, Suceava's overlaps went up by 40%). None (each held by a body in the way): told in
+   * the console, for the turn-around rule (or the user) to settle. Each lock counted and told once (again after LOCK_AGAIN s).
+   */
+  protected findLocks() {
+    const byId = new Map<number, Vehicle>();
+    for (const v of this.vehicles) if (!v.dead) byId.set(v.id, v);
+    const done = new Set<number>();
+    for (const v of this.vehicles) {
+      if (v.dead || v.wait < LOCK_WAIT || done.has(v.id)) continue;
+      const path: Vehicle[] = [], soft: boolean[] = [], at = new Map<number, number>();
+      let u: Vehicle | undefined = v, ring: { vs: Vehicle[]; soft: boolean[] } | null = null;
+      while (u && path.length < 80) {
+        const k = at.get(u.id);
+        if (k !== undefined) { ring = { vs: path.slice(k), soft: soft.slice(k) }; break; }
+        if (done.has(u.id) || u.wait < LOCK_LINK) break;
+        at.set(u.id, path.length); path.push(u);
+        const h = this.holdBy.get(u.id);
+        if (h && this.tick - h.at <= 10) { soft.push(h.soft); u = byId.get(h.by); }
+        else if (u.leader && !u.leader.dead && u.gap < 12) { soft.push(false); u = u.leader; }
+        else break;
+      }
+      for (const w of path) done.add(w.id);
+      if (ring) this.breakLock(ring.vs, ring.soft);
+    }
+    if (this.lockSeen.size > 500) for (const [k, t] of this.lockSeen) if (this.tick - t > LOCK_AGAIN / DT) this.lockSeen.delete(k);
+  }
+  private breakLock(vs: Vehicle[], soft: boolean[]) {
+    const key = vs.map(v => v.id).sort((a, b) => a - b).join(","), last = this.lockSeen.get(key);
+    const free = vs.filter((_, i) => soft[i]).sort((a, b) => b.wait - a.wait || a.id - b.id)[0];
+    if (free) this.lockPass.set(free.id, { until: this.tick + LOCK_PASS / DT, of: new Set(vs.map(v => v.id)) });
+    if (last !== undefined && this.tick - last < LOCK_AGAIN / DT) return;
+    this.lockSeen.set(key, this.tick);
+    this.locks++;
+    const at = free ?? vs[0], p = at.piece.poly.at(Math.min(at.piece.len, Math.max(0, at.s)));
+    const ring = vs.map(v => `#${v.id}`).join(" → ") + ` → #${vs[0].id}`;
+    this.problem({ kind: "lock", veh: at.id, vkind: at.kind, x: p.x, y: p.y, at: this.placeOf(at),
+      detail: free ? `${vs.length} vehicles each waiting for the next (${ring}): #${free.id}, waiting ${free.wait.toFixed(0)} s only by order or for one not there yet, goes first`
+        : `${vs.length} vehicles each waiting for the next (${ring}), each for one in its way: none can go first` });
   }
   /** each roundabout built as a ring of roads (LinkDef.ring): its roads, and how many vehicles it holds before it would lock */
   private ringsCache: Map<string, { edges: Set<Edge>; cap: number }> | null = null;
@@ -370,7 +438,7 @@ export abstract class SimJunctions extends SimReversible {
     const signed = signedNode;
     if (signed) reqs.sort((a, b) => (this.minor(n, a.conn.inEdge) ? 1 : 0) - (this.minor(n, b.conn.inEdge) ? 1 : 0));
     const major = majorNow;
-    const blockers: Conn[] = [];
+    const blockers: { conn: Conn; v: Vehicle }[] = [];
     const log = this.logging(n);
     const deny = (v: Vehicle, why: string) => {
       this.denyWhy.set(v.id, why);
@@ -391,6 +459,10 @@ export abstract class SimJunctions extends SimReversible {
     for (const r of reqs) {
       const c = r.conn;
       let sneak = false;
+      // (ticket #86) let go through a lock: holds by order or a promise overlooked; who holds it up and how, for finding locks
+      const lp = this.lockPass.get(r.v.id), pass = lp && lp.until >= this.tick ? lp.of : undefined, mine = (u: Vehicle | null | undefined) => !!u && !!pass?.has(u.id);
+      let by: Vehicle | null = null, soft = false;
+      this.holdBy.delete(r.v.id);
       if (lights) {
         const sig = this.connSignal(c);
         // a permissive turn waiting at the line for oncoming traffic clears on the yellow / all-red
@@ -407,20 +479,24 @@ export abstract class SimJunctions extends SimReversible {
       if (this.ringFull(c, r.v)) { deny(r.v, "the roundabout is full"); continue; }
       let ok = true, why = "", yielded = false;
       // (a vehicle driving through on a path that meets this one, not booked: it is in the way until it is out)
-      if (!through.has(c)) for (const x of throughOn) if (x.conn !== c && conflicts(c, x.conn)) { ok = false; why = log ? `path crosses #${x.v.id} driving through` : `path crosses #${x.v.id}`; break; }
-      if (ok) for (const o of held) if (o.v !== r.v && conflicts(c, o.conn) && !this.pastConflict(o, c, r)) { ok = false; why = log ? `path crosses ${who(o.conn)}` : `path crosses #${o.v.id}`; break; }
-      if (ok) for (const b of blockers) if (conflicts(c, b)) { ok = false; why = log ? `crosses the path of a vehicle ahead in the queue (${this.mv(b)})` : "crosses the path of a vehicle ahead in the queue"; break; }
+      if (!through.has(c)) for (const x of throughOn) if (x.conn !== c && conflicts(c, x.conn)) { ok = false; by = x.v; why = log ? `path crosses #${x.v.id} driving through` : `path crosses #${x.v.id}`; break; }
+      if (ok) for (const o of held) if (o.v !== r.v && conflicts(c, o.conn) && !this.pastConflict(o, c, r) && !(!o.entered && mine(o.v))) { ok = false; by = o.v; soft = !o.entered; why = log ? `path crosses ${who(o.conn)}` : `path crosses #${o.v.id}`; break; }
+      if (ok) for (const b of blockers) if (!mine(b.v) && conflicts(c, b.conn)) { ok = false; by = b.v; soft = true; why = log ? `crosses the path of a vehicle ahead in the queue (${this.mv(b.conn)})` : "crosses the path of a vehicle ahead in the queue"; break; }
       if (ok && signed && this.minor(n, c.inEdge)) {
         // giving way means not crossing *or* joining the lane in front of priority traffic
         // (traffic in another lane of the road it joins doesn't matter)
         const clash = (b: Conn) => conflicts(c, b) || (b.outEdge === c.outEdge && b.outLane === c.outLane);
-        for (const b of major) if (clash(b)) { ok = false; yielded = true; why = log ? `gives way to priority traffic (${this.mv(b)})` : "gives way to priority traffic"; break; }
-        if (ok) for (const o of held) if (!o.conn.inEdge.sign && clash(o.conn)) { ok = false; yielded = true; why = log ? `gives way to #${o.v.id} (${this.mv(o.conn)})` : `gives way to #${o.v.id}`; break; }
+        for (const b of major) if (clash(b) && !mine(this.majorBy.get(b))) { ok = false; yielded = true; by = this.majorBy.get(b) ?? null; soft = true; why = log ? `gives way to priority traffic (${this.mv(b)})` : "gives way to priority traffic"; break; }
+        if (ok) for (const o of held) if (!o.conn.inEdge.sign && clash(o.conn) && !(!o.entered && mine(o.v))) { ok = false; yielded = true; by = o.v; soft = !o.entered; why = log ? `gives way to #${o.v.id} (${this.mv(o.conn)})` : `gives way to #${o.v.id}`; break; }
       }
       // a vehicle that can't go because its exit is full, or because it gives way, does not hold up
       // the others behind it in arrival order (keep the junction moving: "don't block the box")
       let holdsQueue = !yielded;
-      if (ok && !this.exitRoom(st, c, r.v)) { ok = false; holdsQueue = false; this.exitWanted.set(c.outEdge.lanes[c.outLane].id, this.tick); why = log ? `no room on the exit (${c.outEdge.link.name || c.outEdge.link.id} lane ${c.outLane + 1})` : `no room on the exit (lane ${c.outLane + 1})`; }
+      if (ok && !this.exitRoom(st, c, r.v, pass)) {
+        ok = false; holdsQueue = false; this.exitWanted.set(c.outEdge.lanes[c.outLane].id, this.tick); why = log ? `no room on the exit (${c.outEdge.link.name || c.outEdge.link.id} lane ${c.outLane + 1})` : `no room on the exit (lane ${c.outLane + 1})`;
+        const x = this.exitHolder(st, c, r.v); by = x?.v ?? null; soft = !!x?.soft;
+      }
+      if (!ok && by) this.holdBy.set(r.v.id, { by: by.id, at: this.tick, soft });
       if (ok) {
         if (r.early) { if (r.v.early?.conn !== c) continue; r.v.early.granted = true; } else { r.v.conn = c; r.v.granted = true; }
         this.ringJoined(c, r.v);
@@ -428,7 +504,7 @@ export abstract class SimJunctions extends SimReversible {
         st.occ.push(occ); if (held !== st.occ) held.push(occ);
         this.denyWhy.delete(r.v.id);
         if (log || this.vehLogged(r.v)) { this.lastDeny.delete(r.v.id); this.ev(n, r.v, "grant", `${this.mv(c)} · ${r.d.toFixed(0)} m from the line, waited ${((this.tick - r.at) / 10).toFixed(1)} s${sneak ? " · clears on the change (oncoming stopped)" : ""}`, this.md(c.move, c.inLane, c.outLane)); }
-      } else { if ((!free || atLine(r)) && holdsQueue) blockers.push(c); deny(r.v, why); }
+      } else { if ((!free || atLine(r)) && holdsQueue) blockers.push({ conn: c, v: r.v }); deny(r.v, why); }
     }
   }
   /**

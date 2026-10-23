@@ -64,7 +64,7 @@ export class Sim extends SimDemand {
       if (fuel) this.burnFuel(v, v1, p, s);
     }
     if (this.P.breakdownsPerHour > 0 && this.rng() < (this.P.breakdownsPerHour * DT) / 3600) this.randomBreakdown();
-    if (this.tick % 10 === 0) { this.sample(); this.checkOverlaps(); }
+    if (this.tick % 10 === 0) { this.sample(); this.checkOverlaps(); this.findLocks(); }
     if (this.tick % 50 === 0) this.housekeeping();
   }
   run(n: number) { for (let k = 0; k < n; k++) this.step(); }

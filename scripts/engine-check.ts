@@ -11,7 +11,7 @@ import { sanitizeNetwork, sanitizeSettings } from "../src/engine/validate";
 import { DEFAULT_PARAMS } from "../src/engine/params";
 import { pointInPoly, polyCentroid } from "../src/engine/buildings";
 import type { LaneTurns, Network, NodeDef } from "../src/engine/types";
-import type { Piece } from "../src/engine/compile";
+import { conflicts, conflictEnd, type Piece } from "../src/engine/compile";
 import type { Vehicle } from "../src/engine/sim";
 import { deleteNode, customizePhases, addPhase, approachesTo, toConnectorPhases, setConnGreen, setLaneGreen, reverseLink, splitLink, linkPoint, nodeById, addSlipLane, mergeLinks, smoothBetween, moveNode } from "../src/state/ops";
 import { buildRoadGeo } from "../src/render/geometry";
@@ -1627,5 +1627,40 @@ function alongKerb(input: any): any {
   const ring = on.trips > off.trips * 1.3 && on.stuck < off.stuck, anywhere = lineAllowed.stuck > 0 && lineAnywhere.stuck < lineAllowed.stuck / 2;
   const ok = ring && anywhere;
   console.log(`turn-around rule (trips / stuck outside the blocked road): roundabout jammed ${off.trips} / ${off.stuck}, with the rule ${on.trips} / ${on.stuck} ${ring}; blocked junction, where allowed ${lineAllowed.trips} / ${lineAllowed.stuck}, anywhere ${lineAnywhere.trips} / ${lineAnywhere.stuck} ${anywhere} | ok ${ok}`);
+  if (!ok) process.exit(1);
+}
+
+// ticket #86: learnings from the spatial experiment. (a) Two paths through a junction conflict where their lines come within
+// 2 m, not only their points: an X of two paths with points 4 m apart, none of them within 2 m of the other's. (b) Locks:
+// vehicles each held up by the next, round to the first; one held only by order or a promise is let go (Bistrița's plan, two
+// lanes round one of its roundabouts). (c) Onto a two-lane ring's inner lane only with a gap in the outer one it crosses.
+{
+  type C = Parameters<typeof conflicts>[0];
+  const conn = (id: number, pts: number[], e: number) => ({ id, inEdge: { e }, inLane: 0, outEdge: { e: e + 10 }, outLane: 0, ring: false, mask: 0, poly: new Poly(pts), len: new Poly(pts).len }) as unknown as C;
+  const A = conn(900001, [-6, 0, -2, 0, 2, 0, 6, 0], 1), B = conn(900002, [0, -6, 0, -2, 0, 2, 0, 6], 2);
+  const X = conflicts(A, B) && conflictEnd(A, B) > 6;
+  const net = JSON.parse(readFileSync("scripts/fixtures/v1-bistrita-two-lane.json", "utf8"));
+  const run = (locks: boolean) => {
+    const sim = new Sim(compile(net.network), { ...net.settings, seed: 7 });
+    const S = sim as unknown as { vehicles: Vehicle[]; stats: { trips: number }; problems: { kind: string; detail: string }[]; findLocks: () => void; pose: (v: Vehicle) => { fx: number; fy: number; rx: number; ry: number } };
+    if (!locks) S.findLocks = () => {};
+    let near = 0;
+    for (let t = 0; t < 9000; t++) {
+      sim.step();
+      // (an inner-lane car on its way in, within 2.5 m of one going round the outer lane)
+      for (const v of S.vehicles) if (!v.dead && v.piece.kind === "conn" && v.piece.role === "entry" && v.piece.ringLane === 1) {
+        const a = S.pose(v);
+        for (const u of S.vehicles) if (!u.dead && u.piece.kind === "ring" && u.piece.lane === 0 && u.piece.node === v.piece.node) {
+          const b = S.pose(u);
+          if (Math.hypot((a.fx + a.rx - b.fx - b.rx) / 2, (a.fy + a.ry - b.fy - b.ry) / 2) < 2.5) near++;
+        }
+      }
+    }
+    const lk = S.problems.filter(p => p.kind === "lock");
+    return { trips: S.stats.trips, stuck: S.vehicles.filter(v => !v.dead && v.wait > 60).length, locks: lk.length, letGo: lk.filter(p => p.detail.includes("goes first")).length, near };
+  };
+  const off = run(false), on = run(true);
+  const ok = X && on.locks > 0 && on.letGo >= on.locks * 0.8 && on.stuck < off.stuck && on.trips >= off.trips && on.near === 0;
+  console.log(`spatial learnings (ticket #86): paths crossing between their points conflict ${X}; Bistrița 15 min, trips / stuck a minute+: locks left ${off.trips} / ${off.stuck}, broken ${on.trips} / ${on.stuck} (${on.locks} locks, ${on.letGo} let go); inner-lane entries within 2.5 m of outer-lane cars ${on.near} | ok ${ok}`);
   if (!ok) process.exit(1);
 }
