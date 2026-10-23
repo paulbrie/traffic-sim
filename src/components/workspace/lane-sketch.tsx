@@ -16,7 +16,7 @@ import {
   LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, crossingStripes, stripeDir, CROSSING_WIDTH, type CrossingPatch, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   addStop, updateStop, deleteStop, type SketchStop, setTwoWay, twoWayOk, twinOf, twinId, baseLaneId, connectorEnd, wayFrom, wayTo, type TwoWay,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
-  roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
+  roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, edgeLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve, roadMiddle,
   type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
@@ -3603,7 +3603,9 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     ctx.beginPath(); ws.forEach(([X, Y], i) => (i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y))); ctx.closePath();
     ctx.fillStyle = "rgba(20,28,34,0.55)"; ctx.fill();
   };
-  const carsNow = st.layers.cars && D ? st.cars ?? [] : [], zOfCar = (c: object) => ("z" in c && typeof c.z === "number" ? c.z : 0);
+  const carsNow = st.layers.cars && D ? st.cars ?? [] : [];
+  // (which pass a car draws in: its own edge's level, not its ramped height; ticket #79)
+  const carLevel = (c: object) => edgeLevel(sk, "edge" in c && typeof c.edge === "string" ? c.edge : undefined);
   const drawCars = (cars: typeof carsNow) => {
     for (const car of cars) {
       const t = car.trailer;
@@ -3644,7 +3646,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       if (upper!.width !== c.width || upper!.height !== c.height) { upper!.width = c.width; upper!.height = c.height; }
       ctx = upper!.getContext("2d")!; ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height); ctx.setTransform(main.getTransform());
     } else if (pass === 1) {
-      drawCars(carsNow.filter(x => zOfCar(x) < 0.5));
+      drawCars(carsNow.filter(x => carLevel(x) < 0.5));
       ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(upper!, 0, 0); ctx.restore();
     }
     if (!S) { /* (the surfaces are in the image kept) */ } else {
@@ -3985,7 +3987,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     for (let i = 0; i < Math.min(q.crossing, 9); i++) person(0.6 + q.progress * (f.len - 1.2) - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
     for (let i = 0; i < Math.min(q.waiting, 9); i++) person(-GAP - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
   }
-  drawCars(split ? carsNow.filter(x => zOfCar(x) >= 0.5) : carsNow);
+  drawCars(split ? carsNow.filter(x => carLevel(x) >= 0.5) : carsNow);
   // live traffic (TomTom): its road drawn in red/amber by how bad the delay is, a label with what it is and the delay
   if (D && st.layers.traffic && st.traffic?.length && sk.geo) {
     const geo = sk.geo;

@@ -2748,6 +2748,22 @@ function rampZ(L: number, a: number, b: number, len: number, s: number): number 
 }
 /** a connector's level: where it leaves and where it joins, the lower (as v1's junction paths, at the junction's level) */
 export const connectorLevel = (sk: Sketch, c: SketchConnector) => Math.min(zAt(sk, c.from.lane, c.from.s), zAt(sk, c.to.lane, c.to.s));
+/**
+ * A car's own edge's level, by its `edge` key (`lane:<id>` or `conn:<id>`, as `SketchSim.poses()` sends it): for
+ * drawing, which pass it belongs to (ticket #79). Not its height (`zAt`): a car entering a bridge is on the bridge's
+ * own lane from the start of its ramp, so it must draw in the bridge's pass throughout the ramp, over the bridge's
+ * surface (drawn for the lane's whole length, ramp included) — not only once its height happens to pass 0.5. A car
+ * still on the lane it came from, or on a lane genuinely underneath, keeps that lane's own (lower) level instead.
+ */
+export function edgeLevel(sk: Sketch, edge: string | undefined): number {
+  if (!edge || !hasLevels(sk)) return 0;
+  const i = edge.indexOf(":");
+  if (i < 0) return 0;
+  const kind = edge.slice(0, i), id = edge.slice(i + 1);
+  if (kind === "lane") return laneLevel(laneById(sk, id));
+  const c = connectorById(sk, id);
+  return c ? connectorLevel(sk, c) : 0;
+}
 /** a junction's level: the lowest of what is on it (its lanes and connectors), as v1's; 0 with nothing on it */
 export function junctionLevel(sk: Sketch, c: JunctionContents): number {
   if (!hasLevels(sk)) return 0;
