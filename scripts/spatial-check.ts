@@ -27,6 +27,8 @@
  * - (ticket #77) Roundabout 3 as at rev 461 (two ring lanes): a car goes round in the middle of a ring lane, the one its lane in
  *   leads to as the connectors are drawn, not on the line between the two (a fifth of the time before); cars through, next to
  *   no collisions or locks.
+ * - (ticket #81) handed back onto its lane, a car is drawn easing onto it, not turned or moved at once (up to 45° from one frame to
+ *   the next before); as driven and met, still on its lane.
  * npm run spatial:check
  */
 import { readFileSync } from "fs";
@@ -190,6 +192,31 @@ function fieldsReach(sk: Sketch, z: Zone) {
   const st = sim.stats();
   check(over / on < 0.14, `Roundabout 3 (rev 461): on the ring, a car over the line between its lanes ${((100 * over) / on).toFixed(0)}% of the time (18% before)`);
   check(st.finished >= 300 && st.collisions <= 2 && st.deadlocks <= 2, `Roundabout 3 (rev 461): cars through in 10 min, next to no collisions or locks (${st.finished}, ${st.collisions}, ${st.deadlocks})`);
+}
+
+// (ticket #81) Roundabout 3 at rev 461: handed back, drawn easing onto its lane
+{
+  const sk = load("spatial-roundabout-3-rev461.json");
+  const sim = new SpatialSim(sk, { speed: sk.traffic?.speed ?? 50, rate: sk.traffic?.rate ?? 50, seed: 1, gap: 2, opts: OPTS });
+  const last = new Map<number, { c: { x: number; y: number }; d: { x: number; y: number }; mode: string }>();
+  let backs = 0, turn = 0, jump = 0, onLane = true;
+  for (let t = 0; t < 300; t += 0.1) {
+    sim.step(0.1);
+    for (const v of sim.vehicles) {
+      const b = sim.drawn(v), was = last.get(v.id);
+      if (was?.mode === "spatial" && v.mode === "lane") {
+        backs++;
+        turn = Math.max(turn, (Math.abs(Math.atan2(was.d.x * b.d.y - was.d.y * b.d.x, was.d.x * b.d.x + was.d.y * b.d.y)) * 180) / Math.PI);
+        jump = Math.max(jump, Math.hypot(b.c.x - was.c.x, b.c.y - was.c.y) - v.v * 0.1);
+        // (as driven, on its lane: its body there)
+        const lb = sim.body(v), q = pointAt(v.at!.lane.shape, v.at!.s).p;
+        if (Math.hypot(lb.c.x + (lb.d.x * lb.len) / 2 - q.x, lb.c.y + (lb.d.y * lb.len) / 2 - q.y) > 0.01) onLane = false;
+      }
+      last.set(v.id, { c: b.c, d: b.d, mode: v.mode });
+    }
+  }
+  check(backs >= 100 && turn < 10 && jump < 0.5, `Roundabout 3 (rev 461): handed back, drawn easing onto its lane (${backs} cars, turned at most ${turn.toFixed(1)}° and moved at most ${Math.max(0, jump).toFixed(2)} m past its travel in a step; 45° before)`);
+  check(onLane, "Roundabout 3 (rev 461): handed back, it drives and meets others on its lane as before (only its drawing eased)");
 }
 
 // (ticket #72) Roundabout 3 at rev 454: the ring never fills all the way round

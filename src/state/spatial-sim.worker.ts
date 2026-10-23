@@ -50,10 +50,10 @@ function limitCode(s: string | undefined): [number, number, number] {
  * sensing car's id, what held it (3), its offset, its path's points (a count, then x y every 2 m, the first 30 m) */
 function keep() {
   if (!sim) return;
-  // (from the cars' bodies, not poses(): those carry every sensing car's rays)
+  // (from the cars' bodies as drawn, not poses(): those carry every sensing car's rays)
   const vs = sim.vehicles, data = new Float32Array(vs.length * PER), vmax = Math.max(1, (limit || 50) / 3.6), sp: number[] = [];
   vs.forEach((v, i) => {
-    const b = sim!.body(v);
+    const b = sim!.drawn(v);
     data.set([v.id, b.c.x, b.c.y, b.d.x, b.d.y, b.len, v.v / vmax, v.mode === "spatial" ? 1 : 0], i * PER);
     if (v.mode !== "spatial") return;
     const path = v.pathPts ?? [], pts: number[] = [];

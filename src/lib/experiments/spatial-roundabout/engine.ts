@@ -71,6 +71,8 @@ const TRACK_MAX = 10;
 const ENTRY_V = 4;
 /** handing back: past the way out's lane start, within this of its line (m), heading within this of the lane's (rad) */
 const HAND_D = 3.5, HAND_A = (70 * Math.PI) / 180;
+/** (ticket #81) handed back, drawn easing onto its lane over this far (m) */
+const EASE_LEN = 6;
 /** standing still this long a car counts as stuck (s); a group of them none of which moved this long, one is taken off (s) */
 const STUCK = 60, CLEAR = 60;
 
@@ -115,6 +117,9 @@ export interface SpatialCar {
   offset?: number; heldAt?: number; sideAt?: number;
   /** (sensing) where its rear is: it trails its front at its length (ticket #72) */
   rear?: Pt;
+  /** (ticket #81) handed back, as drawn (not as driven or met): its front off its lane's point by this, faded out over EASE_LEN
+   * m from where it was handed back, and its rear trailing as when sensing, till lined up with its lane */
+  ease?: { dx: number; dy: number; s0: number }; drawRear?: Pt;
   /** (ticket #75) admitted into its junction with this rank (the order cars got in: the lower, the first); the cells it has booked */
   rank?: number; booked?: number[];
 }
@@ -361,10 +366,16 @@ export class SpatialSim {
   private laneMove(v: SpatialCar, dt: number, gone: Set<SpatialCar>) {
     const at = v.at!, out = this.leaveAt(v);
     at.s += v.v * dt;
-    if (out.zone && at.s >= out.s) { this.handOver(v, out.zone, out.s, out.via, out.lead ?? 0); return; }
+    // (ticket #81: as drawn, handed back: its rear trailing its front as drawn, till lined up with its lane and on its line)
+    if (v.ease && at.s - v.ease.s0 >= EASE_LEN) v.ease = undefined;
+    if (v.drawRear) {
+      const f = this.drawnFront(v), d = pointAt(at.lane.shape, Math.min(at.s, at.len)).d, rx = f.x - v.drawRear.x, ry = f.y - v.drawRear.y, rl = Math.hypot(rx, ry) || 1;
+      v.drawRear = (rx * d.x + ry * d.y) / rl > Math.cos(0.01) && !v.ease ? undefined : { x: f.x - (rx / rl) * v.len, y: f.y - (ry / rl) * v.len };
+    }
+    if (out.zone && at.s >= out.s) { v.ease = v.drawRear = undefined; this.handOver(v, out.zone, out.s, out.via, out.lead ?? 0); return; }
     if (out.conn && at.s >= out.s) {
       const lane = this.lane(out.conn.to.lane);
-      v.at = { lane, s: out.conn.to.s + (at.s - out.s), len: laneLength(lane.shape) }; v.leave = undefined;
+      v.at = { lane, s: out.conn.to.s + (at.s - out.s), len: laneLength(lane.shape) }; v.leave = undefined; v.ease = v.drawRear = undefined;
       if (out.lost) { v.dest = this.pickDestFrom(lane.id, v.at.s) ?? v.dest; this.reroutes++; }
       return;
     }
@@ -1128,9 +1139,12 @@ export class SpatialSim {
     const g = v.goal;
     const along = g ? (v.p.x - g.p.x) * g.d.x + (v.p.y - g.p.y) * g.d.y : 0, side = g ? Math.abs(-(v.p.x - g.p.x) * g.d.y + (v.p.y - g.p.y) * g.d.x) : 0;
     if (g && along > -1 && side < HAND_D && Math.abs(angDiff(v.h, Math.atan2(g.d.y, g.d.x))) < HAND_A) {
-      const s = nearestOn(g.lane.shape, v.p).s;
+      const s = Math.max(0.1, nearestOn(g.lane.shape, v.p).s), on = pointAt(g.lane.shape, s).p;
       this.unbook(v);
-      Object.assign(v, { mode: "lane", at: { lane: g.lane, s: Math.max(0.1, s), len: laneLength(g.lane.shape) }, leave: undefined, zone: null, goal: null, rays: null, from: null, rear: undefined, rank: undefined });
+      // (ticket #81: drawn from where it was, eased onto its lane: it was drawn on its lane's line and way at once, from up to
+      // 3.5 m and 70° off, turning 45° from one frame to the next)
+      const ease = { dx: v.p.x - on.x, dy: v.p.y - on.y, s0: s }, drawRear = v.rear;
+      Object.assign(v, { mode: "lane", at: { lane: g.lane, s, len: laneLength(g.lane.shape) }, leave: undefined, zone: null, goal: null, rays: null, from: null, rear: undefined, rank: undefined, ease, drawRear });
     }
   }
 
@@ -1146,6 +1160,23 @@ export class SpatialSim {
     if (v.mode === "lane") return pointAt(v.at!.lane.shape, Math.min(v.at!.s, v.at!.len)).d;
     if (v.rear) { const x = v.p.x - v.rear.x, y = v.p.y - v.rear.y, l = Math.hypot(x, y); if (l > 1e-6) return { x: x / l, y: y / l }; }
     return dirOf(v.h);
+  }
+  /** (ticket #81) its front as drawn: handed back, off its lane's point by what is left of where it was */
+  private drawnFront(v: SpatialCar): Pt {
+    const f = this.front(v);
+    if (v.mode !== "lane" || !v.ease) return f;
+    const k = Math.max(0, 1 - (v.at!.s - v.ease.s0) / EASE_LEN);
+    return { x: f.x + v.ease.dx * k, y: f.y + v.ease.dy * k };
+  }
+  /** (ticket #81) its body as drawn (and kept for the replay): its body, but just handed back eased onto its lane from where it
+   * was, its rear trailing. Not what it drives by or meets others by: that is its body, on its lane (a lane follower doesn't
+   * steer; met there, cars counted collisions it can't avoid) */
+  drawn(v: SpatialCar) {
+    if (v.mode !== "lane" || (!v.ease && !v.drawRear)) return this.body(v);
+    const f = this.drawnFront(v);
+    let d = this.heading(v);
+    if (v.drawRear) { const x = f.x - v.drawRear.x, y = f.y - v.drawRear.y, l = Math.hypot(x, y); if (l > 1e-6) d = { x: x / l, y: y / l }; }
+    return { c: { x: f.x - (d.x * v.len) / 2, y: f.y - (d.y * v.len) / 2 }, d, len: v.len, w: WIDTH };
   }
   /** its body: middle, direction, length, width */
   body(v: SpatialCar) {
@@ -1216,7 +1247,7 @@ export class SpatialSim {
   /** what the page draws: each car's body, and for the spatial ones their rays' ends and their goal */
   poses() {
     return this.vehicles.map(v => {
-      const b = this.body(v);
+      const b = this.drawn(v);
       return { id: v.id, p: b.c, d: b.d, len: v.len, share: v.v / Math.max(1, this.vmax()), spatial: v.mode === "spatial",
         ...(v.mode === "spatial" && v.rays ? { from: v.p, rays: v.rays.map((x, i) => { const a = this.rayAngle(v, i); return { x: v.p.x + Math.cos(a) * x.d, y: v.p.y + Math.sin(a) * x.d, car: x.car >= 0 }; }) } : {}),
         ...(v.goal ? { goal: v.goal.p } : {}) };
