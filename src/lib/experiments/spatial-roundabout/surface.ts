@@ -9,7 +9,7 @@
  * Read only: built from the sketch with the editor's own geometry helpers, nothing changed.
  * No framework: runs in a worker or headless.
  */
-import { bandPolygon, contentsOf, insidePolygon, isFullCircle, junctionBands, laneById, nearestOn, outlinePath, pointAt, laneLength, samples, type Band, type Pt, type Sketch, type SketchJunction, type SketchLane } from "../../lane-sketch";
+import { bandPolygon, contentsOf, hasLevels, insidePolygon, isFullCircle, junctionBands, junctionLevel, laneById, nearestOn, outlinePath, pointAt, laneLength, samples, zAt, type Band, type Pt, type Sketch, type SketchJunction, type SketchLane } from "../../lane-sketch";
 import { junctionSurfaceHoles, nestLoops } from "../../junction-fill";
 
 /** raster cell (m) */
@@ -117,12 +117,16 @@ export function buildSurface(sk: Sketch): Surface | null {
   const own = new Int16Array(nx * ny).fill(-1);
   const inJ = new Set(cands.flatMap(x => x.c!.lanes));
   const near = (b: Band) => b.pts.some(p => p.x > minX && p.x < maxX && p.y > minY && p.y < maxY);
-  const lanePolys = sk.lanes.filter(l => !inJ.has(l.id)).map(l => ({ pts: densify(l.shape), width: l.width, closed: false } as Band)).filter(near).map(b => ({ poly: bandPolygon(b), bb: bbox(b.pts, b.width) }));
+  const lanePolys = sk.lanes.filter(l => !inJ.has(l.id)).map(l => ({ lane: l, b: { pts: densify(l.shape), width: l.width, closed: false } as Band })).filter(x => near(x.b)).map(({ lane, b }) => ({ lane, poly: bandPolygon(b), bb: bbox(b.pts, b.width) }));
+  // (ticket #78: a lane at another level than a junction it passes over or under (a bridge, a tunnel) is no paving of it there
+  // (near it: within its grid's reach))
+  const levels = hasLevels(sk) ? cands.map(({ j, c }) => ({ lv: junctionLevel(sk, c!), bb: bbox(outlinePath(j), FPAD) })) : null;
+  const level = (l: SketchLane, p: Pt) => !levels || levels.every(x => !inBox(p, x.bb) || Math.abs(zAt(sk, l.id, nearestOn(l.shape, p).s) - x.lv) < 0.5);
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     const p = { x: minX + (i + 0.5) * CELL, y: minY + (j + 0.5) * CELL };
     let on = false;
     for (let f = 0; f < fills.length; f++) if (inBox(p, fills[f].bb) && fills[f].inside(p)) { on = true; own[j * nx + i] = f; break; }
-    if (!on) for (const l of lanePolys) if (inBox(p, l.bb) && insidePolygon(p, l.poly)) { on = true; break; }
+    if (!on) for (const l of lanePolys) if (inBox(p, l.bb) && insidePolygon(p, l.poly) && level(l.lane, p)) { on = true; break; }
     s.road[j * nx + i] = on ? 1 : 0;
   }
   closeSlits(s, own);
