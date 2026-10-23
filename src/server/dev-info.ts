@@ -14,3 +14,13 @@ export function gitBranch(): string | null {
     return null;
   }
 }
+
+/** the commit checked out where the dev server runs (short hash, and its subject for a tooltip), or null (ticket #82) */
+export function gitCommit(): { hash: string; subject: string } | null {
+  try {
+    const [hash, subject] = execFileSync("git", ["log", "-1", "--format=%h%n%s"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "ignore"] }).toString().split("\n");
+    return hash ? { hash, subject: subject ?? "" } : null;
+  } catch {
+    return null;
+  }
+}
