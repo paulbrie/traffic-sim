@@ -29,6 +29,10 @@
  *   no collisions or locks.
  * - (ticket #81) handed back onto its lane, a car is drawn easing onto it, not turned or moved at once (up to 45° from one frame to
  *   the next before); as driven and met, still on its lane.
+ * - (ticket #84) Sketch 2's Roundabout 1, roads a level up ending on its island, joined to its ring by connectors across it: those
+ *   ways in and out are found undrivable and left out of the cars' routes (no car comes in on them or makes for them), so none
+ *   stands at a kerb on the island; the ways that can be driven flow (51 of 119 cars through in 10 min before, 812 held back,
+ *   21 locks). Sketches with none have nothing left out.
  * npm run spatial:check
  */
 import { readFileSync } from "fs";
@@ -304,6 +308,29 @@ function fieldsReach(sk: Sketch, z: Zone) {
   check(crossed > 0, "levels: cars cross the bridge over Roundabout 2");
   check(across === 0, `levels: no collisions between cars at different levels (${across})`);
   check(seen === 0, `levels: spatial cars' rays don't see cars at another level (${seen} hits)`);
+}
+
+// (ticket #84) Sketch 2's Roundabout 1: roads a level up ending on its island; only drivable ways in the cars' routes
+{
+  const sk = load("spatial-sketch2-bridges.json"), sim = new SpatialSim(sk, { speed: 50, rate: sk.traffic?.rate ?? 900, seed: 1, gap: 2, opts: OPTS });
+  const cut = sim.stats().undrivable, off = new Set(["l12", "l13", "l14", "l15"]);
+  check(cut.length === 4 && ["c10", "c11", "c12", "c14"].every(c => cut.some(w => w.includes(`(${c})`))), `undrivable: Sketch 2's ways in from Roads 6, 7 and out onto Roads 4, 5 left out (${cut.length}: ${cut.map(w => w.match(/\((c\d+)/)?.[1]).join(" ")})`);
+  let onCut = 0, longest = 0;
+  for (let t = 0; t < 600; t += 0.1) {
+    sim.step(0.1);
+    for (const v of sim.vehicles) { if (off.has(v.dest) || (v.at && off.has(v.at.lane.id))) onCut++; longest = Math.max(longest, v.still); }
+  }
+  const st = sim.stats();
+  check(onCut === 0, `undrivable: no car comes in on them or makes for them (${onCut} car-steps)`);
+  check(longest < 60 && st.deadlocks === 0, `undrivable: on Sketch 2 none stands a minute, no locks (longest ${longest.toFixed(0)} s, ${st.deadlocks} locks)`);
+  check(st.finished >= 300, `undrivable: Sketch 2's drivable ways flow (${st.finished} through in 10 min, ${st.collisions} collisions)`);
+  for (const f of ["spatial-levels.json", "spatial-roundabout-3-rev461.json", "spatial-plain.json"]) {
+    const k = load(f), n = new SpatialSim(k, { speed: 50, rate: 50, seed: 1, gap: 2, opts: OPTS }).stats().undrivable.length;
+    check(n === 0, `undrivable: nothing left out of ${f} (${n})`);
+  }
+  // (the oval: an earlier Sketch 2, Road 4 already a level up from the middle of its island)
+  const ov = new SpatialSim(load("spatial-oval.json"), { speed: 50, rate: 50, seed: 1, gap: 2, opts: OPTS }).stats().undrivable;
+  check(ov.length === 1 && ov[0].includes("onto Road 4 (c10)"), `undrivable: out of the oval only its way onto Road 4, a level up (${ov.length})`);
 }
 
 console.log(failed ? `\n${failed} check(s) failed` : "\nall checks passed");

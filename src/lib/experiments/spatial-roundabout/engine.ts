@@ -7,7 +7,7 @@
  * island only the country's way), a gap-seeking steer along it, and a speed from the free distance ahead; at that way out's
  * lane they hand back. A separate engine: the main one (lane-sketch-sim.ts) is not used or changed. Plain TypeScript, no framework.
  */
-import { connectorPts, contentsOf, demandWays, entryLanes, hasLevels, isFullCircle, junctionLevel, laneInRate, laneLength, laneOutWeight, nearestOn, pointAt, roadOf, RouteTable, zAt, type Pt, type Sketch, type SketchConnector, type SketchLane } from "../../lane-sketch";
+import { connectorPts, contentsOf, demandWays, entryLanes, exitLanes, hasLevels, isFullCircle, junctionLevel, laneInRate, laneLength, laneOutWeight, nearestOn, pointAt, roadOf, RouteTable, zAt, type Pt, type Sketch, type SketchConnector, type SketchLane } from "../../lane-sketch";
 import { buildSurface, descend, drivable, edgeDist, exitStart, inCore, routeField, zoneCell, type Island, type Surface, type Zone } from "./surface";
 
 // drivers (as the main engine's defaults)
@@ -75,6 +75,9 @@ const HAND_D = 3.5, HAND_A = (70 * Math.PI) / 180;
 const EASE_LEN = 6;
 /** standing still this long a car counts as stuck (s); a group of them none of which moved this long, one is taken off (s) */
 const STUCK = 60, CLEAR = 60;
+// (ticket #84) a way into a junction can be driven if its paving leads to a way out within this far straight on from where it is
+// handed over (m): a lane ending on an island, a stub of it all round, can't
+const IN_AHEAD = 3;
 
 export interface SpatialParams { speed: number; rate: number; seed: number; gap: number; opts?: SpatialOpts }
 /** the experiment's own choices, to compare (not the main engine's settings) */
@@ -133,6 +136,8 @@ export interface SpatialStats {
   stuck: number; meanTrip: number; spatialNow: number;
   /** cars that could not get to their way out from where they were (their route changing lane, which the follower doesn't) */
   reroutes: number;
+  /** (ticket #84) the ways into or out of a junction no car can drive, left out of their routes: each in words */
+  undrivable: string[];
 }
 
 /** (ticket #75) a car's booking of a cell of its junction: from when to when its body is over it, which way it goes there */
@@ -180,10 +185,11 @@ export class SpatialSim {
   private zoneLevel = new Map<Zone, number>();
   /** (ticket #77) a ring's own drawn lanes from the inside out, each its radius (two or more, concentric with the island), else null */
   private ringRadii = new Map<Zone, { id: string; r: number }[] | null>();
+  /** (ticket #84) the ways through junctions no car can drive, in words (their connectors are in no car's route) */
+  private undrivable: string[] = [];
 
   constructor(private sk: Sketch, private params: SpatialParams) {
     this.rnd = mulberry32(params.seed);
-    this.routes = new RouteTable(sk);
     this.surface = buildSurface(sk);
     const ways = demandWays(sk);
     this.outWay = new Map(ways.exits.flatMap(w => w.lanes.map(l => [l, w.lanes])));
@@ -199,7 +205,20 @@ export class SpatialSim {
       this.outsOf.set(z, [...outs].flatMap(([id, s]) => { const lane = sk.lanes.find(l => l.id === id); return lane ? [{ lane, s: exitStart(z, lane, s) }] : []; }));
     }
     for (const c of sk.connectors) { const l = this.connsFrom.get(c.from.lane) ?? []; l.push(c); this.connsFrom.set(c.from.lane, l); }
-    for (const lane of entryLanes(sk)) { const rate = laneInRate(lane, sk); if (rate > 0) this.sources.push({ lane, rate, next: this.gap(rate), queue: 0 }); }
+    // (ticket #84: the cars' routes only by the ways through junctions they can drive; on Sketch 2's Roundabout 1, cars came in on
+    // a bridge ending on its island, and stood there for good)
+    const cut = this.undrivableWays();
+    if (cut.size) {
+      for (const [id, l] of this.connsFrom) this.connsFrom.set(id, l.filter(c => !cut.has(c.id)));
+      for (const c of cut) this.zoneOfConn.delete(c);
+    }
+    this.routes = new RouteTable(cut.size ? { ...sk, connectors: sk.connectors.filter(c => !cut.has(c.id)) } : sk);
+    // (the sketch's own ways out: a lane whose only ways on are cut is none; a lane in with no way out left brings no cars)
+    this.exits = exitLanes(sk).map(l => l.id);
+    for (const lane of entryLanes(sk)) {
+      const rate = laneInRate(lane, sk);
+      if (rate > 0 && (!cut.size || this.exits.some(ex => this.routes.from(lane.id, 0, ex) < Infinity))) this.sources.push({ lane, rate, next: this.gap(rate), queue: 0 });
+    }
     for (const j of sk.journeys ?? []) {
       const from = ways.entries.find(w => w.lanes.includes(j.from))?.lanes ?? [], to = ways.exits.find(w => w.lanes.includes(j.to))?.lanes ?? [];
       if (!from.length || !to.length || !(j.rate > 0)) continue;
@@ -207,6 +226,41 @@ export class SpatialSim {
     }
   }
   private journeys: { id: string; from: string[]; to: string[]; rate: number; trucks: number; next: number }[] = [];
+  private exits: string[] = [];
+  /**
+   * (ticket #84) The connectors of the ways through junctions no car can drive (each noted in words), its ways out dropped: a way
+   * out at another level where it comes onto the junction's paving (a bridge over it, a tunnel under it: its connectors leading
+   * to it); a way in whose paving leads to no way out straight on from where a car is handed over (a lane ending on an island)
+   */
+  private undrivableWays(): Set<string> {
+    const sk = this.sk, cut = new Set<string>(), name = (id: string) => roadOf(sk, id)?.name ?? id;
+    for (const z of this.surface?.zones ?? []) {
+      const lv = this.zoneLevel.get(z) ?? 0, outs = this.outsOf.get(z) ?? [];
+      const off = new Set(outs.filter(o => Math.abs(zAt(sk, o.lane.id, o.s) - lv) >= 0.5).map(o => o.lane.id));
+      for (const id of off) {
+        const cs = sk.connectors.filter(c => z.connectors.has(c.id) && c.to.lane === id);
+        cs.forEach(c => cut.add(c.id));
+        this.undrivable.push(`${z.name} onto ${name(id)} (${cs.map(c => c.id).join(", ")}): the road is at another level where it comes onto the junction's paving`);
+      }
+      if (off.size) this.outsOf.set(z, outs.filter(o => !off.has(o.lane.id)));
+      for (const [cid, zc] of this.zoneOfConn) {
+        if (zc !== z) continue;
+        const c = sk.connectors.find(x => x.id === cid)!, lane = this.lane(c.from.lane), pa = pointAt(lane.shape, c.from.s);
+        const ways = this.outsVia(z, c) ?? this.outsOf.get(z) ?? [];
+        const leads = (D: Float32Array) => {
+          for (let u = 0; u <= IN_AHEAD; u += 0.25) for (const w of [0, -0.5, 0.5]) {
+            const q = zoneCell(z, { x: pa.p.x + pa.d.x * u - pa.d.y * w, y: pa.p.y + pa.d.y * u + pa.d.x * w });
+            if (q >= 0 && Number.isFinite(D[q])) return true;
+          }
+          return false;
+        };
+        if (ways.some(o => leads(routeField(z, o.lane, o.s)))) continue;
+        cut.add(cid);
+        this.undrivable.push(`${name(lane.id)} into ${z.name} (${cid}): no paving on from where it comes in${ways.length ? "" : " to a way out"}`);
+      }
+    }
+    return cut;
+  }
   private gap(rate: number) { return (-Math.log(1 - this.rnd()) * 3600) / rate; }
   private lane(id: string) { return this.sk.lanes.find(l => l.id === id)!; }
 
@@ -214,7 +268,7 @@ export class SpatialSim {
   private pickDest(lane: string): string | null { return this.pickDestFrom(lane, 0); }
   /** a way out for a car at `s` on `lane`, drawn by the ways out's shares among those it can reach from there */
   private pickDestFrom(lane: string, s: number): string | null {
-    const rt = this.routes, opts = rt.exits.filter(ex => laneOutWeight(this.lane(ex)) > 0 && rt.from(lane, s, ex) < Infinity);
+    const rt = this.routes, opts = this.exits.filter(ex => laneOutWeight(this.lane(ex)) > 0 && rt.from(lane, s, ex) < Infinity);
     const total = opts.reduce((a, ex) => a + laneOutWeight(this.lane(ex)), 0);
     let r = this.rnd() * total;
     for (const ex of opts) { r -= laneOutWeight(this.lane(ex)); if (r <= 0) return ex; }
@@ -1215,7 +1269,7 @@ export class SpatialSim {
   }
 
   stats(): SpatialStats {
-    return { t: this.t, vehicles: this.vehicles.length, spawned: this.spawned, finished: this.finished, heldBack: this.heldBack + this.sources.reduce((a, s) => a + s.queue, 0), collisions: this.collisions, deadlocks: this.deadlocks, missed: this.missed, stuck: this.vehicles.filter(v => v.still > STUCK).length, meanTrip: this.finished ? this.tripSum / this.finished : 0, spatialNow: this.vehicles.filter(v => v.mode === "spatial").length, reroutes: this.reroutes };
+    return { t: this.t, vehicles: this.vehicles.length, spawned: this.spawned, finished: this.finished, heldBack: this.heldBack + this.sources.reduce((a, s) => a + s.queue, 0), collisions: this.collisions, deadlocks: this.deadlocks, missed: this.missed, stuck: this.vehicles.filter(v => v.still > STUCK).length, meanTrip: this.finished ? this.tripSum / this.finished : 0, spatialNow: this.vehicles.filter(v => v.mode === "spatial").length, reroutes: this.reroutes, undrivable: this.undrivable };
   }
   /**
    * One car as the page shows it picked (ticket #59): what it is doing, what holds it, where it is going, and the path it wants

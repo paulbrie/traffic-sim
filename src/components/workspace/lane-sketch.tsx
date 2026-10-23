@@ -3049,6 +3049,12 @@ function ExperimentRow({ x }: { x: NonNullable<Parameters<typeof TrafficPanel>[0
               {row("Another way out picked", st.reroutes ?? 0)}
             </div>
           )}
+          {st && (st.undrivable?.length ?? 0) > 0 && (
+            <div className="grid gap-0.5 text-[11px] text-amber-700 dark:text-amber-400">
+              <p>Ways no car can drive, left out of their routes:</p>
+              <ul className="list-disc pl-4">{st.undrivable.map(w => <li key={w}>{w}</li>)}</ul>
+            </div>
+          )}
         </>
       )}
     </div>
