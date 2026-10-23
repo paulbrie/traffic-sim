@@ -10,7 +10,7 @@ import { UserMenu, type MenuUser } from "@/components/auth/user-menu";
 import { HistoryButton } from "@/components/workspace/history-dialog";
 import { AgentPatchesButton } from "@/components/workspace/agent-patches";
 import { LaneSketch } from "@/components/workspace/lane-sketch";
-import { FrameRate, MemoryGauge } from "./top-bar-tools";
+import { FrameRate, MemoryGauge, SketchLayerPicker } from "./top-bar-tools";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
 import { loadPlan } from "@/state/store";
 import { scratchSketch, SketchStoreContext } from "@/state/lane-sketch";
@@ -49,6 +49,7 @@ export function SketchPageClient({ plan, user }: { plan: WorkspacePlan; user: Me
             : <SaveIndicator planId={plan.id} />}
           <HistoryButton planId={plan.id} canRestore={plan.access !== "read"} />
           <AgentPatchesButton planId={plan.id} canApply={plan.access !== "read"} />
+          <SketchLayerPicker />
           <div className="ml-auto flex items-center gap-3">
             <FrameRate />
             <MemoryGauge />
