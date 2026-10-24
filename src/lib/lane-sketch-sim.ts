@@ -2611,9 +2611,12 @@ export class SketchSim {
         // (the leader itself still moving, just slow, not held up for its own reason nor a zone kept clear on patience: ease
         // to its pace at the zone's edge rather than planting a dead stop there, as a driver easing off behind one would, not braking hard)
         const holdSpeed = (z: { clear?: boolean }) => (z.clear || leadHeld ? 0 : lead);
-        // (the room it will have past the zone once through it: the car ahead on the move, not held up itself, makes more as it goes; a
-        // leader rolling on at walking pace kept one waiting at a ring's way off for as long as it stayed under 18 km/h (ticket #89))
-        const roomPast = (z: { e: number }) => gap + (!leadHeld && lead >= 2 ? lead * timeTo(Math.max(0, z.e) + reach(v), v.v, vmax, accOf(v)) : 0);
+        // (the room it will have past the zone once through it: the car ahead driving away on a lane out of the junction, on the move and
+        // not held up itself, makes more as it goes; one rolling on down the way out at walking pace kept a car waiting at a ring's way
+        // off for as long as it stayed under 18 km/h (ticket #89). Not one still in among the junction's paths: it may stop there yet)
+        const leadCar = ahead ? carById(Number(ahead[1])) : undefined;
+        const away = !!leadCar && !leadHeld && lead >= 2 && leadCar.edge.kind === "lane" && !leadCar.edge.ring && !leadCar.edge.atRing && !this.jIn.has(leadCar.edge);
+        const roomPast = (z: { e: number }) => gap + (away ? lead * timeTo(Math.max(0, z.e) + reach(v), v.v, vmax, accOf(v)) : 0);
         for (const z of runs) if ((slow || z.clear) && z.s > 0.1 && canStopBefore(z.s) && roomPast(z) < z.e + reach(v) + 1) yields.push({ at: z.s, why: `keeping clear (${why})`, speed: holdSpeed(z), ...(W ? { info: { kind: "keep-clear" as const, ...(why ? { detail: why } : {}), ...((won as Won | null)?.car !== undefined ? { car: (won as Won | null)!.car } : {}), ...((won as Won | null)?.edge ? { edge: (won as Won | null)!.edge } : {}) } } : {}) });
       }
       // giving way: stopping short of the zone, and of every other zone its body would block there
