@@ -1457,6 +1457,12 @@ export class SketchSim {
     if (!best) return null;
     let arm = 0;
     for (let i = 0; i < exits.length; i++) { if (i === 0 || exits[i].d - exits[i - 1].d > 0.35) arm++; if (exits[i] === best) break; }
+    // (the first exit going on the way it came in, within 45°, no road to turn off by before it (a ring in a road with no side roads, or
+    // only on the left): straight on, either ring, not the outer as for turning off at the first (ticket #94))
+    if (arm === 1) {
+      const a = ins[0].from!, b = best.conn.to!, dIn = a.lane.locate(a.s).d, dOut = b.lane.locate(b.s).d;
+      if (dIn.x * dOut.x + dIn.y * dOut.y > Math.SQRT1_2) arm = 2;
+    }
     const inner = G.rings[0], outer = G.rings[G.rings.length - 1];
     let want = arm === 1 ? outer : arm >= 3 || !choice ? inner : this.ringPick.get(v.id);
     // (straight on, either: the ring whose ways on from here have the shorter queue, as drivers pick their lane; much the same, 45% of
