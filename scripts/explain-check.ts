@@ -231,12 +231,13 @@ const RULES: Partial<Sketch> = { traffic: { rate: 0, speed: 50, seed: 1, tune: {
     return { sim, a };
   };
   const live = run(true), rec = run(false);
-  // (a moment the car, watched, waits at the crossing giving way, and has for a second: the recording's frame then)
+  // (a moment the car, watched, waits at the crossing giving way to one on the ring, and has for a second: the recording's frame then)
   let at = -1, since = -1;
   for (let i = 0; i < 600 && at < 0; i++) {
     live.sim.step(0.1); rec.sim.step(0.1);
     const lx = live.sim.explain(live.a);
-    if (lx?.rule?.kind === "give-way" && lx.why?.startsWith("zone lane:O")) { if (since < 0) since = live.sim.t; else if (live.sim.t - since >= 1) at = live.sim.t - 0.5; } else since = -1;
+    // (one coming round on the ring itself, not still on its way onto it: so how far round it is can be said)
+    if (lx?.rule?.kind === "give-way" && lx.why?.startsWith("zone lane:O") && lx.blocker?.round !== undefined) { if (since < 0) since = live.sim.t; else if (live.sim.t - since >= 1) at = live.sim.t - 0.5; } else since = -1;
   }
   for (let i = 0; i < 10; i++) rec.sim.step(0.1);
   const x = at >= 0 ? rec.sim.explain(rec.a, at) : null, b = x?.blocker;

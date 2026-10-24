@@ -6,10 +6,15 @@
  * cars going on (follow-up), and HCM 7's capacity for that lane at that flow (c = A·e^(−B·v_c)). Then: how many go onto the inner
  * ring, missed exits (going more than half a lap past the way off), collisions and deadlocks. As things are, and with each setting
  * given (key=value, as `sketch.traffic.tune`). RING_DEBUG=1 lists every way on; RING_GEOM=1 only prints the ways on and off's lengths
- * and speeds (RING_NEAR, RING_D try other arms).   npm run ring:check [-- key=value …]
+ * and speeds (RING_NEAR, RING_D try other arms).
+ * Last, a check (ticket #89): the team's Roundabout 3 as at rev 485 (a two-lane ring 14 and 21 m across, every way in queued, a zebra on
+ * one arm, its own settings: lane by exit, roundabout driving), 20 minutes on seeds 1 and 2: cars through an hour, deadlocks broken,
+ * collisions (1024 veh/h and some 50 deadlocks before; the spatial experiment's ~1800 on average, without the zebra or lanes).
+ *   npm run ring:check [-- key=value …]
  */
+import { readFileSync } from "fs";
 import { SketchSim } from "../src/lib/lane-sketch-sim";
-import type { Sketch, SketchConnector, SketchLane } from "../src/lib/lane-sketch";
+import { sanitizeSketch, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
 
 type Variant = "S" | "A" | "B";
 const TAU = 2 * Math.PI, r2 = (v: number) => Math.round(v * 100) / 100;
@@ -117,4 +122,18 @@ for (const variant of ["S", "A", "B"] as const) for (const tune of tunes) {
   }
   if (process.env.RING_DEBUG) for (const e of rs[0].entries) console.log("   ", e.id, e.ring, Math.round(e.perHour), "vc", Math.round(e.circulating), "hcm", Math.round(e.hcm));
   console.log(`  all: ${Math.round(avg(r => r.total))} /h onto the ring (HCM ${Math.round(avg(r => r.hcmTotal))} /h); onto the inner ring ${Math.round(avg(r => r.inner))} /h; missed exits ${avg(r => r.missed).toFixed(1)} of ${Math.round(avg(r => r.onRing))} (${((100 * avg(r => r.missed)) / Math.max(1, avg(r => r.onRing))).toFixed(1)}%); out ${Math.round(avg(r => r.out))}; collisions ${avg(r => r.collisions)}; deadlocks ${avg(r => r.deadlocks)}`);
+}
+
+// Roundabout 3 as at rev 485 (ticket #89): through, no deadlocks, few collisions
+{
+  const sk = sanitizeSketch(JSON.parse(readFileSync(new URL("./fixtures/roundabout-3-rev485.json", import.meta.url), "utf8")))!, T = 1200;
+  const rs = [1, 2].map(seed => {
+    const sim = new SketchSim(sk, { ...sk.traffic!, seed }, seed);
+    while (sim.t < T - 1e-9) sim.step(0.1);
+    return sim.stats();
+  });
+  const through = rs.reduce((a, r) => a + r.finished, 0) / rs.length / (T / 3600), deadlocks = rs.reduce((a, r) => a + r.deadlocks, 0), collisions = rs.reduce((a, r) => a + r.collisions, 0);
+  const ok = through >= 1550 && deadlocks <= 4 && collisions <= 6;
+  if (!ok) process.exitCode = 1;
+  console.log(`\n${ok ? "ok  " : "FAIL"} Roundabout 3 (rev 485), 20 min, seeds 1-2: ${Math.round(through)} veh/h through (at least 1550), deadlocks broken ${deadlocks} (at most 4), collisions ${collisions} (at most 6)`);
 }
