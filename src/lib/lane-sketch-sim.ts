@@ -2532,6 +2532,10 @@ export class SketchSim {
           for (const w of toward.get(k.other) ?? NONE) {
             // (nor one following this one, behind it in its lane or held up by it: it can't get there first)
             if (w === v || (w.edge === v.edge && !v.edge.ring && w.pos < v.pos) || whyWas.get(w) === `car ${v.id}`) continue;
+            // (a way off an inner ring across the outer one: one still short of its line onto the ring is no ring car yet; it gives way
+            // to those on the ring, this one leaving it included (ticket #89: a car on its way off waited for car after car coming up
+            // to a line, for minutes))
+            if (r.edge.innerOff && k.other.ring && w.edge.kind === "lane" && !w.edge.ring && w.exit?.minor && w.exit.to!.lane === k.other) continue;
             const dW = this.toPlace(w, k.other, k.otherAt, reach(w) + 1 + k.otherAfter, k.otherBefore);
             if (dW === null) continue;
             const ws = dW - k.otherBefore;
@@ -2631,7 +2635,9 @@ export class SketchSim {
       // creeping up or not, until it gets going: for its patience there, where `.still` resetting to 0 the moment it
       // creeps forward a hair before being blocked again, over and over at a busy merge, would never grow enough to
       // ease anything)
-      if (v.edge.kind === "conn" && (v.edge.innerOff || v.edge.to!.lane.ring) && v.v < 2) this.offWait.set(v.id, (this.offWait.get(v.id) ?? 0) + dt); else this.offWait.delete(v.id);
+      // (and one waiting on the inner ring itself, short of its way off, for a gap in the outer ring: its patience grows there too)
+      const offHeld = (v.edge.kind === "conn" && (v.edge.innerOff || v.edge.to!.lane.ring)) || (v.edge.ring && !!v.exit?.innerOff && /^zone /.test((why as string | null) ?? ""));
+      if (offHeld && v.v < 2) this.offWait.set(v.id, (this.offWait.get(v.id) ?? 0) + dt); else this.offWait.delete(v.id);
       // (and how long held where it has to have changed lane: not since it wanted to, which in a queue up to there is long gone
       // by the time it gets there, and gave the change up the moment it did (ticket #89))
       const changing = !!(v.why as string | null)?.startsWith("changing to");
