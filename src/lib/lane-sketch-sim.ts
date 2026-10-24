@@ -1637,7 +1637,9 @@ export class SketchSim {
    */
   private zoneWon(kind: ExplainRule, k: Conflict, mine: Edge, w: SimVehicle, ws: number, dMe: number, v: SimVehicle, rules: boolean): Won {
     return { kind, car: w.id, ...(ws <= 0 ? { detail: "already in the zone" } : rules ? { detail: w.commitUntil > this.t ? "set off first" : k.prioWhy } : {}), edge: k.other.key, ...(w.edge !== k.other ? { carEdge: w.edge.key } : {}), theirSec: r2(timeTo(Math.max(0, ws), w.v, k.other.vmax, accOf(w))), mySec: r2(timeTo(dMe + k.after + reach(v), v.v, mine.vmax, accOf(v))),
-      ...(kind === "give-way" ? { wantSec: GAP } : {}), ...(k.other.ring && w.edge === k.other && ws > 0 ? { round: r2(ws) } : {}),
+      // (how far round the ring the other is: on the ring the crossing is on, or on the ring a way off it leaves, coming round to that
+      // way off, past where this one comes on maybe (ticket #91))
+      ...(kind === "give-way" ? { wantSec: GAP } : {}), ...(ws > 0 && ((k.other.ring && w.edge === k.other) || (w.edge.ring && k.other.kind === "conn" && k.other.from!.lane === w.edge)) ? { round: r2(ws) } : {}),
       zone: { mine, mineAt: [k.at - k.before, k.at + k.after], theirs: k.other, theirsAt: [k.otherAt - k.otherBefore, k.otherAt + k.otherAfter] } };
   }
   /** a line in the car watched's log (about 30 kept); a repeat of the last one within 2 s only updates its time */
@@ -3452,6 +3454,8 @@ export class SketchSim {
       wE = this.edges.get(this.tags[f.tags[wi * 4]]);
       if (wE === other) { let d = other.ring ? this.along(other, posOn(other, wi), k.otherAt) : k.otherAt - posOn(other, wi); if (other.ring && d > other.len - Math.min(f.nums[wi * 9 + 7] + 1 + k.otherAfter, other.len / 2)) d -= other.len; ws = d - k.otherBefore; }
       else if (wE?.kind === "conn" && wE.to!.lane === other) { const d = (other.ring ? this.along(other, wE.to!.s, k.otherAt) : k.otherAt - wE.to!.s); if (d >= 0) ws = wE.len - posOn(wE, wi) + d - k.otherBefore; }
+      // (on a ring, coming round to a way off it: ticket #91)
+      else if (wE?.ring && other.kind === "conn" && other.from!.lane === wE) ws = this.along(wE, posOn(wE, wi), this.exitS(other)) + k.otherAt - k.otherBefore;
     }
     const minor = (mine.kind === "conn" && !!mine.minor) || (!!mine.innerOff && other.ring), wMinor = !!other.minor || (!!other.innerOff && mine.ring);
     const kind: ExplainRule = ws !== null && ws <= 0 ? "priority" : rules ? (k.prio > 0 ? "priority" : k.prio < 0 ? "give-way" : "zone") : minor && !wMinor ? "give-way" : "zone";
@@ -3465,7 +3469,7 @@ export class SketchSim {
       out.theirSec = r2(timeTo(ws, f.nums[wi * 9 + 5], other.vmax, truck(wLen) ? TRUCK_A : A_MAX));
       out.mySec = r2(timeTo(Math.max(0, dMe) + k.after + len + (truck(len) ? SWEEP : 0), f.nums[me * 9 + 5], mine.vmax, truck(len) ? TRUCK_A : A_MAX));
       if (kind === "give-way") out.wantSec = GAP;
-      if (other.ring && wE === other) out.round = r2(ws);
+      if ((other.ring && wE === other) || (wE?.ring && other.kind === "conn" && other.from!.lane === wE)) out.round = r2(ws);
     }
     return out;
   }

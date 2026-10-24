@@ -86,4 +86,11 @@ t("a give-way to one not on the ring yet (ticket #80): \"heading to\", not \"on\
     "Giving way to car 306 on lane l3278, 21 m round the ring, 3.2 s from the crossing; needs 3.4 s + 1.5 s to spare (0.5 s)");
 });
 
+t("a give-way to one coming round its ring to a way off it (ticket #91): \"coming round\", with how far round", () => {
+  const gw = (b: Partial<NonNullable<CarExplain["blocker"]>>) => ({ ...base, rule: { kind: "give-way" as const }, blocker: { car: 24, edge: "conn:c5230", ...b }, since: 0.2 });
+  assert.equal(headline(gw({ carEdge: "lane:l3245", round: 33, theirSec: 4.8, mySec: 4.4, wantSec: 1.5 })).text,
+    "Giving way to car 24 coming round lane l3245 to connector c5230, 33 m round the ring, 4.8 s from the crossing; needs 4.4 s + 1.5 s to spare (0.2 s)");
+  assert.ok(explainText(gw({ carEdge: "lane:l3245", round: 33, theirSec: 4.8, mySec: 4.4, wantSec: 1.5 }), clock).includes("Held by: car 24 coming round lane l3245 to connector c5230 (33 m round the ring"));
+});
+
 console.log(`car-explain: ${ok} checks passed`);

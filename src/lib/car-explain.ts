@@ -110,12 +110,17 @@ export function crossingWords(b: NonNullable<CarExplain["blocker"]>): { where: s
   return { where, need };
 }
 
+/** where the car held for is, against the path it holds this one up on: on it, heading to it from its own edge, or coming round its ring
+ * to it (a way off the ring it is on: ticket #91, "heading to" read as if it were coming the other way) */
+const heldWhere = (b: NonNullable<CarExplain["blocker"]>) =>
+  b.carEdge && b.round !== undefined && !b.edge.startsWith("lane:") ? ` coming round ${edgeName(b.carEdge)} to ${edgeName(b.edge)}` : ` ${b.carEdge ? "heading to" : "on"} ${edgeName(b.edge)}`;
+
 /** the explanation's headline in plain words, with the car it is about (to link); no route leads it unless something else holds the car */
 export function headline(x: CarExplain): { text: string; car?: number } {
   const r = x.rule?.kind, b = x.blocker, on = (e?: string) => (e ? ` on ${edgeName(e)}` : "");
   // (the car held for: "on" the crossing's lane once it's there, "heading to" it while it's still on its own, so a
   // car not in the junction yet isn't said to be on it; ticket #80)
-  const heldOn = (bb: typeof b) => (bb?.edge ? ` ${bb.carEdge ? "heading to" : "on"} ${edgeName(bb.edge)}` : "");
+  const heldOn = (bb: typeof b) => (bb?.edge ? heldWhere(bb) : "");
   const speedNow = x.speed ? `${kmh(x.speed.kmh)} of ${kmh(x.speed.desiredKmh)} km/h` : null;
   if (x.deadlock) return { text: `${x.deadlock.includes(x.car) ? "Deadlock" : "Waiting on a deadlock"}: ${x.deadlock.join(" → ")} → ${x.deadlock[0]} all wait on each other`, car: x.deadlock[0] };
   const lost = noRouteText(x);
@@ -163,7 +168,7 @@ export function explainText(x: CarExplain, clock: (t: number) => string, firstCo
   if (x.leader) out.push(`Leader: car ${x.leader.car}, ${m1(x.leader.gap)} ahead at ${kmh(x.leader.kmh)} km/h`);
   if (x.blocker) {
     const b = x.blocker, cw = crossingWords(b), extra = [b.gap !== undefined ? `gap ${m1(b.gap)}` : "", b.needGap !== undefined ? `needs ${m1(b.needGap)}` : "", ...cw.where, cw.need ? `this one needs ${cw.need}` : ""].filter(Boolean);
-    out.push(`Held by: car ${b.car}${b.carEdge ? " heading to" : " on"} ${edgeName(b.edge)}${extra.length ? ` (${extra.join(", ")})` : ""}`);
+    out.push(`Held by: car ${b.car}${heldWhere(b)}${extra.length ? ` (${extra.join(", ")})` : ""}`);
   }
   if (x.stopAt) out.push(`Holding for: ${tagWords(x.stopAt.why)}, ${m1(x.stopAt.dist)} ahead (${edgeName(x.stopAt.edge)} at ${m1(x.stopAt.s)})`);
   if (x.chain.length) out.push(`Blocking chain: ${[x.car, ...x.chain].join(" → ")}${x.deadlock ? `  DEADLOCK ring: ${x.deadlock.join(", ")}` : movingLoop(x) ? "  (a loop, still moving: not a deadlock)" : ""}`);
