@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { bridgeCanvas, bridgeEditScope, bridgeState, bridgeToWorld } from "@/state/bridge-registry";
 import { type BridgeView, bridgeAddAgent, bridgeAllowEdits, bridgeAllowTabs, bridgeCloseTab, bridgeDenyRequest, bridgeDisconnect, bridgeFocusTab, bridgeHello, bridgeOpenRequest, bridgePair, bridgePauseTab, bridgeResume, bridgeRevoke, bridgeSend, bridgeStore, bridgeTakeOver, setBridgeNavigate } from "@/state/bridge-client";
 import { under } from "./a11y";
+import { NewTicketButton } from "./new-ticket";
 
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const hm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -113,6 +114,7 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
         <span className="ml-auto text-xs text-muted-foreground">
           {view.reconnecting ? "reconnecting…" : view.phase === "attached" ? `${view.agent} attached` : view.phase === "waiting" ? "waiting for the agent" : view.phase === "pairing" ? "pairing…" : view.phase === "lost" ? "pairing lost" : "not connected"}
         </span>
+        <NewTicketButton />
         <Button variant="ghost" size="icon-sm" className="size-7" aria-label="Close the panel" onClick={() => bridgeStore.show(false)}><X /></Button>
       </div>
       <div className="grid grid-cols-[minmax(0,1fr)] gap-2 p-3">

@@ -28,6 +28,8 @@ function logConsole(kind: BridgeConsoleEntry["kind"], parts: unknown[]) {
   browserConsole.push({ at: Date.now(), kind, text });
   if (browserConsole.length > CONSOLE_KEEP) browserConsole.shift();
 }
+/** the console lines kept (for a ticket filed from the bridge panel) */
+export const bridgeConsole = () => browserConsole.slice();
 if (typeof window !== "undefined" && !(window as { __trafficsimConsolePatched?: boolean }).__trafficsimConsolePatched) {
   (window as { __trafficsimConsolePatched?: boolean }).__trafficsimConsolePatched = true;
   const origError = console.error.bind(console), origWarn = console.warn.bind(console);
@@ -322,6 +324,8 @@ async function run(c: Command) {
   }
 }
 
+/** state keys too big (or not state) for the default `state` answer: only when asked by name */
+const BY_NAME_ONLY = new Set(["hitTest", "sketchJson", "moment", "simulation"]);
 async function exec(type: string, a: Record<string, unknown>, said: (t: string) => void): Promise<unknown> {
   switch (type) {
     case "snapshot": {
@@ -356,14 +360,14 @@ async function exec(type: string, a: Record<string, unknown>, said: (t: string) 
         if (v === undefined) throw noPath(a.path, snap);
         return { [a.path]: v };
       }
-      const keys = Array.isArray(a.keys) && a.keys.length ? a.keys.map(String) : [...bridgeState.names().filter(k => k !== "hitTest" && k !== "sketchJson"), ...(u ? ["ui"] : []), "visibility"];
+      const keys = Array.isArray(a.keys) && a.keys.length ? a.keys.map(String) : [...bridgeState.names().filter(k => !BY_NAME_ONLY.has(k)), ...(u ? ["ui"] : []), "visibility"];
       const out: Record<string, unknown> = {};
       for (const k of keys) {
         if (k === "ui" && u) { out.ui = u.snapshot(); continue; }
         // (a background tab stops repainting and, after a pause, delays its own stepping too: not this page's own
         // state, true of any tab, so answered here rather than asked of an editor; ticket #70)
         if (k === "visibility") { out.visibility = { visible: document.visibilityState === "visible", state: document.visibilityState }; continue; }
-        // (not in the default keys, as hitTest and sketchJson aren't: only when asked by name)
+        // (not in the default keys, as BY_NAME_ONLY's aren't: only when asked by name)
         if (k === "browserConsole") { out.browserConsole = browserConsole.slice(-50); continue; }
         const f = bridgeState.get(k); out[k] = f ? await f({}) : { error: "not offered on this page" };
       }

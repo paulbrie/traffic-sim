@@ -772,23 +772,35 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     setRunning(r => !r);
   };
   /** what the cars did, as text to paste into a conversation (like the plan's replay data) */
-  const copyRun = async () => {
+  const runText = async () => {
     const s = sim.current;
-    if (!s) return;
+    if (!s) return null;
     const r = await s.report(), sk = live.current.sketch;
-    const text = `Lane sketch simulation at ${clock(r.time)} (${running ? "running" : "paused"}) · ${r.stats.vehicles} cars, ${r.stats.collisions} collisions, ${r.stats.jumps} jumps\n\`\`\`json\n${JSON.stringify({ sketch: exportSketch(sk, live.current.contents), ...r })}\n\`\`\`\n`;
+    return `Lane sketch simulation at ${clock(r.time)} (${running ? "running" : "paused"}) · ${r.stats.vehicles} cars, ${r.stats.collisions} collisions, ${r.stats.jumps} jumps\n\`\`\`json\n${JSON.stringify({ sketch: exportSketch(sk, live.current.contents), ...r })}\n\`\`\`\n`;
+  };
+  const copyRun = async () => {
+    const text = await runText();
+    if (!text) return;
     try { await navigator.clipboard.writeText(text); toast.success("Simulation data copied", { description: `${Math.round(text.length / 1024)} kB: the sketch, the cars now, the jumps, the last minute's events and the last 10 s of every car. Paste it into the conversation.` }); }
     catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
   };
   /** the moment shown (replayed, or now) as text to paste into a conversation, like V1's: the cars in view, the lights, a minute's events */
   const copyMoment = async () => {
     if (expUi.current.on && exp.current) { await copyExpMoment(); return; }
+    const text = await momentText();
+    if (!text) return;
+    try { await navigator.clipboard.writeText(text); toast.success("Replay data copied", { description: `${Math.round(text.length / 1024)} kB: paste it into the conversation.` }); }
+    catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
+  };
+  /** the moment shown as that text (the experiment's while it is on), or null (the bridge's "moment", for a ticket) */
+  const momentText = async (): Promise<string | null> => {
+    if (expUi.current.on && exp.current) return expMomentText();
     const s = sim.current, c = canvas.current;
-    if (!s || !c) return;
+    if (!s || !c) return null;
     const v = view.current, m = 20, hw = c.clientWidth / 2 / v.scale + m, hh = c.clientHeight / 2 / v.scale + m;
     const t = live.current.replayT, at = t ?? s.t;
     const mo = await s.moment(at, { x0: v.cx - hw, y0: v.cy - hh, x1: v.cx + hw, y1: v.cy + hh });
-    if (!mo) return;
+    if (!mo) return null;
     const sk = live.current.sketch, u = ui.getValue();
     const names = new Map(sk.junctions.map(j => [j.id, j.name]));
     const data = {
@@ -799,23 +811,25 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       cars: mo.cars, lights: mo.lights.map(l => ({ ...l, name: names.get(l.junction) ?? null })),
       events: mo.events.length ? mo.events : "none within a minute",
     };
-    const text = `Lane sketch replay at ${clock(mo.time)} (${t === null ? "live" : "replay"}) · plan ${u.planId} rev ${u.save.revision}\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n`;
-    try { await navigator.clipboard.writeText(text); toast.success("Replay data copied", { description: `${Math.round(text.length / 1024)} kB: paste it into the conversation.` }); }
-    catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
+    return `Lane sketch replay at ${clock(mo.time)} (${t === null ? "live" : "replay"}) · plan ${u.planId} rev ${u.save.revision}\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n`;
   };
   /** (the experiment) the moment shown, its cars in view and its results, as text to paste into a conversation (ticket #69) */
   const copyExpMoment = async () => {
+    const text = expMomentText();
+    if (!text) return;
+    try { await navigator.clipboard.writeText(text); toast.success("Replay data copied", { description: `${Math.round(text.length / 1024)} kB: the experiment's cars in view at this moment. Paste it into the conversation.` }); }
+    catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
+  };
+  const expMomentText = () => {
     const e = exp.current, c = canvas.current;
-    if (!e || !c) return;
+    if (!e || !c) return null;
     const v = view.current, m = 20, hw = c.clientWidth / 2 / v.scale + m, hh = c.clientHeight / 2 / v.scale + m, t = live.current.replayT, u = ui.getValue();
     const r1 = (x: number) => Math.round(x * 10) / 10, time = t ?? e.last?.t ?? 0;
     const cars = e.cars().filter(q => Math.abs(q.p.x - v.cx) < hw && Math.abs(q.p.y - v.cy) < hh)
       .map(q => ({ id: q.id, x: r1(q.p.x), y: r1(q.p.y), heading: Math.round((Math.atan2(q.d.y, q.d.x) * 180) / Math.PI), kmh: Math.round(q.share * (live.current.sketch.traffic?.speed ?? 50)), sensing: q.spatial }));
     const data = { plan: u.planId, revision: u.save.revision, experiment: "spatial", moment: { time: r1(time), live: t === null, kept: e.kept() },
       view: { cx: r1(v.cx), cy: r1(v.cy), width: r1(hw * 2), height: r1(hh * 2) }, picked: e.car(), stats: e.stats(), cars };
-    const text = `Spatial experiment ${t === null ? "live" : "replay"} at ${clock(time)} · plan ${u.planId} rev ${u.save.revision}\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n`;
-    try { await navigator.clipboard.writeText(text); toast.success("Replay data copied", { description: `${Math.round(text.length / 1024)} kB: the experiment's cars in view at this moment. Paste it into the conversation.` }); }
-    catch { toast.error("Couldn't copy: the browser blocked the clipboard."); }
+    return `Spatial experiment ${t === null ? "live" : "replay"} at ${clock(time)} · plan ${u.planId} rev ${u.save.revision}\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n`;
   };
   const resetCars = () => { exp.current?.reset(live.current.sketch, { ...expParams(), opts: { exitLine: true, noBlockBox: true, uturnAfterRound: true } }); setExpStats(null); setExpCar(null); sim.current?.reset(); setStats(sim.current?.stats() ?? null); setPeds([]); setCarInfo(null); setReplayT(null); setReplayPlaying(false); setReplayRange(null); redraw(); };
   // "Test in Sketch": the selection taken into the Sketch window, cut off with short ways in and out, to run on its own
@@ -1254,6 +1268,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           roadNames: s.roads.slice(0, 200).map(r => `${r.id} ${r.name}`), junctionNames: s.junctions.slice(0, 200).map(j => `${j.id} ${j.name}`) };
       }),
       bridgeState.register("sketchJson", () => sk()),
+      // (the moment shown and the whole run, as the Copy buttons' text: for a ticket filed from the bridge panel)
+      bridgeState.register("moment", () => momentText()),
+      bridgeState.register("simulation", () => runText()),
       bridgeState.register("selection", () => ({ ...live.current.sel, car: live.current.selCar, ...(live.current.selCar !== null ? { explain: whyNow() } : {}) })),
       bridgeState.register("stats", () => sim.current?.stats() ?? null),
       bridgeState.register("problems", () => sim.current?.problems() ?? null),

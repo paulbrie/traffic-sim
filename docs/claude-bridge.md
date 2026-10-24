@@ -55,7 +55,7 @@ reach, "reconnecting…" and the pairing kept.
 |---|---|---|
 | `snapshot` | `{ root?: string }` (a CSS selector, default `body`) | `{ url, title, tree }`: the accessibility tree, compact text: one line per node `role "name" [value] {states}`, indented; regions, buttons, inputs, headings, tables (first rows), dialogs, toasts, and a `<p>` or other mixed-content element's own text (not swallowed by its children's) |
 | `screenshot` | `{ target?: "map" \| "page", maxWidth?: number }` | `{ dataUrl }` (PNG; `map`: the editor's canvas, or its 3D view while that shows; `page`: the whole page, best effort) plus `note` if the tab is hidden (`document.visibilityState`): a background tab stops painting, so the picture may be stale |
-| `state` | `{ keys?: string[] }` (`sketch`, `selection`, `stats`, `problems`, `view`, `run`, `experiment`, `visibility`, `ui`; not in the default keys, only by name: `browserConsole`); or `{ path }`; or `{ watch: string[] }` | `{ [key]: value }` (sketch: counts and ids, not the whole JSON; ask `sketchJson` for that; `experiment`: `{ on }`, or on: `{ on, stats, hasJunction }`; `visibility`: `{ visible, state }`, `document.visibilityState`; `browserConsole`: the page's last 50 uncaught errors, unhandled rejections and `console.error`/`warn` lines — not a worker's, which don't reach this thread's console); `{ [path]: value }`; `{ watching }` (see "UI state") |
+| `state` | `{ keys?: string[] }` (`sketch`, `selection`, `stats`, `problems`, `view`, `run`, `experiment`, `visibility`, `ui`; not in the default keys, only by name: `browserConsole`, `moment` and `simulation` (a V2 sketch's Copy replay data / Copy simulation data text, for a ticket filed from the panel; null before a run)); or `{ path }`; or `{ watch: string[] }` | `{ [key]: value }` (sketch: counts and ids, not the whole JSON; ask `sketchJson` for that; `experiment`: `{ on }`, or on: `{ on, stats, hasJunction }`; `visibility`: `{ visible, state }`, `document.visibilityState`; `browserConsole`: the page's last 50 uncaught errors, unhandled rejections and `console.error`/`warn` lines — not a worker's, which don't reach this thread's console); `{ [path]: value }`; `{ watching }` (see "UI state") |
 | `click` | `{ role?, name?, nth?, selector?, text? }` | `{ clicked: "<role> \"<name>\"" }` |
 | `type` | `{ role?, name?, selector?, text, submit?: boolean }` | `{ typed }` |
 | `key` | `{ key: string }` (e.g. `"Control+k"`, `"Escape"`) | `{}` |
@@ -248,3 +248,14 @@ Agent tabs: only with the user's leave (Allow agent tabs), each agent only in it
 agent edits: only with the user's leave (Allow agent edits: one sketch, or the plan), kept and checked by the server, each
 one undo step and shown;
 an agent token can't drive the hub unless the user paired that agent with the hub's own code.
+
+## New ticket (ticket #95)
+
+The panel's ticket button (in its header, paired or not) files a ticket in the box's admin: a title, a description and a
+checkbox per kind of data this page has (the map's picture, the selection and its car's explanation, the moment's replay
+data, the whole run, stats, problems, the sketch, the editor's state, the browser console, the page's outline, the bridge's
+activity, the agents' reports), each kind a file attached to the ticket; the page's address goes in the description. The
+data is taken when the form opens. It posts to `${NEXT_PUBLIC_ADMIN_URL ?? "/admin"}/api/projects/${NEXT_PUBLIC_TICKETS_PROJECT
+?? "trafficsim"}/tasks` (multipart `title`, `description`, `files`): the admin on the same host, its own session cookie;
+signed out of it, the form says so with a link to sign in. Agents can't use it: it is the bridge's own UI, which they don't
+see or click.
