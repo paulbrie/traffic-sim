@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
+import { toast } from "sonner";
 import { Subject } from "subjecto";
-import { emptySketch, settle, type Piece, type Pt, type Sketch } from "@/lib/lane-sketch";
+import { emptySketch, lockedChange, settle, type Piece, type Pt, type Sketch } from "@/lib/lane-sketch";
 import { sanitizeZones } from "@/lib/sketch-zones";
 import { sketchList, touchOpen } from "@/lib/sketch-list";
 import { mapChanged, stepBack } from "@/lib/sketch-edit";
@@ -8,6 +9,16 @@ import type { SketchSimClient } from "./sketch-sim-client";
 import { laneSketch$, sketchReplaced } from "./store";
 
 const MAX = 200;
+
+/**
+ * (ticket #93) A change from `from` to `to` that would change something locked: refused, and said (once while it goes on,
+ * a drag being refused at every move). True: refused.
+ */
+export function lockRefused(from: Sketch, to: Sketch) {
+  const what = lockedChange(from, to);
+  if (what) toast.error(`${what[0].toUpperCase()}${what.slice(1)} is locked`, { id: "sketch-locked", description: "Unlock it to change it: right-click it on the map, or use the lock in the structure tree or the inspector." });
+  return !!what;
+}
 
 /**
  * A sketch the editor works on, with its own undo history and its own cars:
@@ -84,12 +95,14 @@ function makeStore(kind: SketchStore["kind"], sketch$: Subject<Sketch>, write: (
   };
   const store: SketchStore = {
     kind, sketch$, beginEdit: begin,
-    show(sk) { beginIf(sketch$.getValue(), sk); write(sk); },
+    show(sk) { const cur = sketch$.getValue(); if (lockRefused(cur, sk)) return; beginIf(cur, sk); write(sk); },
     edit(f) {
       const cur = sketch$.getValue(), changed = f(cur);
       if (changed === cur) return;
-      beginIf(cur, changed);
+      // (as it will be, roads laid out again: a lane laid out with one moved changes too)
       const next = settle(changed);
+      if (lockRefused(cur, next)) return;
+      beginIf(cur, changed);
       past.push({ back: cur, left: next });
       if (past.length > MAX) past.shift();
       future.length = 0;

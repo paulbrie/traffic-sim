@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Bike, BusFront, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Bike, BusFront, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +17,7 @@ import {
   addStop, updateStop, deleteStop, type SketchStop, setTwoWay, twoWayOk, twinOf, twinId, baseLaneId, connectorEnd, wayFrom, wayTo, type TwoWay,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, edgeLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
-  alignmentOf, entryLanes, insertPoint, leadOf, removePoint, settle, toggleCurve, roadMiddle,
+  alignmentOf, entryLanes, insertPoint, laneLocked, leadOf, setLocked, type LockIds, removePoint, settle, toggleCurve, roadMiddle,
   type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
 import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
@@ -25,7 +25,7 @@ import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { EditorKindContext, editorBack, NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, useUiPath, type TestOptions, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
-import { changeSketches, clipText, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
+import { changeSketches, clipText, lockRefused, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
 import { testPiece } from "@/lib/test-piece";
 import { offRoute } from "@/lib/route-trace";
 import { isDark, onThemeChange, readPalette, speedColor } from "@/render/palette";
@@ -335,6 +335,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [menu, setMenu] = useState<{ x: number; y: number; lanes: string[]; straightenable: boolean; /** some are rings of points (closed lanes) */ ring: boolean; geo: { lat: number; lon: number } | null; /** the place on the lane clicked a point can go (a line lane, not following a lead) */ add: { lane: string; p: Pt } | null;
     /** on a selected junction's corner: that corner (its own items) */ corner?: { junction: string; i: number; curved: boolean } | null;
     /** right-clicked a junction's surface, off any corner: that junction */ junction?: string | null } | null>(null);
+  // (ticket #93: some of the lanes the menu is for locked, theirs or their road's: what would change them offered greyed)
+  const menuLocked = !!menu?.lanes.some(id => laneLocked(sketch, id));
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
@@ -1525,7 +1527,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
    * A drag's sketch shown as it goes, but kept in the editor until the drag ends (then made the plan's
    * sketch once: the panels, the cars, saving and undo see the result, not every move of the drag).
    */
-  const dragShow = (sk: Sketch) => { if (!dragSk.current) store.beginEdit(); dragSk.current = sk; redraw(); };
+  // (ticket #93: a drag that would change something locked shows nothing moving, and says so)
+  const dragShow = (sk: Sketch) => { if (lockRefused(store.sketch$.getValue(), sk)) return; if (!dragSk.current) store.beginEdit(); dragSk.current = sk; redraw(); };
   /** a click in the 3D view at `p` on level `lv`: a car there, else what the plan view would pick there if it is on that level */
   const pickAt3d = (p: Pt, lv: number) => {
     const sk = live.current.sketch, car = live.current.replayT === null ? sim.current?.carAt(p, 1.5) ?? null : null;
@@ -1926,29 +1929,34 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                   <DropdownMenuItem onSelect={() => goTo({ kind: "junction", id: menu.junction! })}>
                     <ChartColumn /> Show stats
                   </DropdownMenuItem>
+                  {(() => { const on = !!sketch.junctions.find(j => j.id === menu.junction)?.locked; return (
+                    <DropdownMenuItem disabled={readOnly} onSelect={() => editSketch(sk => setLocked(sk, { junctions: [menu.junction!] }, !on))}>
+                      {on ? <LockOpen /> : <Lock />} {on ? "Unlock the junction" : "Lock the junction"} <span className="ml-auto text-[11px] text-muted-foreground">{on ? "locked" : "no changes"}</span>
+                    </DropdownMenuItem>
+                  ); })()}
                 </>}
                 {menu.lanes.length > 0 && <>
-                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{menu.lanes.length === 1 ? `Lane ${menu.lanes[0]}` : `${menu.lanes.length} lanes`}</DropdownMenuLabel>
-                  <DropdownMenuItem disabled={readOnly || !menu.add} onSelect={() => addPointAt(menu.add!)}>
+                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{menu.lanes.length === 1 ? `Lane ${menu.lanes[0]}` : `${menu.lanes.length} lanes`}{menuLocked ? " · locked" : ""}</DropdownMenuLabel>
+                  <DropdownMenuItem disabled={readOnly || menuLocked || !menu.add} onSelect={() => addPointAt(menu.add!)}>
                     <Plus /> Add point <span className="ml-auto text-[11px] text-muted-foreground">{menu.add ? "here" : "arcs: Edit as points"}</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => editSketch(s => straightenLanes(s, menu.lanes))}>
+                  <DropdownMenuItem disabled={readOnly || menuLocked || !menu.straightenable} onSelect={() => editSketch(s => straightenLanes(s, menu.lanes))}>
                     Straighten <span className="ml-auto text-[11px] text-muted-foreground">only the ends</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => editSketch(s => straightenLanes(s, menu.lanes, 0.5))}>
+                  <DropdownMenuItem disabled={readOnly || menuLocked || !menu.straightenable} onSelect={() => editSketch(s => straightenLanes(s, menu.lanes, 0.5))}>
                     Fewer points <span className="ml-auto text-[11px] text-muted-foreground">within 0.5 m</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem disabled={readOnly || !menu.straightenable} onSelect={() => makeCurve(editSketch, menu.lanes)}>
+                  <DropdownMenuItem disabled={readOnly || menuLocked || !menu.straightenable} onSelect={() => makeCurve(editSketch, menu.lanes)}>
                     Make a curve <span className="ml-auto text-[11px] text-muted-foreground">2 ends, 1 curved point</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem disabled={readOnly || !menu.ring} onSelect={() => editSketch(s => circleLanes(s, menu.lanes))}>
+                  <DropdownMenuItem disabled={readOnly || menuLocked || !menu.ring} onSelect={() => editSketch(s => circleLanes(s, menu.lanes))}>
                     Make a circle <span className="ml-auto text-[11px] text-muted-foreground">a ring, made round</span>
                   </DropdownMenuItem>
                   {menu.lanes.some(id => roadOf(sketch, id)) && <>
-                    <DropdownMenuItem disabled={readOnly} onSelect={() => deleteRoadLanes(sketch, menu.lanes, editSketch, setSel)}>
+                    <DropdownMenuItem disabled={readOnly || menuLocked} onSelect={() => deleteRoadLanes(sketch, menu.lanes, editSketch, setSel)}>
                       <Trash2 /> {menu.lanes.length === 1 ? "Delete this lane" : "Delete these lanes"} <span className="ml-auto text-[11px] text-muted-foreground">the road keeps the rest</span>
                     </DropdownMenuItem>
-                    <DropdownMenuItem disabled={readOnly} onSelect={() => takeLanesOut(sketch, menu.lanes, editSketch, setSel)}>
+                    <DropdownMenuItem disabled={readOnly || menuLocked} onSelect={() => takeLanesOut(sketch, menu.lanes, editSketch, setSel)}>
                       Take out of the road <span className="ml-auto text-[11px] text-muted-foreground">kept, in no road</span>
                     </DropdownMenuItem>
                   </>}
@@ -1957,6 +1965,22 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                       {t?.kind === "roads" ? "Merge the roads" : "Merge lanes"} <span className="ml-auto text-[11px] text-muted-foreground">{t ? "the two selected · M" : "select two · M"}</span>
                     </DropdownMenuItem>
                   ); })()}
+                  <DropdownMenuSeparator />
+                  {(() => {
+                    // (ticket #93: the lanes' own locks; and their road's, when they are all of one road)
+                    const own = menu.lanes.every(id => !!laneById(sketch, id)?.locked), roads = [...new Set(menu.lanes.map(id => roadOf(sketch, id)))], road = roads.length === 1 ? roads[0] : undefined;
+                    const n = menu.lanes.length === 1 ? "lane" : "lanes";
+                    return <>
+                      <DropdownMenuItem disabled={readOnly || !!road?.locked} title={road?.locked ? "Locked with its road: unlock the road" : undefined} onSelect={() => editSketch(sk => setLocked(sk, { lanes: menu.lanes }, !own))}>
+                        {own ? <LockOpen /> : <Lock />} {own ? `Unlock the ${n}` : `Lock the ${n}`}{road?.locked && <span className="ml-auto text-[11px] text-muted-foreground">with its road</span>}
+                      </DropdownMenuItem>
+                      {road && (
+                        <DropdownMenuItem disabled={readOnly} onSelect={() => editSketch(sk => setLocked(sk, { roads: [road.id] }, !road.locked))}>
+                          {road.locked ? <LockOpen /> : <Lock />} {road.locked ? "Unlock the road" : "Lock the road"} <span className="ml-auto max-w-24 truncate text-[11px] text-muted-foreground">{road.name}</span>
+                        </DropdownMenuItem>
+                      )}
+                    </>;
+                  })()}
                 </>}
                 {page && menu.lanes.length === 1 && <>
                   <DropdownMenuSeparator />
@@ -2619,6 +2643,7 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
   results?: SimStats | null;
 }) {
   const { edit: editSketch, show } = useSketchStore();
+  const [readOnly] = useDeepSubject(ui, "readOnly");
   const road = sel.road ? sketch.roads.find(r => r.id === sel.road) : null;
   const link = sel.link ? sketch.links?.find(k => k.id === sel.link) : null;
   const junction = sel.junctions.length === 1 ? sketch.junctions.find(j => j.id === sel.junctions[0]) : null;
@@ -2930,9 +2955,24 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
   } else {
     body = <p className="text-xs text-muted-foreground">Draw lanes (L, A for arcs, O for a ring) and connectors (C, with bends where you click), group lanes into roads (G), and draw junctions (J): a surface taking in the lanes and connectors on it.</p>;
   }
+  // (ticket #93: the road, junction or lane shown locked or not: its fields greyed while it is; a lane locked by its road
+  // unlocked with the road)
+  const laneByRoad = !!lane && !lane.locked && !!roadOf(sketch, lane.id)?.locked;
+  const lock = link ? null : road ? { ids: { roads: [road.id] }, on: !!road.locked, what: "road" } : junction ? { ids: { junctions: [junction.id] }, on: !!junction.locked, what: "junction" }
+    : lane ? { ids: { lanes: [lane.id] }, on: !!lane.locked || laneByRoad, what: "lane" } : null;
   return (
-    <InspectorPanel id="selection" title={link ? `Link ${link.id}` : road ? "Road" : junction ? `Junction ${junction.id}` : lane ? `Lane ${lane.id}` : conn ? `Connector ${conn.id}` : "Selection"}>
-      {body}
+    <InspectorPanel id="selection" title={link ? `Link ${link.id}` : road ? "Road" : junction ? `Junction ${junction.id}` : lane ? `Lane ${lane.id}` : conn ? `Connector ${conn.id}` : "Selection"}
+      actions={lock && (
+        <Button size="icon-sm" variant={lock.on ? "secondary" : "ghost"} className="size-7" disabled={readOnly || laneByRoad} aria-pressed={lock.on} aria-label={lock.on ? `Unlock the ${lock.what}` : `Lock the ${lock.what}`}
+          title={laneByRoad ? "Locked with its road: unlock the road" : lock.on ? `Locked: click to unlock the ${lock.what}` : `Lock the ${lock.what}: its properties can't be changed until unlocked`}
+          onClick={() => editSketch(sk => setLocked(sk, lock.ids, !lock.on))}>
+          {lock.on ? <Lock /> : <LockOpen />}
+        </Button>
+      )}>
+      {lock?.on ? <>
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Lock className="size-3 shrink-0" /> {laneByRoad ? "Locked with its road: unlock the road to change it." : `Locked: unlock the ${lock.what} to change it.`}</p>
+        <fieldset disabled className="contents">{body}</fieldset>
+      </> : body}
     </InspectorPanel>
   );
 }
@@ -3141,6 +3181,9 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
   onHover: (h: Hit | null) => void; onZoom: (p: Piece) => void; onCenter: (p: Piece) => void;
 }) {
   const [closed, setClosed] = useState<Set<string>>(() => new Set());
+  // (ticket #93: a lane, road or junction locked or unlocked from its row)
+  const { edit: editSketch } = useSketchStore();
+  const [readOnly] = useDeepSubject(ui, "readOnly");
   // (long lists: the first rows only, more on asking; what is selected always listed)
   const [limits, setLimits] = useState<Record<string, number>>({});
   const STEP = 60;
@@ -3186,9 +3229,10 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
   const piece = (p: Partial<Piece>): Piece => ({ lanes: p.lanes ?? [], connectors: p.connectors ?? [], junctions: p.junctions ?? [] });
   const pick = (e: React.MouseEvent, s: Sel) => setSel(e.shiftKey ? { lanes: [...new Set([...sel.lanes, ...s.lanes])], connectors: [...new Set([...sel.connectors, ...s.connectors])], junctions: [...new Set([...sel.junctions, ...s.junctions])], road: null } : s);
 
-  const row = (o: { key: string; depth: number; on: boolean; label: React.ReactNode; note?: React.ReactNode; title?: string; kids?: boolean; hit?: Hit; sel: Sel; zoom: Piece; tone?: string }) => (
+  // (`lock`: what the row's lock locks, whether it is locked, and whether it is locked by its road (its own lock then not offered))
+  const row = (o: { key: string; depth: number; on: boolean; label: React.ReactNode; note?: React.ReactNode; title?: string; kids?: boolean; hit?: Hit; sel: Sel; zoom: Piece; tone?: string; lock?: { ids: LockIds; on: boolean; byRoad?: boolean } }) => (
     <div key={o.key} role="treeitem" aria-selected={o.on} aria-expanded={o.kids ? !closed.has(o.key) : undefined} data-on={o.on}
-      className={cn("flex cursor-default items-center gap-1 rounded py-0.5 pr-1.5 text-xs hover:bg-muted", o.on && "bg-primary/10 text-foreground", o.tone)}
+      className={cn("group flex cursor-default items-center gap-1 rounded py-0.5 pr-1.5 text-xs hover:bg-muted", o.on && "bg-primary/10 text-foreground", o.tone)}
       style={{ paddingLeft: 4 + o.depth * 12 }} title={o.title}
       onMouseEnter={() => onHover(o.hit ?? null)} onMouseLeave={() => onHover(null)}
       onClick={e => { pick(e, o.sel); onCenter(o.zoom); }} onDoubleClick={() => onZoom(o.zoom)}>
@@ -3199,6 +3243,14 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
       <span className="min-w-0 flex-1 truncate">{o.label}</span>
       {/* (the note gives way past 60% of the row: the name or id beside it stays readable, "l3222" not "L…") */}
       {o.note !== undefined && <span className="max-w-[60%] min-w-0 truncate text-[11px] text-muted-foreground" title={typeof o.note === "string" ? o.note : undefined}>{o.note}</span>}
+      {o.lock && (o.lock.byRoad
+        ? <span className="grid size-4 shrink-0 place-items-center text-muted-foreground" title="Locked with its road"><Lock className="size-3" /></span>
+        : <button type="button" disabled={readOnly} aria-label={o.lock.on ? "Unlock" : "Lock"} aria-pressed={o.lock.on}
+            title={o.lock.on ? "Locked: click to unlock it" : "Lock it: its properties can't be changed until unlocked"}
+            className={cn("grid size-4 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground disabled:pointer-events-none", o.lock.on ? "text-foreground" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}
+            onClick={e => { e.stopPropagation(); const l = o.lock!; editSketch(sk => setLocked(sk, l.ids, !l.on)); }} onDoubleClick={e => e.stopPropagation()}>
+            {o.lock.on ? <Lock className="size-3" /> : <LockOpen className="size-3" />}
+          </button>)}
     </div>
   );
   const heading = (key: string, text: string, n: number) => (
@@ -3214,6 +3266,7 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
     const sign = l.control === "stop" ? <span className="font-medium text-red-600 dark:text-red-400">stop</span> : l.control === "yield" ? <span className="font-medium text-amber-600 dark:text-amber-400">yield</span> : null;
     return row({
       key: `${under}lane:${id}`, depth, on: sel.lanes.includes(id) && !sel.road, hit: { lane: id }, sel: { ...NO_SEL, lanes: [id] }, zoom: piece({ lanes: [id] }),
+      lock: { ids: { lanes: [id] }, on: !!l.locked || !!roadOf(sketch, id)?.locked, byRoad: !l.locked && !!roadOf(sketch, id)?.locked },
       label: <>{id} {sign}</>, note: [isFullCircle(l.shape) ? `ring · ${fmtM(laneLength(l.shape))}` : fmtM(laneLength(l.shape)), on].filter(Boolean).join(" · "),
       title: next.length ? `Leads on to ${[...new Set(next)].map(laneName).join(", ")}` : "Leads nowhere: cars drive off its end",
     });
@@ -3242,7 +3295,7 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
         const js = joinedAt.get(r.id) ?? [];
         return [
           row({
-            key: `road:${r.id}`, depth: 0, kids: true, on: sel.road === r.id, sel: { ...NO_SEL, lanes: r.lanes, road: r.id }, zoom: piece({ lanes: r.lanes }),
+            key: `road:${r.id}`, depth: 0, kids: true, on: sel.road === r.id, sel: { ...NO_SEL, lanes: r.lanes, road: r.id }, zoom: piece({ lanes: r.lanes }), lock: { ids: { roads: [r.id] }, on: !!r.locked },
             label: <span className="font-medium">{roadName(r.id)}</span>, note: plural(r.lanes.length, "lane"), title: js.length ? `Joined at ${js.join(", ")}` : "Joined at no junction",
           }),
           ...(open(`road:${r.id}`) ? r.lanes.map(id => laneRow(id, 1)) : []),
@@ -3263,14 +3316,14 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
         ] : [];
         return [
           row({
-            key: k, depth: 0, kids: true, on: sel.junctions.includes(j.id), hit: { junction: j.id }, sel: junctionSel([j.id]), zoom: piece({ junctions: [j.id] }),
+            key: k, depth: 0, kids: true, on: sel.junctions.includes(j.id), hit: { junction: j.id }, sel: junctionSel([j.id]), zoom: piece({ junctions: [j.id] }), lock: { ids: { junctions: [j.id] }, on: !!j.locked },
             label: <span className="font-medium">{j.name}{(() => { const ws = warnings?.get(j.id); return ws?.length ? <span className="ml-1 rounded bg-amber-500/20 px-1 text-[10px] font-normal text-amber-800 dark:text-amber-300" title={ws.map(w => w.text).join("\n")}>⚠ {ws.length}</span> : null; })()}</span>, note: c.roads.length ? plural(c.roads.length, "road") : plural(c.connectors.length, "connector"),
           }),
           ...(open(k) ? [
             // (those of the same name told apart by which way from the junction they lie: "Bulevardul Decebal (NE)", "(SW)")
             ...(() => { const here = roadNames(sketch, c.roads); return group(`${k}:roads`, "Roads it joins", c.roads.length, c.roads.map(id => {
               const r = sketch.roads.find(x => x.id === id)!;
-              return row({ key: `${k}:road:${id}`, depth: 2, on: sel.road === id, sel: { ...NO_SEL, lanes: r.lanes, road: id }, zoom: piece({ lanes: r.lanes }), label: here.get(id) ?? roadName(id), note: plural(r.lanes.length, "lane") });
+              return row({ key: `${k}:road:${id}`, depth: 2, on: sel.road === id, sel: { ...NO_SEL, lanes: r.lanes, road: id }, zoom: piece({ lanes: r.lanes }), label: here.get(id) ?? roadName(id), note: plural(r.lanes.length, "lane"), lock: { ids: { roads: [id] }, on: !!r.locked } });
             })); })(),
             ...group(`${k}:lanes`, "Lanes on it", c.lanes.length, c.lanes.map(id => laneRow(id, 2, `${k}:`))),
             ...group(`${k}:conns`, "Connectors", c.connectors.length, c.connectors.map(id => connRow(id, 2, `${k}:`))),

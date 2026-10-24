@@ -33,6 +33,8 @@ export interface SketchLane {
    * its ends ramp to the level of the lanes it joins there (see `zAt`).
    */
   level?: number;
+  /** (ticket #93) locked: its properties can't be changed on the map or in the inspectors until it is unlocked (see `lockedChange`) */
+  locked?: true;
   /** a lane in no road: its speed limit (km/h; default: its road's, else the sketch's traffic speed) */
   speed?: number;
   /** a bus lane: closed to ordinary cars, at the road's border or in the middle */
@@ -69,6 +71,8 @@ export interface SketchConnector { id: string; from: LaneAt; to: LaneAt; /** ben
 export interface SketchRoad { id: string; name: string; lanes: string[]; align?: { ref: string; lanes: { id: string; offset: number; reverse: boolean }[] };
   /** its speed limit (km/h; default: the sketch's traffic speed) */
   speed?: number;
+  /** (ticket #93) locked: it and its lanes can't be changed until it is unlocked */
+  locked?: true;
 }
 /** a lane's speed limit (km/h): its road's, else its own (in no road), else none of its own (the sketch's traffic speed) */
 export function speedLimitOf(sk: Sketch, lane: string): number | undefined {
@@ -100,6 +104,8 @@ export interface SketchJunction { id: string; name: string; outline: Pt[]; /** c
    * share of the traffic on it that goes on to each road out (by the same keys). Ways in without one: each car its own way.
    */
   splits?: JunctionSplit[];
+  /** (ticket #93) locked: its properties (border, surface, lights, turning shares, name) can't be changed until it is unlocked */
+  locked?: true;
 }
 export interface JunctionSplit { from: string; shares: Record<string, number> }
 export interface Sketch {
@@ -2545,6 +2551,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
       ...(num(l.speed) ? { speed: Math.min(130, Math.max(10, l.speed)) } : {}),
       ...(l.bus === true && l.bike !== true ? { bus: true as const } : {}),
       ...(l.bike === true ? { bike: true as const } : {}),
+      ...(l.locked === true ? { locked: true as const } : {}),
       // (one lane both ways, ticket #53: not a bike lane, nor a ring; its way back's traffic in and share out with it)
       ...(TWO_WAYS.includes(l.twoWay) && l.bike !== true && !isFullCircle(shape) && !isTwinId(l.id) ? { twoWay: l.twoWay as TwoWay,
         ...(num(l.backInRate) && l.backInRate >= 0 ? { backInRate: Math.min(5000, l.backInRate) } : {}), ...(num(l.backOutWeight) && l.backOutWeight >= 0 ? { backOutWeight: Math.min(100, l.backOutWeight) } : {}),
@@ -2567,14 +2574,14 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const align = al && typeof al.ref === "string" && rl.includes(al.ref) && Array.isArray(al.lanes)
       ? { ref: al.ref as string, lanes: (al.lanes as { id: unknown; offset: unknown; reverse: unknown }[]).filter(x => typeof x?.id === "string" && rl.includes(x.id) && num(x.offset)).map(x => ({ id: x.id as string, offset: x.offset as number, reverse: !!x.reverse })) }
       : undefined;
-    roads.push({ id: r.id, name: typeof r.name === "string" ? r.name.slice(0, 80) : r.id, lanes: rl, ...(align ? { align } : {}), ...(num(r.speed) ? { speed: Math.min(130, Math.max(10, r.speed)) } : {}) });
+    roads.push({ id: r.id, name: typeof r.name === "string" ? r.name.slice(0, 80) : r.id, lanes: rl, ...(align ? { align } : {}), ...(num(r.speed) ? { speed: Math.min(130, Math.max(10, r.speed)) } : {}), ...(r.locked === true ? { locked: true as const } : {}) });
   }
   const junctions: SketchJunction[] = [];
   for (const j of Array.isArray(o.junctions) ? o.junctions : []) {
     const outline = pts(j?.outline, 3);
     if (!str(j?.id) || !outline || junctions.some(x => x.id === j.id)) continue;
     const curved = Array.isArray(j.curved) && j.curved.length === outline.length ? { curved: (j.curved as unknown[]).map(Boolean) } : {};
-    junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...(j.fill === true ? { fill: true as const } : {}), ...lightsOf(j.lights), ...splitsOf(j.splits) });
+    junctions.push({ id: j.id, name: typeof j.name === "string" ? j.name.slice(0, 80) : j.id, outline, ...curved, ...(j.shape === "auto" ? { shape: "auto" as const } : {}), ...(num(j.smooth) && j.smooth > 0 ? { smooth: Math.min(50, j.smooth) } : {}), ...(j.fill === true ? { fill: true as const } : {}), ...lightsOf(j.lights), ...splitsOf(j.splits), ...(j.locked === true ? { locked: true as const } : {}) });
   }
   const g = o.geo as Sketch["geo"];
   const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;
@@ -2648,6 +2655,52 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.zones?.length) ? sc : null;
   if (!lanes.length && !junctions.length && !geo && !crossings.length && !zones.length && !scratch && !sketches.length) return null;
   return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
+}
+
+// ---------------------------------------------------------------- locks (ticket #93)
+
+/** what can be locked: lanes, roads, junctions, by id */
+export interface LockIds { lanes?: Iterable<string>; roads?: Iterable<string>; junctions?: Iterable<string> }
+/** a lane locked: its own lock, or its road's */
+export const laneLocked = (sk: Sketch, id: string) => !!laneById(sk, id)?.locked || !!roadOf(sk, id)?.locked;
+/** lanes, roads and junctions locked (`on`) or unlocked: nothing else of them changed */
+export function setLocked(sk: Sketch, ids: LockIds, on: boolean): Sketch {
+  const flip = <T extends { id: string; locked?: true }>(xs: T[], want: Iterable<string> | undefined): T[] => {
+    const w = new Set(want ?? []);
+    if (!w.size || xs.every(x => !w.has(x.id) || !!x.locked === on)) return xs;
+    return xs.map(x => { if (!w.has(x.id) || !!x.locked === on) return x; const { locked: _, ...rest } = x; return (on ? { ...rest, locked: true } : rest) as T; });
+  };
+  const lanes = flip(sk.lanes, ids.lanes), roads = flip(sk.roads, ids.roads), junctions = flip(sk.junctions, ids.junctions);
+  return lanes === sk.lanes && roads === sk.roads && junctions === sk.junctions ? sk : { ...sk, lanes, roads, junctions };
+}
+/**
+ * What an edit from `a` to `b` changes that is locked in `a`, as a short name ("lane l12", "road Strada X", "Roundabout 3",
+ * "Junction 6"; a lane locked by its road says so); null: nothing locked changed. Locked: a lane (its own lock or its road's: its shape, width, sign, rates, …),
+ * a road (its name, lanes, speed) or a junction (its border, surface, lights, turning shares, name), changed or deleted.
+ * Locking and unlocking itself is no change.
+ */
+export function lockedChange(a: Sketch, b: Sketch): string | null {
+  if (a === b) return null;
+  const same = <T extends { locked?: true }>(x: T, y: T | undefined) => {
+    if (x === y) return true;
+    if (!y) return false;
+    const { locked: _x, ...rx } = x, { locked: _y, ...ry } = y;
+    return JSON.stringify(rx) === JSON.stringify(ry);
+  };
+  // ("road Strada X", but "Road 12", not "road Road 12")
+  const called = (kind: string, name: string) => (name.toLowerCase().startsWith(kind) ? name : `${kind} ${name}`);
+  const lockedRoads = a.roads.filter(r => r.locked);
+  if (a.lanes !== b.lanes) {
+    const inLocked = new Map(lockedRoads.flatMap(r => r.lanes.map(id => [id, r] as const)));
+    const bl = new Map(b.lanes.map(l => [l.id, l]));
+    for (const l of a.lanes) {
+      const r = l.locked ? undefined : inLocked.get(l.id);
+      if ((l.locked || r) && !same(l, bl.get(l.id))) return r ? `lane ${l.id} (with its ${called("road", r.name)})` : `lane ${l.id}`;
+    }
+  }
+  if (a.roads !== b.roads) for (const r of lockedRoads) if (!same(r, b.roads.find(x => x.id === r.id))) return called("road", r.name);
+  if (a.junctions !== b.junctions) for (const j of a.junctions) if (j.locked && !same(j, b.junctions.find(x => x.id === j.id))) return called("junction", j.name);
+  return null;
 }
 
 // ---------------------------------------------------------------- elevation (as v1's)
