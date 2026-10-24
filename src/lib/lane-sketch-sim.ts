@@ -2532,6 +2532,11 @@ export class SketchSim {
           for (const w of toward.get(k.other) ?? NONE) {
             // (nor one following this one, behind it in its lane or held up by it: it can't get there first)
             if (w === v || (w.edge === v.edge && !v.edge.ring && w.pos < v.pos) || whyWas.get(w) === `car ${v.id}`) continue;
+            // (nor one already on this one's own way ahead, its back maybe still on the other path: it is the car ahead, followed, not one
+            // crossing (ticket #90: a car going onto a ring gave way, first come, first served, to one standing on the ring ahead of it
+            // that had just come onto it from that path))
+            // (one that has come off that path onto this one's way ahead, and goes on along it by the same way off, or none yet)
+            if (w.edge !== v.edge && k.other.kind === "conn" && k.other.to!.lane === w.edge && (!w.exit || route.some(q => q.edge === w.exit)) && route.some(q => q.edge === w.edge && (q.edge.ring ? this.along(q.edge, q.a, w.pos) <= q.b - q.a : w.pos >= q.a && w.pos <= q.b))) continue;
             // (a way off an inner ring across the outer one: one still short of its line onto the ring is no ring car yet; it gives way
             // to those on the ring, this one leaving it included (ticket #89: a car on its way off waited for car after car coming up
             // to a line, for minutes))
