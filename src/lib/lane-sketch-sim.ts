@@ -1732,6 +1732,7 @@ export class SketchSim {
     if (e.kind === "conn") {
       out.push({ edge: e, a: v.pos, b: e.len, off: 0 });
       const t = e.to!;
+      if (this.onRing(v, e, e.len - v.pos, out)) return out;
       out.push({ edge: t.lane, a: t.s, b: t.lane.ring ? t.s + LOOK : Math.min(t.lane.len, t.s + LOOK), off: e.len - v.pos });
       this.beyond(v, t.lane, t.s, e.len - v.pos, out);
       return out;
@@ -1742,6 +1743,7 @@ export class SketchSim {
     if (v.exit) {
       out.push({ edge: v.exit, a: 0, b: v.exit.len, off: toExit });
       const t = v.exit.to!;
+      if (this.onRing(v, v.exit, toExit + v.exit.len, out)) return out;
       out.push({ edge: t.lane, a: t.s, b: t.s + LOOK, off: toExit + v.exit.len });
       this.beyond(v, t.lane, t.s, toExit + v.exit.len, out);
     }
@@ -1752,6 +1754,25 @@ export class SketchSim {
    * from its end too (the only one, or the one with the shortest way to where it is going), so it sees a queue there in
    * time to stop; it hasn't chosen yet, and the lane is too short to stop on once it has.
    */
+  /**
+   * Its way on `on` joins a ring (`off` metres on): the ring as far as the way off it will take, as its turn signal has it, and that way
+   * off, not the ring all round from there: a car coming on to leave again at once has nothing to do with the crossings further round
+   * (ticket #89: one going in from Bulevardul Decebal to the first exit waited for a car crossing the ring past it). False: no ring, or no
+   * way off its own ring known (going on to the other ring: then the ring all round, as before).
+   */
+  private onRing(v: SimVehicle, on: Edge, off: number, out: { edge: Edge; a: number; b: number; off: number }[]) {
+    const t = on.to!, G = t.lane.ring && v.dest ? this.ringOn.get(on) : undefined;
+    let x = G ? this.ringExit(G, on, v.dest!) : null;
+    if (!x || x.from!.lane !== t.lane || !this.routes) return false;
+    // (of the ways off as good as that one, the furthest round: its plan, made once on the ring, may pick any of them)
+    const rt = this.routes, cost = (c: Edge, d: number) => d + this.viaOut(rt, c.id, v.dest!), d0 = this.along(t.lane, t.s, this.exitS(x)), best = cost(x, d0);
+    let d = d0;
+    for (const o of t.lane.outs) { const dd = this.along(t.lane, t.s, o.s); if (dd > d && cost(o.conn, dd) <= best + 5) { d = dd; x = o.conn; } }
+    if (d < 0.5) return false;
+    out.push({ edge: t.lane, a: t.s, b: t.s + d, off });
+    out.push({ edge: x, a: 0, b: x.len, off: off + d });
+    return true;
+  }
   private beyond(v: SimVehicle, lane: Edge, s: number, off: number, out: { edge: Edge; a: number; b: number; off: number }[]) {
     if (lane.ring || lane.len - s > SHORT_AHEAD) return;
     const ends = lane.outs.filter(o => o.s >= lane.len - EXIT_CLEAR && o.s >= s);
