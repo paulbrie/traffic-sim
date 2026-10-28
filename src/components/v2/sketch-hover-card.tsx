@@ -3,14 +3,15 @@
 /**
  * A card by the pointer on the V2 editor's map with what it is over, as V1's hover card (hover-info.tsx): a lane (its
  * road, length, level, sign, speed limit), a junction (its kind, roads, and how traffic does there while the cars run),
- * a connector, a zebra crossing, or a car (its speed, where it is going, what it waits for). Shown after the pointer
+ * a connector, a zebra crossing, a speed bump, or a car (its speed, where it is going, what it waits for). Shown after the pointer
  * rests a moment, not while drawing (see LaneSketch).
  */
 import { connectorPts, isFullCircle, laneById, laneLength, speedLimitOf, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
 import type { SimStats, SketchSim } from "@/lib/lane-sketch-sim";
 import { formatArea, zoneArea } from "@/lib/sketch-zones";
+import { BUMP_KINDS, bumpHeavySpeed, bumpSpeed } from "@/lib/sketch-bumps";
 
-export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { link: string } | { zone: string } | { car: number };
+export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { bump: string } | { link: string } | { zone: string } | { car: number };
 export interface HoverInfo { title: string; sub?: string; rows: [string, string][] }
 
 const m = (x: number) => (x >= 1000 ? `${(x / 1000).toFixed(2)} km` : `${x.toFixed(x < 10 ? 1 : 0)} m`);
@@ -77,6 +78,10 @@ export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, J
   if ("crossing" in hit) {
     const x = sk.crossings?.find(y => y.id === hit.crossing);
     return x ? { title: `Zebra crossing ${x.id}`, rows: [["Pedestrians", `${x.peds} /h`], ["Width", m(x.width)]] } : null;
+  }
+  if ("bump" in hit) {
+    const x = sk.bumps?.find(y => y.id === hit.bump);
+    return x ? { title: `${BUMP_KINDS[x.kind].label} ${x.id}`, rows: [["Cars cross at", `${bumpSpeed(x)} km/h`], ["Buses, trucks", `${bumpHeavySpeed(x)} km/h`], ["Size", `${m(x.length)} long, ${x.height} cm high`]] } : null;
   }
   if ("zone" in hit) {
     const z = sk.zones?.find(x => x.id === hit.zone);

@@ -101,10 +101,11 @@ export function cropAround(sk: Sketch, ids: string[], radius = 600): Sketch {
   const js = new Set(junctions.map(j => j.id));
   const signalGroups = (sk.signalGroups ?? []).map(g => ({ ...g, members: g.members.filter(m => js.has(m.junction)) })).filter(g => g.members.length);
   const journeys = (sk.journeys ?? []).filter(j => keep.has(j.from) && keep.has(j.to));
-  const { links: _l, scratch: _s, signalGroups: _g, journeys: _j, crossings, ...rest } = sk;
+  const { links: _l, scratch: _s, signalGroups: _g, journeys: _j, crossings, bumps, ...rest } = sk;
   return {
     ...rest, lanes, connectors, roads, junctions,
     ...(crossings ? { crossings: crossings.filter(x => near(x.a) || near(x.b)) } : {}),
+    ...(bumps ? { bumps: bumps.filter(x => near(x.a) || near(x.b)) } : {}),
     ...(signalGroups.length ? { signalGroups } : {}), ...(journeys.length ? { journeys } : {}),
   };
 }

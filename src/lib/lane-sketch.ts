@@ -10,6 +10,7 @@
  */
 import { sanitizeTuning, type Tuning } from "./sketch-tuning";
 import { copyZones, pasteZones, sanitizeZones, type SketchZone } from "./sketch-zones";
+import { sanitizeBumps, type SketchBump } from "./sketch-bumps";
 
 export interface Pt { x: number; y: number }
 /**
@@ -118,6 +119,8 @@ export interface Sketch {
   geo?: { lat: number; lon: number };
   /** zebra crossings drawn by hand (see `SketchCrossing`) */
   crossings?: SketchCrossing[];
+  /** speed bumps, humps, tables and cushions (see sketch-bumps.ts) */
+  bumps?: SketchBump[];
   /** journeys between a particular way in and way out (see `SketchJourney`) */
   journeys?: SketchJourney[];
   /** bus stops, a point on a lane (see `SketchStop`) */
@@ -2605,6 +2608,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     if (num(x.stripes) && x.stripes) free.stripes = Math.round(Math.min(90, Math.max(-90, x.stripes)));
     crossings.push(free);
   }
+  const bumps = sanitizeBumps(o.bumps);
   // (nothing drawn and nowhere placed: no sketch)
   const journeys: SketchJourney[] = [];
   for (const j of Array.isArray(o.journeys) ? o.journeys : []) {
@@ -2652,9 +2656,9 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   if (sketchOpen) { const k = sketches.findIndex(x => x.id === sketchOpen); if (sketches[k].sketch) { const { sketch: _, ...rest } = sketches[k]; sketches[k] = rest; } }
   // (the zones drawn: a sketch with only zones is a sketch still)
   const zones = sanitizeZones(o.zones);
-  const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.zones?.length) ? sc : null;
-  if (!lanes.length && !junctions.length && !geo && !crossings.length && !zones.length && !scratch && !sketches.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(journeys.length ? { journeys } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
+  const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.bumps?.length || sc.zones?.length) ? sc : null;
+  if (!lanes.length && !junctions.length && !geo && !crossings.length && !bumps.length && !zones.length && !scratch && !sketches.length) return null;
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
 }
 
 // ---------------------------------------------------------------- locks (ticket #93)

@@ -149,7 +149,7 @@ const scratchView$ = new Subject<Sketch>(laneSketch$.getValue().scratch ?? empty
 onDispose(laneSketch$.subscribe(k => {
   if (!samePlan(k, planView$.getValue())) planView$.next(planPart(k));
   const sc = k.scratch ?? null, cur = scratchView$.getValue();
-  if (sc ? sc !== cur : cur.lanes.length || cur.junctions.length || cur.connectors.length || cur.crossings?.length || cur.zones?.length) scratchView$.next(sc ?? emptySketch());
+  if (sc ? sc !== cur : cur.lanes.length || cur.junctions.length || cur.connectors.length || cur.crossings?.length || cur.bumps?.length || cur.zones?.length) scratchView$.next(sc ?? emptySketch());
 }).unsubscribe);
 export const planSketch = makeStore("plan", planView$, sk => {
   planView$.next(sk);
@@ -158,7 +158,7 @@ export const planSketch = makeStore("plan", planView$, sk => {
 });
 export const scratchSketch = makeStore("scratch", scratchView$, sk => {
   scratchView$.next(sk);
-  const cur = laneSketch$.getValue(), plan = planPart(cur), empty = !sk.lanes.length && !sk.junctions.length && !sk.connectors.length && !sk.crossings?.length && !sk.zones?.length && !sk.traffic;
+  const cur = laneSketch$.getValue(), plan = planPart(cur), empty = !sk.lanes.length && !sk.junctions.length && !sk.connectors.length && !sk.crossings?.length && !sk.bumps?.length && !sk.zones?.length && !sk.traffic;
   // (the sketch open changed now)
   const list = listPart(touchOpen(cur, Date.now()));
   laneSketch$.next(empty ? { ...plan, ...list } : { ...plan, scratch: planPart(sk), ...list });

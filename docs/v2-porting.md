@@ -46,6 +46,7 @@ noted), **todo**, or **n/a** (not needed in V2).
 | Reversible lanes | `engine/sim/reversible.ts`, `reversible-lane.tsx` | todo |
 | Bus stops and lines | `lines-panel.tsx`, engine `stops` / `lines` | todo |
 | Pedestrians, zebra crossings | `engine/crossings.ts`, `render/pedestrians.ts`, `crossing-parking.tsx` | done: X tool, pedestrians in the sim and the replay; converted from V1 (drawn crossings, and one across each road of a junction with pedestrians) |
+| Speed bumps, humps, tables, cushions (new in V2, ticket #101) | — | done: H tool, kind / crossing speed / size per bump, cars brake for them and cross at their speed (buses and trucks slower, faster over cushions), norms checked in the panel, drawn in 2D and 3D (`lib/sketch-bumps.ts`, docs/speed-bumps.md) |
 | Parking bays | `engine/parking.ts` | todo |
 | Markers | `engine/markers.ts`, `marker-inspector.tsx` | todo |
 | Copy / paste, placing, multi-select, bulk delete | `state/placing.ts`, `state/bulk.ts`, `multi-selection.tsx` | done (sketch copy / paste / duplicate, box select) |

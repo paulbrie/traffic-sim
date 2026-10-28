@@ -12,6 +12,7 @@ import type { SketchLayers } from "@/state/sketch-layers";
 import { LEVEL_H } from "@/engine/compile";
 import { junctionSurfaceHoles, nestLoops } from "@/lib/junction-fill";
 import { circlePts, deadEndTurnarounds } from "@/lib/dead-ends";
+import { bumpShapes } from "@/lib/sketch-bumps";
 import {
   bandPolygon, crossingStripes, isFullCircle, junctionBands, junctionLevel, laneLevel, laneLength, linkGeometry,
   outlinePath, densePoints, hasLevels, pointAt, roadMarkings, samples, shownZ, smoothJunction, turnArrows, twoWayOk, twinOf, isTwinId, baseLaneId,
@@ -204,8 +205,17 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(() => h), PAINT_W, Y.paint);
     }
     for (const a of turnArrows(sk)) for (const line of arrowLines(a.p, a.d, a.turns)) paint.ribbon(line, line.map(() => a.level * LEVEL_H), 0.18, Y.paint);
-    // zebras: stripes along the traffic (or turned as it says), across the road, cut to its shape
-    for (const x of sk.crossings ?? []) for (const bar of crossingStripes(x)) paint.polygon(bar, [], Y.paint);
+    // speed bumps: their bodies raised by their height (red), their markings on top (white, or a short bump's yellow), on the ground
+    for (const x of sk.bumps ?? []) {
+      const sh = bumpShapes(x), top = Y.asphalt + x.height / 100;
+      for (const b of sh.body) red.polygon(b, [], top);
+      for (const m of sh.marks) (sh.markColor === "#ffffff" ? paint : yellow).polygon(m, [], top + 0.01);
+    }
+    // zebras: stripes along the traffic (or turned as it says), across the road, cut to its shape (on a table: on top of it)
+    for (const x of sk.crossings ?? []) {
+      const on = (sk.bumps ?? []).find(b => b.kind === "table" && Math.hypot((x.a.x + x.b.x) / 2 - (b.a.x + b.b.x) / 2, (x.a.y + x.b.y) / 2 - (b.a.y + b.b.y) / 2) < b.length / 2);
+      for (const bar of crossingStripes(x)) paint.polygon(bar, [], Y.paint + (on ? on.height / 100 : 0));
+    }
   }
   if (layers.signs) {
     // a stop line across a lane's end, a yield its row of triangles

@@ -47,6 +47,7 @@ import { speedLimitOf,
   type LaneControl, type TwoWay, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
 } from "./lane-sketch";
 import { resolveTuning, type Tuning } from "./sketch-tuning";
+import { bumpFrame, bumpHeavySpeed, bumpSpeed, onBump } from "./sketch-bumps";
 import { FUEL_STILL, fuelRate, hasStopStart } from "../engine/fuel";
 import type { CarExplain, ExplainRule } from "./car-explain";
 
@@ -691,6 +692,8 @@ export class SketchSim {
   /** the zebras, and where they run over each lane and connector */
   private crossings: SimCrossing[] = [];
   private crossOn = new Map<Edge, { k: number; s0: number; s1: number; /** where it crosses the zebra, metres across from its side `a` */ at: number }[]>();
+  /** the speed bumps' stretches on each lane and connector, and their crossing speeds (m/s): cars', buses' and trucks' */
+  private bumpOn = new Map<Edge, { id: string; s0: number; s1: number; car: number; heavy: number }[]>();
   /** pedestrians draw their own random numbers, so adding them leaves the cars' run as it was */
   private pedRnd: () => number;
 
@@ -1013,6 +1016,7 @@ export class SketchSim {
       }
     }
     this.buildCrossings(sk, edges);
+    this.buildBumps(sk, edges);
     this.vehicles = this.vehicles.flatMap(v => {
       const e = edges.get(v.edge.key);
       if (!e) { this.note({ what: "gone", car: v.id, edge: v.edge.key }); return []; }
@@ -1096,6 +1100,25 @@ export class SketchSim {
         if (conns.length) lit.push({ c, conns });
       }
       this.crossings.push({ def, len: f.len, on, lit, ped: old.get(def.id) ?? newPed() });
+    }
+  }
+
+  /** where each speed bump lies across each lane and connector (sampled as the zebras are, see `buildCrossings`) */
+  private buildBumps(sk: Sketch, edges: Map<string, Edge>) {
+    this.bumpOn = new Map();
+    for (const def of sk.bumps ?? []) {
+      const c = bumpFrame(def).corners, xs = c.map(p => p.x), ys = c.map(p => p.y);
+      const x0 = Math.min(...xs) - 6, x1 = Math.max(...xs) + 6, y0 = Math.min(...ys) - 6, y1 = Math.max(...ys) + 6;
+      const car = bumpSpeed(def) / 3.6, heavy = bumpHeavySpeed(def) / 3.6;
+      for (const e of edges.values()) {
+        let near = false;
+        for (let s0 = 0; s0 <= e.len && !near; s0 += 5) { const q = e.locate(Math.min(s0, e.len)).p; near = q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1; }
+        if (!near) continue;
+        let lo = -1, hi = -1;
+        for (let s0 = 0; s0 <= e.len + 1e-9; s0 += 0.25) if (onBump(def, e.locate(Math.min(s0, e.len)).p)) { if (lo < 0) lo = s0; hi = Math.min(s0, e.len); }
+        if (lo < 0) continue;
+        (this.bumpOn.get(e) ?? this.bumpOn.set(e, []).get(e)!).push({ id: def.id, s0: Math.max(0, lo - 0.125), s1: Math.min(e.len, hi + 0.125), car, heavy });
+      }
     }
   }
 
@@ -2233,7 +2256,7 @@ export class SketchSim {
         continue;
       }
       const route = this.route(v);
-      let gap = Infinity, lead = 0, vmax = v.edge.vmax * v.vf, why: string | null = null;
+      let gap = Infinity, lead = 0, vmax = v.edge.vmax * v.vf, why: string | null = null, slowFor: string | null = null;
       // (the reason: a car's "car <id>" made only when it is the nearest yet, not for every car looked at)
       // (the car the explainer follows: what holds it back, as decided, kept with the reason)
       const W = v.id === this.watchId;
@@ -2411,6 +2434,24 @@ export class SketchSim {
           const d = r.off + x - 0.5;
           if (!ped.crossing && d < ((v.v * v.v) / (2 * B_COMF)) * 0.8) continue;
           behind(Math.max(0.1, d + S0), 0, `pedestrians at ${this.crossings[o.k].def.id}`);
+        }
+        // a speed bump: down to its speed by the time it gets there (braking in comfort), and kept to it until its back is
+        // off it (ticket #101); its own share of the speed, as of the limit (buses and trucks: their own, slower but over cushions)
+        for (const o of this.bumpOn.get(r.edge) ?? []) {
+          const vb = (v.truck || v.bus ? o.heavy : o.car) * Math.min(1.2, v.vf);
+          if (r.edge === v.edge) {
+            const d0 = this.diff(r.edge, v.pos, o.s0), d1 = this.diff(r.edge, v.pos, o.s1);
+            if (d0 <= 0 && d1 + v.len >= 0) { if (vb < vmax) { vmax = vb; slowFor = o.id; } continue; }
+            if (d0 < 0) continue;
+          }
+          const x = ahead(o.s0);
+          if (x < 0 || x > r.b - r.a + 0.01) continue;
+          // (braking once it needs half its comfortable braking to get down to it in time, then evenly: the desired speed set
+          // where the car-following model brakes by just that, as it lags a desired speed coming down, ~20% over it)
+          const d = Math.max(0.1, r.off + x - 0.5), need = (v.v * v.v - vb * vb) / (2 * d);
+          let cap = Math.sqrt(vb * vb + 2 * B_COMF * d);
+          if (need > B_COMF / 2) cap = Math.min(cap, v.v / Math.pow(1 + need / accOf(v), 0.25));
+          if (cap < vmax) { vmax = cap; slowFor = o.id; }
         }
         // slowing down in time for a slower stretch
         if (r.off > 0) vmax = Math.min(vmax, Math.sqrt((r.edge.vmax * v.vf) ** 2 + 2 * B_COMF * r.off));
@@ -2673,7 +2714,7 @@ export class SketchSim {
       acc.set(v, Math.max(-9, a));
       held.set(v, { gap, lead });
       v.gap = gap;
-      if (W) this.watchTrace = { t: this.t + dt, gap, lead, vmax, a: Math.max(-9, a), target: Math.max(0, v.v + Math.max(-9, a) * dt), won: won as Won | null, stop: lead === 0 && gap < Infinity, yields: yields.slice() };
+      if (W) this.watchTrace = { t: this.t + dt, gap, lead, vmax, bump: slowFor as string | null, a: Math.max(-9, a), target: Math.max(0, v.v + Math.max(-9, a) * dt), won: won as Won | null, stop: lead === 0 && gap < Infinity, yields: yields.slice() };
     }
 
     // another way: at the head of the queue where it turns off, kept waiting there long (not by lights), a connector further along its
@@ -2895,7 +2936,7 @@ export class SketchSim {
   /** the car the explainer follows (`watch`): what its last step decided, its state and since when, its recent decisions, the gaps it
    * turned down, and why the last lane change it looked at had no room */
   private watchId: number | null = null;
-  private watchTrace: { t: number; gap: number; lead: number; vmax: number; a: number; target: number; won: Won | null; stop: boolean; yields: { at: number; why: string; info?: Won; speed?: number }[] } | null = null;
+  private watchTrace: { t: number; gap: number; lead: number; vmax: number; /** the speed bump its desired speed is down to, if any */ bump: string | null; a: number; target: number; won: Won | null; stop: boolean; yields: { at: number; why: string; info?: Won; speed?: number }[] } | null = null;
   private watchState: { key: string; since: number } | null = null;
   private watchLog: CarExplain["log"] = [];
   private watchRejected: NonNullable<CarExplain["plan"]>["rejected"] = [];
@@ -3353,7 +3394,7 @@ export class SketchSim {
     return {
       car: id, t: r2(this.t), traced, why: v.why,
       rule: r ? { kind: r.kind, ...(r.edge ? { edge: r.edge } : {}), ...(r.detail ? { detail: r.detail } : {}) } : v.forceUntil > this.t ? { kind: "forced" } : null,
-      speed: traced ? { kmh: r2(v.v * 3.6), desiredKmh: r2(tr!.vmax * 3.6), targetKmh: r2(tr!.target * 3.6), accel: r2(tr!.a) } : null,
+      speed: traced ? { kmh: r2(v.v * 3.6), desiredKmh: r2(tr!.vmax * 3.6), targetKmh: r2(tr!.target * 3.6), accel: r2(tr!.a), ...(tr!.bump ? { bump: tr!.bump } : {}) } : null,
       leader, blocker, stopAt, rules,
       since: r2(id === this.watchId && this.watchState ? this.t - this.watchState.since : v.still),
       chain, deadlock,
