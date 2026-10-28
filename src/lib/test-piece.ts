@@ -102,16 +102,17 @@ export function testPiece(sk: Sketch, sel: { lanes: string[]; junctions: string[
     const { align, ...rest } = r;
     return [ls.some(id => span.has(id)) || ls.length !== r.lanes.length || !align ? { ...rest, lanes: ls } : { ...rest, lanes: ls, align }];
   });
-  // zebras on the lanes kept; signal groups with every junction in the piece; journeys between ways still there
+  // zebras and speed bumps on the lanes kept; signal groups with every junction in the piece; journeys between ways still there
   const near = (p: Pt) => lanes.some(l => nearestOn(l.shape, p).d < l.width);
   const crossings = (sk.crossings ?? []).filter(x => near({ x: (x.a.x + x.b.x) / 2, y: (x.a.y + x.b.y) / 2 }));
+  const bumps = (sk.bumps ?? []).filter(x => near({ x: (x.a.x + x.b.x) / 2, y: (x.a.y + x.b.y) / 2 }));
   const jIds = new Set(js.map(j => j.id));
   const groups = (sk.signalGroups ?? []).filter(g => g.members.every(m => jIds.has(m.junction)));
   const journeys = (sk.journeys ?? []).filter(j => kept.has(j.from) && kept.has(j.to) && !span.has(j.from) && !span.has(j.to));
   let piece: Sketch = {
     lanes, connectors, roads, junctions: js,
     ...(sk.traffic ? { traffic: sk.traffic } : {}), ...(sk.geo ? { geo: sk.geo } : {}),
-    ...(crossings.length ? { crossings } : {}), ...(groups.length ? { signalGroups: groups } : {}), ...(journeys.length ? { journeys } : {}),
+    ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(groups.length ? { signalGroups: groups } : {}), ...(journeys.length ? { journeys } : {}),
   };
   // (ways in and out too short for a car made longer, nothing folded)
   piece = tidySketch(piece, { stub: 0, minEnd: MIN_END }).sketch;

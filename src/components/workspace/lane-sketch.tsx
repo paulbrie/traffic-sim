@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Bike, BusFront, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Bike, BusFront, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, Gauge, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,12 +14,13 @@ import { cn } from "@/lib/utils";
 import { project, unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, crossingStripes, stripeDir, CROSSING_WIDTH, type CrossingPatch, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
-  addStop, updateStop, deleteStop, type SketchStop, setTwoWay, twoWayOk, twinOf, twinId, baseLaneId, connectorEnd, wayFrom, wayTo, type TwoWay,
+  addStop, updateStop, deleteStop, type SketchStop, speedLimitOf, setTwoWay, twoWayOk, twinOf, twinId, baseLaneId, connectorEnd, wayFrom, wayTo, type TwoWay,
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, edgeLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, laneLocked, leadOf, setLocked, type LockIds, removePoint, settle, toggleCurve, roadMiddle,
   type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
+import { addBump, bumpFrame, bumpHeavySpeed, bumpNotes, bumpShapes, bumpSpeed, deleteBump, onBump, updateBump, BUMP_KIND, BUMP_KIND_IDS, BUMP_KINDS, type BumpKind, type BumpPatch, type SketchBump } from "@/lib/sketch-bumps";
 import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
@@ -93,6 +94,7 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
   { id: "connector", key: "C", label: "Connector", icon: <Milestone />, hint: "Click the lane traffic leaves, then click bend points anywhere (Alt: over a lane too), then the lane it joins · Backspace takes the last bend back · Esc cancels" },
   { id: "slice", key: "K", label: "Slice", icon: <Scissors />, hint: "Click a road to cut it across there into two roads (Shift: keep them linked, so the road carries on; Alt: only the lane under the pointer) · its connectors stay with the piece they are on" },
   { id: "crossing", key: "X", label: "Zebra crossing", icon: <Footprints />, hint: "Click one kerb, then the other: the zebra runs between them (4 m wide, 300 pedestrians an hour; set them in its panel) · Esc cancels" },
+  { id: "bump", key: "H", label: "Speed bump", icon: <Gauge />, hint: "Click one kerb, then the other: a speed hump across the road between them (the kind of the last one put down; bump, hump, table or cushions in its panel). Cars slow to its speed · Esc cancels" },
   { id: "junction", key: "J", label: "Junction", icon: <Pentagon />, hint: "Click the junction's corners; click the first again (or Enter, or double-click) to close it. The lanes in no road and the connectors on it are its own" },
   { id: "zone", key: "Z", label: "Zone", icon: <LandPlot />, hint: "Click the zone's corners; click the first again (or Enter, or double-click) to close it · Backspace takes the last corner back · Esc cancels. A labelled area (a neighbourhood, a zone) for reading the plan: the cars don't see it" },
   { id: "stop", key: "B", label: "Bus stop", icon: <BusFront />, hint: "Click a lane to put a bus stop there. Add it to a bus line in the Bus lines panel so buses serve it" },
@@ -102,7 +104,7 @@ const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
 interface View { cx: number; cy: number; /** px per metre */ scale: number }
 /** a live traffic incident (TomTom), as the `/api/plans/[planId]/traffic` route reports it */
 interface TrafficIncident { id: string; iconCategory: number; magnitudeOfDelay: number; delay: number | null; from: string | null; to: string | null; description: string | null; coordinates: { lat: number; lon: number }[] }
-type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { zone: string } | { stop: string };
+type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { bump: string } | { zone: string } | { stop: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[] };
 /** a road's or a junction's name as drawn on the map: what it names, and its pill (px on the canvas) */
@@ -122,7 +124,8 @@ type Draft =
   | { kind: "connector"; from: LaneAt; via: Pt[] }
   | { kind: "junction"; pts: Pt[] }
   | { kind: "zone"; pts: Pt[] }
-  | { kind: "crossing"; a: Pt };
+  | { kind: "crossing"; a: Pt }
+  | { kind: "bump"; a: Pt };
 type Drag =
   | { kind: "pan"; x0: number; y0: number; v0: View; /** with the right button: a click without moving opens the menu */ right?: boolean }
   | { kind: "move"; base: Sketch; from: Pt; piece: Piece }
@@ -130,7 +133,9 @@ type Drag =
   | { kind: "box"; a: Pt; b: Pt; add: boolean }
   | { kind: "rotate"; base: Sketch; o: Pt; a0: number; piece: Piece; angle: number }
   /** a zebra crossing: moved whole, one kerb end, one corner (0..3), or its bars turned (ticket #57) */
-  | { kind: "crossing"; base: Sketch; id: string; part: "move" | "a" | "b" | 0 | 1 | 2 | 3 | "stripes"; from: Pt };
+  | { kind: "crossing"; base: Sketch; id: string; part: "move" | "a" | "b" | 0 | 1 | 2 | 3 | "stripes"; from: Pt }
+  /** a speed bump: moved whole, or one kerb end */
+  | { kind: "bump"; base: Sketch; id: string; part: "move" | "a" | "b"; from: Pt };
 
 const isEmpty = (p: Piece) => !p.lanes.length && !p.connectors.length && !p.junctions.length;
 /**
@@ -172,6 +177,7 @@ function prune(sel: Sel, sk: Sketch): Sel {
   const ids = new Set(sk.lanes.map(l => l.id)), cids = new Set(sk.connectors.map(c => c.id)), jids = new Set(sk.junctions.map(j => j.id));
   const linkOk = !sel.link || !!sk.links?.some(k => k.id === sel.link), crossingOk = !sel.crossing || !!sk.crossings?.some(x => x.id === sel.crossing);
   if (!crossingOk) return { ...sel, crossing: null };
+  if (sel.bump && !sk.bumps?.some(x => x.id === sel.bump)) return { ...sel, bump: null };
   const stopOk = !sel.stop || !!sk.stops?.some(x => x.id === sel.stop);
   if (!stopOk) return { ...sel, stop: null };
   // (a zone deleted, or undone away: let go)
@@ -430,6 +436,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const sk = live.current.sketch, px = 1 / view.current.scale;
     // (a zebra crossing: over the lanes it crosses)
     for (const x of sk.crossings ?? []) if (onCrossing(x, p, 2 * px)) return { crossing: x.id };
+    // (a speed bump: over its lanes too, under a zebra on a table)
+    for (const x of sk.bumps ?? []) if (onBump(x, p, 2 * px)) return { bump: x.id };
     // (a bus stop: its marker, beside its lane)
     for (const x of sk.stops ?? []) { const l = laneById(sk, x.lane); if (l && dist(pointAt(l.shape, x.s).p, p) < 6 * px + 1) return { stop: x.id }; }
     let best: Hit | null = null, bd = Infinity;
@@ -929,6 +937,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const s = live.current.sel;
     if (s.link) { const id = s.link; editSketch(sk => unlink(sk, id)); setSel(NO_SEL); return; }
     if (s.crossing) { const id = s.crossing; editSketch(sk => deleteCrossing(sk, id)); setSel(NO_SEL); return; }
+    if (s.bump) { const id = s.bump; editSketch(sk => deleteBump(sk, id)); setSel(NO_SEL); return; }
     if (s.stop) { const id = s.stop; editSketch(sk => deleteStop(sk, id)); setSel(NO_SEL); return; }
     // (zones with it or on their own: one undo step for it all)
     const zones = s.zones ?? [];
@@ -1076,6 +1085,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       case "junction": setSel(junctionSel(sk, [to.id])); centerOn(piece({ junctions: [to.id] })); break;
       case "link": { const k = sk.links?.find(x => x.id === to.id); if (k) { setSel({ ...NO_SEL, link: k.id }); centerOn(piece({ connectors: k.conns })); } break; }
       case "crossing": { const x = sk.crossings?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, crossing: x.id }); centerOnPts([x.a, x.b]); } break; }
+      case "bump": { const x = sk.bumps?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, bump: x.id }); centerOnPts([x.a, x.b]); } break; }
       case "zone": { const z = sk.zones?.find(y => y.id === to.id); if (z) { setSel({ ...NO_SEL, zones: [z.id] }); centerOnPts(z.outline); } break; }
       case "stop": { const x = sk.stops?.find(y => y.id === to.id); const l = x && laneById(sk, x.lane); if (x && l) { setSel({ ...NO_SEL, stop: x.id }); centerOnPts([pointAt(l.shape, x.s).p]); } break; }
     }
@@ -1174,7 +1184,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
 
   /** an agent's select/goTo: { kind, id }, checked (a car's id a number, the others' a string) */
   const target = (a: Record<string, unknown>): SearchTarget => {
-    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "zone", "car"];
+    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "bump", "zone", "car"];
     if (!kinds.includes(kind)) throw new Error(`kind: one of ${kinds.join(", ")}`);
     const sk = live.current.sketch;
     if (kind === "car") {
@@ -1186,7 +1196,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const id = argOf(a, "id", "string", true)!;
     const there = kind === "road" ? sk.roads.some(x => x.id === id) : kind === "lane" ? sk.lanes.some(x => x.id === id) : kind === "connector" ? sk.connectors.some(x => x.id === id)
       : kind === "junction" ? sk.junctions.some(x => x.id === id) : kind === "link" ? (sk.links ?? []).some(x => x.id === id)
-      : kind === "zone" ? (sk.zones ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
+      : kind === "zone" ? (sk.zones ?? []).some(x => x.id === id) : kind === "bump" ? (sk.bumps ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
     if (!there) throw new Error(`no ${kind} ${id}`);
     return { kind: kind as Exclude<SearchTarget["kind"], "car">, id };
   };
@@ -1264,7 +1274,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       }),
       bridgeState.register("sketch", () => {
         const s = sk();
-        return { lanes: s.lanes.length, connectors: s.connectors.length, roads: s.roads.length, junctions: s.junctions.length, crossings: s.crossings?.length ?? 0, links: s.links?.length ?? 0,
+        return { lanes: s.lanes.length, connectors: s.connectors.length, roads: s.roads.length, junctions: s.junctions.length, crossings: s.crossings?.length ?? 0, bumps: s.bumps?.length ?? 0, links: s.links?.length ?? 0,
           roadNames: s.roads.slice(0, 200).map(r => `${r.id} ${r.name}`), junctionNames: s.junctions.slice(0, 200).map(j => `${j.id} ${j.name}`) };
       }),
       bridgeState.register("sketchJson", () => sk()),
@@ -1352,6 +1362,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           const part = near(stripeKnob(xs, 1 / view.current.scale)) ? "stripes" : ([0, 1, 2, 3] as const).find(i => near(cs[i])) ?? (["a", "b"] as const).find(k => near(xs[k]));
           if (part !== undefined) { drag.current = { kind: "crossing", base: sk, id: xs.id, part, from: raw }; return; }
         }
+        // (the selected speed bump's kerb ends)
+        const bs = s.bump ? sk.bumps?.find(x => x.id === s.bump) : null, bEnd = bs && (["a", "b"] as const).find(k => dist(raw, bs[k]) <= 7 / view.current.scale);
+        if (bs && bEnd) { drag.current = { kind: "bump", base: sk, id: bs.id, part: bEnd, from: raw }; return; }
         const h = handleAt(raw);
         if (h?.kind === "lane") {
           setSelPt({ lane: h.id, i: h.i });
@@ -1407,6 +1420,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         if ("stop" in hit) { setSel({ ...NO_SEL, stop: hit.stop }); return; }
         // (a zebra crossing: selected on its own, dragged whole)
         if ("crossing" in hit) { setSel({ ...NO_SEL, crossing: hit.crossing }); drag.current = { kind: "crossing", base: sk, id: hit.crossing, part: "move", from: raw }; return; }
+        // (a speed bump: selected on its own, dragged whole)
+        if ("bump" in hit) { setSel({ ...NO_SEL, bump: hit.bump }); drag.current = { kind: "bump", base: sk, id: hit.bump, part: "move", from: raw }; return; }
         // (a zone: selected on its own, dragged whole)
         if ("zone" in hit) {
           const zs = s.zones?.includes(hit.zone) ? s : { ...NO_SEL, zones: [hit.zone] };
@@ -1458,6 +1473,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         let made: SketchCrossing | null = null;
         editSketch(k => { const [next, x] = addCrossing(k, d.a, p); made = x; return next; });
         if (made) { setSel({ ...NO_SEL, crossing: (made as SketchCrossing).id }); changeTool("select"); }
+        break;
+      }
+      case "bump": {
+        const p = snap(raw).p;
+        if (d?.kind !== "bump") { draft.current = { kind: "bump", a: p }; break; }
+        draft.current = null;
+        if (dist(d.a, p) < 1) break;
+        // (the kind of the last one put down: a row of cushions drawn one after another)
+        let made: SketchBump | null = null;
+        editSketch(k => { const [next, x] = addBump(k, d.a, p, k.bumps?.at(-1)?.kind); made = x; return next; });
+        if (made) { setSel({ ...NO_SEL, bump: (made as SketchBump).id }); changeTool("select"); }
         break;
       }
       case "junction": {
@@ -1563,6 +1589,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     } else if ("connector" in hit) setSel({ ...NO_SEL, connectors: [hit.connector] });
     else if ("link" in hit) setSel({ ...NO_SEL, link: hit.link });
     else if ("crossing" in hit) setSel({ ...NO_SEL, crossing: hit.crossing });
+    else if ("bump" in hit) setSel({ ...NO_SEL, bump: hit.bump });
     else if ("stop" in hit) setSel({ ...NO_SEL, stop: hit.stop });
     else setSel({ ...NO_SEL, zones: [hit.zone] });
     setSelCar(null);
@@ -1634,6 +1661,16 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         const next = updateCrossing(g.base, g.id, patch), x1 = next.crossings!.find(x => x.id === g.id)!;
         if (dist(x1.a, x1.b) >= 1 && x1.width >= 0.5) dragShow(next);
       }
+    } else if (g?.kind === "bump") {
+      // (to the half metre, as points are; Shift: off the grid)
+      const q = (p: Pt) => (e.shiftKey ? { x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100 } : { x: Math.round(p.x * 2) / 2, y: Math.round(p.y * 2) / 2 });
+      const x0 = g.base.bumps?.find(x => x.id === g.id);
+      if (x0) {
+        const a = g.part === "move" ? q({ x: x0.a.x + raw.x - g.from.x, y: x0.a.y + raw.y - g.from.y }) : null;
+        const patch: BumpPatch = a ? { a, b: { x: x0.b.x + a.x - x0.a.x, y: x0.b.y + a.y - x0.a.y } } : { [g.part]: q(raw) };
+        const next = updateBump(g.base, g.id, patch), x1 = next.bumps!.find(x => x.id === g.id)!;
+        if (dist(x1.a, x1.b) >= 1) dragShow(next);
+      }
     } else if (g?.kind === "box") {
       g.b = raw;
     } else if (g?.kind === "rotate") {
@@ -1670,7 +1707,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (dragSk.current) { const sk = dragSk.current; dragSk.current = null; store.show(sk); }
     // a right click (not a right drag): the menu for the lane under it, or the lanes selected
     if (g?.kind === "pan" && g.right && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) { openMenu(e); return; }
-    if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || (g?.kind === "crossing" && store.sketch$.getValue() !== g.base)) recordSketch(g.base);
+    if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || ((g?.kind === "crossing" || g?.kind === "bump") && store.sketch$.getValue() !== g.base)) recordSketch(g.base);
     // (an Automatic junction's corner moved, or put in: its surface Drawn now, said)
     if (g?.kind === "handle" && g.h.kind === "corner" && store.sketch$.getValue() !== g.base) { const j = g.base.junctions.find(x => x.id === (g.h as { id: string }).id); if (j?.shape === "auto") drawnNow(j.name); }
     if (g?.kind === "box" && dist(g.a, g.b) * view.current.scale > 3) {
@@ -1781,7 +1818,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "escape") {
       // (a menu or dialog took it already)
       if (e.defaultPrevented) return;
-      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.stop && !live.current.sel.zones?.length && live.current.selCar === null;
+      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.bump && !live.current.sel.stop && !live.current.sel.zones?.length && live.current.selCar === null;
       if (d) draft.current = null;
       // (the Sketch window, a modal (T184), one thing a press: the selection, then a drawing tool (back to Select), then
       // the window closed)
@@ -2102,6 +2139,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           ) : sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
             <CrossingPanel x={sketch.crossings.find(x => x.id === sel.crossing)!} readOnly={readOnly} onDelete={deleteSel}
               live={stats ? peds.find(q => q.id === sel.crossing) ?? null : null} />
+          ) : sel.bump && sketch.bumps?.some(x => x.id === sel.bump) ? (
+            <BumpPanel sketch={sketch} x={sketch.bumps.find(x => x.id === sel.bump)!} readOnly={readOnly} onDelete={deleteSel} />
           ) : sel.stop && sketch.stops?.some(x => x.id === sel.stop) ? (
             <StopPanel sketch={sketch} stop={sketch.stops.find(x => x.id === sel.stop)!} readOnly={readOnly} onDelete={deleteSel} />
           ) : (
@@ -2995,6 +3034,54 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
 }
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
+/**
+ * A speed bump (ticket #101): its kind, size and the speed cars cross it at (its kind's, or set), what buses and trucks
+ * cross it at, where its kerbs are, and where it is outside the norms (for the speed limit of the lanes it crosses)
+ */
+function BumpPanel({ sketch, x, readOnly, onDelete }: { sketch: Sketch; x: SketchBump; readOnly: boolean; onDelete: () => void }) {
+  const { edit: editSketch } = useSketchStore();
+  const set = (patch: BumpPatch) => editSketch(sk => updateBump(sk, x.id, patch));
+  const k = BUMP_KINDS[x.kind], mid = { x: (x.a.x + x.b.x) / 2, y: (x.a.y + x.b.y) / 2 };
+  // (the speed limit where it is: the fastest of the lanes it crosses)
+  const lanes = sketch.lanes.filter(l => !l.bike && nearestOn(l.shape, mid).d < Math.max(l.width, dist(x.a, x.b) / 2));
+  const limit = lanes.length ? Math.max(...lanes.map(l => speedLimitOf(sketch, l.id) ?? sketch.traffic?.speed ?? DEFAULT_SIM.speed)) : undefined;
+  const notes = bumpNotes(x, limit);
+  return (
+    <InspectorPanel id="bump" title={`${k.label} ${x.id}`}
+      actions={!readOnly && <Button size="icon-sm" variant="ghost" aria-label="Delete the speed bump" title="Delete it (Del)" onClick={onDelete}><Trash2 /></Button>}>
+      <ToggleGroup type="single" value={x.kind} aria-label="Kind" className="w-full" disabled={readOnly}
+        onValueChange={v => v && v !== x.kind && set({ kind: v as BumpKind })}>
+        {BUMP_KIND_IDS.map(id => <ToggleGroupItem key={id} value={id} className="h-7 flex-1 px-1.5 text-[11px]" title={BUMP_KINDS[id].hint}>{BUMP_KINDS[id].short}</ToggleGroupItem>)}
+      </ToggleGroup>
+      <p className="text-[11px] text-muted-foreground">{k.hint}.</p>
+      <div className="grid grid-cols-2 gap-2">
+        <NumberField id="sk-hv" label={`Cars cross at${x.speed === undefined ? " (its kind's)" : ""}`} unit="km/h" value={bumpSpeed(x)} min={3} max={80} step={1} digits={0} onCommit={v => set({ speed: Math.round(v) })} />
+        <div className="space-y-1">
+          <div className="text-xs text-muted-foreground">Buses and trucks</div>
+          <div className="font-mono text-sm tabular" title={x.kind === "cushion" ? "They straddle the cushions: slowed less than cars" : "About 8 km/h slower than cars (TRL)"}>{bumpHeavySpeed(x)} km/h</div>
+        </div>
+        <NumberField id="sk-hl" label="Length (along the traffic)" unit="m" value={x.length} min={0.3} max={20} step={0.1} digits={1} onCommit={length => set({ length })} />
+        <NumberField id="sk-hh" label="Height" unit="cm" value={x.height} min={1} max={20} step={0.5} digits={1} onCommit={height => set({ height })} />
+        <NumberField id="sk-hax" label="One kerb: X (east)" unit="m" value={x.a.x} onCommit={v => set({ a: { ...x.a, x: v } })} />
+        <NumberField id="sk-hay" label="Y (south)" unit="m" value={x.a.y} onCommit={v => set({ a: { ...x.a, y: v } })} />
+        <NumberField id="sk-hbx" label="Other kerb: X (east)" unit="m" value={x.b.x} onCommit={v => set({ b: { ...x.b, x: v } })} />
+        <NumberField id="sk-hby" label="Y (south)" unit="m" value={x.b.y} onCommit={v => set({ b: { ...x.b, y: v } })} />
+      </div>
+      {!readOnly && x.speed !== undefined && <Button size="sm" variant="outline" onClick={() => set({ speed: null })}>Speed back to its kind&apos;s ({k.speed} km/h)</Button>}
+      {notes.length > 0 && (
+        <ul className="space-y-1 text-[11px] text-amber-700 dark:text-amber-400">
+          {notes.map(n => <li key={n} className="flex gap-1.5"><TriangleAlert className="mt-0.5 size-3 shrink-0" />{n}</li>)}
+        </ul>
+      )}
+      <p className="text-[11px] text-muted-foreground">
+        Drivers brake for it ahead, cross it at its speed (each at their own share of it, as of the limit) and speed up once off it: humps
+        close together keep the speed down between them too. Its height is for the norms only; the crossing speed is what slows the cars.
+        Drag it to move it, a round kerb end to move that kerb (Shift: off the half-metre grid).
+      </p>
+    </InspectorPanel>
+  );
+}
 
 /** a zebra crossing: where its kerbs are, how wide, how busy, and its pedestrians while the cars run (as V1's) */
 function CrossingPanel({ x, readOnly, onDelete, live }: { x: SketchCrossing; readOnly: boolean; onDelete: () => void; live: PedView | null }) {
@@ -4015,6 +4102,24 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       arrowHead(pts[pts.length - 1], connectorEnd(sk, cn.to, "to")!.d, 8 * px);
       dot(pts[0], 2.5 * px, ctx.strokeStyle);
     }
+    // speed bumps (ticket #101): their raised bodies and markings, under any zebra on a table; selected or under the pointer,
+    // outlined; selected, its kerb ends to drag
+    for (const x of S && pass < 1 ? sk.bumps ?? [] : []) {
+      const f = bumpFrame(x), on = s.bump === x.id, over = !!hv && "bump" in hv && hv.bump === x.id;
+      const xs = f.corners.map(p => p.x), ys = f.corners.map(p => p.y);
+      if (Math.max(...xs) < x0 || Math.min(...xs) > x1 || Math.max(...ys) < y0 || Math.min(...ys) > y1) continue;
+      const sh = bumpShapes(x);
+      ctx.globalAlpha = dark ? 0.8 : 0.9;
+      ctx.fillStyle = sh.color;
+      for (const b of sh.body) { path(b); ctx.closePath(); ctx.fill(); }
+      ctx.fillStyle = sh.markColor;
+      for (const m of sh.marks) { path(m); ctx.closePath(); ctx.fill(); }
+      ctx.globalAlpha = 1;
+      if (on || over) {
+        path(f.corners); ctx.closePath(); ctx.strokeStyle = col.sel; ctx.lineWidth = (on ? 2 : 1.5) * px; ctx.setLineDash(on ? [] : [5 * px, 3 * px]); ctx.stroke(); ctx.setLineDash([]);
+      }
+      if (on) for (const p of [x.a, x.b]) { ctx.beginPath(); ctx.arc(p.x, p.y, 3.5 * px, 0, Math.PI * 2); ctx.fillStyle = col.bg; ctx.fill(); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.stroke(); }
+    }
     // zebra crossings: white bars a metre apart, cut to its shape; selected or under the pointer, outlined; selected, its
     // corners and kerb ends to drag, and a knob turning its bars (ticket #57)
     for (const x of S && pass < 1 ? sk.crossings ?? [] : []) {
@@ -4247,6 +4352,13 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       path(f.corners); ctx.closePath(); ctx.globalAlpha = 0.25; ctx.fill(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.stroke();
     }
     square(d.a);
+  } else if (d?.kind === "bump") {
+    const b = cur?.p ?? d.a;
+    if (dist(d.a, b) > 0.1) {
+      const f = bumpFrame({ id: "", kind: "hump", a: d.a, b, length: BUMP_KINDS[sk.bumps?.at(-1)?.kind ?? BUMP_KIND].length, height: 0 });
+      path(f.corners); ctx.closePath(); ctx.globalAlpha = 0.25; ctx.fill(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.stroke();
+    }
+    square(d.a);
   } else if (d?.kind === "roundabout" && cur) {
     const r = dist(d.c, cur.p);
     ctx.beginPath(); ctx.arc(d.c.x, d.c.y, r, 0, Math.PI * 2); ctx.globalAlpha = 0.35; ctx.lineWidth = LANE_WIDTH; ctx.setLineDash([]); ctx.stroke(); ctx.globalAlpha = 1;
@@ -4278,7 +4390,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   ctx.setLineDash([]);
   if (d && "c" in d) dot(d.c, 3 * px, col.sel);
-  if (cur && (tool === "lane" || tool === "bike" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "zone" || tool === "crossing")) {
+  if (cur && (tool === "lane" || tool === "bike" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "zone" || tool === "crossing" || tool === "bump")) {
     ctx.beginPath(); ctx.arc(cur.p.x, cur.p.y, (cur.snapped ? 5 : 3) * px, 0, Math.PI * 2);
     ctx.strokeStyle = col.sel; ctx.fillStyle = col.sel; ctx.lineWidth = 1.5 * px; if (cur.snapped) ctx.stroke(); else ctx.fill();
   }

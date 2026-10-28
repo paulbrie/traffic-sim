@@ -18,7 +18,7 @@ const inner = (k: Sketch | undefined): Sketch | undefined => {
   return rest;
 };
 /** nothing drawn in it */
-export const emptyContent = (k: Sketch | undefined) => !k || (!k.lanes.length && !k.junctions.length && !k.connectors.length && !k.crossings?.length && !k.zones?.length);
+export const emptyContent = (k: Sketch | undefined) => !k || (!k.lanes.length && !k.junctions.length && !k.connectors.length && !k.crossings?.length && !k.bumps?.length && !k.zones?.length);
 
 /** nothing at all in it: its own content, its links, the Sketch window's sketch and the saved ones all empty (T185) */
 export const nothingIn = (k: Sketch | undefined) =>

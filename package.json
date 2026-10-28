@@ -35,6 +35,7 @@
     "bus:check": "tsx scripts/bus-lane-check.ts",
     "bike:check": "tsx scripts/bike-lane-check.ts",
     "crossing:check": "tsx scripts/crossing-shape-check.ts",
+    "bump:check": "tsx scripts/speed-bump-check.ts",
     "plan:check": "tsx scripts/plan-fallback-check.ts",
     "bus-support:check": "tsx scripts/bus-support-check.ts",
     "levels:check": "tsx scripts/levels-check.ts",

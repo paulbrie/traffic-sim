@@ -17,7 +17,7 @@ export interface CarExplain {
   why: string | null;
   rule: null | { kind: ExplainRule; edge?: string; detail?: string };
   /** km/h; target: what the car-following model chose this step; accel m/s² */
-  speed: null | { kmh: number; desiredKmh: number; targetKmh: number; accel: number };
+  speed: null | { kmh: number; desiredKmh: number; targetKmh: number; accel: number; /** the speed bump its desired speed is down for (ticket #101) */ bump?: string };
   /** the car ahead on its path: bumper gap (m) and its speed (km/h) */
   leader: null | { car: number; gap: number; kmh: number };
   /** the car holding it (give way, merge, zone…): the gap seen and needed (m), seconds to the zone (theirs) and to clear it (mine), the conflict zone on both paths */
@@ -125,7 +125,7 @@ export function headline(x: CarExplain): { text: string; car?: number } {
   if (x.deadlock) return { text: `${x.deadlock.includes(x.car) ? "Deadlock" : "Waiting on a deadlock"}: ${x.deadlock.join(" → ")} → ${x.deadlock[0]} all wait on each other`, car: x.deadlock[0] };
   const lost = noRouteText(x);
   if (lost && (!r || r === "follow")) return { text: lost };
-  if (!r) return { text: speedNow ? `Free road, ${speedNow}` : "Free road" };
+  if (!r) return { text: x.speed?.bump ? `Slowing for speed bump ${x.speed.bump}, ${speedNow}` : speedNow ? `Free road, ${speedNow}` : "Free road" };
   if (r === "follow" && x.leader) return { text: `Following car ${x.leader.car}, ${x.leader.gap.toFixed(0)} m gap${speedNow ? `, ${speedNow}` : ""}`, car: x.leader.car };
   if ((r === "merge" || r === "lane-change") && b?.gap !== undefined && b.needGap !== undefined)
     return { text: `${r === "merge" ? `Merging onto ${edgeName(x.rule?.edge ?? b.edge)}` : `Changing to ${edgeName(x.rule?.edge ?? b.edge)}`}: gap ${m1(b.gap)} too short (needs ${b.needGap.toFixed(0)} m)`, car: b.car };
@@ -164,7 +164,7 @@ export function explainText(x: CarExplain, clock: (t: number) => string, firstCo
   const pn = patienceNote(x, firstCome);
   if (pn) out.push(pn);
   if (x.rule) out.push(`Rule: ${RULE_WORDS[x.rule.kind]}${x.rule.edge ? ` on ${edgeName(x.rule.edge)}` : ""}${x.rule.detail ? ` (${x.rule.detail})` : ""}, for ${s1(x.since)}`);
-  if (x.speed) out.push(`Speed: ${kmh(x.speed.kmh)} km/h now, ${kmh(x.speed.desiredKmh)} desired, ${kmh(x.speed.targetKmh)} target (${x.speed.accel.toFixed(1)} m/s²)`);
+  if (x.speed) out.push(`Speed: ${kmh(x.speed.kmh)} km/h now, ${kmh(x.speed.desiredKmh)} desired, ${kmh(x.speed.targetKmh)} target (${x.speed.accel.toFixed(1)} m/s²)${x.speed.bump ? `, desired down for speed bump ${x.speed.bump}` : ""}`);
   if (x.leader) out.push(`Leader: car ${x.leader.car}, ${m1(x.leader.gap)} ahead at ${kmh(x.leader.kmh)} km/h`);
   if (x.blocker) {
     const b = x.blocker, cw = crossingWords(b), extra = [b.gap !== undefined ? `gap ${m1(b.gap)}` : "", b.needGap !== undefined ? `needs ${m1(b.needGap)}` : "", ...cw.where, cw.need ? `this one needs ${cw.need}` : ""].filter(Boolean);
