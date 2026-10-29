@@ -139,10 +139,14 @@ export interface JunctionStats { id: string; through: number; delay: number; que
 const APPROACH = 100;
 interface JunctionTally { id: string; through: number; delay: number; queueSum: number; queueMax: number; fuel: number; now: number;
   /** (ticket #109) vehicles come onto it from each lane, and gone off it onto each lane, so far; and its series (see `JunctionSeries`) */
-  ins: Map<string, number>; outs: Map<string, number>; series: JunctionSample[] }
+  ins: Map<string, number>; outs: Map<string, number>; series: JunctionSample[];
+  /** metres driven and seconds spent by vehicles inside it (its ring too), so far: their mean speed over any stretch of time */
+  dist: number; time: number }
 /** a junction's counts at a moment: vehicles come onto it (each once, however often round its ring), and come in and gone out by each
  * lane (in the order of `JunctionSeries`'s lanes) so far */
-export interface JunctionSample { t: number; through: number; ins: number[]; outs: number[] }
+export interface JunctionSample { t: number; through: number; ins: number[]; outs: number[];
+  /** metres driven and vehicle-seconds spent inside it so far (their mean speed between two samples: Δdist / Δtime) */
+  dist: number; time: number }
 /**
  * A junction's traffic over time (ticket #109): every `SERIES_DT` simulated seconds, the counts so far (the last hour of them), with
  * the lanes vehicles came onto it from (`ins`) and went off it onto (`outs`), in the order first seen; a sample's counts follow them
@@ -150,7 +154,7 @@ export interface JunctionSample { t: number; through: number; ins: number[]; out
  */
 export interface JunctionSeries { id: string; ins: string[]; outs: string[]; samples: JunctionSample[] }
 const SERIES_DT = 5, SERIES_KEEP = 720, SERIES_MAX = 24;
-const newTally = (id: string): JunctionTally => ({ id, through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0, ins: new Map(), outs: new Map(), series: [] });
+const newTally = (id: string): JunctionTally => ({ id, through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0, ins: new Map(), outs: new Map(), series: [], dist: 0, time: 0 });
 export interface FuelStats { total: number; idle: number; idleTime: number; km: number; trips: number; tripFuel: number; co2: number }
 const CO2_PETROL = 2.31, CO2_DIESEL = 2.64;
 const noFuel = (): FuelStats => ({ total: 0, idle: 0, idleTime: 0, km: 0, trips: 0, tripFuel: 0, co2: 0 });
@@ -2897,6 +2901,8 @@ export class SketchSim {
         J.delay += dt * Math.max(0, 1 - nv / Math.max(1, v.edge.vmax * v.vf)); J.fuel += mL / 1000;
         if (nv < 0.5) J.now++;
       }
+      // (inside one, for its mean speed (ticket #109): on it or round its ring)
+      { const ik = this.jInside.get(v.edge); if (ik !== undefined) { const J = this.jTally[ik]; J.dist += move; J.time += dt; } }
       // (a road's: on one of its lanes)
       const rk = this.rOn.get(v.edge);
       if (rk !== undefined) {
@@ -2967,7 +2973,7 @@ export class SketchSim {
     if (this.jTally.length <= SERIES_MAX && Math.floor(this.t / SERIES_DT) !== Math.floor((this.t - dt) / SERIES_DT)) {
       for (const J of this.jTally) {
         const ins = [...J.ins.values()];
-        J.series.push({ t: r2(this.t), through: ins.reduce((x, y) => x + y, 0), ins, outs: [...J.outs.values()] });
+        J.series.push({ t: r2(this.t), through: ins.reduce((x, y) => x + y, 0), ins, outs: [...J.outs.values()], dist: Math.round(J.dist * 10) / 10, time: Math.round(J.time * 10) / 10 });
         if (J.series.length > SERIES_KEEP) J.series.splice(0, J.series.length - SERIES_KEEP);
       }
     }

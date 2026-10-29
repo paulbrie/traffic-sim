@@ -39,6 +39,24 @@ function rates(samples: JunctionSample[], at: (s: JunctionSample) => number): nu
     return dt > 0 ? (dc / dt) * 3600 : 0;
   });
 }
+/** the mean speed (km/h) over the last `WINDOW` s at each sample: metres driven over vehicle-seconds inside the junction (none
+ * inside: as at the sample before) */
+function speeds(samples: JunctionSample[]): number[] {
+  let j = 0, last = 0;
+  return samples.map((s, i) => {
+    while (j < i && samples[j + 1].t <= s.t - WINDOW) j++;
+    const from = s.t - WINDOW >= samples[0].t - 0.01 && j < i ? samples[j] : null;
+    const dd = s.dist - (from?.dist ?? 0), dt = s.time - (from?.time ?? 0);
+    if (dt > 0.5) last = (dd / dt) * 3.6;
+    return last;
+  });
+}
+/** over the samples shown (from the run's start if they go back to it): vehicles an hour through it, and their mean speed (km/h) */
+function periodMeans(samples: JunctionSample[]) {
+  const a = samples[0], b = samples.at(-1)!, fromStart = a.t <= 5.5;
+  const t0 = fromStart ? 0 : a.t, c0 = fromStart ? 0 : a.through, d0 = fromStart ? 0 : a.dist, s0 = fromStart ? 0 : a.time;
+  return { from: t0, to: b.t, flow: b.t > t0 ? ((b.through - c0) / (b.t - t0)) * 3600 : 0, speed: b.time - s0 > 0.5 ? ((b.dist - d0) / (b.time - s0)) * 3.6 : null };
+}
 /** a clean top for the y axis: 1, 2 or 5 × a power of ten, at least `v` */
 function niceTop(v: number) {
   if (v <= 0) return 10;
@@ -50,22 +68,31 @@ const compact = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0
 const roadName = (sk: Sketch, id: string) => roadOf(sk, baseLaneId(id))?.name;
 
 /**
- * A side's lines: each lane its colour by the order first seen (so it keeps it as others come, and whatever is filtered), past
- * `SLOTS` - 1 lanes the rest summed as "Other"; only the lanes shown (`shown`)
+ * A side's lines, per lane or per road (`byRoad`: each road's lanes summed; a lane in no road on its own): each its colour by the
+ * order first seen (so it keeps it as others come, and whatever is filtered), past `SLOTS` - 1 the rest summed as "Other"; only the
+ * lanes shown (`shown`) counted
  */
-function laneLines(sk: Sketch, ids: string[], samples: JunctionSample[], side: "ins" | "outs", shown: (id: string) => boolean): Line[] {
+function sideLines(sk: Sketch, ids: string[], samples: JunctionSample[], side: "ins" | "outs", shown: (id: string) => boolean, byRoad: boolean): Line[] {
   const one = (i: number) => (s: JunctionSample) => s[side][i] ?? 0;
-  const fold = ids.length > SLOTS, own = fold ? SLOTS - 1 : ids.length;
-  const lines: Line[] = [];
+  // (the groups, in the order their first lane was seen: a lane each, or a road each)
+  const groups: { key: string; label: string; sub?: string; idx: number[] }[] = [];
   ids.forEach((id, i) => {
-    if (i < own && shown(id)) lines.push({ key: id, label: id, sub: roadName(sk, id), lanes: [id], color: `var(--s${i + 1})`, values: rates(samples, one(i)), total: samples.at(-1)?.[side][i] ?? 0 });
+    const road = byRoad ? roadOf(sk, baseLaneId(id)) : null, key = road ? `road:${road.id}` : id;
+    const g = groups.find(x => x.key === key);
+    if (g) g.idx.push(i);
+    else groups.push(road ? { key, label: road.name, idx: [i] } : { key, label: id, sub: roadName(sk, id), idx: [i] });
   });
-  const rest = ids.map((id, i) => ({ id, i })).filter(x => x.i >= own && shown(x.id));
-  if (rest.length) {
-    const sum = (s: JunctionSample) => rest.reduce((a, x) => a + one(x.i)(s), 0);
-    lines.push({ key: "other", label: "Other", sub: `${rest.length} lanes`, lanes: rest.map(x => x.id), color: "var(--other)", values: rates(samples, sum), total: samples.length ? sum(samples.at(-1)!) : 0 });
-  }
-  return lines;
+  for (const g of groups) if (g.key.startsWith("road:")) g.sub = `${g.idx.length} lane${g.idx.length === 1 ? "" : "s"}`;
+  const line = (key: string, label: string, sub: string | undefined, idx: number[], color: string): Line | null => {
+    const on = idx.filter(i => shown(ids[i]));
+    if (!on.length) return null;
+    const sum = (s: JunctionSample) => on.reduce((a, i) => a + one(i)(s), 0);
+    return { key, label, sub, lanes: on.map(i => ids[i]), color, values: rates(samples, sum), total: samples.length ? sum(samples.at(-1)!) : 0 };
+  };
+  const fold = groups.length > SLOTS, own = fold ? SLOTS - 1 : groups.length;
+  const lines = groups.slice(0, own).map((g, k) => line(g.key, g.label, g.sub, g.idx, `var(--s${k + 1})`));
+  if (fold) { const rest = groups.slice(own); lines.push(line("other", "Other", `${rest.length} ${byRoad ? "roads or lanes" : "lanes"}`, rest.flatMap(g => g.idx), "var(--other)")); }
+  return lines.filter((l): l is Line => !!l);
 }
 
 /** an element's size, as it changes */
@@ -90,15 +117,17 @@ const L = 30, R = 6, T = 6, B = 16;
  * one line chart, `width` × `height` px (its text the same size however big): its lines over the samples' times, the crosshair (its
  * tooltip if it's this chart's), the replay's moment at `cursor` (s); a legend under it (a lane hovered there lit up on the map)
  */
-function Chart({ title, lines, times, width, height, hover: hv, setHover: setHv, cursor, single, onFocus }: {
+function Chart({ title, lines, times, width, height, hover: hv, setHover: setHv, cursor, single, mark, unit = "", onFocus }: {
   title: string; lines: Line[]; times: number[]; width: number; height: number; hover: Hover; setHover: (h: Hover) => void; cursor: number | null; single?: boolean;
-  onFocus?: (lanes: string[] | null) => void;
+  /** a reference value across the chart (the mean over the period shown), labelled at its right end */
+  mark?: { value: number; label: string }; unit?: string;
+  onFocus?: (lanes: string[] | null, label?: string) => void;
 }) {
   const hover = hv?.i ?? null, setHover = (i: number | null) => setHv(i === null ? null : { i, on: title });
   const box = useRef<HTMLDivElement | null>(null);
   const W = Math.max(120, width), H = Math.max(60, height);
   const t0 = times[0] ?? 0, t1 = Math.max(t0 + 1, times.at(-1) ?? 1);
-  const top = niceTop(Math.max(1, ...lines.flatMap(l => l.values)));
+  const top = niceTop(Math.max(1, mark?.value ?? 0, ...lines.flatMap(l => l.values)));
   const x = (t: number) => L + ((t - t0) / (t1 - t0)) * (W - L - R), y = (v: number) => T + (1 - v / top) * (H - T - B);
   const pick = (clientX: number) => {
     const r = box.current?.getBoundingClientRect();
@@ -138,6 +167,12 @@ function Chart({ title, lines, times, width, height, hover: hv, setHover: setHv,
           {lines.map(l => (
             <polyline key={l.key} points={l.values.map((v, i) => `${x(times[i])},${y(v)}`).join(" ")} fill="none" stroke={l.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           ))}
+          {mark && (
+            <g>
+              <line x1={L} x2={W - R} y1={y(mark.value)} y2={y(mark.value)} stroke="currentColor" className="text-muted-foreground" strokeWidth={1} opacity={0.7} />
+              <text x={W - R} y={y(mark.value) - 3} textAnchor="end" className="fill-muted-foreground text-[9px] tabular-nums">{mark.label}</text>
+            </g>
+          )}
           {cursor !== null && cursor >= t0 && cursor <= t1 && <line x1={x(cursor)} x2={x(cursor)} y1={T} y2={H - B} stroke="var(--axis)" strokeWidth={1} />}
           {tip !== null && (
             <g>
@@ -153,7 +188,7 @@ function Chart({ title, lines, times, width, height, hover: hv, setHover: setHv,
             {[...lines].sort((a, b) => b.values[tip!] - a.values[tip!]).map(l => (
               <div key={l.key} className="flex items-center gap-1.5">
                 <span className="inline-block h-0.5 w-3 rounded" style={{ background: l.color }} />
-                <span className="font-semibold tabular-nums">{Math.round(l.values[tip!])}</span>
+                <span className="font-semibold tabular-nums">{Math.round(l.values[tip!])}{unit}</span>
                 <span className="truncate text-muted-foreground">{l.label}{l.sub ? ` · ${l.sub}` : ""}</span>
               </div>
             ))}
@@ -164,7 +199,7 @@ function Chart({ title, lines, times, width, height, hover: hv, setHover: setHv,
         <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px] text-muted-foreground">
           {lines.length ? lines.map(l => (
             <span key={l.key} className="flex cursor-default items-center gap-1 rounded px-0.5 hover:bg-muted hover:text-foreground" title={l.sub ? `${l.label} · ${l.sub}` : l.label}
-              onPointerEnter={() => onFocus?.(l.lanes)} onPointerLeave={() => onFocus?.(null)}>
+              onPointerEnter={() => onFocus?.(l.lanes, l.label)} onPointerLeave={() => onFocus?.(null)}>
               <span className="inline-block h-0.5 w-3 rounded" style={{ background: l.color }} />{l.label}{width > 420 && l.sub ? <span className="opacity-70"> · {l.sub}</span> : null}
             </span>
           )) : <span>No lanes shown: see the filters above.</span>}
@@ -175,8 +210,9 @@ function Chart({ title, lines, times, width, height, hover: hv, setHover: setHv,
 }
 
 /** the filters, one row above the charts: roads (each all its lanes, in and out) and lanes, shown or not; one hovered lit up on the map */
-function Filters({ sketch, ins, outs, hidden, setHidden, onFocus }: {
-  sketch: Sketch; ins: string[]; outs: string[]; hidden: Set<string>; setHidden: (h: Set<string>) => void; onFocus?: (lanes: string[] | null) => void;
+function Filters({ sketch, ins, outs, hidden, setHidden, byRoad, setByRoad, onFocus }: {
+  sketch: Sketch; ins: string[]; outs: string[]; hidden: Set<string>; setHidden: (h: Set<string>) => void; byRoad: boolean; setByRoad: (b: boolean) => void;
+  onFocus?: (lanes: string[] | null, label?: string) => void;
 }) {
   const all = [...ins, ...outs];
   const roads = new Map<string, string[]>();
@@ -184,13 +220,21 @@ function Filters({ sketch, ins, outs, hidden, setHidden, onFocus }: {
   const toggle = (ids: string[], show: boolean) => { const h = new Set(hidden); for (const id of ids) if (show) h.delete(id); else h.add(id); setHidden(h); };
   const item = (id: string) => (
     <DropdownMenuCheckboxItem key={id} checked={!hidden.has(id)} onCheckedChange={v => toggle([id], !!v)} onSelect={e => e.preventDefault()}
-      onPointerEnter={() => onFocus?.([id])} onPointerLeave={() => onFocus?.(null)}>
+      onPointerEnter={() => onFocus?.([id], id)} onPointerLeave={() => onFocus?.(null)}>
       <span className="font-mono">{id}</span><span className="ml-1 truncate text-muted-foreground">{roadName(sketch, id) ?? ""}</span>
     </DropdownMenuCheckboxItem>
   );
   const shownRoads = [...roads].filter(([, ids]) => ids.some(id => !hidden.has(id))).length;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
+      {/* (a line a lane, or each road's lanes summed) */}
+      <div role="radiogroup" aria-label="Lines" className="flex h-7 items-center rounded-md border p-0.5 text-xs">
+        {([[false, "Per lane"], [true, "Per road"]] as const).map(([v, label]) => (
+          <button key={label} type="button" role="radio" aria-checked={byRoad === v} onClick={() => setByRoad(v)}
+            title={v ? "Each road's lanes summed (a lane in no road on its own)" : "A line for each lane"}
+            className={`h-full rounded px-2 ${byRoad === v ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>{label}</button>
+        ))}
+      </div>
       <DropdownMenu modal={false} onOpenChange={o => { if (!o) onFocus?.(null); }}>
         <DropdownMenuTrigger asChild>
           <Button size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs">Roads <span className="text-muted-foreground">{shownRoads}/{roads.size}</span><ChevronDown className="size-3" /></Button>
@@ -200,7 +244,7 @@ function Filters({ sketch, ins, outs, hidden, setHidden, onFocus }: {
           {[...roads].map(([name, ids]) => (
             <DropdownMenuCheckboxItem key={name} checked={ids.every(id => !hidden.has(id)) ? true : ids.some(id => !hidden.has(id)) ? "indeterminate" : false}
               onCheckedChange={() => toggle(ids, !ids.every(id => !hidden.has(id)))} onSelect={e => e.preventDefault()}
-              onPointerEnter={() => onFocus?.(ids)} onPointerLeave={() => onFocus?.(null)}>
+              onPointerEnter={() => onFocus?.(ids, name)} onPointerLeave={() => onFocus?.(null)}>
               <span className="truncate">{name}</span><span className="ml-auto pl-2 text-[11px] text-muted-foreground">{ids.length} lane{ids.length === 1 ? "" : "s"}</span>
             </DropdownMenuCheckboxItem>
           ))}
@@ -225,15 +269,18 @@ function Filters({ sketch, ins, outs, hidden, setHidden, onFocus }: {
   );
 }
 
-interface View { samples: JunctionSample[]; times: number[]; through: Line[]; ins: Line[]; outs: Line[] }
+interface View { samples: JunctionSample[]; times: number[]; through: Line[]; speed: Line[]; ins: Line[]; outs: Line[]; byRoad: boolean;
+  /** over the period shown: vehicles an hour through it, and their mean speed inside it (km/h; null: none inside yet) */
+  mean: { from: number; to: number; flow: number; speed: number | null } }
 
 /** the charts (or the table), sized to the room they have: three short ones in the inspector, sharing the window's height in it */
-function LiveBody({ v, table, replayT, fill, onFocus }: { v: View; table: boolean; replayT: number | null; fill: boolean; onFocus?: (lanes: string[] | null) => void }) {
+function LiveBody({ v, table, replayT, fill, onFocus }: { v: View; table: boolean; replayT: number | null; fill: boolean; onFocus?: (lanes: string[] | null, label?: string) => void }) {
   const [hover, setHover] = useState<Hover>(null);
   const [ref, size] = useSize<HTMLDivElement>();
   const now = (l: Line) => Math.round(l.values.at(-1) ?? 0);
   // (in the window, the three charts share its height after their titles and legends)
-  const h = fill ? Math.max(70, Math.floor((size.h - 3 * 18 - 2 * 44) / 3)) : 92;
+  const h = fill ? Math.max(60, Math.floor((size.h - 4 * 18 - 2 * 44) / 4)) : 84;
+  const span = `${clock(v.mean.from)}–${clock(v.mean.to)}`, kmh = (x: number) => `${Math.round(x)} km/h`;
   if (table) return (
     <div className="space-y-2">
       <p className="text-[11px] text-muted-foreground">At {clock(v.times.at(-1)!)}: vehicles an hour over the last minute, and so far.</p>
@@ -242,7 +289,7 @@ function LiveBody({ v, table, replayT, fill, onFocus }: { v: View; table: boolea
           <thead><tr className="text-[11px] text-muted-foreground"><th className="text-left font-normal">{head}</th><th className="text-right font-normal">veh/h</th><th className="text-right font-normal">so far</th></tr></thead>
           <tbody>
             {rows.map(l => (
-              <tr key={l.key} className="border-t hover:bg-muted" onPointerEnter={() => onFocus?.(l.lanes)} onPointerLeave={() => onFocus?.(null)}>
+              <tr key={l.key} className="border-t hover:bg-muted" onPointerEnter={() => onFocus?.(l.lanes, l.label)} onPointerLeave={() => onFocus?.(null)}>
                 <td className="max-w-40 truncate py-0.5" title={l.sub}><span className="mr-1 inline-block h-0.5 w-3 rounded align-middle" style={{ background: l.color }} />{l.label}{l.sub && <span className="text-muted-foreground"> · {l.sub}</span>}</td>
                 <td className="py-0.5 text-right font-mono tabular-nums">{now(l)}</td>
                 <td className="py-0.5 text-right font-mono tabular-nums">{l.total}</td>
@@ -251,16 +298,20 @@ function LiveBody({ v, table, replayT, fill, onFocus }: { v: View; table: boolea
           </tbody>
         </table>
       ))}
-      <p className="text-xs">Through: <span className="font-mono font-semibold tabular-nums">{now(v.through[0])}</span> veh/h, {v.through[0].total} so far</p>
+      <p className="text-xs">Through: <span className="font-mono font-semibold tabular-nums">{now(v.through[0])}</span> veh/h, {v.through[0].total} so far; mean <span className="font-mono tabular-nums">{Math.round(v.mean.flow)}</span> veh/h over {clock(v.mean.from)}–{clock(v.mean.to)}</p>
+      <p className="text-xs">Speed inside: <span className="font-mono font-semibold tabular-nums">{Math.round(v.speed[0].values.at(-1) ?? 0)}</span> km/h{v.mean.speed !== null && <>; mean <span className="font-mono tabular-nums">{Math.round(v.mean.speed)}</span> km/h over {clock(v.mean.from)}–{clock(v.mean.to)}</>}</p>
     </div>
   );
   return (
     <div ref={ref} className={fill ? "min-h-0 flex-1 space-y-1.5" : "space-y-1.5"}>
       {size.w > 0 && (
         <>
-          <Chart title={`Through: ${now(v.through[0])} veh/h now`} lines={v.through} times={v.times} width={size.w} height={h} hover={hover} setHover={setHover} cursor={replayT} single />
-          <Chart title="Coming in, by lane (veh/h)" lines={v.ins} times={v.times} width={size.w} height={h} hover={hover} setHover={setHover} cursor={replayT} onFocus={onFocus} />
-          <Chart title="Going out, by lane (veh/h)" lines={v.outs} times={v.times} width={size.w} height={h} hover={hover} setHover={setHover} cursor={replayT} onFocus={onFocus} />
+          <Chart title={`Through: ${now(v.through[0])} veh/h now · mean ${Math.round(v.mean.flow)} veh/h over ${span}`} lines={v.through} times={v.times} width={size.w} height={h}
+            hover={hover} setHover={setHover} cursor={replayT} single mark={{ value: v.mean.flow, label: `mean ${Math.round(v.mean.flow)}` }} unit=" veh/h" />
+          <Chart title={`Speed inside: ${kmh(v.speed[0].values.at(-1) ?? 0)} now${v.mean.speed !== null ? ` · mean ${kmh(v.mean.speed)} over ${span}` : ""}`} lines={v.speed} times={v.times} width={size.w} height={h}
+            hover={hover} setHover={setHover} cursor={replayT} single mark={v.mean.speed !== null ? { value: v.mean.speed, label: `mean ${Math.round(v.mean.speed)}` } : undefined} unit=" km/h" />
+          <Chart title={`Coming in, by ${v.byRoad ? "road" : "lane"} (veh/h)`} lines={v.ins} times={v.times} width={size.w} height={h} hover={hover} setHover={setHover} cursor={replayT} onFocus={onFocus} />
+          <Chart title={`Going out, by ${v.byRoad ? "road" : "lane"} (veh/h)`} lines={v.outs} times={v.times} width={size.w} height={h} hover={hover} setHover={setHover} cursor={replayT} onFocus={onFocus} />
         </>
       )}
     </div>
@@ -274,12 +325,14 @@ function LiveBody({ v, table, replayT, fill, onFocus }: { v: View; table: boolea
  */
 export function JunctionLive({ sketch, junction, busiest, t, replayT, load, onFocus }: {
   sketch: Sketch; junction: string | null; busiest: string | null; t: number; replayT: number | null;
-  load: ((id: string) => Promise<JunctionSeries | null>) | null; onFocus?: (lanes: string[] | null) => void;
+  load: ((id: string) => Promise<JunctionSeries | null>) | null; onFocus?: (lanes: string[] | null, label?: string) => void;
 }) {
   const [own, setOwn] = useState<string | null>(null);
   const id = junction ?? (own && sketch.junctions.some(j => j.id === own) ? own : busiest ?? sketch.junctions[0]?.id ?? null);
   const [got, setGot] = useState<JunctionSeries | null>(null);
   const [table, setTable] = useState(false);
+  // (each road's lanes summed, or a line a lane)
+  const [byRoad, setByRoad] = useState(false);
   const [open, setOpen] = useState(false);
   // (the lanes hidden, per junction)
   const [hiddenBy, setHiddenBy] = useState<Record<string, string[]>>({});
@@ -300,16 +353,21 @@ export function JunctionLive({ sketch, junction, busiest, t, replayT, load, onFo
     return {
       samples, times: samples.map(s => s.t),
       through: [{ key: "through", label: "Through", lanes: [], color: "var(--s1)", values: rates(samples, s => s.through), total: samples.at(-1)!.through }],
-      ins: laneLines(sketch, series.ins, samples, "ins", shown), outs: laneLines(sketch, series.outs, samples, "outs", shown),
+      speed: [{ key: "speed", label: "Speed", lanes: [], color: "var(--s7)", values: speeds(samples), total: 0 }], mean: periodMeans(samples),
+      ins: sideLines(sketch, series.ins, samples, "ins", shown, byRoad), outs: sideLines(sketch, series.outs, samples, "outs", shown, byRoad), byRoad,
     };
-  }, [sketch, series, hidden]);
+  }, [sketch, series, hidden, byRoad]);
   // (the window: moved by its title bar, sized by its edges, where it was left)
   const { panel, style, placed, start, reset } = useFloatingBox("junctionLive:box", 360, 320);
   useEffect(() => {
     if (!open) return;
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
+    // (before the editor's own keys, which take Esc for the selection; a menu open in it first closes that)
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector("[role=menu]")) return;
+      e.preventDefault(); e.stopPropagation(); setOpen(false);
+    };
+    window.addEventListener("keydown", esc, true);
+    return () => window.removeEventListener("keydown", esc, true);
   }, [open]);
   if (!id) return null;
   const name = sketch.junctions.find(j => j.id === id)?.name ?? id, many = sketch.junctions.length > 1;
@@ -328,7 +386,7 @@ export function JunctionLive({ sketch, junction, busiest, t, replayT, load, onFo
       {table ? <LineChart className="size-3.5" /> : <Table2 className="size-3.5" />}
     </Button>
   );
-  const filters = view && series && <Filters sketch={sketch} ins={series.ins} outs={series.outs} hidden={hidden} setHidden={setHidden} onFocus={onFocus} />;
+  const filters = view && series && <Filters sketch={sketch} ins={series.ins} outs={series.outs} hidden={hidden} setHidden={setHidden} byRoad={byRoad} setByRoad={setByRoad} onFocus={onFocus} />;
   return (
     <InspectorPanel id="junction-live" title="Live graph"
       actions={<>
