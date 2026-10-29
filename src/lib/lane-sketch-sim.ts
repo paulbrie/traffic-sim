@@ -150,6 +150,8 @@ interface SimJourney { def: SketchJourney; from: string[]; to: string[]; next: n
 let PED_WALK = 8, PED_YIELD = 5, PED_V = 1.2;
 /** a group crossing a zebra: the room each row of three takes along it (m); half a lane's width (m) */
 const PED_ROW = 1, LANE_HALF = 1.75;
+/** m/s: a car on a zebra slower than this is standing there (in a queue): people cross past it, and it waits for them (ticket #108) */
+const PED_STAND = 0.3;
 /** pedestrians at a zebra: waiting at the kerb (since when), the group on it (from, until), their claim on it, and the counts so far */
 interface PedState { waiting: number; since: number; crossing: number; from: number; until: number; redSince: number; claim: boolean; crossed: number; waitSum: number }
 /** a zebra as the cars see it: where it runs over each lane and connector (s0..s1), the lights over it (the connectors they hold), and its pedestrians */
@@ -1148,17 +1150,20 @@ export class SketchSim {
       p.waiting = 0; p.claim = false;
     }
   }
-  /** a car on the zebra (its body over it), or too close to stop before it */
+  /**
+   * a car moving on the zebra (its body over it), or too close to stop before it. Not one standing on it in a queue: people
+   * walk across between those, and it waits for them (ticket #108: a queue standing over x8 kept them waiting 45 s and more)
+   */
   private crossingBusy(x: SimCrossing, byEdge: Map<Edge, SimVehicle[]>) {
     for (const o of x.on) for (const v of byEdge.get(o.edge) ?? []) {
       const front = this.diff(o.edge, o.s0, v.pos);
-      if (front > -0.5 && front - v.len < o.s1 - o.s0 + 0.5) return true;
+      if (front > -0.5 && front - v.len < o.s1 - o.s0 + 0.5 && v.v >= PED_STAND) return true;
       if (front <= -0.5 && v.v > 1 && -front < (v.v * v.v) / (2 * B_COMF) + 1) return true;
     }
     // (one whose back is still on it, just turned off onto the next edge)
     for (const v of this.vehicles) for (let t = v.trail, run = v.run; t && run < v.len; run += t.run, t = t.before) {
       const rest = v.len - run, at = t;
-      if (x.on.some(o => o.edge === at.edge && at.pos - rest < o.s1 + 0.5 && at.pos > o.s0 - 0.5)) return true;
+      if (v.v >= PED_STAND && x.on.some(o => o.edge === at.edge && at.pos - rest < o.s1 + 0.5 && at.pos > o.s0 - 0.5)) return true;
     }
     return false;
   }
@@ -2444,7 +2449,12 @@ export class SketchSim {
             const back = 0.6 + Math.min(1, (this.t - ped.from) / Math.max(0.1, ped.until - ped.from)) * (X.len - 1.2) - Math.ceil(ped.crossing / 3) * PED_ROW;
             if (back > o.at + LANE_HALF + 1) continue;
           }
-          if (r.edge === v.edge && this.diff(r.edge, o.s0, v.pos) > -0.3) continue;
+          if (r.edge === v.edge && this.diff(r.edge, o.s0, v.pos) > -0.3) {
+            // (on it already as they set off, standing in a queue (no one moving on it lets them go): it stays standing until they're
+            // past its lane, not driving through them as the queue moves on (ticket #108))
+            if (ped.crossing && this.diff(r.edge, o.s0, v.pos) - v.len < o.s1 - o.s0) behind(0.1, 0, `pedestrians at ${X.def.id}`);
+            continue;
+          }
           const x = ahead(o.s0);
           if (x < 0 || x > r.b - r.a + 0.01) continue;
           const d = r.off + x - 0.5;
