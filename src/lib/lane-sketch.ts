@@ -1902,24 +1902,30 @@ export function junctionBands(sk: Sketch, c: JunctionContents): Band[] {
   return bands;
 }
 function junctionBandsOf(sk: Sketch, c: JunctionContents): Band[] {
-  const out: Band[] = [], inRoad = new Set(sk.roads.flatMap(r => r.lanes));
-  const stretch = (sh: LaneShape, a: number, b: number) => { const n = Math.max(2, Math.ceil((b - a) / 0.5)); return Array.from({ length: n + 1 }, (_, i) => pointAt(sh, a + ((b - a) * i) / n).p); };
+  const out: Band[] = [];
   for (const id of c.lanes) { const l = laneById(sk, id); if (l) out.push({ pts: samples(l.shape, 0.5), width: l.width, closed: isFullCircle(l.shape) }); }
-  for (const id of c.connectors) {
-    const cn = sk.connectors.find(x => x.id === id), pts = cn && connectorPts(sk, cn);
-    if (!cn || !pts) continue;
-    const from = laneById(sk, cn.from.lane)!, to = laneById(sk, cn.to.lane)!;
-    out.push({ pts, width: from.width, ...(to.width !== from.width ? { w1: to.width } : {}), closed: false });
-    // (the stub behind where it leaves, and on from where it joins, as the cars go: on a lane both ways' way back, the other way, ticket #53)
-    const F = laneLength(from.shape), L = laneLength(to.shape);
-    if (inRoad.has(from.id)) {
-      if (!backFrom(from, cn.from.s)) { if (cn.from.s > 0.01) out.push({ pts: stretch(from.shape, Math.max(0, cn.from.s - STUB), cn.from.s), width: from.width, closed: false }); }
-      else if (cn.from.s < F - 0.01) out.push({ pts: stretch(from.shape, cn.from.s, Math.min(F, cn.from.s + STUB)), width: from.width, closed: false });
-    }
-    if (inRoad.has(to.id)) {
-      if (!backTo(to, cn.to.s)) { if (cn.to.s < L - 0.01) out.push({ pts: stretch(to.shape, cn.to.s, Math.min(L, cn.to.s + STUB)), width: to.width, closed: false }); }
-      else if (cn.to.s > 0.01) out.push({ pts: stretch(to.shape, Math.max(0, cn.to.s - STUB), cn.to.s), width: to.width, closed: false });
-    }
+  for (const id of c.connectors) { const cn = sk.connectors.find(x => x.id === id); if (cn) out.push(...connectorBands(sk, cn)); }
+  return out;
+}
+/**
+ * A connector's surface as bands: itself, as wide as the lanes it joins (easing from one to the other), and STUB metres
+ * of a road's lane behind where it leaves and on from where it joins, so it meets the road's surface.
+ */
+export function connectorBands(sk: Sketch, cn: SketchConnector): Band[] {
+  const pts = connectorPts(sk, cn), from = laneById(sk, cn.from.lane), to = laneById(sk, cn.to.lane);
+  if (!pts || !from || !to) return [];
+  const out: Band[] = [], inRoad = lanesInRoads(sk);
+  const stretch = (sh: LaneShape, a: number, b: number) => { const n = Math.max(2, Math.ceil((b - a) / 0.5)); return Array.from({ length: n + 1 }, (_, i) => pointAt(sh, a + ((b - a) * i) / n).p); };
+  out.push({ pts, width: from.width, ...(to.width !== from.width ? { w1: to.width } : {}), closed: false });
+  // (the stub behind where it leaves, and on from where it joins, as the cars go: on a lane both ways' way back, the other way, ticket #53)
+  const F = laneLength(from.shape), L = laneLength(to.shape);
+  if (inRoad.has(from.id)) {
+    if (!backFrom(from, cn.from.s)) { if (cn.from.s > 0.01) out.push({ pts: stretch(from.shape, Math.max(0, cn.from.s - STUB), cn.from.s), width: from.width, closed: false }); }
+    else if (cn.from.s < F - 0.01) out.push({ pts: stretch(from.shape, cn.from.s, Math.min(F, cn.from.s + STUB)), width: from.width, closed: false });
+  }
+  if (inRoad.has(to.id)) {
+    if (!backTo(to, cn.to.s)) { if (cn.to.s < L - 0.01) out.push({ pts: stretch(to.shape, cn.to.s, Math.min(L, cn.to.s + STUB)), width: to.width, closed: false }); }
+    else if (cn.to.s > 0.01) out.push({ pts: stretch(to.shape, Math.max(0, cn.to.s - STUB), cn.to.s), width: to.width, closed: false });
   }
   return out;
 }
@@ -2448,7 +2454,7 @@ export const laneOutWeight = (l: SketchLane) => l.outWeight ?? 1;
 
 /** a rectangle, metres */
 export interface Box { x0: number; y0: number; x1: number; y1: number }
-const boxOf = (pts: Pt[], pad: number): Box => {
+export const boxOf = (pts: Pt[], pad: number): Box => {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of pts) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
   return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };

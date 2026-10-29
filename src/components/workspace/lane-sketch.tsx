@@ -83,6 +83,7 @@ import { keyForEditor, keyTargetOf, somethingOpen } from "@/lib/editor-keys";
 import { resolveTuning } from "@/lib/sketch-tuning";
 import { CarWhy, EdgeLink, PlaceLink, SketchGoContext, SketchText, type SketchPlace } from "./car-explain";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
+import { looseSurfaces } from "@/lib/loose-surface";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
@@ -3760,6 +3761,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   const bandsOf = new Map(autos.filter(j => !j.smooth).map(j => [j.id, junctionBands(sk, contentsOf(j))]));
   // (the ground they shut in: paved too; far out, a pixel or two, left out)
   const holesOf = new Map(autos.map(j => [j.id, far ? [] : junctionSurfaceHoles(sk, j, contentsOf(j))]));
+  // (ticket #111: the connectors on no junction paved, and the slivers between those leaving or joining a lane's end; far out, a pixel or two, left out)
+  const loose = S && !far ? looseSurfaces(sk, st.contents).filter(x => boxesMeet(x.box, viewBox)) : [];
   const loopsPath = (loops: Pt[][]) => { ctx.beginPath(); for (const l of loops) { l.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); } };
   const strokeBands = (g: CanvasRenderingContext2D, bands: Band[], extra: number) => {
     for (const b of bands) {
@@ -3863,7 +3866,7 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       const ends = deadEndTurnarounds(sk);
       for (const lv of levels.filter(inPass)) {
         const at = <T,>(xs: T[], f: (x: T) => number) => (leveled ? xs.filter(x => f(x) === lv) : xs);
-        const js = at(drawn, jLevel), as = at(autos, jLevel), ks = at(linkGeo, x => kLevel(x.k)), ls = at(roadLanes, laneLevel);
+        const js = at(drawn, jLevel), as = at(autos, jLevel), ks = at(linkGeo, x => kLevel(x.k)), ls = at(roadLanes, laneLevel), lo = at(loose, x => x.level);
         ctx.globalAlpha = (lv < 0 ? 0.55 : 1) * surfAlpha;
         // (its shadow, cast further the higher it is, in a shade of black: its junctions moved by it, its lanes point by
         // point by their height there, none where they come down to the ground; the lanes of one width in one go)
@@ -3891,6 +3894,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
           if (!far) for (const j of as) { const bands = bandsOf.get(j.id); if (bands) strokeBands(ctx, bands, pass ? 0 : kerbW); }
           const holes = as.flatMap(j => holesOf.get(j.id) ?? []);
           if (pass && holes.length) { loopsPath(holes); ctx.fill("nonzero"); }
+          // (the slivers' edges kerbed too, where they meet the ground)
+          for (const x of lo) { strokeBands(ctx, x.bands, pass ? 0 : kerbW); if (x.fill.length) { loopsPath(x.fill); if (pass) ctx.fill("nonzero"); else { ctx.lineWidth = kerbW; ctx.stroke(); } } }
           // (a link: its sides kerbed, not its ends, where it meets its roads)
           for (const { g } of ks) { if (pass) { path(g.outline); ctx.closePath(); ctx.fill(); } else { ctx.lineWidth = kerbW; for (const side of g.sides) { path(side); ctx.stroke(); } } }
           for (const d of at(ends, x => x.level)) { ctx.beginPath(); ctx.arc(d.c.x, d.c.y, d.r + (pass ? 0 : kerbW / 2), 0, Math.PI * 2); ctx.fill(); }
