@@ -1334,8 +1334,10 @@ export class SketchSim {
     // (each with how far it is: along the lane, a lane change counting `CHANGE_COST`)
     const goals: { lane: Edge; conn: Edge | null; d: number }[] = [];
     const add = (lane: Edge, from: number) => {
-      const extra = lane === v.edge ? 0 : CHANGE_COST;
-      for (const o of lane.outs) if (this.along(lane, from, o.s) > 0.5 || (!lane.ring && o.s >= lane.len - 0.01 && from < lane.len - 0.01)) goals.push({ lane, conn: o.conn, d: extra + Math.max(0, this.along(lane, from, o.s)) });
+      // (on another lane, a way off at least 15 m past where it has changed by then: it has to have changed 15 m before it (`hopOf`),
+      // and with less it missed it and went round again, ticket #104)
+      const extra = lane === v.edge ? 0 : CHANGE_COST, min = lane === v.edge ? 0.5 : 15;
+      for (const o of lane.outs) if (this.along(lane, from, o.s) > min || (!lane.ring && o.s >= lane.len - 0.01 && from < lane.len - 0.01)) goals.push({ lane, conn: o.conn, d: extra + Math.max(0, this.along(lane, from, o.s)) });
       // (something leaves near its end: it leads on there, cars don't drive off it)
       if (!lane.ring && from < lane.len - 0.01 && !lane.outs.some(o => o.s >= lane.len - EXIT_CLEAR)) goals.push({ lane, conn: null, d: extra + lane.len - from });
     };
@@ -1504,7 +1506,10 @@ export class SketchSim {
     let a = i, b = i;
     while (a > 0 && exits[a].d - exits[a - 1].d <= 0.35) a--;
     while (b < exits.length - 1 && exits[b + 1].d - exits[b].d <= 0.35) b++;
-    const lane = want === outer && exits.slice(a, b + 1).every(x => x.conn.from!.lane !== outer) ? inner : want;
+    // (nor from the ring it wants if none of that arm's ways off from that ring lead where it is going as well, within a lane change:
+    // then from the ring its way off leaves, not changing over to it on the way round and missing it, round again (ticket #104))
+    const leaves = (ring: Edge) => exits.slice(a, b + 1).some(x => x.conn.from!.lane === ring && x.d * r + this.viaOut(rt, x.conn.id, dest) <= bc + CHANGE_COST);
+    const lane = leaves(want) || !G.rings.includes(best.conn.from!.lane) ? want : best.conn.from!.lane;
     return { lane, other: lane === outer ? inner : outer, first: arm === 1, choice };
   }
 
