@@ -61,7 +61,7 @@ reach, "reconnecting…" and the pairing kept.
 | `key` | `{ key: string }` (e.g. `"Control+k"`, `"Escape"`) | `{}` |
 | `navigate` | `{ url }` (same origin; an absolute path missing the app's base, e.g. `/plans/x`, is still read as under it, not the origin's root; to the page already shown: a real reload, `router.push` being a no-op there) | `{ url }` (always the full URL, base path included) |
 | `reload` | `{}` | `{}` (a real `location.reload()`, not `router.push`: for a dynamically-imported module — a worker, say — still the old code after a merge, that hot reload didn't swap) |
-| `app` | `{ action, args }` (edits too, with the user's leave: see "Edits"): `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }` (clears a car followed first: it would otherwise move the view right back, every frame), `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30, 50, 100), `replay` `{ t }`, `restart`, `testCar`, `runUntil` `{ t }` (runs at the speed set until sim time `t`, or 25 s real time first — then `{ reached: false }`, left running: call again or raise the speed; the Sketch window's experiment's own clock while that's on), `carsAt` `{ x, y, r? }` (r: metres, default 10 — `{ cars: [{ id, x, y, kind: "lane" | "sensing", why? }] }`, `why` the main engine only so far; whichever engine is on, live or replayed), `experiment` `{ on }` (the Sketch window's spatial-roundabout switch, as its own Switch) (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
+| `app` | `{ action, args }` (edits too, with the user's leave: see "Edits"): `select` `{ kind, id }`, `goTo` `{ kind, id }`, `view` `{ x, y, scale? }` (clears a car followed first: it would otherwise move the view right back, every frame), `run`, `pause`, `speed` `{ speed }` (1, 3, 10, 30, 50, 100), `replay` `{ t }`, `restart`, `testCar`, `runUntil` `{ t }` (runs at the speed set until sim time `t`, or 25 s real time first — then `{ reached: false }`, left running: call again or raise the speed; the Sketch window's experiment's own clock while that's on), `carsAt` `{ x, y, r? }` (r: metres, default 10 — `{ cars: [{ id, x, y, kind: "lane" | "sensing", why? }] }`, `why` the main engine only so far; whichever engine is on, live or replayed), `experiment` `{ on }` (the Sketch window's spatial-roundabout switch, as its own Switch) (see "UI state"); on a V2 plan also `route`, `mode`, `panel`, `structure`, `console`, `search`, `layers`, `sort`, `sketchWindow` (see "UI state") | `{}` or what the action returns |
 | `report` | `{ title, intro?, table?: { columns, rows, highlight?, note? }, findings?: string[] }` (T196, `bridge_report`: plain text and numbers, at most 14 columns, 60 rows, 24 findings) | `{ shown }`: the report in a window over the page, kept in the Claude panel (the last 10) to open again, copied as text from there |
 
 Targets by role and name follow Playwright's `getByRole` (name: case-insensitive substring unless `exact`).
@@ -78,6 +78,7 @@ as `{ first, count }`), with no plan data, no results, nothing private, nothing 
 { active: "plan" | "scratch",            // the editor the user is at: the Sketch window's while open and last used
   editors: { plan: Editor, scratch: Editor },    // the plan's, and the Sketch window's (Test in Sketch)
   panels: { closed: { [panelId]: true } },       // the inspector's panels folded away (both editors')
+  structure: { open },                            // the structure tree (the left column) shown, or folded to a strip (both editors')
   sketchWindow: { open, test: { cut, mode, run }, lastPiece: { junctions, lanes, mode, at } | null },
   layers: { surfaces, markings, lanes, connectors, signs, cars, names, demand, grid, satellite, image },  // shown or not
   background: { brightness, source },             // the satellite imagery's
@@ -103,6 +104,7 @@ Changes an agent may ask for (`app`; no others, nothing written by path):
 | action | args | does |
 |---|---|---|
 | `panel` | `{ id, open }` | folds an inspector panel away or opens it (ids: `selection`, `traffic`, `fuel`, `demand`, `junction-results`, `road-results`, `test-in-sketch`, `background`, `car`, `crossing`) |
+| `structure` | `{ open? }` | the structure tree, the left column, shown or folded to a strip (without `open`: the other way), as its fold button and `[` do; `{ open }` |
 | `console` | `{ open?, kind?, text?, editor? }` | the problem console: open or close it, show one kind (`all`, `stuck`, `collision`, `jump`, `deadlock`, `breakdown`, `towed`), filter its lines |
 | `search` | `{ open, query?, editor? }` | the search box (Cmd/Ctrl+K), with what is typed in it |
 | `route` | `{ from, to, editor? }` or `{ clear: true }` | the route tracer from a lane to an exit lane; the page works it out (read `editors.<editor>.route.result`: the steps in order, metres, seconds at the speed limits; or why there is none) |
