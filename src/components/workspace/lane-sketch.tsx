@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import { Bike, BusFront, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, Gauge, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
@@ -39,6 +39,7 @@ import { DemandPanel } from "@/components/v2/demand-panel";
 import { BusLinesPanel } from "@/components/v2/bus-lines-panel";
 import { FuelPanel, fmtFuel } from "@/components/v2/fuel-panel";
 import { JunctionLine, JunctionResults } from "@/components/v2/junction-results";
+import { JunctionLive } from "@/components/v2/junction-live";
 import { RoadResults } from "@/components/v2/road-results";
 import { LiveTrafficPanel } from "@/components/v2/live-traffic-panel";
 import { liveTraffic$, logTrafficPull } from "@/state/live-traffic";
@@ -347,6 +348,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (ticket #93: some of the lanes the menu is for locked, theirs or their road's: what would change them offered greyed)
   const menuLocked = !!menu?.lanes.some(id => laneLocked(sketch, id));
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
+  // (a junction's traffic over time for its live graph, ticket #109: asked of the cars' worker; one function, so the graph isn't asked again each render)
+  const loadSeries = useCallback((id: string) => sim.current?.junctionSeries(id) ?? Promise.resolve(null), []);
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
   const [peds, setPeds] = useState<PedView[]>([]);
   // (the test car's results, from the cars' stats as they come: into the route's state; the stats of the car sent from it
@@ -2174,6 +2177,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               setRays: on => { setShowRays(on); redraw(false); } } : null} />
           <DisplayOptionsPanel canSyncTraffic={!!(page && sketch.geo)} />
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
+          {stats && sketch.junctions.length ? (
+            <JunctionLive sketch={sketch} junction={sel.junctions.length === 1 ? sel.junctions[0] : null} t={stats.t} replayT={replayT} load={loadSeries}
+              busiest={(stats.junctions ?? []).reduce<{ id: string; through: number } | null>((m, j) => (!m || j.through > m.through ? j : m), null)?.id ?? null} />
+          ) : null}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
           {stats ? <RoadResults sketch={sketch} stats={stats} traffic={flow} onGo={id => goTo({ kind: "road", id })} /> : null}
           {page && <RoutePanel sketch={sketch} onGo={x => goTo({ kind: x.kind, id: x.id })} onSendTest={() => sendTestCar().catch((e: Error) => toast.error("No test car", { description: e.message }))} />}
