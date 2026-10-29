@@ -2179,6 +2179,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           {stats && sketch.junctions.length ? (
             <JunctionLive sketch={sketch} junction={sel.junctions.length === 1 ? sel.junctions[0] : null} t={stats.t} replayT={replayT} load={loadSeries}
+              onFocus={lanes => { hover.current = lanes ? { lanes: [...new Set(lanes.map(baseLaneId))] } : null; redraw(); }}
               busiest={(stats.junctions ?? []).reduce<{ id: string; through: number } | null>((m, j) => (!m || j.through > m.through ? j : m), null)?.id ?? null} />
           ) : null}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
