@@ -8,7 +8,8 @@
  * - its bars stay inside its outline, turned by `stripes` (and none kept at 0°);
  * - `onCrossing` follows the free outline (and its pad);
  * - sanitizeSketch keeps corners and stripes, kerbs re-derived from the corners, the angle within ±90°;
- * - the sim: a road under a skewed crossing, its pedestrians cross, cars stop for them, no collision.
+ * - the sim: a road under a skewed crossing, its pedestrians cross, cars stop for them, no collision;
+ * - a queue back over a zebra (ticket #106): no car stands on it, they wait short of it for room past it.
  * npm run crossing:check
  */
 import { SketchSim } from "../src/lib/lane-sketch-sim";
@@ -80,6 +81,38 @@ const road: Sketch = {
   const st = sim.stats(), xs = sim.crossingStats("x1");
   check("sim: pedestrians cross, cars come and go, no collision", (xs?.crossed ?? 0) > 20 && st.finished > 20 && st.collisions === 0 && (xs?.over.length ?? 0) === 2,
     `crossed ${xs?.crossed}, over ${xs?.over.join(" ")}, finished ${st.finished}, collisions ${st.collisions}`);
+}
+
+{
+  // (ticket #106: a queue back from a stop line 15 m on, over the zebra: no car stands on it, they wait short of it until there's
+  // room past it for the whole car; the pedestrians still cross, the cars still come through)
+  const sk: Sketch = {
+    lanes: [{ id: "E", width: LANE_WIDTH, control: "stop", shape: { kind: "line", pts: [{ x: 0, y: 1.75 }, { x: 200, y: 1.75 }] } }],
+    connectors: [], roads: [], junctions: [],
+    crossings: [{ id: "x1", a: { x: 185, y: -2 }, b: { x: 185, y: 5.5 }, width: 4, peds: 120 }],
+    traffic: { rate: 900, speed: 50, seed: 1 },
+  };
+  const sim = new SketchSim(sk, sk.traffic!, 1);
+  // (car-seconds on it slow, and the longest any one car stayed on it)
+  let on = 0, queued = 0, longest = 0;
+  const since = new Map<number, number>();
+  for (let i = 0; i < 6000; i++) {
+    sim.step(0.1);
+    for (const v of sim.vehicles) {
+      const over = v.pos > 183 && v.pos - v.len < 187;
+      if (over) { const t0 = since.get(v.id) ?? sim.t; since.set(v.id, t0); longest = Math.max(longest, sim.t - t0); } else since.delete(v.id);
+      // (on it, not driving over: standing or inching along in the queue)
+      if (v.v >= 2) continue;
+      if (over) on += 0.1;
+      else if (v.pos < 183) queued += 0.1;
+    }
+  }
+  const st = sim.stats(), xs = sim.crossingStats("x1");
+  const xs0 = () => sim.crossingStats("x1");
+  // (a queue inching over it held 365 car-s there in this run before; driving off the line just short of it, a few seconds each)
+  check("queue over a zebra: none waits on it, they wait short of it", on < 100 && queued > 100, `the longest on it ${longest.toFixed(1)} s, ${on.toFixed(1)} car-s on it under 2 m/s, ${queued.toFixed(0)} car-s queued short of it; pedestrians' mean wait ${(xs0()?.avgWait ?? 0).toFixed(1)} s`);
+  check("queue over a zebra: pedestrians cross, cars come through, no collision", (xs?.crossed ?? 0) > 10 && st.finished > 50 && st.collisions === 0,
+    `crossed ${xs?.crossed}, finished ${st.finished}, collisions ${st.collisions}`);
 }
 
 if (bad) { console.error(`${bad} check(s) failed`); process.exit(1); }

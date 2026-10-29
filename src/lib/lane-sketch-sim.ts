@@ -2281,7 +2281,7 @@ export class SketchSim {
         if (g < gap) { gap = g; lead = speed; why = typeof reason === "string" ? reason : `car ${reason.id}`; if (W) won = info ?? (typeof reason === "string" ? null : { kind: "follow", car: reason.id }); }
       };
       /** the zones ahead where its path meets another (not to stop in), and where those it gives way at start */
-      const zones: { s: number; e: number; clear?: boolean; soft?: boolean }[] = [], yields: { at: number; why: string; info?: Won; speed?: number }[] = [];
+      const zones: { s: number; e: number; clear?: boolean; soft?: boolean; /** a zebra's (ticket #106): kept clear, but no car's path */ ped?: true }[] = [], yields: { at: number; why: string; info?: Won; speed?: number }[] = [];
       // (a car stops 0.5 m short of a zone; one closer than 0.1 m, or too fast to stop before it, is committed)
       const canStopBefore = (d: number) => d >= Math.max(0.1, (v.v * v.v) / 8 - 1);
       const forced = v.forceUntil > this.t;
@@ -2437,6 +2437,10 @@ export class SketchSim {
         // not one it is on already (it drives off it)
         for (const o of this.crossOn.get(r.edge) ?? []) {
           const X = this.crossings[o.k], ped = X.ped;
+          // (whoever is on it: a zebra ahead is no place to stop on, kept clear as a junction's zones are: not driven onto unless
+          // there's room past it for the whole car, the car ahead held up or slow (ticket #106: one stood on it in a queue back
+          // from a roundabout's give-way, the pedestrians waiting))
+          { const x0 = ahead(o.s0); if (x0 >= 0 && x0 <= r.b - r.a + 0.01) zones.push({ s: r.off + x0, e: r.off + x0 + Math.max(0, o.s1 - o.s0), ped: true }); }
           if (!ped.crossing && !ped.claim) continue;
           // (at a zebra, the people crossing past its lane already, walking on away from it: it drives on behind them, as drivers
           // do, not waiting until the last of them is on the far kerb (ticket #89); they cross from its side `a`, as drawn)
@@ -2703,7 +2707,7 @@ export class SketchSim {
       }
       // (let go from waiting at a zone, nearly standing: committed to going through, so it doesn't change its mind on the next step)
       const wasWaiting = /^(zone |keeping clear)/.test(whyWas.get(v) ?? "");
-      if (this.tuning.junctionRules >= 0.5 && wasWaiting && !/^(zone |keeping clear)/.test(why ?? "") && v.v < 2 && zones.some(q => q.s > -0.5 && q.s < 15)) v.commitUntil = this.t + COMMIT;
+      if (this.tuning.junctionRules >= 0.5 && wasWaiting && !/^(zone |keeping clear)/.test(why ?? "") && v.v < 2 && zones.some(q => !q.ped && q.s > -0.5 && q.s < 15)) v.commitUntil = this.t + COMMIT;
       // (stopped again for something else, a car ahead or no room where it joins: no longer on its way through)
       else if (v.commitUntil > this.t && v.v < 0.3 && why !== null && !/^(zone |keeping clear)/.test(why)) v.commitUntil = 0;
       v.why = gap < 30 ? why : null;
@@ -2718,7 +2722,7 @@ export class SketchSim {
       // by the time it gets there, and gave the change up the moment it did (ticket #89))
       const changing = !!(v.why as string | null)?.startsWith("changing to");
       if (changing && v.v < 2) this.hopWait.set(v.id, (this.hopWait.get(v.id) ?? 0) + dt); else if (!changing) this.hopWait.delete(v.id);
-      v.blocking = zones.some(q => q.s < -0.01 && q.e > -reach(v));
+      v.blocking = zones.some(q => !q.ped && q.s < -0.01 && q.e > -reach(v));
       // IDM
       const free = 1 - (v.v / Math.max(vmax, 0.1)) ** 4;
       const A = accOf(v);
