@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Bike, BusFront, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, Gauge, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Bike, BusFront, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, Gauge, LandPlot, MapPin, Maximize, Milestone, MousePointer2, PanelLeftClose, PanelLeftOpen, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -298,6 +298,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [expCar, setExpCar] = useState<import("@/lib/experiments/spatial-roundabout/engine").SpatialCarInfo | null>(null);
   /** the problem console open, under the map (the replay bar above it) */
   const [consoleOpen, setConsoleOpen] = useUiPath<boolean>(`editors/${ek}/dialogs/console/open`);
+  const [structureOpen, setStructureOpen] = useUiPath<boolean>("structure/open");
   // (saved with the sketch: changing them isn't an undo step)
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
   const setParams = (p: SimParams) => store.show({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}) } });
@@ -1873,6 +1874,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "+" || k === "=") { e.preventDefault(); if (in3d) api3d.current?.dolly(1.25); else zoomBy(1.25); return; }
     if (k === "-" || k === "_") { e.preventDefault(); if (in3d) api3d.current?.dolly(1 / 1.25); else zoomBy(1 / 1.25); return; }
     if (k === "p") { play(); return; }
+    if (k === "[") { setStructureOpen(o => !o); return; }
     // (the replay: a step back or forward; Shift, a second)
     // (not on a slider: the replay's own thumb steps it already, and once is enough)
     if ((k === "arrowleft" || k === "arrowright" || ((k === "," || k === ".") && live.current.replayT !== null)) && !(e.target as HTMLElement).closest("[role=slider]")) {
@@ -1977,10 +1979,22 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         </div>
       </div>
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-56 shrink-0 flex-col overflow-y-auto border-r text-sm" aria-label="Sketch structure">
+        {/* (ticket #110: the structure tree folded to a strip, for more map; [ the other way. Kept mounted, hidden, so its groups
+            folded and lists lengthened stay as they were) */}
+        <aside className={cn("w-56 shrink-0 scroll-pt-9 flex-col overflow-y-auto border-r text-sm", structureOpen ? "flex" : "hidden")} aria-label="Sketch structure">
+          <div className="sticky top-0 z-10 flex items-center gap-1 border-b bg-background py-1 pr-1 pl-3">
+            <span className="text-xs font-medium text-muted-foreground">Structure</span>
+            <Button size="icon-sm" variant="ghost" className="ml-auto size-6" aria-label="Fold the structure away" title="Fold the structure away, for more map ([)" onClick={() => setStructureOpen(false)}><PanelLeftClose /></Button>
+          </div>
           <StructureTree warnings={jw.byJunction} sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
             onHover={h => { hover.current = h; redraw(); }} onZoom={zoomTo} onCenter={centerOn} />
         </aside>
+        {!structureOpen && (
+          <aside className="flex w-9 shrink-0 flex-col items-center border-r py-1" aria-label="Sketch structure (folded away)">
+            <Button size="icon-sm" variant="ghost" className="size-7" aria-label="Show the structure" title="Show the structure: the roads and junctions, and what is selected ([)" onClick={() => setStructureOpen(true)}><PanelLeftOpen /></Button>
+            <button type="button" tabIndex={-1} className="mt-2 rounded px-1 py-2 text-xs font-medium text-muted-foreground [writing-mode:vertical-rl] hover:bg-muted hover:text-foreground" onClick={() => setStructureOpen(true)}>Structure</button>
+          </aside>
+        )}
         <div className="relative min-w-0 flex-1">
           {menu && (
             <DropdownMenu open onOpenChange={o => { if (!o) setMenu(null); }}>

@@ -93,6 +93,8 @@ export interface SketchUiState {
   editors: Record<EditorKind, EditorUi>;
   /** the inspector's panels folded away (by id; kept in the browser, the same for both editors) */
   panels: { closed: Record<string, true> };
+  /** the structure tree, the left column: shown, or folded to a strip at the map's edge (kept in the browser, the same for both editors) */
+  structure: { open: boolean };
   /** the Sketch window over the plan: open; Test in Sketch's options and the last piece it took there */
   sketchWindow: { open: boolean; test: TestOptions; lastPiece: { junctions: number; lanes: number; mode: "replace" | "add" | "new"; at: number } | null };
   /** the layers shown (the editor's and the top bar's: sketch-layers.ts, kept in the browser; shown here as they are) */
@@ -115,7 +117,7 @@ export const freshEditor = (): EditorUi => editor("select");
 /** the inspector's panels (their ids): the only ones that can be folded away */
 export const PANEL_IDS = ["selection", "car", "crossing", "bump", "zone", "junction-live", "test-in-sketch", "background", "traffic", "display", "fuel", "junction-results", "road-results", "demand", "route"];
 // (kept in the browser: the panels folded away, Test in Sketch's options)
-const PANELS_KEY = "trafficsim:v2-closed-panels", TEST_KEY = "laneSketch:testInSketch", DISPLAY_KEY = "v2:display";
+const PANELS_KEY = "trafficsim:v2-closed-panels", TEST_KEY = "laneSketch:testInSketch", DISPLAY_KEY = "v2:display", STRUCTURE_KEY = "v2:structure";
 const stored = <T,>(key: string, fallback: T): T => {
   if (typeof localStorage === "undefined") return fallback;
   try { const v = localStorage.getItem(key); return v ? { ...fallback, ...(JSON.parse(v) as T) } : fallback; } catch { return fallback; }
@@ -127,6 +129,7 @@ export const sketchUi = new DeepSubject<SketchUiState>({
   editors: { plan: freshEditor(), scratch: freshEditor(), whole: freshEditor() },
   // (only known panels: anything else kept there is let go)
   panels: { closed: Object.fromEntries(Object.keys(stored<Record<string, true>>(PANELS_KEY, {})).filter(id => PANEL_IDS.includes(id)).map(id => [id, true as const])) },
+  structure: stored<{ open: boolean }>(STRUCTURE_KEY, { open: true }),
   sketchWindow: { open: false, test: stored<TestOptions>(TEST_KEY, { cut: 70, mode: "replace", run: true }), lastPiece: null },
   layers: sketchLayers$.getValue(),
   background: typeof localStorage === "undefined" ? { brightness: 0.85, source: "esri" } : loadSatOptions(),
@@ -140,6 +143,7 @@ sketchUi.subscribe("panels/closed", v => store(PANELS_KEY, v), { skipInitialCall
 // (and kept so: what was let go on loading goes from the browser too)
 if (typeof localStorage !== "undefined" && Object.keys(stored<Record<string, true>>(PANELS_KEY, {})).some(id => !PANEL_IDS.includes(id))) store(PANELS_KEY, sketchUi.getValue().panels.closed);
 sketchUi.subscribe("sketchWindow/test", v => store(TEST_KEY, v), { skipInitialCall: true });
+sketchUi.subscribe("structure", v => store(STRUCTURE_KEY, v), { skipInitialCall: true });
 // (the Sketch window opens and closes through V1's ui, as before: shown here too)
 ui.subscribe("sketch", v => { const w = sketchUi.getValue().sketchWindow; if (w.open !== !!v) w.open = !!v; });
 
@@ -242,6 +246,12 @@ export function offerSketchUiToBridge() {
       if (open) delete next[id]; else next[id] = true;
       p.closed = next;
       return { id, open };
+    }),
+    // the structure tree (the left column) shown or folded away: { open? } (without it: the other way)
+    bridgeApp.register("structure", a => {
+      const open = argOf(a, "open", "boolean"), st = sketchUi.getValue().structure;
+      st.open = open ?? !st.open;
+      return { open: st.open };
     }),
     // the problem console: { open?, kind?, text?, editor? }
     bridgeApp.register("console", a => {
