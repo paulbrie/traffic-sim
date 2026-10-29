@@ -12,6 +12,7 @@ import type { SketchLayers } from "@/state/sketch-layers";
 import { LEVEL_H } from "@/engine/compile";
 import { junctionSurfaceHoles, nestLoops } from "@/lib/junction-fill";
 import { circlePts, deadEndTurnarounds } from "@/lib/dead-ends";
+import { looseSurfaces } from "@/lib/loose-surface";
 import { bumpShapes } from "@/lib/sketch-bumps";
 import {
   bandPolygon, crossingStripes, isFullCircle, junctionBands, junctionLevel, laneLevel, laneLength, linkGeometry,
@@ -184,6 +185,15 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       for (const p of nestLoops(junctionSurfaceHoles(sk, j, c))) asphalt.polygon(loop(p.outer), p.holes.map(loop), h + Y.asphalt);
     }
     for (const k of sk.links ?? []) { const g = linkGeometry(sk, k); if (g) asphalt.polygon(g.outline, [], Y.asphalt); }
+    // (ticket #111: the connectors on no junction, and the slivers between those leaving or joining a lane's end)
+    for (const x of looseSurfaces(sk, contents)) {
+      const h = x.level * LEVEL_H;
+      for (const b of x.bands) {
+        if (b.w1 !== undefined) asphalt.polygon(simplify(bandPolygon(b), TOL_J), [], h + Y.asphalt);
+        else { const ps = simplify(b.pts, TOL); asphalt.ribbon(ps, ps.map(() => h), b.width, Y.asphalt, false); }
+      }
+      for (const p of nestLoops(x.fill)) asphalt.polygon(simplify(p.outer, TOL_J), p.holes.map(q => simplify(q, TOL_J)), h + Y.asphalt);
+    }
     // (a dead end with a turnaround: a turning circle of road, on its kerb, under the U-turn; drawn only)
     for (const d of deadEndTurnarounds(sk)) {
       const h = d.level * LEVEL_H;
