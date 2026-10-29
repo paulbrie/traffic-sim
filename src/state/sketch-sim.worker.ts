@@ -21,6 +21,8 @@ export type ToSimWorker =
   | { type: "moment"; t: number; box: Parameters<SketchSim["moment"]>[1]; req: number }
   | { type: "explain"; id: number; t: number; req: number }
   | { type: "car"; id: number; req: number }
+  /** a junction's traffic over time (ticket #109) */
+  | { type: "junctionSeries"; id: string; req: number }
   | { type: "breakDown"; id: number }
   | { type: "tow"; id: number }
   /** a test car sent now from the start of lane `from` to the end of exit lane `to` (its id and the time answered, id null if it couldn't come in) */
@@ -49,6 +51,7 @@ export type FromSimWorker =
   | { type: "moment"; req: number; moment: ReturnType<SketchSim["moment"]> | null }
   | { type: "explain"; req: number; explain: ReturnType<SketchSim["explain"]> }
   | { type: "car"; req: number; frames: ReturnType<SketchSim["carFrames"]>; events: SketchSim["log"] }
+  | { type: "junctionSeries"; req: number; series: ReturnType<SketchSim["junctionSeries"]> }
   | { type: "sendTest"; req: number; id: number | null; t: number };
 
 let sim: SketchSim | null = null, running = false, speed = 1, watch: number | null = null;
@@ -115,6 +118,7 @@ self.onmessage = (e: MessageEvent<ToSimWorker>) => {
     case "moment": post({ type: "moment", req: m.req, moment: sim?.moment(m.t, m.box) ?? null }); break;
     // (why a car does what it does: the car watched as traced; another, or a moment past, from the recording)
     case "explain": post({ type: "explain", req: m.req, explain: sim?.explain(m.id, m.t) ?? null }); break;
+    case "junctionSeries": post({ type: "junctionSeries", req: m.req, series: sim?.junctionSeries(m.id) ?? null }); break;
     case "car": if (sim) post({ type: "car", req: m.req, frames: sim.carFrames(m.id), events: sim.log.filter(x => x.car === m.id || x.with === m.id).slice(-60) }); break;
   }
 };

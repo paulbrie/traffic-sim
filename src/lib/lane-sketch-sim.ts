@@ -137,7 +137,20 @@ export interface RoadStats { id: string; through: number; vehKm: number; vehHour
 export interface JunctionStats { id: string; through: number; delay: number; queueMean: number; queueMax: number; fuel: number }
 /** metres of a way in counted as the junction's */
 const APPROACH = 100;
-interface JunctionTally { id: string; through: number; delay: number; queueSum: number; queueMax: number; fuel: number; now: number }
+interface JunctionTally { id: string; through: number; delay: number; queueSum: number; queueMax: number; fuel: number; now: number;
+  /** (ticket #109) vehicles come onto it from each lane, and gone off it onto each lane, so far; and its series (see `JunctionSeries`) */
+  ins: Map<string, number>; outs: Map<string, number>; series: JunctionSample[] }
+/** a junction's counts at a moment: vehicles come onto it (each once, however often round its ring), and come in and gone out by each
+ * lane (in the order of `JunctionSeries`'s lanes) so far */
+export interface JunctionSample { t: number; through: number; ins: number[]; outs: number[] }
+/**
+ * A junction's traffic over time (ticket #109): every `SERIES_DT` simulated seconds, the counts so far (the last hour of them), with
+ * the lanes vehicles came onto it from (`ins`) and went off it onto (`outs`), in the order first seen; a sample's counts follow them
+ * (one taken before a lane was first seen is shorter: none there yet). Kept on sketches of up to `SERIES_MAX` junctions only.
+ */
+export interface JunctionSeries { id: string; ins: string[]; outs: string[]; samples: JunctionSample[] }
+const SERIES_DT = 5, SERIES_KEEP = 720, SERIES_MAX = 24;
+const newTally = (id: string): JunctionTally => ({ id, through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0, ins: new Map(), outs: new Map(), series: [] });
 export interface FuelStats { total: number; idle: number; idleTime: number; km: number; trips: number; tripFuel: number; co2: number }
 const CO2_PETROL = 2.31, CO2_DIESEL = 2.64;
 const noFuel = (): FuelStats => ({ total: 0, idle: 0, idleTime: 0, km: 0, trips: 0, tripFuel: 0, co2: 0 });
@@ -684,10 +697,27 @@ export class SketchSim {
   private jTally: JunctionTally[] = [];
   private jOn = new Map<Edge, number>();
   private jIn = new Map<Edge, number>();
+  /** (ticket #109) what is inside each junction for its ways in and out: what is on it, and the rings its connectors lead onto or off (a
+   * roundabout's ring in a road of its own: going round it is not going out and in again) */
+  private jInside = new Map<Edge, number>();
   private jSince = 0;
   /** per road: its tally, and the road each of its lanes is in */
   private rTally: (RoadStats & { now: number })[] = [];
   private rOn = new Map<Edge, number>();
+  /**
+   * a vehicle moved from edge `from` onto edge `to`: into a junction (counted by the lane it came from), out of one (by the lane it
+   * goes on along), or both (ticket #109)
+   */
+  private countInOut(from: Edge, to: Edge) {
+    const a = this.jInside.get(to), b = this.jInside.get(from), bump = (m: Map<string, number>, l: Edge) => m.set(l.id, (m.get(l.id) ?? 0) + 1);
+    if (a !== undefined && a !== b) bump(this.jTally[a].ins, from.kind === "lane" ? from : from.from!.lane);
+    if (b !== undefined && b !== a) bump(this.jTally[b].outs, to.kind === "lane" ? to : to.to!.lane);
+  }
+  /** junction `id`'s traffic over time (ticket #109; null: no such junction; no samples on a sketch of more than SERIES_MAX junctions) */
+  junctionSeries(id: string): JunctionSeries | null {
+    const J = this.jTally.find(x => x.id === id);
+    return J ? { id, ins: [...J.ins.keys()], outs: [...J.outs.keys()], samples: J.series.slice() } : null;
+  }
   /** a vehicle come onto road `r` from outside it, on its lane `lane` */
   private countOnto(r: number, lane: string) { const R = this.rTally[r]; R.through++; (R.lanes ??= {})[lane] = (R.lanes[lane] ?? 0) + 1; }
   private breakdowns = 0;
@@ -999,15 +1029,19 @@ export class SketchSim {
     // junctions: what is on each and its ways in (their tallies kept by id)
     {
       const cs = contentsOf(sk), oldT = new Map(this.jTally.map(j => [j.id, j]));
-      this.jTally = []; this.jOn = new Map(); this.jIn = new Map();
+      this.jTally = []; this.jOn = new Map(); this.jIn = new Map(); this.jInside = new Map();
       for (const j of sk.junctions) {
         const c = cs.get(j.id);
         if (!c) continue;
         const k = this.jTally.length;
-        this.jTally.push(oldT.get(j.id) ?? { id: j.id, through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 });
+        this.jTally.push(oldT.get(j.id) ?? newTally(j.id));
         for (const id of c.connectors) { const e = edges.get(`conn:${id}`); if (e) this.jOn.set(e, k); }
         for (const id of c.lanes) { const e = edges.get(`lane:${id}`); if (e) this.jOn.set(e, k); }
         for (const a of junctionApproaches(sk, c)) for (const id of a.lanes) { const e = edges.get(`lane:${id}`); if (e && !this.jOn.has(e)) this.jIn.set(e, k); }
+        for (const [e, x] of this.jOn) if (x === k) {
+          this.jInside.set(e, k);
+          if (e.kind === "conn") for (const l of [e.from!.lane, e.to!.lane]) if (l.ring && !this.jOn.has(l)) this.jInside.set(l, k);
+        }
       }
     }
     // roads: the road each lane is in (their tallies kept by id)
@@ -1060,7 +1094,7 @@ export class SketchSim {
   reset() {
     this.posed = null;
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0; this.offWait.clear(); this.hopWait.clear(); this.ringPick.clear();
-    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.problemList = []; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, { through: 0, delay: 0, queueSum: 0, queueMax: 0, fuel: 0, now: 0 }); for (const r of this.rTally) Object.assign(r, { through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0, lanes: {} }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
+    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.problemList = []; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, newTally(j.id)); for (const r of this.rTally) Object.assign(r, { through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0, lanes: {} }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
     this.watchTrace = null; this.watchState = null; this.watchLog = []; this.watchRejected = [];
     this.replay = []; this.replayBytes = 0; this.replayCapped = false; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
@@ -2881,6 +2915,7 @@ export class SketchSim {
           v.trail = this.trailOf(v, e, e.len);
           v.edge = e.to!.lane; v.pos = e.to!.s; v.run = 0; v.stopped = false;
           { const a = this.jOn.get(v.edge); if (a !== undefined && a !== this.jOn.get(e)) this.jTally[a].through++; }
+          this.countInOut(e, v.edge);
           // (onto a road from outside it: not from one of its own lanes)
           { const r = this.rOn.get(v.edge); if (r !== undefined && this.rOn.get(e.from!.lane) !== r) this.countOnto(r, v.edge.id); }
           this.plan(v);
@@ -2910,6 +2945,7 @@ export class SketchSim {
           { const sc = this.splitOut.get(v.exit!.id); if (sc) this.turnCounts.set(sc.count, (this.turnCounts.get(sc.count) ?? 0) + 1); }
           move -= toExit; v.trail = this.trailOf(v, e, exitAt!); v.edge = v.exit!; v.pos = 0; v.run = 0; v.exit = null; v.goal = null; v.stopped = false;
           { const a = this.jOn.get(v.edge); if (a !== undefined && a !== this.jOn.get(e)) this.jTally[a].through++; }
+          this.countInOut(e, v.edge);
           this.note({ what: "onto", car: v.id, from: e.key, left: r2(exitAt!), to: v.edge.key });
           continue;
         }
@@ -2927,6 +2963,14 @@ export class SketchSim {
     }
     // (the junctions' queues: how many stand there now, over the time so far)
     for (const J of this.jTally) { J.queueSum += J.now * dt; if (J.now > J.queueMax) J.queueMax = J.now; }
+    // (the junctions' series, ticket #109: every SERIES_DT s, on a sketch with few junctions)
+    if (this.jTally.length <= SERIES_MAX && Math.floor(this.t / SERIES_DT) !== Math.floor((this.t - dt) / SERIES_DT)) {
+      for (const J of this.jTally) {
+        const ins = [...J.ins.values()];
+        J.series.push({ t: r2(this.t), through: ins.reduce((x, y) => x + y, 0), ins, outs: [...J.outs.values()] });
+        if (J.series.length > SERIES_KEEP) J.series.splice(0, J.series.length - SERIES_KEEP);
+      }
+    }
     for (const R of this.rTally) if (R.now > R.queueMax) R.queueMax = R.now;
     this.jSince += dt;
     // (broken down long enough: towed away)

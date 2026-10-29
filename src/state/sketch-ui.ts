@@ -113,7 +113,7 @@ const editor = (tool: Tool): EditorUi => ({
 export const freshEditor = (): EditorUi => editor("select");
 
 /** the inspector's panels (their ids): the only ones that can be folded away */
-export const PANEL_IDS = ["selection", "car", "crossing", "bump", "zone", "test-in-sketch", "background", "traffic", "display", "fuel", "junction-results", "road-results", "demand", "route"];
+export const PANEL_IDS = ["selection", "car", "crossing", "bump", "zone", "junction-live", "test-in-sketch", "background", "traffic", "display", "fuel", "junction-results", "road-results", "demand", "route"];
 // (kept in the browser: the panels folded away, Test in Sketch's options)
 const PANELS_KEY = "trafficsim:v2-closed-panels", TEST_KEY = "laneSketch:testInSketch", DISPLAY_KEY = "v2:display";
 const stored = <T,>(key: string, fallback: T): T => {
