@@ -1,7 +1,8 @@
 /**
  * The per-car explanation (T157, lane-sketch-sim's `explain`) in a few known situations, on small sketches with test cars only:
  * a car giving way where its lane joins another (merge, with the gap seen and needed), a car waiting at a crossing (the zone on
- * both paths), two lanes zipping into one, a way in held back behind a broken-down car, and a two-car cycle (chain and deadlock).
+ * both paths), two lanes zipping into one, a way in held back behind a broken-down car, and a two-car cycle (chain and deadlock);
+ * on a two-lane roundabout, whether a car changing over to the inner ring is one for a crossing further round the outer one.
  * Then a moment past, from the recording.   npx tsx scripts/explain-check.ts
  */
 import { SketchSim } from "../src/lib/lane-sketch-sim";
@@ -243,6 +244,27 @@ const RULES: Partial<Sketch> = { traffic: { rate: 0, speed: 50, seed: 1, tune: {
   const x = at >= 0 ? rec.sim.explain(rec.a, at) : null, b = x?.blocker;
   const ok = !!x && !x.traced && x.rule?.kind === "give-way" && b?.theirSec !== undefined && b.mySec !== undefined && b.wantSec === 1.5 && b.round !== undefined && b.round > 0;
   report("crossing the outer ring, not watched", ok, at < 0 ? "never gave way at the crossing" : `car ${rec.a} at ${at.toFixed(1)} s (traced ${x?.traced}): ${x?.rule?.kind} for car ${b?.car}, ${b?.round} m round the ring, ${b?.theirSec} s from the crossing; needs ${b?.mySec} s + ${b?.wantSec} s`);
+}
+
+// ticket #103: a way off the inner ring, across the outer one, and a car on the outer ring whose way off is that one (lane by exit),
+// changing over to the inner ring first: short of where it has to have changed, it is no car for that crossing (it leaves before
+// getting there); past it, still on the outer ring, it may miss its way off and come round to it, so it is one
+{
+  const arc = (id: string, r: number): SketchLane => ({ id, width: 4, inRate: 0, shape: { kind: "arc", c: { x: 0, y: 0 }, r, a0: 0, sweep: -2 * Math.PI } as SketchLane["shape"] });
+  const P = (r: number, a: number): [number, number] => [r * Math.cos(a), r * Math.sin(a)], sOn = (r: number, a: number) => ((((-a) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) * r;
+  const sim = make(sketch([arc("I", 7), arc("O", 11.5), line("IN", [P(60, Math.PI + 0.5), P(16, Math.PI + 0.5)], { control: "yield" }), line("OUT", [P(16, -Math.PI / 2 - 0.6), P(60, -Math.PI / 2 - 0.6)])],
+    [conn("cIn", "IN", 44, "O", sOn(11.5, Math.PI)), conn("cOff", "I", sOn(7, -Math.PI / 2), "OUT", 0)],
+    { roads: [{ id: "r1", name: "Roundabout", lanes: ["I", "O"] }], traffic: { rate: 0, speed: 50, seed: 1, tune: { ringLanes: 1 } } }));
+  type E = { key: string; conflicts: { other: E; otherAt: number; otherBefore: number; otherAfter: number }[] };
+  type V = { id: number; edge: E; pos: number; len: number; goal: { lane: E } | null };
+  const S = sim as unknown as { edges: Map<string, E>; toPlace: (w: V, e: E, at: number, past: number, before: number) => number | null };
+  const O = S.edges.get("lane:O")!, k = S.edges.get("conn:cOff")!.conflicts.find(c => c.other === O)!;
+  const a = sim.sendTest("IN", "OUT")!, car = () => sim.vehicles.find(v => v.id === a) as unknown as V;
+  for (let i = 0; i < 300 && car().edge !== O; i++) sim.step(0.1);
+  const at = (ang: number) => { car().pos = sOn(11.5, ang); return S.toPlace(car(), O, k.otherAt, car().len + 1 + k.otherAfter, k.otherBefore); };
+  const goal = car().goal?.lane.key, far = at(Math.PI / 4), late = at(-Math.PI / 4);
+  const ok = goal === "lane:I" && far === null && late !== null && late > 0;
+  report("outer ring car leaving by the inner ring", ok, `goal on ${goal}; a quarter round the ring short of where it must have changed: ${far === null ? "not coming" : `${far.toFixed(1)} m from the crossing`}; past it: ${late === null ? "not coming" : `${late.toFixed(1)} m from the crossing`}`);
 }
 
 // T170: how a lane change ended, for a car not watched, asked about a moment later: it gave up (the lane it wanted blocked by one

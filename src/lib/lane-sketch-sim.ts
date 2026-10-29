@@ -236,6 +236,9 @@ const RING_WAIT = 15;
  * where the raw distance ahead is plenty: a livelock no amount of following traffic moving off ever broke on its own
  * (ticket #56) */
 const JOIN_PATIENCE = 15, JOIN_EASE = 20, JOIN_FLOOR = 0.25;
+/** a car's lane change on the way to its goal (`hop`): the neighbour to change to next, how many changes, where it has to have changed
+ * at the latest; round two rings, also where its way off leaves, as beside its own ring */
+interface Hop { n: Neighbor; hops: number; by: number; leave?: number }
 /** a lane of the same road running beside this one the same way: along this one from `a0` to `a1`, and the place beside it there (every metre from `a0`) */
 interface Neighbor { lane: Edge; a0: number; a1: number; map: number[]; /** two rings round one middle (a two-lane roundabout): beside all the way round, places on both wrapping round */ round?: boolean }
 // (join: two connectors running together into the same place on a lane, see the zip in step)
@@ -385,7 +388,7 @@ export interface SimVehicle {
 }
 
 /** the lane changes found, from a lane to a goal (its connector, or its lane for its end): the lanes don't change while the edges are the same */
-const hopsKept = new WeakMap<Edge, Map<Edge, { n: Neighbor; hops: number; by: number } | null>>();
+const hopsKept = new WeakMap<Edge, Map<Edge, Hop | null>>();
 /** (no vehicles at places: none there) */
 const NO_PLACES: { w: SimVehicle; pos: number }[] = [];
 /** (no vehicles: at a light) */
@@ -1528,7 +1531,7 @@ export class SketchSim {
   }
 
   /** a car whose goal is on another lane: the neighbour to change to next, how many changes it has to make, and where it has to have changed at the latest */
-  private hop(v: SimVehicle): { n: Neighbor; hops: number; by: number } | null {
+  private hop(v: SimVehicle): Hop | null {
     const g = v.goal, e = v.edge;
     if (!g || g.lane === e || e.kind !== "lane") return null;
     // (the same from one lane for one goal, whoever asks: kept)
@@ -1540,7 +1543,7 @@ export class SketchSim {
     byGoal.set(key, h);
     return h;
   }
-  private hopOf(e: Edge, g: { lane: Edge; conn: Edge | null }): { n: Neighbor; hops: number; by: number } | null {
+  private hopOf(e: Edge, g: { lane: Edge; conn: Edge | null }): Hop | null {
     const first = new Map<Edge, Neighbor>(), depth = new Map<Edge, number>([[e, 0]]), todo = [e];
     while (todo.length) {
       const l = todo.shift()!;
@@ -1558,7 +1561,7 @@ export class SketchSim {
       // (round a ring: 15 m before where it leaves, as beside this ring, 20 m more per ring over; past there, once more round)
       let l = g.lane, s = g.conn ? this.exitS(g.conn) : 0;
       while (l !== e) { const x = l.neighbors.find(x => x.round && depth.get(x.lane) === depth.get(l)! - 1); if (!x) break; s = this.across(x, s)!; l = x.lane; }
-      return { n, hops, by: (((s - 15 - 20 * (hops - 1)) % e.len) + e.len) % e.len };
+      return { n, hops, by: (((s - 15 - 20 * (hops - 1)) % e.len) + e.len) % e.len, ...(l === e ? { leave: s } : {}) };
     }
     let by = n.a1 - 15 - 20 * (hops - 1);
     // (one change: before where it leaves, as beside this lane)
@@ -1852,6 +1855,14 @@ export class SketchSim {
       // (it turns off before getting there: before `before` metres short of it, where a zone round it begins; turning off inside
       // the zone, its front still sweeps through it (T206))
       if (d > 0 && e.kind === "lane" && w.exit && this.along(e, w.pos, this.exitS(w.exit)) < d - before) return null;
+      // (round a ring, its way off from the ring beside it (lane by exit): it changes over and leaves by that before getting there too,
+      // while still short of where it has to have changed (past that, not over yet, it may miss its way off and come round here)
+      // (ticket #103: a car going off the inner ring across the outer one waited for one on the outer ring 37 m back, on its way over
+      // to the inner ring to leave by the same way off))
+      if (d > 0 && e.ring && !w.exit) {
+        const h = this.hop(w), off = h?.leave !== undefined ? this.along(e, w.pos, h.leave) : Infinity;
+        if (off < d - before && this.along(e, w.pos, h!.by) < off) return null;
+      }
       return d;
     }
     // (just left it, its back still on it; or one before that, across edges shorter than it)
