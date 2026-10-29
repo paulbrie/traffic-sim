@@ -2262,6 +2262,12 @@ export function exitLanes(sk: Sketch): SketchLane[] {
 
 /** metres a lane change counts for in a route (it is slower and harder than driving on) */
 export const CHANGE_COST = 25;
+/**
+ * metres a lane change takes: a route changing lane goes on, on the lane beside, from this far past where it came
+ * beside it, as the simulation plans a change (its `plan`, ticket #104: a car coming onto a ring's outer lane 2 m
+ * short of where its way off leaves the inner one, the route said to change there, did the whole lap round instead)
+ */
+export const CHANGE_ROOM = 20;
 
 /**
  * How far it is to each exit (metres, by the shortest way): from the start of every connector, and
@@ -2342,9 +2348,9 @@ export class RouteTable {
       // (a bus lane: no ordinary car's route drives on it, not even in passing; a bus's route may)
       if (L.lane.bus && !this.bus) return;
       for (const i of L.ins) { const a = this.reach(L, i.s, s); if (a !== null) push(this.connLen.get(i.id)! + a + onward, i.id); }
-      // (from a lane beside it: coming onto that one, then changing over)
+      // (from a lane beside it: coming onto that one, then changing over, `CHANGE_ROOM` on)
       for (const b of this.besideOf.get(laneId) ?? []) {
-        for (const i of this.lanes.get(b.from)!.ins) { const a = this.reach(L, b.map(i.s), s); if (a !== null) push(this.connLen.get(i.id)! + CHANGE_COST + a + onward, i.id); }
+        for (const i of this.lanes.get(b.from)!.ins) { const a = this.reach(L, b.map(i.s) + CHANGE_ROOM, s); if (a !== null) push(this.connLen.get(i.id)! + CHANGE_COST + CHANGE_ROOM + a + onward, i.id); }
       }
     };
     // (driving off the exit's end)
@@ -2370,7 +2376,7 @@ export class RouteTable {
       const a = this.reach(L, s, o.s), c = cost.get(o.id);
       if (a !== null && c !== undefined) best = Math.min(best, a + c);
     }
-    if (change) for (const b of L.beside) best = Math.min(best, CHANGE_COST + this.fromLane(b.id, b.map(s), exit, cost, false));
+    if (change) for (const b of L.beside) best = Math.min(best, CHANGE_COST + CHANGE_ROOM + this.fromLane(b.id, b.map(s) + CHANGE_ROOM, exit, cost, false));
     return best;
   }
 
