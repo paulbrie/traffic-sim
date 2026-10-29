@@ -109,7 +109,7 @@ interface View { cx: number; cy: number; /** px per metre */ scale: number }
 interface TrafficIncident { id: string; iconCategory: number; magnitudeOfDelay: number; delay: number | null; from: string | null; to: string | null; description: string | null; coordinates: { lat: number; lon: number }[] }
 type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { bump: string } | { zone: string } | { stop: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
-type Hover = Hit | { conns: string[] } | { lanes: string[] };
+type Hover = Hit | { conns: string[] } | { lanes: string[]; /** found from a panel (the live graph, ticket #109): lit up strongly, over the cars, with this label */ focus?: string };
 /** a road's or a junction's name as drawn on the map: what it names, and its pill (px on the canvas) */
 type NameLabel = { kind: "road" | "junction" | "in" | "out" | "zone"; id: string; /** a way in's or out's lanes */ lanes?: string[]; x0: number; y0: number; x1: number; y1: number };
 /** a way in's traffic, or a way out's share of the trips, being edited on its label: its lanes, where (px), the value it had */
@@ -2179,7 +2179,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {stats?.fuel && <FuelPanel fuel={stats.fuel} />}
           {stats && sketch.junctions.length ? (
             <JunctionLive sketch={sketch} junction={sel.junctions.length === 1 ? sel.junctions[0] : null} t={stats.t} replayT={replayT} load={loadSeries}
-              onFocus={lanes => { hover.current = lanes ? { lanes: [...new Set(lanes.map(baseLaneId))] } : null; redraw(); }}
+              onFocus={(lanes, label) => { hover.current = lanes ? { lanes: [...new Set(lanes.map(baseLaneId))], focus: label ?? lanes.join(", ") } : null; redraw(); }}
               busiest={(stats.junctions ?? []).reduce<{ id: string; through: number } | null>((m, j) => (!m || j.through > m.through ? j : m), null)?.id ?? null} />
           ) : null}
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
@@ -3934,8 +3934,10 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       if (!vis.lanes.has(l.id) || !lIn(l)) continue;
       const on = selLanes.has(l.id), over = (hv && "lane" in hv && hv.lane === l.id) || (hv && "lanes" in hv && hv.lanes.includes(l.id));
       if (!on && !over) continue;
+      // (one found from a panel: wide and strong, a short lane by a busy junction not to be missed)
+      const found = over && !!hv && "lanes" in hv && !!hv.focus;
       path(samples(l.shape, 0.5)); if (isFullCircle(l.shape)) ctx.closePath();
-      ctx.strokeStyle = col.sel; ctx.globalAlpha = on ? 0.9 : 0.35; ctx.lineWidth = l.width + 5 * px; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
+      ctx.strokeStyle = col.sel; ctx.globalAlpha = on || found ? 0.9 : 0.35; ctx.lineWidth = l.width + (found ? 12 : 5) * px; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
       ctx.globalAlpha = 1;
     }
     // the route traced: an orange band under its lanes and along its connectors
@@ -4206,6 +4208,18 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       const mins = inc.delay ? Math.max(1, Math.round(inc.delay / 60)) : null;
       label(`${inc.description ?? "Traffic"}${mins ? ` +${mins} min` : ""}`, mid, color);
     }
+  }
+  // lanes found from a panel (the live graph's legend, ticket #109): outlined over the cars, their name at the middle of the first
+  if (D && hv && "lanes" in hv && hv.focus) {
+    const ls = hv.lanes.map(id => laneById(sk, id)).filter((l): l is NonNullable<typeof l> => !!l);
+    ctx.strokeStyle = col.sel; ctx.lineWidth = 2.5 * px; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.setLineDash([]);
+    for (const l of ls) {
+      const L = laneLength(l.shape), hw = l.width / 2 + 3 * px;
+      // (both sides of the lane: a frame round it that the cars on it don't hide)
+      const n = Math.max(2, Math.ceil(L / 0.5));
+      for (const side of [1, -1]) { path(Array.from({ length: n + 1 }, (_, i) => { const q = pointAt(l.shape, (L * i) / n); return { x: q.p.x - q.d.y * hw * side, y: q.p.y + q.d.x * hw * side }; })); ctx.stroke(); }
+    }
+    if (ls.length) label(hv.focus, pointAt(ls[0].shape, laneLength(ls[0].shape) / 2).p, col.sel);
   }
   // the car picked: the way it will go, and a ring round it
   if (D && st.car) {
