@@ -719,6 +719,21 @@ function queueSave(planId: string) {
   saveTimer = setTimeout(() => { saveTimer = null; void doSave(planId); }, Math.max(0, dirtySince + MAX_WAIT - Date.now()));
 }
 
+/**
+ * The plan's unsaved changes saved now, a save under way waited for (before going to another of its pages, which
+ * loads it afresh: what isn't saved would be lost). False: they couldn't be (a conflict, an error, too long).
+ */
+export async function saveNow(planId: string): Promise<boolean> {
+  for (const until = Date.now() + 20_000; Date.now() < until;) {
+    const u = ui.getValue(), st = u.save.status;
+    if (u.readOnly || st === "saved") return true;
+    if (st === "conflict" || st === "error") return false;
+    if (st === "dirty" && !saving) await doSave(planId);
+    else await new Promise(r => setTimeout(r, 100));
+  }
+  return false;
+}
+
 export function useAutosave(planId: string) {
   useEffect(() => {
     const onChange = () => { if (ui.getValue().save.status === "dirty") queueSave(planId); };

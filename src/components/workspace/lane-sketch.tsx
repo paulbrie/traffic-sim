@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import { Bike, BusFront, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, Gauge, LandPlot, MapPin, Maximize, Milestone, MousePointer2, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
@@ -26,7 +27,8 @@ import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { EditorKindContext, editorBack, NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, useUiPath, type TestOptions, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
-import { changeSketches, clipText, lockRefused, onScratchFocus, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
+import { changeSketches, clipText, lockRefused, onScratchFocus, putInSketchPage, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
+import { saveNow } from "./workspace";
 import { testPiece } from "@/lib/test-piece";
 import { offRoute } from "@/lib/route-trace";
 import { isDark, onThemeChange, readPalette, speedColor } from "@/render/palette";
@@ -217,6 +219,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const { panel, style, placed, start, reset } = useFloatingBox("laneSketch:box", 480, 320);
   // (what it works on: the plan's sketch, or the ideas sketched apart; see SketchStore)
   const store = useSketchStore();
+  const router = useRouter();
   const { edit: editSketch, undo: undoSketch, redo: redoSketch, record: recordSketch } = store, sketchSim = store.sim;
   const [sketch] = useSubject(store.sketch$);
   // (the editor's own state, in the V2 UI store where agents (the Claude bridge) and other views can read it: src/state/sketch-ui.ts)
@@ -859,25 +862,36 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const measured = !!stats && stats.t >= MEASURE_AFTER;
     const { sketch: piece, report } = testPiece(sk, s, { cut: tis.cut, rates: measured ? rates : undefined });
     if (!piece.lanes.length) { toast("Nothing to test there", { description: "The selection has no lanes, and no junction with lanes or connectors on it." }); return; }
-    let added = false, addedPiece: Piece | undefined;
     const what0 = report.junctions ? (sk.junctions.find(j => j.id === s.junctions[0])?.name ?? "junctions") : `${report.lanes} lanes`;
-    // (into a new sketch: the user's others kept as they are)
-    if (tis.mode === "new") changeSketches(k => newSketch(k, `Test: ${what0}`, Date.now()).sketch);
-    scratchSketch.edit(cur => {
-      if (tis.mode !== "add" || (!cur.lanes.length && !cur.junctions.length)) return { ...piece, ...(piece.geo ?? cur.geo ? { geo: piece.geo ?? cur.geo } : {}) };
-      // (beside what is there: where it is on the plan, as the Sketch's own origin has it, so the imagery still lines up)
-      added = true;
-      const o = geoShift(sk.geo, cur.geo), r = pastePart(cur, piece, o.x, o.y);
-      addedPiece = r.piece;
-      return { ...r.sketch, ...(cur.geo ?? sk.geo ? { geo: cur.geo ?? sk.geo } : {}), ...(cur.traffic ?? piece.traffic ? { traffic: cur.traffic ?? piece.traffic } : {}) };
-    });
-    ui.getValue().sketch = true;
-    requestScratchFocus({ run: tis.run, piece: addedPiece });
-    sketchUi.getValue().sketchWindow.lastPiece = { junctions: report.junctions, lanes: report.lanes, mode: added ? "add" : tis.mode === "new" ? "new" : "replace", at: Date.now() };
-    const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
-    const what = report.junctions ? n(report.junctions, "junction") : n(report.lanes, "lane");
-    toast.success(`Testing ${what} in the Sketch`, {
-      description: `${n(report.lanes, "lane")}, ${report.cut} cut ${tis.cut} m out; ${n(report.entries, "way")} in${report.measured ? `, ${report.measured} at the rate measured in the last run` : !stats ? " at the plan's rate (no run yet)" : !measured ? ` at the plan's rate (the run so far is under ${MEASURE_AFTER / 60} min: too short to measure)` : ""}${added ? "; added beside what was there (zebras, signal groups and journeys come only when replacing)" : ""}. ⌘Z in the Sketch takes it back.`,
+    const opts = { ...tis };
+    // (put in on the Sketch's page, once it has loaded the plan: ticket #105)
+    const put = () => {
+      let added = false, addedPiece: Piece | undefined;
+      // (into a new sketch: the user's others kept as they are)
+      if (opts.mode === "new") changeSketches(k => newSketch(k, `Test: ${what0}`, Date.now()).sketch);
+      scratchSketch.edit(cur => {
+        if (opts.mode !== "add" || (!cur.lanes.length && !cur.junctions.length)) return { ...piece, ...(piece.geo ?? cur.geo ? { geo: piece.geo ?? cur.geo } : {}) };
+        // (beside what is there: where it is on the plan, as the Sketch's own origin has it, so the imagery still lines up)
+        added = true;
+        const o = geoShift(sk.geo, cur.geo), r = pastePart(cur, piece, o.x, o.y);
+        addedPiece = r.piece;
+        return { ...r.sketch, ...(cur.geo ?? sk.geo ? { geo: cur.geo ?? sk.geo } : {}), ...(cur.traffic ?? piece.traffic ? { traffic: cur.traffic ?? piece.traffic } : {}) };
+      });
+      requestScratchFocus({ run: opts.run, piece: addedPiece });
+      sketchUi.getValue().sketchWindow.lastPiece = { junctions: report.junctions, lanes: report.lanes, mode: added ? "add" : opts.mode === "new" ? "new" : "replace", at: Date.now() };
+      const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
+      const what = report.junctions ? n(report.junctions, "junction") : n(report.lanes, "lane");
+      toast.success(`Testing ${what} in the Sketch`, {
+        id: "test-in-sketch",
+        description: `${n(report.lanes, "lane")}, ${report.cut} cut ${opts.cut} m out; ${n(report.entries, "way")} in${report.measured ? `, ${report.measured} at the rate measured in the last run` : !stats ? " at the plan's rate (no run yet)" : !measured ? ` at the plan's rate (the run so far is under ${MEASURE_AFTER / 60} min: too short to measure)` : ""}${added ? "; added beside what was there (zebras, signal groups and journeys come only when replacing)" : ""}. ⌘Z in the Sketch takes it back.`,
+      });
+    };
+    // (the Sketch's page loads the plan as saved: what isn't saved yet saved first, else lost)
+    const planId = ui.getValue().planId;
+    void saveNow(planId).then(ok => {
+      if (!ok) { toast.error("Couldn't save the plan first", { description: "The Sketch opens the plan as saved: see the save status, then try again." }); return; }
+      putInSketchPage(planId, put);
+      router.push(`/plans/${planId}/sketch`);
     });
   };
 

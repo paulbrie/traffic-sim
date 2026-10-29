@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { LaneSketch } from "@/components/workspace/lane-sketch";
 import { FrameRate, MemoryGauge, SketchLayerPicker } from "./top-bar-tools";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
 import { loadPlan } from "@/state/store";
-import { scratchSketch, SketchStoreContext } from "@/state/lane-sketch";
+import { scratchSketch, SketchStoreContext, takeSketchPut } from "@/state/lane-sketch";
 import { startUnderlayImage } from "@/state/underlay-image";
 
 /**
@@ -24,8 +24,12 @@ import { startUnderlayImage } from "@/state/underlay-image";
  */
 export function SketchPageClient({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
   const [loaded, setLoaded] = useState(false);
+  // (what "Test in Sketch" on the plan's page sent here, put in once the plan is loaded; kept for Strict Mode's second run, which loads it again)
+  const put = useRef<(() => void) | null | undefined>(undefined);
   useLayoutEffect(() => {
     loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read", plan.sketch);
+    if (put.current === undefined) put.current = takeSketchPut(plan.id);
+    put.current?.();
     startUnderlayImage();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the stores are outside React: loaded, the page can show
     setLoaded(true);

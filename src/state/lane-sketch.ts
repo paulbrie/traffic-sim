@@ -221,3 +221,12 @@ export function requestScratchFocus(f: ScratchFocus) { scratchFocus = f; scratch
 /** the request, taken (null: none) */
 export function takeScratchFocus(): ScratchFocus | null { const f = scratchFocus; scratchFocus = null; return f; }
 export function onScratchFocus(g: () => void) { scratchFocusWaiting.add(g); return () => { scratchFocusWaiting.delete(g); }; }
+
+/**
+ * (ticket #105) What "Test in Sketch" on a V2 plan's page puts in the Sketch: the Sketch is a page of its own, which
+ * loads the plan afresh, so the piece is put in there once it has (undoable there, ⌘Z taking it back)
+ */
+let sketchPut: { planId: string; put: () => void } | null = null;
+export function putInSketchPage(planId: string, put: () => void) { sketchPut = { planId, put }; }
+/** what is to be put in plan `planId`'s Sketch, taken (null: nothing) */
+export function takeSketchPut(planId: string): (() => void) | null { const p = sketchPut?.planId === planId ? sketchPut.put : null; sketchPut = null; return p; }
