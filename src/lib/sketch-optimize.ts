@@ -127,7 +127,7 @@ function byHand(sk: Sketch, id: string): JunctionLights | null {
   if (L.phases?.length) return L;
   const plan = signalPlan(sk, j, junctionContents(sk, j));
   if (!plan || plan.phases.length < 2) return null;
-  return { ...L, phases: plan.phases.map((p): LightsPhase => ({ name: p.name, green: p.green, conns: [...p.conns] })) };
+  return { ...L, phases: plan.phases.map((p): LightsPhase => ({ name: p.name, green: p.green, conns: [...p.conns], ...(p.peds?.length ? { peds: [...p.peds] } : {}) })) };
 }
 /** lights it may time: two phases or more, not in a signal group */
 const timeable = (sk: Sketch, id: string) => {

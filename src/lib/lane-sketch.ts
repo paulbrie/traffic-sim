@@ -1285,7 +1285,9 @@ export function setSigns(sk: Sketch, lanes: string[], control: LaneControl | nul
 // ---------------------------------------------------------------- traffic lights
 
 /** one phase set by hand: its name, how long its green lasts, and the connectors with green in it */
-export interface LightsPhase { name?: string; green: number; /** default: the junction's */ minGreen?: number; conns: string[] }
+export interface LightsPhase { name?: string; green: number; /** default: the junction's */ minGreen?: number; conns: string[];
+  /** (ticket #112) the zebras on the lights whose pedestrians cross in it (best with none of their traffic green in it) */
+  peds?: string[] }
 /**
  * A junction's traffic lights, as on the plan: each phase gets green in turn (`green` seconds at most),
  * then `amber`, then `allRed` with every way red. Worked out (`mode`: ways facing each other together,
@@ -1296,11 +1298,20 @@ export interface JunctionLights {
   green: number; amber: number; allRed: number; mode: "pairs" | "each";
   minGreen: number; actuated: boolean;
   phases?: LightsPhase[];
+  /**
+   * (ticket #112, worked-out phases) a zebra on the lights whose traffic is green in every phase (one across both ways of a
+   * road, say) gets a pedestrian phase: every way red while people cross, on demand when actuated. `false`: none (its
+   * pedestrians then only find the all-red between phases). `walk`: its seconds (default: `pedWalkTime` of the longest)
+   */
+  pedPhase?: false; walk?: number;
 }
 export const DEFAULT_LIGHTS: JunctionLights = { green: 18, amber: 3, allRed: 2, mode: "pairs", minGreen: 6, actuated: true };
 export const MAX_PHASES = 8;
-export interface SignalPhase { name: string; ways: string[]; lanes: string[]; conns: string[]; start: number; green: number; minGreen: number }
+export interface SignalPhase { name: string; ways: string[]; lanes: string[]; conns: string[]; start: number; green: number; minGreen: number;
+  /** the zebras whose pedestrians cross in it (only then, see LightsPhase) */ peds?: string[] }
 export interface SignalPlan {
+  /** the zebras on the lights (lightsCrossings) */
+  crossings: LitCrossing[];
   junction: string; cycle: number; amber: number; allRed: number; actuated: boolean; custom: boolean; phases: SignalPhase[];
   /** every connector the lights hold (the ways in), green in a phase or not */ controlled: string[];
   /** in a signal group: its id, the coordinated phase (it starts the cycle) and when, in the group's cycle, it turns green; the cycle its phases need when the group's is too short */
@@ -1414,6 +1425,38 @@ function wayConns(sk: Sketch, c: JunctionContents, ways: Approach[]) {
   return ways.map(w => sk.connectors.filter(cn => set.has(cn.id) && w.lanes.includes(wayFrom(sk, cn).lane)).map(cn => cn.id));
 }
 
+/** a zebra on a junction's lights: its length and the connectors it lies across (or is just before, on their lane) */
+export interface LitCrossing { id: string; len: number; conns: string[] }
+/** metres before where a connector leaves its lane a zebra there is the lights' (as the cars see it: lane-sketch-sim's buildCrossings) */
+const LIT_REACH = 15;
+/** points every `step` metres along a polyline */
+const alongPts = (pts: Pt[], step: number): Pt[] => {
+  const out: Pt[] = pts.length ? [pts[0]] : [];
+  for (let i = 1; i < pts.length; i++) { const a = pts[i - 1], b = pts[i], n = Math.max(1, Math.ceil(dist(a, b) / step)); for (let k = 1; k <= n; k++) out.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n }); }
+  return out;
+};
+/** the zebras over connectors `controlled` (a junction's lights hold), or over the last LIT_REACH metres of a lane before one leaves it */
+export function lightsCrossings(sk: Sketch, controlled: string[]): LitCrossing[] {
+  const out: LitCrossing[] = [];
+  for (const x of sk.crossings ?? []) {
+    const f = crossingFrame(x), box = boxOf(f.corners, LIT_REACH + 2), conns: string[] = [];
+    for (const id of controlled) {
+      const cn = sk.connectors.find(c => c.id === id), pts = cn && connectorPts(sk, cn), l = cn && laneById(sk, cn.from.lane);
+      if (!cn || !pts || !l) continue;
+      const near = (p: Pt) => p.x >= box.x0 && p.x <= box.x1 && p.y >= box.y0 && p.y <= box.y1;
+      if (!near(pts[0]) && !near(pts[pts.length - 1])) continue;
+      if (alongPts(pts, 0.5).some(p => onCrossing(x, p))) { conns.push(id); continue; }
+      // (on its lane just before it leaves: as the cars go, the other way on a lane both ways' way back, ticket #53)
+      const L = laneLength(l.shape), s = cn.from.s, back = backFrom(l, s), a = back ? s : Math.max(0, s - LIT_REACH), b = back ? Math.min(L, s + LIT_REACH) : s;
+      for (let t = a; t <= b + 1e-9; t += 0.5) if (onCrossing(x, pointAt(l.shape, Math.min(t, b)).p)) { conns.push(id); break; }
+    }
+    if (conns.length) out.push({ id: x.id, len: f.len, conns });
+  }
+  return out;
+}
+/** a pedestrian phase's seconds for a zebra `len` metres across: time to step out, walk it at 1.2 m/s, and clear it (the simulation's walkers) */
+export const pedWalkTime = (len: number) => Math.ceil(5 + len / 1.2 + 1.5);
+
 /** a junction's lights as a plan: the phases in order, their connectors, when each starts in a fixed cycle */
 export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): SignalPlan | null {
   const L = j.lights;
@@ -1422,12 +1465,14 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
   if (!ways.length) return null;
   const conns = wayConns(sk, c, ways), controlled = conns.flat(), key = (i: number) => ways[i].road ?? `lane:${ways[i].lanes[0]}`;
   const minGreen = Math.min(L.minGreen ?? DEFAULT_LIGHTS.minGreen, L.green);
-  let raw: { name: string; ways: string[]; lanes: string[]; conns: string[]; green: number; minGreen: number }[];
+  const crossings = lightsCrossings(sk, controlled), xs = L.pedPhase === false ? [] : crossings;
+  let raw: { name: string; ways: string[]; lanes: string[]; conns: string[]; green: number; minGreen: number; peds?: string[] }[];
   if (L.phases?.length) {
     // (by hand: each phase's connectors, still there and held by the lights; its lanes and ways those they leave)
     raw = L.phases.map((p, i) => {
       const cs = p.conns.filter(id => controlled.includes(id)), lanes = [...new Set(cs.map(id => wayFrom(sk, sk.connectors.find(x => x.id === id)!).lane))];
-      return { name: p.name || `Phase ${i + 1}`, ways: [...new Set(lanes.map(l => { const k = ways.findIndex(w => w.lanes.includes(l)); return key(k); }))], lanes, conns: cs, green: p.green, minGreen: Math.min(p.minGreen ?? minGreen, p.green) };
+      const peds = (p.peds ?? []).filter(id => crossings.some(x => x.id === id));
+      return { name: p.name || `Phase ${i + 1}`, ways: [...new Set(lanes.map(l => { const k = ways.findIndex(w => w.lanes.includes(l)); return key(k); }))], lanes, conns: cs, green: p.green, minGreen: peds.length ? p.green : Math.min(p.minGreen ?? minGreen, p.green), ...(peds.length ? { peds } : {}) };
     });
   } else {
     // (worked out: the way each faces where its lanes end, and those facing each other paired)
@@ -1441,8 +1486,11 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
       if (used.has(i)) continue;
       used.add(i);
       const g = [i];
-      // (two ways only: together they would always have green, so each gets its own)
-      if (L.mode === "pairs" && ways.length > 2) {
+      // (two ways only: together they would always have green, so each gets its own; unless a zebra crosses them both,
+      // a crossing between junctions: then they go together, and its pedestrian phase is their red, ticket #112)
+      const zebraOverBoth = ways.length === 2 && xs.some(x => conns[0].some(id => x.conns.includes(id)) && conns[1].some(id => x.conns.includes(id)));
+      if (L.mode === "pairs" && zebraOverBoth && facing[0].x * facing[1].x + facing[0].y * facing[1].y < -0.7) { used.add(1); g.push(1); }
+      else if (L.mode === "pairs" && ways.length > 2) {
         let best = -1, bd = -0.7;
         for (let k = 0; k < ways.length; k++) { if (used.has(k)) continue; const dot = facing[i].x * facing[k].x + facing[i].y * facing[k].y; if (dot < bd) { bd = dot; best = k; } }
         if (best >= 0) { used.add(best); g.push(best); }
@@ -1450,6 +1498,12 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
       groups.push(g);
     }
     raw = groups.map((g, i) => ({ name: `Phase ${i + 1}`, ways: g.map(key), lanes: g.flatMap(k => ways[k].lanes), conns: g.flatMap(k => conns[k]), green: L.green, minGreen }));
+    // (a zebra whose traffic is green in every phase: a phase of its own, all its traffic red, ticket #112)
+    const needs = xs.filter(x => raw.every(p => p.conns.some(id => x.conns.includes(id))));
+    if (needs.length) {
+      const walk = L.walk ?? pedWalkTime(Math.max(...needs.map(x => x.len)));
+      raw.push({ name: "Pedestrians", ways: [], lanes: [], conns: [], green: walk, minGreen: walk, peds: needs.map(x => x.id) });
+    }
   }
   // (in a signal group: the group's cycle, its coordinated phase first with its share of the green, the others sharing the rest; fixed, from its offset)
   const g = groupOf(sk, j.id), m = g?.members.find(x => x.junction === j.id);
@@ -1457,19 +1511,20 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
     const n = raw.length, lost = n * (L.amber + L.allRed), c = Math.min(Math.max(0, m.phase), n - 1);
     const avail = Math.max(g.cycle - lost, n * 5), mine = Math.max(5, avail * m.share), rest = Math.max(5, (avail - mine) / (n - 1));
     const r1 = (x: number) => Math.round(x * 10) / 10;
-    raw = raw.map((p, i) => ({ ...p, green: r1(i === c ? mine : rest), minGreen: r1(i === c ? mine : rest) }));
+    // (a pedestrian phase never shorter than its walk)
+    raw = raw.map((p, i) => { const gr = r1(i === c ? mine : p.peds?.length && !p.conns.length ? Math.max(rest, p.green) : rest); return { ...p, green: gr, minGreen: gr }; });
     let t = 0;
     const starts = new Array<number>(n);
     for (let k = 0; k < n; k++) { const i = (c + k) % n; starts[i] = t; t += raw[i].green + L.amber + L.allRed; }
     const phases = raw.map((p, i) => ({ ...p, start: starts[i] }));
     return {
-      junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: false, custom: !!L.phases?.length, phases, controlled,
+      crossings, junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: false, custom: !!L.phases?.length, phases, controlled,
       coord: { group: g.id, groupName: g.name, phase: c, offset: m.offset, ...(t > g.cycle + 0.05 ? { stretched: t } : {}) },
     };
   }
   let t = 0;
   const phases = raw.map(p => { const out = { ...p, start: t }; t += p.green + L.amber + L.allRed; return out; });
-  return { junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: L.actuated ?? DEFAULT_LIGHTS.actuated, custom: !!L.phases?.length, phases, controlled };
+  return { crossings, junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: L.actuated ?? DEFAULT_LIGHTS.actuated, custom: !!L.phases?.length, phases, controlled };
 }
 
 /** the light a lane has at time `t` in the fixed cycle (green if any of its connectors is), or null if the lights don't hold it */
@@ -1515,8 +1570,8 @@ export class SignalController {
     this.history.push({ t, phase, stage });
     if (this.history.length > 5000) this.history.splice(0, this.history.length - 5000);
   }
-  /** the lights moved on by `dt` seconds (to time `t`); `demand`: are cars coming up to a line for one of these connectors? */
-  step(t: number, dt: number, demand: (conns: string[]) => boolean) {
+  /** the lights moved on by `dt` seconds (to time `t`); `demand`: is anyone waiting for this phase (cars coming up to a line for one of its connectors, people at one of its zebras)? */
+  step(t: number, dt: number, demand: (p: SignalPhase) => boolean) {
     const P = this.plan, n = P.phases.length;
     if (!n) return;
     // (in a signal group: by the group's clock)
@@ -1529,18 +1584,18 @@ export class SignalController {
     this.into += dt;
     const ph = P.phases[this.phase];
     if (this.stage === "green") {
-      const others = P.actuated && n > 1 && P.phases.some((q, i) => i !== this.phase && q.conns.length && demand(q.conns));
+      const others = P.actuated && n > 1 && P.phases.some((q, i) => i !== this.phase && (q.conns.length || q.peds?.length) && demand(q));
       // (fixed: at the end of its green; actuated: then too if others wait, or after its minimum if nobody uses it and others wait. Nobody else waiting, it rests on green)
-      if ((this.into >= ph.green && (!P.actuated || others)) || (P.actuated && others && this.into >= ph.minGreen && !demand(ph.conns))) this.go(t, this.phase, "amber");
+      if ((this.into >= ph.green && (!P.actuated || others)) || (P.actuated && others && this.into >= ph.minGreen && !demand(ph))) this.go(t, this.phase, "amber");
     } else if (this.stage === "amber") {
       if (this.into >= P.amber) { if (P.allRed > 0) this.go(t, this.phase, "allRed"); else this.next(t, demand); }
     } else if (this.into >= P.allRed) this.next(t, demand);
   }
   /** on to the next phase (actuated: the next one cars wait for, if any does) */
-  private next(t: number, demand: (conns: string[]) => boolean) {
+  private next(t: number, demand: (p: SignalPhase) => boolean) {
     const n = this.plan.phases.length;
     let k = (this.phase + 1) % n;
-    if (this.plan.actuated) for (let i = 1; i <= n; i++) { const q = (this.phase + i) % n; if (demand(this.plan.phases[q].conns)) { k = q; break; } }
+    if (this.plan.actuated) for (let i = 1; i <= n; i++) { const q = (this.phase + i) % n; if (demand(this.plan.phases[q])) { k = q; break; } }
     this.go(t, k, "green");
   }
   private stateIn(conn: string, phase: number, stage: "green" | "amber" | "allRed"): SignalState | null {
@@ -2538,10 +2593,12 @@ function lightsOf(x: unknown): { lights?: JunctionLights } {
   const phases = Array.isArray(L.phases) ? L.phases.slice(0, MAX_PHASES).flatMap(p => (p && typeof p === "object" ? [{
     ...(typeof p.name === "string" && p.name ? { name: p.name.slice(0, 40) } : {}), green: t(p.green, 3, 180, D.green),
     ...(num(p.minGreen) ? { minGreen: t(p.minGreen, 1, 60, D.minGreen) } : {}), conns: Array.isArray(p.conns) ? p.conns.filter((c): c is string => typeof c === "string") : [],
+    ...(Array.isArray(p.peds) && p.peds.some((x: unknown) => typeof x === "string") ? { peds: p.peds.filter((x: unknown): x is string => typeof x === "string") } : {}),
   }] : [])) : [];
   return { lights: {
     green: t(L.green, 3, 180, D.green), amber: t(L.amber, 0, 10, D.amber), allRed: t(L.allRed, 0, 15, D.allRed), mode: L.mode === "each" ? "each" : "pairs",
     minGreen: t(L.minGreen, 1, 60, D.minGreen), actuated: typeof L.actuated === "boolean" ? L.actuated : D.actuated, ...(phases.length ? { phases } : {}),
+    ...(L.pedPhase === false ? { pedPhase: false as const } : {}), ...(num(L.walk) ? { walk: t(L.walk, 3, 120, 15) } : {}),
   } };
 }
 
