@@ -114,7 +114,7 @@ export interface Sketch {
   /** road ends joined so the road carries on (see `SketchLink`) */
   links?: SketchLink[];
   /** the cars run on it: vehicles per hour at each entry, the speed on straight lanes (km/h), the random numbers' seed, the simulation settings changed (see sketch-tuning.ts) */
-  traffic?: { rate: number; speed: number; seed?: number; tune?: Partial<Tuning> };
+  traffic?: { rate: number; speed: number; seed?: number; tune?: Partial<Tuning>; /** (ticket #113) the time of day the simulation starts at, minutes after midnight (default 0) */ clock?: number };
   /** where it is on Earth: the latitude / longitude of its origin (x east, y south, metres; as a V1 plan's `geo`), for the satellite imagery under it */
   geo?: { lat: number; lon: number };
   /** zebra crossings drawn by hand (see `SketchCrossing`) */
@@ -123,6 +123,9 @@ export interface Sketch {
   bumps?: SketchBump[];
   /** journeys between a particular way in and way out (see `SketchJourney`) */
   journeys?: SketchJourney[];
+  /** (ticket #113) demand matrices, and the one in use (its id; MATRIX_BY_TIME: by the time of day, each in its period; none: each way in's rate and each way out's share) */
+  matrices?: DemandMatrix[];
+  matrixOn?: string;
   /** bus stops, a point on a lane (see `SketchStop`) */
   stops?: SketchStop[];
   /** bus lines, each a loop of stops (see `SketchBusLine`) */
@@ -149,6 +152,16 @@ export interface SavedSketch { id: string; name: string; created: number; update
  * `trucks` per cent of them trucks; on top of the traffic coming in at each way's own rate.
  */
 export interface SketchJourney { id: string; from: string; to: string; rate: number; trucks?: number }
+/**
+ * A demand matrix (ticket #113): vehicles per hour from each way in to each way out, `od[from][to]`, the ways by a lane of
+ * each (as journeys name them); `trucks` per cent of them trucks (default: the simulation's truck share). In use, it is all
+ * the traffic coming in (the ways' own rates and shares aside), journeys on top. See demand-matrix.ts.
+ */
+export interface DemandMatrix { id: string; name: string; od: Record<string, Record<string, number>>; trucks?: number;
+  /** the period of the day it is for, minutes after midnight, `start` to `end` (past midnight when `end` is before `start`); none: all day */
+  start?: number; end?: number }
+/** the most matrices a sketch keeps, and the most vehicles an hour in a cell; `matrixOn` for "by the time of day" */
+export const MAX_MATRICES = 30, MAX_CELL = 20000, MATRIX_BY_TIME = "@time";
 export const JOURNEY_RATE = 100;
 /** a new journey from the way in with lane `from` to the way out with lane `to` (the next free id) */
 export function addJourney(sk: Sketch, from: string, to: string): [Sketch, SketchJourney] {
@@ -2659,7 +2672,8 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;
   const t = o.traffic as Sketch["traffic"];
   const tune = t ? sanitizeTuning(t.tune) : null, seed = t && num(t.seed) ? Math.round(Math.min(1e9, Math.max(1, t.seed))) : undefined;
-  const traffic = t && num(t.rate) && num(t.speed) ? { rate: Math.min(3000, Math.max(0, t.rate)), speed: Math.min(130, Math.max(10, t.speed)), ...(seed !== undefined ? { seed } : {}), ...(tune ? { tune } : {}) } : undefined;
+  const clock = t && num(t.clock) ? Math.round(Math.min(1439, Math.max(0, t.clock))) : 0;
+  const traffic = t && num(t.rate) && num(t.speed) ? { rate: Math.min(3000, Math.max(0, t.rate)), speed: Math.min(130, Math.max(10, t.speed)), ...(seed !== undefined ? { seed } : {}), ...(tune ? { tune } : {}), ...(clock ? { clock } : {}) } : undefined;
   const end = (e: unknown): RoadEnd | null => { const x = e as RoadEnd; return x && roads.some(r => r.id === x.road) && (x.end === "start" || x.end === "end") ? { road: x.road, end: x.end } : null; };
   const links: SketchLink[] = [];
   for (const k of Array.isArray(o.links) ? o.links : []) {
@@ -2685,6 +2699,19 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     const trucks = num(j.trucks) ? Math.round(Math.min(100, Math.max(0, j.trucks))) : 0;
     journeys.push({ id: j.id, from: j.from, to: j.to, rate: Math.round(Math.min(5000, Math.max(0, j.rate))), ...(trucks ? { trucks } : {}) });
   }
+  const matrices: DemandMatrix[] = [];
+  for (const m of Array.isArray(o.matrices) ? o.matrices.slice(0, MAX_MATRICES) : []) {
+    if (!str(m?.id) || matrices.some(y => y.id === m.id)) continue;
+    const od: Record<string, Record<string, number>> = {};
+    if (m.od && typeof m.od === "object") for (const [f, row] of Object.entries(m.od as Record<string, unknown>)) {
+      if (!row || typeof row !== "object") continue;
+      for (const [t, v] of Object.entries(row as Record<string, unknown>)) if (num(v) && v > 0) (od[f] ??= {})[t] = Math.round(Math.min(MAX_CELL, v) * 10) / 10;
+    }
+    const trucks = num(m.trucks) ? Math.round(Math.min(100, Math.max(0, m.trucks))) : undefined;
+    const minute = (v: unknown) => (num(v) ? Math.round(Math.min(1440, Math.max(0, v))) : undefined), start = minute(m.start), end = minute(m.end);
+    matrices.push({ id: m.id, name: typeof m.name === "string" && m.name.trim() ? m.name.trim().slice(0, 60) : m.id, od, ...(trucks !== undefined ? { trucks } : {}), ...(start !== undefined && end !== undefined ? { start, end } : {}) });
+  }
+  const matrixOn = str(o.matrixOn) && (o.matrixOn === MATRIX_BY_TIME ? matrices.length > 0 : matrices.some(m => m.id === o.matrixOn)) ? (o.matrixOn as string) : undefined;
   const stops: SketchStop[] = [];
   for (const x of Array.isArray(o.stops) ? o.stops : []) {
     const l = str(x?.lane) ? lanes.find(y => y.id === x.lane) : undefined;
@@ -2727,7 +2754,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const zones = sanitizeZones(o.zones);
   const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.bumps?.length || sc.zones?.length) ? sc : null;
   if (!lanes.length && !junctions.length && !geo && !crossings.length && !bumps.length && !zones.length && !scratch && !sketches.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(matrices.length ? { matrices } : {}), ...(matrixOn ? { matrixOn } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
 }
 
 // ---------------------------------------------------------------- locks (ticket #93)

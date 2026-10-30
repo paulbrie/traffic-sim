@@ -4,21 +4,26 @@
  * Where the traffic comes from and goes to: each way in (an entry lane, or a road's entry lanes
  * together) with the vehicles per hour coming in on it, and each way out with its share of the trips
  * that end there. Cars take the shortest way to the exit they are going to. Journeys (as V1's transit
- * flows): vehicles going from a particular way in to a particular way out, on top of those.
+ * flows): vehicles going from a particular way in to a particular way out, on top of those. Demand matrices
+ * (ticket #113): several kept, each edited as a spreadsheet (demand-matrix-dialog.tsx), one in use or each in
+ * its period of the day, instead of the ways' rates and shares.
  */
 import { useState } from "react";
-import { Plus, Trash2, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronUp, CopyPlus, Plus, Table2, Trash2, TriangleAlert } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { NumberField } from "@/components/workspace/fields";
 import { cn } from "@/lib/utils";
 import { addJourney, deleteJourney, demandWays, laneInRate, laneOutWeight, laneById, setInRate, setOutWeight, updateJourney, type DemandWay, type Pt, type Sketch, type SketchJourney } from "@/lib/lane-sketch";
-import type { JourneyStats } from "@/lib/lane-sketch-sim";
+import type { JourneyStats, SimStats } from "@/lib/lane-sketch-sim";
+import { MATRIX_BY_TIME, addMatrix, deleteMatrix, demandMode, duplicateMatrix, hhmm, matrixGrid, moveMatrix, overlaps, periodText, setStartClock, startClock, setMatrixOn } from "@/lib/demand-matrix";
+import { MatrixDialog, TimeField } from "./demand-matrix-dialog";
 import { useSketchStore } from "@/state/lane-sketch";
 import { compassNames } from "./compass-names";
 import { InspectorPanel } from "./inspector-panel";
 
-export function DemandPanel({ sketch, readOnly, onFocus, results, heldBack, onGo }: {
+export function DemandPanel({ sketch, readOnly, onFocus, results, heldBack, onGo, now }: {
   sketch: Sketch; readOnly: boolean; onFocus?: (lanes: string[] | null) => void;
   /** the view glided to a way in or out (where its lanes start or end) */
   onGo?: (at: Pt) => void;
@@ -26,6 +31,8 @@ export function DemandPanel({ sketch, readOnly, onFocus, results, heldBack, onGo
   results?: JourneyStats[] | null;
   /** while the cars run: arrivals that couldn't come in so far, by entry lane */
   heldBack?: Record<string, number> | null;
+  /** while the cars run: the demand matrix in use, the time of day */
+  now?: SimStats["demand"] | null;
 }) {
   const { edit: editSketch } = useSketchStore();
   const { entries, exits } = distinctNames(demandWays(sketch));
@@ -40,7 +47,9 @@ export function DemandPanel({ sketch, readOnly, onFocus, results, heldBack, onGo
   const row = "flex items-center gap-2 rounded px-1 text-xs hover:bg-muted";
   return (
     <InspectorPanel id="demand" title="Demand">
-      <p className="text-[11px] text-muted-foreground">Cars come in on the ways in at their rate, go to a way out (more often to those with a larger share), and take the shortest way there.</p>
+      <Matrices sketch={sketch} entries={entries} exits={exits} readOnly={readOnly} now={now} />
+      <p className="text-[11px] text-muted-foreground">Cars come in on the ways in at their rate, go to a way out (more often to those with a larger share), and take the shortest way there.
+        {(() => { const mode = demandMode(sketch); return mode.kind === "matrix" ? " Not used while a matrix is in use (kept as they are)." : mode.kind === "time" ? " Used at the times of day no matrix covers." : ""; })()}</p>
       <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
         <span className="text-xs font-medium">Ways in <span className="font-normal text-muted-foreground">· veh/h</span></span>
         {entries.slice(0, shown.in).map(w => (
@@ -79,6 +88,76 @@ export function DemandPanel({ sketch, readOnly, onFocus, results, heldBack, onGo
       </div>
       <Journeys sketch={sketch} entries={entries} exits={exits} readOnly={readOnly} onFocus={onFocus} results={results} />
     </InspectorPanel>
+  );
+}
+
+/**
+ * The demand matrices (ticket #113): which demand the cars run on (the ways' rates and shares, one matrix, or by the time of
+ * day, each matrix in its period from the simulation's start), each matrix (its period, its total, to edit, copy, order or
+ * delete), new ones; while the cars run, the time of day and the matrix in use
+ */
+function Matrices({ sketch, entries, exits, readOnly, now }: { sketch: Sketch; entries: DemandWay[]; exits: DemandWay[]; readOnly: boolean; now?: SimStats["demand"] | null }) {
+  const { edit: editSketch } = useSketchStore();
+  const [open, setOpen] = useState<string | null>(null);
+  const ms = sketch.matrices ?? [], mode = demandMode(sketch);
+  const value = mode.kind === "ways" ? "ways" : mode.kind === "time" ? MATRIX_BY_TIME : mode.matrix.id;
+  const add = (from: "current" | "empty") => {
+    let made: string | null = null;
+    editSketch(s => { const r = addMatrix(s, from); if (!r) return s; made = r[1].id; return r[0]; });
+    if (made) setOpen(made); else toast.error("No room for another matrix", { description: "A sketch keeps 30 at most." });
+  };
+  const clash = overlaps(sketch);
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5">
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 text-xs font-medium">Demand from</span>
+        <Select value={value} disabled={readOnly} onValueChange={v => editSketch(s => setMatrixOn(s, v === "ways" ? null : v))}>
+          <SelectTrigger size="sm" className="h-7 min-w-0 flex-1 text-xs" aria-label="Demand from"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ways" className="text-xs">Each way&apos;s rate and share (below)</SelectItem>
+            {ms.length > 0 && <SelectItem value={MATRIX_BY_TIME} className="text-xs">Matrices by the time of day</SelectItem>}
+            {ms.map(m => <SelectItem key={m.id} value={m.id} className="text-xs">{m.name} · {periodText(m)}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      {ms.length > 0 && (
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span title="The simulation's clock: this time of day at its start, on as it runs (by the time of day, each matrix is used in its period)">Simulation starts at</span>
+          <TimeField label="Simulation starts at" value={startClock(sketch)} disabled={readOnly} onCommit={v => editSketch(s => setStartClock(s, v))} />
+        </div>
+      )}
+      {now && (
+        <p className="text-[11px] text-muted-foreground">
+          Now <span className="font-mono tabular">{hhmm(now.clock)}</span> · {now.matrix ? <>matrix <span className="font-medium text-foreground">{ms.find(m => m.id === now.matrix)?.name ?? now.matrix}</span></> : mode.kind === "ways" ? "each way's rate and share" : "no matrix for this time: each way's rate and share"}
+          {now.noRoute > 0 && <span className="text-amber-700 dark:text-amber-500"> · {now.noRoute} sent with no way to their way out</span>}
+        </p>
+      )}
+      {ms.map((m, i) => {
+        const total = Math.round(matrixGrid(sketch, m).total), on = mode.kind === "matrix" ? mode.matrix.id === m.id : mode.kind === "time";
+        return (
+          <div key={m.id} className={cn("flex items-center gap-1 rounded px-1 text-xs hover:bg-muted", now?.matrix === m.id && "bg-primary/10")}>
+            <button type="button" className={cn("min-w-0 flex-1 truncate text-left hover:underline", !on && "text-muted-foreground")} onClick={() => setOpen(m.id)} title={`${m.name}: edit it`}>{m.name}</button>
+            <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular">{periodText(m)}</span>
+            <span className="w-14 shrink-0 text-right font-mono text-[11px] tabular" title="Vehicles per hour in all">{total}/h</span>
+            <Button variant="ghost" size="icon" className="size-6 shrink-0" aria-label={`Edit ${m.name}`} title="Edit it as a spreadsheet" onClick={() => setOpen(m.id)}><Table2 className="size-3.5" /></Button>
+            {!readOnly && <>
+              <Button variant="ghost" size="icon" className="size-6 shrink-0" aria-label={`Move ${m.name} up`} title="Earlier in the list (by the time of day, where periods overlap the first listed is used)" disabled={i === 0} onClick={() => editSketch(s => moveMatrix(s, m.id, -1))}><ChevronUp className="size-3.5" /></Button>
+              <Button variant="ghost" size="icon" className="size-6 shrink-0" aria-label={`Move ${m.name} down`} title="Later in the list" disabled={i === ms.length - 1} onClick={() => editSketch(s => moveMatrix(s, m.id, 1))}><ChevronDown className="size-3.5" /></Button>
+              <Button variant="ghost" size="icon" className="size-6 shrink-0" aria-label={`Duplicate ${m.name}`} title="A copy of it (for another period, say)" onClick={() => editSketch(s => duplicateMatrix(s, m.id)?.[0] ?? s)}><CopyPlus className="size-3.5" /></Button>
+              <Button variant="ghost" size="icon" className="size-6 shrink-0" aria-label={`Delete ${m.name}`} title="Delete it (undo brings it back)" onClick={() => editSketch(s => deleteMatrix(s, m.id))}><Trash2 className="size-3.5" /></Button>
+            </>}
+          </div>
+        );
+      })}
+      {clash.length > 0 && <p className="flex gap-1.5 text-[11px] text-amber-700 dark:text-amber-500"><TriangleAlert className="mt-0.5 size-3 shrink-0" /> Periods overlap ({clash.map(([a, b]) => `${a} and ${b}`).join("; ")}): by the time of day, the one listed first is used.</p>}
+      {!readOnly && (
+        <div className="flex gap-1.5">
+          <Button variant="outline" size="sm" className="h-7" disabled={!entries.length || !exits.length} title="A matrix of the demand now: each way in's rate over the ways out it can reach, by their shares" onClick={() => add("current")}><Plus /> Matrix from the demand now</Button>
+          <Button variant="ghost" size="sm" className="h-7" disabled={!entries.length || !exits.length} onClick={() => add("empty")}>Empty</Button>
+        </div>
+      )}
+      {open && sketch.matrices?.some(m => m.id === open) && <MatrixDialog sketch={sketch} id={open} entries={entries} exits={exits} readOnly={readOnly} onClose={() => setOpen(null)} />}
+    </div>
   );
 }
 

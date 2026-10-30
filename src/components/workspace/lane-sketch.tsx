@@ -84,6 +84,7 @@ import { resolveTuning } from "@/lib/sketch-tuning";
 import { CarWhy, EdgeLink, PlaceLink, SketchGoContext, SketchText, type SketchPlace } from "./car-explain";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
 import { looseSurfaces } from "@/lib/loose-surface";
+import { matrixAt, matrixGrid, startClock } from "@/lib/demand-matrix";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
@@ -302,7 +303,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [structureOpen, setStructureOpen] = useUiPath<boolean>("structure/open");
   // (saved with the sketch: changing them isn't an undo step)
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
-  const setParams = (p: SimParams) => store.show({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}) } });
+  const setParams = (p: SimParams) => store.show({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}), ...(live.current.sketch.traffic?.clock ? { clock: live.current.sketch.traffic.clock } : {}) } });
   const [readOnly] = useDeepSubject(ui, "readOnly");
   // (the cars coloured by speed, or all one colour: in the V2 UI store, kept in the browser)
   const [bySpeed] = useUiPath<boolean>("display/carsBySpeed");
@@ -1407,6 +1408,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         // (a way in's or out's label: its number edited there, as in Demand)
         if (lab && lab.lanes && (lab.kind === "in" || lab.kind === "out")) {
           if (readOnly) return;
+          // (a demand matrix in use: its totals, edited in the matrix, ticket #113)
+          const mx = matrixAt(sk, startClock(sk));
+          if (mx) { toast(`From the demand matrix ${mx.name}`, { description: "Edit it in Demand (its spreadsheet), or set Demand from back to each way's rate and share." }); return; }
           const lane = (id: string) => laneById(sk, id)!, ws = (ids: string[]) => ids.reduce((b, id) => b + laneOutWeight(lane(id)), 0);
           const all = ws(demandWays(sk).exits.flatMap(w => w.lanes));
           const value = lab.kind === "in" ? Math.round(lab.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0)) : all > 0 ? Math.round((ws(lab.lanes) / all) * 100) : 0;
@@ -2200,7 +2204,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {stats?.junctions?.length ? <JunctionResults sketch={sketch} stats={stats} onGo={id => goTo({ kind: "junction", id })} /> : null}
           {stats ? <RoadResults sketch={sketch} stats={stats} traffic={flow} onGo={id => goTo({ kind: "road", id })} /> : null}
           {page && <RoutePanel sketch={sketch} onGo={x => goTo({ kind: x.kind, id: x.id })} onSendTest={() => sendTestCar().catch((e: Error) => toast.error("No test car", { description: e.message }))} />}
-          <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} heldBack={stats?.heldBackBy}
+          <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} heldBack={stats?.heldBackBy} now={stats?.demand}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
           <BusLinesPanel sketch={sketch} readOnly={readOnly}
             onPick={id => { const x = sketch.stops?.find(s => s.id === id); const l = x && laneById(sketch, x.lane); if (x && l) { setSel({ ...NO_SEL, stop: x.id }); centerOnPts([pointAt(l.shape, x.s).p]); } }} />
@@ -4522,8 +4526,10 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       tags.push({ ...c, hw, hh });
       st.labels?.push({ kind: atEnd ? "out" : "in", id: ids[0], lanes: ids, ...label(text, c, color) });
     };
-    for (const w of entries) tag(w.lanes, false, `→ ${Math.round(w.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0))}/h`, dark ? "#4ade80" : "#15803d");
-    for (const w of exits) { const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0); tag(w.lanes, true, ws === 0 ? "closed" : `${sumW ? Math.round((ws / sumW) * 100) : 0}% →`, dark ? "#93c5fd" : "#1d4ed8"); }
+    // (a demand matrix in use, ticket #113: its rows' and columns' totals; by the time of day, the one at the simulation's start)
+    const mx = matrixAt(sk, startClock(sk)), mg = mx ? matrixGrid(sk, mx) : null;
+    for (const w of entries) tag(w.lanes, false, `→ ${Math.round(mg ? mg.rows.get(w.key) ?? 0 : w.lanes.reduce((a, id) => a + laneInRate(lane(id), sk), 0))}/h`, dark ? "#4ade80" : "#15803d");
+    for (const w of exits) { const ws = w.lanes.reduce((b, id) => b + laneOutWeight(lane(id)), 0); tag(w.lanes, true, mg ? `${Math.round(mg.cols.get(w.key) ?? 0)}/h →` : ws === 0 ? "closed" : `${sumW ? Math.round((ws / sumW) * 100) : 0}% →`, dark ? "#93c5fd" : "#1d4ed8"); }
   }
   // zones' names (T129) at their middles, in their colours (before the roads': a road's name over a zone's wins the click)
   for (const z of st.layers.zones ? sk.zones ?? [] : []) {

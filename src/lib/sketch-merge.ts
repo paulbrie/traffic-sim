@@ -14,7 +14,7 @@
  */
 import {
   arcToPoints, connectorPts, contentsOf, dist, isFullCircle, laneById, laneLength, leadOf, linkEnd, pointAt, settle, twoWayOk,
-  type LaneAt, type Pt, type Sketch, type SketchConnector, type SketchLane,
+  type LaneAt, type Pt, type DemandMatrix, type Sketch, type SketchConnector, type SketchLane,
 } from "./lane-sketch";
 
 export type MergeResult = { ok: true; sketch: Sketch; /** what was dropped (where the two differed), said in words */ dropped: string[] } | { ok: false; reason: string };
@@ -149,6 +149,7 @@ function joinLanes(sk0: Sketch, first: string, second: string, via: SketchConnec
     connectors: sk.connectors.filter(c => c !== via && c.id !== via?.id && !back.has(c.id)).map(c => (c.from.lane === first || c.from.lane === second || c.to.lane === first || c.to.lane === second ? { ...c, from: place(c.from), to: place(c.to) } : c)),
     roads: sk.roads.map(r => (r.lanes.includes(gone) ? { ...r, lanes: r.lanes.filter(x => x !== gone) } : r)).filter(r => r.lanes.length),
     ...(sk.journeys ? { journeys: sk.journeys.map(j => ({ ...j, from: rename(j.from), to: rename(j.to) })) } : {}),
+    ...(sk.matrices ? { matrices: renameMatrixLanes(sk.matrices, rename) } : {}),
     junctions: sk.junctions.map(j => (j.splits?.some(s => s.from === `lane:${gone}` || `lane:${gone}` in s.shares)
       ? { ...j, splits: j.splits.map(s => ({ from: s.from === `lane:${gone}` ? `lane:${keep}` : s.from, shares: Object.fromEntries(Object.entries(s.shares).map(([k, v]) => [k === `lane:${gone}` ? `lane:${keep}` : k, v])) })) }
       : j)),
@@ -257,6 +258,7 @@ export function mergeRoads(sk: Sketch, a: string, b: string): MergeResult {
       ...out,
       connectors: out.connectors.map(c => (moved.has(c.from.lane) || moved.has(c.to.lane) ? { ...c, from: place(c.from), to: place(c.to) } : c)),
       ...(out.journeys ? { journeys: out.journeys.map(j => ({ ...j, from: rename(j.from), to: rename(j.to) })) } : {}),
+      ...(out.matrices ? { matrices: renameMatrixLanes(out.matrices, rename) } : {}),
     };
   }
   // (turning shares: the second road's now the first's)
@@ -264,4 +266,13 @@ export function mergeRoads(sk: Sketch, a: string, b: string): MergeResult {
     ? { ...j, splits: j.splits.map(s => ({ from: s.from === b ? a : s.from, shares: Object.fromEntries(Object.entries(s.shares).map(([k, v]) => [k === b ? a : k, v])) })) }
     : j)) };
   return { ok: true, sketch: settle(out), dropped };
+}
+
+/** demand matrices' cells following their lanes renamed (two cells coming to one: added together, ticket #113) */
+function renameMatrixLanes(ms: DemandMatrix[], rename: (id: string) => string): DemandMatrix[] {
+  return ms.map(m => {
+    const od: DemandMatrix["od"] = {};
+    for (const [f, row] of Object.entries(m.od)) for (const [t, v] of Object.entries(row)) { const r = (od[rename(f)] ??= {}), k = rename(t); r[k] = (r[k] ?? 0) + v; }
+    return { ...m, od };
+  });
 }
