@@ -43,10 +43,11 @@
  */
 import { speedLimitOf,
   CHANGE_COST, drivable, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
-  onCrossing, crossingFrame, twinId, twoWayOk,
-  type LaneControl, type TwoWay, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
+  onCrossing, crossingFrame, twinId, twoWayOk, MATRIX_BY_TIME,
+  type DemandMatrix, type LaneControl, type TwoWay, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
 } from "./lane-sketch";
 import { resolveTuning, type Tuning } from "./sketch-tuning";
+import { clockAt, matrixAt, matrixRows, type MatrixRow } from "./demand-matrix";
 import { bumpFrame, bumpHeavySpeed, bumpSpeed, onBump } from "./sketch-bumps";
 import { FUEL_STILL, fuelRate, hasStopStart } from "../engine/fuel";
 import type { CarExplain, ExplainRule } from "./car-explain";
@@ -91,6 +92,8 @@ export interface SimStats {
   pedsWaiting: number;
   /** the journeys' results (when the sketch has journeys) */
   journeys?: JourneyStats[];
+  /** (a sketch with demand matrices, ticket #113) the one in use now (null: the ways' rates and shares), the time of day (minutes after midnight), and vehicles it sent with no way to their way out */
+  demand?: { matrix: string | null; clock: number; noRoute: number };
   /** vehicles still for STUCK_AFTER seconds or more */
   stuck: number;
   /** turning shares: the vehicles that have gone each way, by `junction|way in|road out` (when the sketch has any) */
@@ -634,11 +637,17 @@ export class SketchSim {
   /** where cars come in: the lane, when the next one is due, and how many per hour (its own, or the sketch's) */
   private sources: {
     lane: Edge; next: number; rate: number | null; /** the next one in a truck (drawn when it is due) */ truck?: boolean;
+    /** its own rate (`rate` is 0 while a demand matrix is in use, ticket #113) */ own: number | null;
     /** vehicles on journeys waiting to come in here (before the lane's own next one); and (`handed`) those due on a lane beside
-     * of its road whose way on is this lane, handed to it (ticket #89) */ wait?: { journey: string; dest: string; truck: boolean; handed?: true }[];
+     * of its road whose way on is this lane, handed to it (ticket #89); (`matrix`) those a demand matrix sends (ticket #113) */ wait?: { journey: string; dest: string; truck: boolean; handed?: true; matrix?: true }[];
     /** arrivals lost while it was held up so far (expected, from its rate: a fraction) */ held?: number;
   }[] = [];
   private journeys: SimJourney[] = [];
+  /** (ticket #113) the demand matrix in use now (null: the ways' own rates and shares), and its ways in with traffic, each with its next arrival */
+  private mNow: DemandMatrix | null = null;
+  private mRows: (MatrixRow & { next: number; cum: number[] })[] = [];
+  /** vehicles a matrix sent that had no way to their way out */
+  private mNoRoute = 0;
   /** the journeys' own random numbers (so runs without journeys stay as they were); and the breakdowns' */
   private jRnd: () => number;
   private bRnd: () => number;
@@ -1016,7 +1025,7 @@ export class SketchSim {
     this.sources = [...edges.values()].filter(e => entries.has(e.key)).map(lane => {
       const rate = entries.get(lane.key)!.inRate ?? null, was = old.get(lane.key);
       // (its rate changed: the next arrival drawn again)
-      return { lane, rate, next: was && was.rate === rate ? was.next : this.t + this.gap(rate), held: was?.held ?? 0 };
+      return { lane, own: rate, rate: was && was.own === rate ? was.rate : rate, next: was && was.own === rate ? was.next : this.t + this.gap(rate), held: was?.held ?? 0 };
     });
     // where cars go: the shortest ways to the exits, and their shares
     this.routes = new RouteTable(sk);
@@ -1029,7 +1038,9 @@ export class SketchSim {
       const was = oldJ.get(def.id), from = ways.entries.find(w => w.lanes.includes(def.from))?.lanes ?? [], to = ways.exits.find(w => w.lanes.includes(def.to))?.lanes ?? [];
       return { def, from, to, next: was && was.def.rate === def.rate ? was.next : this.t + this.jGap(def.rate), sent: was?.sent ?? 0, arrived: was?.arrived ?? 0, tripSum: was?.tripSum ?? 0, noRoute: was?.noRoute ?? 0 };
     });
-    for (const s of this.sources) if (s.wait) { s.wait = s.wait.filter(w => w.handed ? this.routes!.from(s.lane.id, 0, w.dest) < Infinity : this.journeys.some(j => j.def.id === w.journey && j.to.includes(w.dest))); if (!s.wait.length) delete s.wait; }
+    for (const s of this.sources) if (s.wait) { s.wait = s.wait.filter(w => w.handed || w.matrix ? this.routes!.from(s.lane.id, 0, w.dest) < Infinity : this.journeys.some(j => j.def.id === w.journey && j.to.includes(w.dest))); if (!s.wait.length) delete s.wait; }
+    // (the demand matrix, as it may have changed)
+    this.matrixNow(true);
     this.edges = edges;
     // junctions: what is on each and its ways in (their tallies kept by id)
     {
@@ -1109,8 +1120,27 @@ export class SketchSim {
     // (and the cars numbered from 1 again, each lane's next one not drawn yet: those numbers settle who goes first)
     this.nextId = 1;
     this.testId = -1; this.testsSent = 0; this.test = null; this.testOut = null; this.testRnd = mulberry32((this.seed * 49979687) ^ 0x51ab);
-    for (const s of this.sources) { s.next = this.gap(s.rate); delete s.wait; delete s.truck; s.held = 0; }
+    for (const s of this.sources) { s.rate = s.own; s.next = this.gap(s.rate); delete s.wait; delete s.truck; s.held = 0; }
     for (const j of this.journeys) Object.assign(j, { next: this.jGap(j.def.rate), sent: 0, arrived: 0, tripSum: 0, noRoute: 0 });
+    this.mNow = null; this.mRows = []; this.mNoRoute = 0; this.matrixNow(true);
+  }
+
+  /**
+   * The demand matrix for the time now (ticket #113: one chosen, or by the time of day, the simulation's clock starting at the
+   * sketch's `traffic.clock`): switched to, its ways' arrivals drawn from now, the ways' own rates paused (or, no matrix now,
+   * going again). `force`: worked out again (the sketch changed), arrivals kept where nothing changed.
+   */
+  private matrixNow(force = false) {
+    const sk = this.sketch, m = matrixAt(sk, clockAt(sk, this.t));
+    if (!force && m === this.mNow) return;
+    const was = this.mNow, old = new Map(this.mRows.map(r => [r.key, r]));
+    this.mNow = m;
+    this.mRows = m ? matrixRows(sk, m).map(r => {
+      let c = 0;
+      const o = old.get(r.key);
+      return { ...r, cum: r.dests.map(d => (c += d.rate)), next: o && was?.id === m.id && o.total === r.total ? o.next : this.t + this.jGap(r.total) };
+    }) : [];
+    for (const s of this.sources) { const rate = m ? 0 : s.own; if (rate !== s.rate) { s.rate = rate; s.next = this.t + this.gap(rate); } }
   }
 
   /**
@@ -2138,6 +2168,16 @@ export class SketchSim {
     if (this.crossings.length) this.stepPeds(dt, byEdge);
 
     // new cars where there is room
+    // a demand matrix's: those due at each way in, each to a way out drawn by its cells, in the same way (ticket #113)
+    if (this.sketch.matrixOn === MATRIX_BY_TIME) this.matrixNow();
+    for (const r of this.mRows) while (this.t >= r.next) {
+      r.next += this.jGap(r.total);
+      const x = this.jRnd() * r.total, k = r.cum.findIndex(c => x < c), d = r.dests[k < 0 ? r.dests.length - 1 : k];
+      const rt = this.routes, opts = r.from.flatMap(l => { const to = rt ? d.to.filter(e => rt.from(l, 0, e) < Infinity) : []; return to.length ? [{ l, to }] : []; });
+      const o = opts.length ? opts[Math.floor(this.jRnd() * opts.length)] : null, s = o && this.sources.find(y => y.lane.id === o.l);
+      if (!o || !s) { this.mNoRoute++; continue; }
+      (s.wait ??= []).push({ journey: "", dest: o.to[Math.floor(this.jRnd() * o.to.length)], truck: this.jRnd() * 100 < (this.mNow?.trucks ?? this.tuning.truckShare), matrix: true });
+    }
     // journeys: those due come in on a lane of their way in that leads to their way out (waiting there for room)
     for (const j of this.journeys) while (this.t >= j.next) {
       j.next += this.jGap(j.def.rate);
@@ -3269,6 +3309,7 @@ export class SketchSim {
       breakdowns: this.breakdowns, towed: this.towed, ...this.heldStats(),
       testsSent: this.testsSent, ...(this.test ? { test: { id: this.test.id, state: this.test.state, t0: this.test.t0, ...(this.test.t1 !== undefined ? { t1: this.test.t1 } : {}), stops: this.test.stops, to: this.test.to, path: [...this.test.path] } } : {}),
       pedsCrossed: this.crossings.reduce((a, x) => a + x.ped.crossed, 0), pedsWaiting: this.crossings.reduce((a, x) => a + x.ped.waiting, 0),
+      ...(this.sketch.matrices?.length ? { demand: { matrix: this.mNow?.id ?? null, clock: clockAt(this.sketch, this.t), noRoute: this.mNoRoute } } : {}),
       ...(this.splitOut.size ? { turns: Object.fromEntries(this.turnCounts) } : {}),
       ...(this.journeys.length ? { journeys: this.journeys.map(j => ({
         id: j.def.id, sent: j.sent, arrived: j.arrived, meanTrip: j.arrived ? j.tripSum / j.arrived : 0, noRoute: j.noRoute,

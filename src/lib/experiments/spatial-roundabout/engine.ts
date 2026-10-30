@@ -8,6 +8,7 @@
  * lane they hand back. A separate engine: the main one (lane-sketch-sim.ts) is not used or changed. Plain TypeScript, no framework.
  */
 import { connectorPts, contentsOf, demandWays, entryLanes, exitLanes, hasLevels, isFullCircle, junctionLevel, laneInRate, laneLength, laneOutWeight, nearestOn, pointAt, roadOf, RouteTable, zAt, type Pt, type Sketch, type SketchConnector, type SketchLane } from "../../lane-sketch";
+import { matrixAt, matrixRows, startClock } from "../../demand-matrix";
 import { buildSurface, descend, drivable, edgeDist, exitStart, inCore, routeField, zoneCell, type Island, type Surface, type Zone } from "./surface";
 
 // drivers (as the main engine's defaults)
@@ -215,10 +216,13 @@ export class SpatialSim {
     this.routes = new RouteTable(cut.size ? { ...sk, connectors: sk.connectors.filter(c => !cut.has(c.id)) } : sk);
     // (the sketch's own ways out: a lane whose only ways on are cut is none; a lane in with no way out left brings no cars)
     this.exits = exitLanes(sk).map(l => l.id);
-    for (const lane of entryLanes(sk)) {
+    // (a demand matrix in use, ticket #113: its cells as journeys, the lanes' own rates aside; by the time of day, the one at the start)
+    const mx = matrixAt(sk, startClock(sk));
+    if (!mx) for (const lane of entryLanes(sk)) {
       const rate = laneInRate(lane, sk);
       if (rate > 0 && (!cut.size || this.exits.some(ex => this.routes.from(lane.id, 0, ex) < Infinity))) this.sources.push({ lane, rate, next: this.gap(rate), queue: 0 });
     }
+    if (mx) for (const r of matrixRows(sk, mx)) for (const d of r.dests) this.journeys.push({ id: `matrix:${r.key}>${d.to[0]}`, from: r.from, to: d.to, rate: d.rate, trucks: mx.trucks ?? 0, next: this.gap(d.rate) });
     for (const j of sk.journeys ?? []) {
       const from = ways.entries.find(w => w.lanes.includes(j.from))?.lanes ?? [], to = ways.exits.find(w => w.lanes.includes(j.to))?.lanes ?? [];
       if (!from.length || !to.length || !(j.rate > 0)) continue;
