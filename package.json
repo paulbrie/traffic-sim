@@ -33,6 +33,7 @@
     "edit:check": "tsx scripts/sketch-edit-check.ts",
     "fill:check": "tsx scripts/junction-fill-check.ts",
     "loose:check": "tsx scripts/loose-surface-check.ts",
+    "peds:check": "tsx scripts/ped-phase-check.ts",
     "align:check": "tsx scripts/lane-align-check.ts",
     "bus:check": "tsx scripts/bus-lane-check.ts",
     "bike:check": "tsx scripts/bike-lane-check.ts",

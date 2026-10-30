@@ -172,7 +172,8 @@ const PED_STAND = 0.3;
 /** pedestrians at a zebra: waiting at the kerb (since when), the group on it (from, until), their claim on it, and the counts so far */
 interface PedState { waiting: number; since: number; crossing: number; from: number; until: number; redSince: number; claim: boolean; crossed: number; waitSum: number }
 /** a zebra as the cars see it: where it runs over each lane and connector (s0..s1), the lights over it (the connectors they hold), and its pedestrians */
-interface SimCrossing { def: SketchCrossing; len: number; on: { edge: Edge; s0: number; s1: number }[]; lit: { c: SignalController; conns: string[] }[]; ped: PedState }
+interface SimCrossing { def: SketchCrossing; len: number; on: { edge: Edge; s0: number; s1: number }[]; lit: { c: SignalController; conns: string[] }[];
+  /** (ticket #112) the lights' phase its pedestrians cross in, if they have one: only then */ walk: { c: SignalController; phase: number } | null; ped: PedState }
 /** a zebra's pedestrians, to draw and show: waiting at kerb a, crossing to b (how far across, 0..1) */
 export interface PedView { id: string; waiting: number; crossing: number; progress: number; /** (live only) crossed so far, and their mean wait (s) */ crossed?: number; avgWait?: number }
 
@@ -1142,7 +1143,9 @@ export class SketchSim {
         const conns = on.flatMap(o => (o.edge.kind === "conn" ? [o.edge.id] : o.edge.outs.filter(x => x.conn.len > 0 && o.s1 > o.edge.len - 15).map(x => x.conn.id))).filter(id => c.plan.controlled.includes(id));
         if (conns.length) lit.push({ c, conns });
       }
-      this.crossings.push({ def, len: f.len, on, lit, ped: old.get(def.id) ?? newPed() });
+      let walk: SimCrossing["walk"] = null;
+      for (const c of this.signals) { const phase = c.plan.phases.findIndex(p => p.peds?.includes(def.id)); if (phase >= 0) { walk = { c, phase }; break; } }
+      this.crossings.push({ def, len: f.len, on, lit, walk, ped: old.get(def.id) ?? newPed() });
     }
   }
 
@@ -1167,9 +1170,9 @@ export class SketchSim {
 
   /**
    * The zebras' pedestrians, a step on: new ones come to the kerb; a group on it gets across; those waiting
-   * claim it (no new car may drive onto it) when they may go: at lights early in the red of the traffic over
-   * it, at a zebra a little after the last group (to let cars by); and they step out once no car is on it or
-   * too close to stop.
+   * claim it (no new car may drive onto it) when they may go: at lights with a pedestrian phase in it (while
+   * there is time to get across), at other lights early in the red of the traffic over it, at a zebra a little
+   * after the last group (to let cars by); and they step out once no car is on it or too close to stop.
    */
   private stepPeds(dt: number, byEdge: Map<Edge, SimVehicle[]>) {
     for (const x of this.crossings) {
@@ -1179,11 +1182,16 @@ export class SketchSim {
       const lights = x.lit.length > 0;
       const red = lights && x.lit.every(({ c, conns }) => conns.every(id => c.stateOf(id) === "red"));
       if (lights) { if (!red) p.redSince = -1; else if (p.redSince < 0) p.redSince = this.t; }
-      if (!p.waiting || p.crossing) { p.claim = false; continue; }
-      const allowed = lights ? red && this.t - p.redSince < PED_WALK : this.t >= p.until + PED_YIELD;
+      // (a phase of their own: in its green, while there is time left to get across; else early in their traffic's red)
+      const w = x.walk, wp = w?.c.plan.phases[w.phase];
+      const walkNow = !!w && !!wp && w.c.phase === w.phase && w.c.stage === "green" && w.c.into < Math.max(3, wp.green - (x.len / PED_V + 1.5));
+      if (!p.waiting || (p.crossing && !walkNow)) { p.claim = false; continue; }
+      const allowed = w && wp ? walkNow : lights ? red && this.t - p.redSince < PED_WALK : this.t >= p.until + PED_YIELD;
       p.claim = allowed;
       if (!allowed || this.crossingBusy(x, byEdge)) continue;
-      p.crossing = p.waiting; p.from = this.t; p.until = this.t + x.len / PED_V + 1.5;
+      // (in their phase, those come since follow the group already on it, not left for the next cycle)
+      if (p.crossing) { p.crossing += p.waiting; p.until = Math.max(p.until, this.t + x.len / PED_V + 1.5); }
+      else { p.crossing = p.waiting; p.from = this.t; p.until = this.t + x.len / PED_V + 1.5; }
       p.crossed += p.waiting; p.waitSum += p.waiting * (this.t - p.since);
       p.waiting = 0; p.claim = false;
     }
@@ -2122,7 +2130,9 @@ export class SketchSim {
       const l = atLight.get(c);
       if (l) l.push(v); else atLight.set(c, [v]);
     }
-    for (const c of this.signals) c.step(this.t, dt, conns => (atLight.get(c) ?? NO_VEHICLES).some(v => conns.includes(v.exit!.id) && this.exitS(v.exit!) - v.pos < 50));
+    // (a pedestrian phase: someone waiting at one of its zebras, as at a push button, ticket #112)
+    for (const c of this.signals) c.step(this.t, dt, ph => (ph.conns.length > 0 && (atLight.get(c) ?? NO_VEHICLES).some(v => ph.conns.includes(v.exit!.id) && this.exitS(v.exit!) - v.pos < 50))
+      || !!ph.peds?.some(id => (this.crossings.find(x => x.def.id === id)?.ped.waiting ?? 0) > 0));
     const byEdge = new Map<Edge, SimVehicle[]>();
     for (const v of this.vehicles) { const l = byEdge.get(v.edge); if (l) l.push(v); else byEdge.set(v.edge, [v]); }
     if (this.crossings.length) this.stepPeds(dt, byEdge);

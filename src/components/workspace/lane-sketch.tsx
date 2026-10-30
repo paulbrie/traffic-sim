@@ -2509,7 +2509,7 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover, now, onPick 
         onValueChange={v => {
           if (!v) return;
           // (by hand: starting from the phases worked out now)
-          if (v === "custom") setPhases(plan.phases.map(p => ({ name: p.name, green: p.green, conns: [...p.conns] })));
+          if (v === "custom") setPhases(plan.phases.map(p => ({ name: p.name, green: p.green, conns: [...p.conns], ...(p.peds?.length ? { peds: [...p.peds] } : {}) })));
           else editSketch(sk => ({ ...sk, junctions: sk.junctions.map(x => { if (x.id !== junction.id) return x; const n = { ...L, mode: v as JunctionLights["mode"] }; delete n.phases; return { ...x, lights: n }; }) }));
         }}>
         <ToggleGroupItem value="pairs" className="h-7 flex-1 px-1 text-[11px]" title="Ways facing each other get green together">Opposite together</ToggleGroupItem>
@@ -2520,10 +2520,32 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover, now, onPick 
         <div className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
           {plan.phases.map((p, i) => (
             <div key={i} className="flex justify-between gap-2 rounded px-1 text-xs hover:bg-muted" onMouseEnter={() => onHover({ conns: p.conns })} onMouseLeave={() => onHover(null)}>
-              <span className="min-w-0 truncate"><span className="text-muted-foreground">{p.name}:</span> {timesEach(p.ways.map(name)).join(" + ")}</span>
+              <span className="min-w-0 truncate"><span className="text-muted-foreground">{p.name}:</span> {[...timesEach(p.ways.map(name)), ...(p.peds ?? []).map(id => `people at zebra ${id}`)].join(" + ")}{p.peds?.length && !p.conns.length ? " (every way red)" : ""}</span>
               <span className="shrink-0 font-mono tabular text-muted-foreground">{p.green} s</span>
             </div>
           ))}
+          {/* (ticket #112: zebras on the lights; one whose traffic is green in every phase gets a phase of its own) */}
+          {plan.crossings.length > 0 && (
+            <div className="mt-1 grid grid-cols-[1fr_auto] items-end gap-2">
+              <label className="flex items-center justify-between gap-2 pb-1.5 text-xs"
+                title="A zebra on these lights whose traffic has green in every phase (one across both ways of the road, say) gets a phase of its own: every way red while people cross. Actuated, it comes when someone is waiting, as at a push button">
+                Pedestrian phase <Switch checked={L.pedPhase !== false} onCheckedChange={on => { const n = { ...L }; if (on) delete n.pedPhase; else n.pedPhase = false; editSketch(sk => ({ ...sk, junctions: sk.junctions.map(x => (x.id === junction.id ? { ...x, lights: n } : x)) })); }} />
+              </label>
+              {(() => {
+                const ped = plan.phases.find(p => p.peds?.length && !p.conns.length);
+                return ped
+                  ? <NumberField id="sk-walk" label="Walk" unit="s" digits={0} value={ped.green} min={3} max={120} step={1} onCommit={walk => set({ walk })} />
+                  : <span />;
+              })()}
+              <p className="col-span-2 text-[11px] text-muted-foreground">
+                {L.pedPhase === false
+                  ? `Off: people at ${timesEach(plan.crossings.map(x => `zebra ${x.id}`)).join(", ")} step out only when all their traffic is red, early in the red.`
+                  : plan.phases.some(p => p.peds?.length)
+                    ? "People cross in their phase only, while there is time to get across; a car waits for anyone still on it."
+                    : `People at ${timesEach(plan.crossings.map(x => `zebra ${x.id}`)).join(", ")} cross early in their traffic's red: no phase of their own needed.`}
+              </p>
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid gap-2">
@@ -2551,6 +2573,18 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover, now, onPick 
                   ))}
                 </div>
               ))}
+              {plan.crossings.length > 0 && (
+                <div className="grid gap-0.5">
+                  <span className="text-[11px] text-muted-foreground" title="People there cross only in this phase, while there is time to get across (its whole green, best with none of their traffic green in it)">People cross</span>
+                  {plan.crossings.map(x => (
+                    <label key={x.id} className="flex items-center gap-1.5 text-xs">
+                      <input type="checkbox" className="accent-green-600" checked={!!p.peds?.includes(x.id)}
+                        onChange={e => { const peds = e.target.checked ? [...(p.peds ?? []), x.id] : (p.peds ?? []).filter(y => y !== x.id); setPhase(i, { peds: peds.length ? peds : undefined }); }} />
+                      <span className="truncate">Zebra crossing {x.id}{p.conns.some(id => x.conns.includes(id)) ? " (its traffic has green here too)" : ""}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
           <Button size="sm" variant="outline" disabled={phases.length >= MAX_PHASES} onClick={() => setPhases([...phases, { green: L.green, conns: [] }])}><Plus /> Add phase</Button>
