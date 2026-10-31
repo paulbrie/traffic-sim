@@ -178,7 +178,7 @@ export function MatrixDialog({ sketch, id, entries, exits, readOnly, onClose }: 
             <Button size="sm" variant="outline" className="h-8" disabled={readOnly || scale === 100 || !g.total} onClick={() => { editSketch(s => scaleMatrix(s, id, scale / 100)); setScale(100); }}>Apply</Button>
           </div>
           <div className="ml-auto flex items-end gap-2">
-            <span className="pb-2 text-muted-foreground">{R} ways in × {C} ways out · <span className={num}>{Math.round(g.total)}</span> veh/h in all</span>
+            <span className="pb-2 text-muted-foreground">{R} ways in × {C} ways out · <span className={num}>{fmt(g.total) || "0"}</span> veh/h in all</span>
             <Button size="sm" variant="outline" className="h-8" title="Copy the whole matrix with the ways' names, to paste into a spreadsheet"
               onClick={() => void navigator.clipboard.writeText(matrixText(sketch, m, { entries, exits })).then(() => toast("Matrix copied, with the ways' names"))}><Copy /> Copy all</Button>
           </div>
@@ -215,7 +215,7 @@ export function MatrixDialog({ sketch, id, entries, exits, readOnly, onClose }: 
               {cols.map(c => (
                 <div key={`T:${c}`} className={cn("absolute flex items-center justify-end border-t-2 border-r bg-muted/40 px-1.5 font-medium", num)} style={{ left: HEAD_W + c * COL_W, top: HEAD_H + R * ROW_H, width: COL_W, height: ROW_H }}>{fmt(g.cols.get(exits[c].key) ?? 0) || "0"}</div>
               ))}
-              <div className={cn("absolute flex items-center justify-end border-t-2 border-l-2 bg-muted px-1.5 font-semibold", num)} style={{ left: HEAD_W + C * COL_W, top: HEAD_H + R * ROW_H, width: COL_W, height: ROW_H }}>{Math.round(g.total)}</div>
+              <div className={cn("absolute flex items-center justify-end border-t-2 border-l-2 bg-muted px-1.5 font-semibold", num)} style={{ left: HEAD_W + C * COL_W, top: HEAD_H + R * ROW_H, width: COL_W, height: ROW_H }}>{fmt(g.total) || "0"}</div>
               {/* the headers, kept in view: the ways out along the top, the ways in down the side */}
               {cols.map(c => (
                 <div key={`h:${c}`} className={cn("absolute z-10 flex items-end border-r border-b bg-background px-1.5 pb-1 text-[11px] leading-tight font-medium", c === sel.c && "bg-primary/10")}
@@ -255,7 +255,7 @@ export function TimeField({ label, value, onCommit, disabled, className }: { lab
     setDraft(null);
   };
   return (
-    <Input aria-label={label} value={draft ?? hhmm(value)} disabled={disabled} className={cn("h-8 w-16 text-center font-mono text-xs tabular", className)} placeholder="07:30"
+    <Input aria-label={label} value={draft ?? hhmm(value)} disabled={disabled} className={cn("h-8 w-[4.5rem] px-1.5 text-center font-mono text-xs tabular md:text-xs", className)} placeholder="07:30"
       onChange={e => setDraft(e.target.value)} onBlur={done} onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setDraft(null); }} />
   );
 }
