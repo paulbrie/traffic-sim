@@ -29,8 +29,8 @@ export interface ReplayKept { from: number; to: number; frames: number; bytes: n
  * The lane sketch's replay, as V1's (replay-bar.tsx): what the cars did is kept (the last 10 minutes, every
  * 0.1 s, or less in a big town: then the time kept is shown); drag to any moment, step back and forward (held, it keeps stepping; ← → too, Shift for a second),
  * play it back at the simulation speed, copy the moment to paste into a conversation. Live goes back to the
- * cars as they are (replaying doesn't change them; going into the replay pauses them). The time of day shown first (ticket #115):
- * the simulation's start (the sketch's "Simulation starts at", midnight if not set) and the time simulated.
+ * cars as they are (replaying doesn't change them; going into the replay pauses them). Its times are times of day (ticket #115):
+ * from the simulation's start (the sketch's "Simulation starts at", midnight if not set); the time simulated in the tooltip.
  */
 export function SketchReplayBar({ kept, t, start = 0, playing, onPlaying, onShow, onLive, onCopy, above = 0, sides = { left: 0, right: 0 } }: {
   kept: ReplayKept | null;
@@ -93,8 +93,7 @@ export function SketchReplayBar({ kept, t, start = 0, playing, onPlaying, onShow
       <Slider className="flex-1" min={kept.from} max={kept.to} step={REPLAY_STEP} value={[cur]} onValueChange={([v]) => go(v)} aria-label="Replay position" />
       <span className="shrink-0 text-right font-mono tabular text-muted-foreground"
         title={`The time of day: the simulation started at ${timeOfDay(start, 0).slice(0, 5)}${start ? "" : " (midnight: set \"Simulation starts at\" in Demand)"}, ${clock(cur)} simulated · step ${Math.round(cur / REPLAY_STEP)} · ${kept.frames} steps kept (${(kept.bytes / 1048576).toFixed(1)} MB), from ${clock(kept.from)}${kept.capped ? " (the last " + clock(kept.to - kept.from) + " only: the memory kept for the replay is full)" : ""}`}>
-        <span className="font-semibold text-foreground" aria-label="Time of day">{timeOfDay(start, cur)}</span>
-        {" "}· started {timeOfDay(start, 0).slice(0, 5)} · {clock(cur)} / {clock(kept.to)}{kept.capped ? <span className="text-foreground/70"> · last {clock(kept.to - kept.from)}</span> : null}
+        started {timeOfDay(start, 0).slice(0, 5)} · <span className="font-semibold text-foreground" aria-label="Time of day">{timeOfDay(start, cur)}</span> / {timeOfDay(start, kept.to)}{kept.capped ? <span className="text-foreground/70"> · last {clock(kept.to - kept.from)}</span> : null}
       </span>
       <Button size="icon-sm" variant="ghost" aria-label="Copy this moment's data"
         title="Copy this moment's data (the cars in view, the lights, and what happened a minute either side) to paste into a conversation"
