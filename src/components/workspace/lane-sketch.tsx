@@ -2140,7 +2140,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {searchShown && <SketchSearch sketch={sketch} contents={contents} cars={searchCars}
             commands={canTest && hasSel(sel) ? [{ title: "Test in Sketch", sub: "the selection, on its own in the Sketch window · ⇧T", run: () => testInSketch() }] : []}
             onGo={goTo} onClose={() => { setSearchShown(false); panel.current?.focus(); }} />}
-          <SketchReplayBar kept={replayRange} t={replayT} playing={replayPlaying} onPlaying={setReplayPlaying}
+          <SketchReplayBar kept={replayRange} t={replayT} start={startClock(sketch)} playing={replayPlaying} onPlaying={setReplayPlaying}
             onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0}
             sides={{ left: consoleOpen ? 0 : CONSOLE_BUTTON_ROOM, right: ZOOM_ROOM }} />
           {bySpeed && stats && layers.cars && <SpeedLegend above={consoleOpen ? CONSOLE_HEIGHT : 0} />}
