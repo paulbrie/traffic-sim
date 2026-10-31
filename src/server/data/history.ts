@@ -31,5 +31,7 @@ export async function recordVersion(tx: Tx, planId: string, userId: string, snap
   const [cut] = await tx
     .select({ createdAt: schema.planVersions.createdAt })
     .from(schema.planVersions).where(eq(schema.planVersions.planId, planId)).orderBy(desc(schema.planVersions.createdAt)).offset(KEEP_VERSIONS).limit(1);
-  if (cut) await tx.delete(schema.planVersions).where(and(eq(schema.planVersions.planId, planId), lt(schema.planVersions.createdAt, sql`${cut.createdAt}::timestamptz + interval '1 millisecond'`)));
+  // (the time as text: the driver takes a Date in a raw sql fragment for a string and fails, every save once a plan had
+  // KEEP_VERSIONS versions)
+  if (cut) await tx.delete(schema.planVersions).where(and(eq(schema.planVersions.planId, planId), lt(schema.planVersions.createdAt, sql`${cut.createdAt.toISOString()}::timestamptz + interval '1 millisecond'`)));
 }
