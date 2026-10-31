@@ -1,6 +1,6 @@
 /** What pauses the cars (T158): map edits, not the run's settings; and what undo keeps (T160). `npm run edit:check` */
 import { mapChanged, stepBack } from "../src/lib/sketch-edit";
-import { sanitizeSketch, type Sketch } from "../src/lib/lane-sketch";
+import { reshape, sanitizeSketch, type Sketch } from "../src/lib/lane-sketch";
 
 let ok = true;
 const check = (name: string, pass: boolean) => { ok &&= pass; console.log(`${pass ? "ok  " : "FAIL"} ${name}`); };
@@ -34,4 +34,17 @@ const withJ: Sketch = { ...sk, journeys: [{ id: "t1", from: "a", to: "b", rate: 
 check("a lane delete undone: its journeys back with it, unless the journeys changed since", stepBack(withJ, noB, noB).journeys?.length === 1 && stepBack(withJ, noB, { ...noB, journeys: [{ id: "t2", from: "a", to: "a", rate: 50 }] }).journeys?.[0].id === "t2");
 const added: Sketch = { ...sk, lanes: [...sk.lanes, line("c", 130, 180)] }, toC: Sketch = { ...added, journeys: [{ id: "t3", from: "a", to: "c", rate: 80 }] };
 check("a lane added, a journey to it, the add undone: the journey naming it lets go", !stepBack(sk, added, toC).journeys?.length && !stepBack(sk, added, toC).lanes.some(l => l.id === "c"));
+// ticket #116: a lane's start dragged back (its first point), its connectors stay where they were on the ground: the one out of its
+// end still at its end (not 50 m before it), the one 10 m before its end still 10 m before it, the one into its start at its start
+{
+  const k0 = sanitizeSketch({ lanes: [line("a", 0, 50), line("b", 60, 120), line("c", 60, 100), line("z", -80, -60)],
+    connectors: [{ id: "end", from: { lane: "a", s: 50 }, to: { lane: "b", s: 0 } }, { id: "mid", from: { lane: "a", s: 40 }, to: { lane: "c", s: 0 } }, { id: "in", from: { lane: "z", s: 20 }, to: { lane: "a", s: 0 } }],
+    roads: [], junctions: [], traffic: { rate: 600, speed: 50 } })!;
+  const k1 = reshape(k0, "a", { kind: "line", pts: [{ x: -50, y: 0 }, { x: 50, y: 0 }] }), c = (id: string) => k1.connectors.find(x => x.id === id)!;
+  check("a lane's start dragged 50 m back: the connector out of its end still at its end", c("end").from.s === 100);
+  check("…the one 10 m before its end still 10 m before it", c("mid").from.s === 90);
+  check("…the one into its start at its new start", c("in").to.s === 0);
+  const k2 = reshape(k0, "a", { kind: "line", pts: [{ x: 0, y: 0 }, { x: 30, y: 0 }] });
+  check("its end pulled in to 30 m: the connector out of its end at its new end, the one at 40 m at 30", k2.connectors.find(x => x.id === "end")!.from.s === 30 && k2.connectors.find(x => x.id === "mid")!.from.s === 30);
+}
 process.exit(ok ? 0 : 1);

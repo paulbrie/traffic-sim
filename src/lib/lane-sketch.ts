@@ -1637,13 +1637,19 @@ export function signalPlans(sk: Sketch): SignalPlan[] {
   return x;
 }
 
-/** a lane's shape changed; connectors on it are kept within its new length */
+/**
+ * A lane's shape changed (a point dragged, put in or taken out, curved): connectors on it stay where they were on the ground
+ * (at the nearest place on the new shape), those at its start or end at its start or end (ticket #116: its first point dragged
+ * 58 m back, they kept their distance from the start, so its connectors out of its end began 76 and 90 m before it, running
+ * alongside it, and the cars on it and on them held each other up all that way)
+ */
 export function reshape(sk: Sketch, id: string, shape: LaneShape, width?: number): Sketch {
-  const L = laneLength(shape), clamp = (a: LaneAt) => (a.lane === id ? { ...a, s: Math.min(a.s, L) } : a);
+  const l = sk.lanes.find(x => x.id === id);
+  if (!l) return sk;
   return {
     ...sk,
-    lanes: sk.lanes.map(l => (l.id === id ? { ...l, shape, width: width ?? l.width } : l)),
-    connectors: sk.connectors.map(c => ({ ...c, from: clamp(c.from), to: clamp(c.to) })),
+    lanes: sk.lanes.map(x => (x.id === id ? { ...x, shape, width: width ?? x.width } : x)),
+    connectors: replace(sk, new Map([[id, { old: l.shape, shape }]])),
   };
 }
 
