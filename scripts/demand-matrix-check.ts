@@ -5,7 +5,7 @@
  * matrix in use, the run as before; cells set, scaled, copied as text and read back.   npm run matrix:check
  */
 import { demandWays, MATRIX_BY_TIME, sanitizeSketch, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
-import { addMatrix, moveLostCell, sameStreet, currentDemand, inPeriod, matrixAt, matrixGrid, matrixText, overlaps, parseCells, reachable, scaleMatrix, setCells, setStartClock, updateMatrix, setMatrixOn } from "../src/lib/demand-matrix";
+import { addMatrix, uncovered, moveLostCell, sameStreet, currentDemand, inPeriod, matrixAt, matrixGrid, matrixText, overlaps, parseCells, reachable, scaleMatrix, setCells, setStartClock, updateMatrix, setMatrixOn } from "../src/lib/demand-matrix";
 import { SketchSim } from "../src/lib/lane-sketch-sim";
 
 let ok = true;
@@ -68,6 +68,10 @@ const count = (xs: { lane: string; dest: string }[], lane: string | null, dest: 
   check("…the stats on Late at 08:30", r.stats.demand?.matrix === m2.id && Math.abs(r.stats.demand!.clock - 510) < 0.1, JSON.stringify(r.stats.demand));
   const after = run(setStartClock(sk, 8 * 60 + 50), 1200), lateOn = after.ins.filter(x => x.t < 590), none = after.ins.filter(x => x.t > 610);
   check("…and past 09:00, no matrix for the time: the ways' rates and shares again (B comes in)", count(lateOn, "B", null) === 0 && count(none, "B", null) > 40, `B before 09:00 ${count(lateOn, "B", null)}, after ${count(none, "B", null)}`);
+  // ticket #123: the times no matrix covers, and what comes in then
+  const u = uncovered(sk), z = uncovered({ ...sk, traffic: { ...sk.traffic!, rate: 0 } });
+  check("by the time of day: the times no matrix covers, across midnight as one, and what comes in then", u.gaps.length === 1 && u.gaps[0].start === 540 && u.gaps[0].end === 420 && u.fallback === 800 && z.fallback === 0, JSON.stringify(u));
+  check("…none with an all-day matrix", uncovered(updateMatrix(sk, m2.id, { start: undefined, end: undefined })).gaps.length === 0);
   check("periods past midnight", inPeriod({ id: "n", name: "n", od: {}, start: 22 * 60, end: 6 * 60 }, 23 * 60) && inPeriod({ id: "n", name: "n", od: {}, start: 22 * 60, end: 6 * 60 }, 60) && !inPeriod({ id: "n", name: "n", od: {}, start: 22 * 60, end: 6 * 60 }, 12 * 60));
   check("overlapping periods found", overlaps(updateMatrix(sk, m2.id, { start: 7 * 60 + 30, end: 9 * 60 })).length === 1 && overlaps(sk).length === 0);
 }

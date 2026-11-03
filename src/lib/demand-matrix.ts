@@ -47,6 +47,24 @@ export function overlaps(sk: Sketch): [string, string][] {
   }
   return out;
 }
+/**
+ * (ticket #123) By the time of day: the times no matrix covers (minutes after midnight, `start` to `end`, past midnight when `end`
+ * is before it; none with an all-day matrix), and the vehicles an hour coming in then (the ways' own rates, and journeys)
+ */
+export function uncovered(sk: Sketch): { gaps: { start: number; end: number }[]; fallback: number } {
+  const ms = sk.matrices ?? [], on = (t: number) => ms.some(m => inPeriod(m, t + 0.5)), gaps: { start: number; end: number }[] = [];
+  if (sk.matrixOn !== MATRIX_BY_TIME || !ms.length || ms.some(m => m.start === undefined || m.end === undefined || m.start === m.end)) return { gaps, fallback: 0 };
+  for (let t = 0; t < MINUTES_A_DAY; t++) {
+    if (on(t)) continue;
+    const last = gaps[gaps.length - 1];
+    if (last && last.end === t) last.end = t + 1; else gaps.push({ start: t, end: t + 1 });
+  }
+  // (one gap across midnight: as one)
+  if (gaps.length > 1 && gaps[0].start === 0 && gaps[gaps.length - 1].end === MINUTES_A_DAY) { gaps[0] = { start: gaps[gaps.length - 1].start, end: gaps[0].end }; gaps.pop(); }
+  const w = demandWays(sk), fallback = w.entries.reduce((a, e) => a + e.lanes.reduce((b, id) => b + laneInRate(laneById(sk, id)!, sk), 0), 0) + (sk.journeys ?? []).reduce((a, j) => a + j.rate, 0);
+  return { gaps, fallback };
+}
+
 /** "07:30" (as a clock shows it: 07:30:50 is still 07:30) */
 export const hhmm = (min: number) => { const m = Math.floor(min + 1e-6) % MINUTES_A_DAY; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
 /** "07:30" (or "7:30", "730", "7") as minutes after midnight (null: not a time) */

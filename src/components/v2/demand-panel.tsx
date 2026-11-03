@@ -17,7 +17,7 @@ import { NumberField } from "@/components/workspace/fields";
 import { cn } from "@/lib/utils";
 import { addJourney, deleteJourney, demandWays, laneInRate, laneOutWeight, laneById, setInRate, setOutWeight, updateJourney, type DemandWay, type Pt, type Sketch, type SketchJourney } from "@/lib/lane-sketch";
 import type { JourneyStats, SimStats } from "@/lib/lane-sketch-sim";
-import { MATRIX_BY_TIME, addMatrix, deleteMatrix, demandMode, duplicateMatrix, hhmm, matrixGrid, moveMatrix, overlaps, periodText, setStartClock, startClock, setMatrixOn } from "@/lib/demand-matrix";
+import { MATRIX_BY_TIME, uncovered, addMatrix, deleteMatrix, demandMode, duplicateMatrix, hhmm, matrixGrid, moveMatrix, overlaps, periodText, setStartClock, startClock, setMatrixOn } from "@/lib/demand-matrix";
 import { MatrixDialog, TimeField } from "./demand-matrix-dialog";
 import { useSketchStore } from "@/state/lane-sketch";
 import { compassNames } from "./compass-names";
@@ -106,7 +106,9 @@ function Matrices({ sketch, entries, exits, readOnly, now }: { sketch: Sketch; e
     editSketch(s => { const r = addMatrix(s, from); if (!r) return s; made = r[1].id; return r[0]; });
     if (made) setOpen(made); else toast.error("No room for another matrix", { description: "A sketch keeps 30 at most." });
   };
-  const clash = overlaps(sketch);
+  const clash = overlaps(sketch), gap = uncovered(sketch);
+  // (the times no matrix covers, and what comes in then: ticket #123, a run past the last period emptied without a word)
+  const gapText = gap.gaps.map(g => `${hhmm(g.start)}–${hhmm(g.end)}`).join(", "), none = gap.fallback === 0;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5">
       <div className="flex items-center gap-2">
@@ -128,7 +130,7 @@ function Matrices({ sketch, entries, exits, readOnly, now }: { sketch: Sketch; e
       )}
       {now && (
         <p className="text-[11px] text-muted-foreground">
-          Now <span className="font-mono tabular">{hhmm(now.clock)}</span> · {now.matrix ? <>matrix <span className="font-medium text-foreground">{ms.find(m => m.id === now.matrix)?.name ?? now.matrix}</span></> : mode.kind === "ways" ? "each way's rate and share" : "no matrix for this time: each way's rate and share"}
+          Now <span className="font-mono tabular">{hhmm(now.clock)}</span> · {now.matrix ? <>matrix <span className="font-medium text-foreground">{ms.find(m => m.id === now.matrix)?.name ?? now.matrix}</span></> : mode.kind === "ways" ? "each way's rate and share" : none ? <span className="text-amber-700 dark:text-amber-500">no matrix for this time, and the ways&apos; own rates are 0: no cars come in</span> : "no matrix for this time: each way's rate and share"}
           {now.noRoute > 0 && <span className="text-amber-700 dark:text-amber-500"> · {now.noRoute} sent with no way to their way out</span>}
         </p>
       )}
@@ -149,6 +151,12 @@ function Matrices({ sketch, entries, exits, readOnly, now }: { sketch: Sketch; e
           </div>
         );
       })}
+      {gap.gaps.length > 0 && (
+        <p className={cn("flex gap-1.5 text-[11px]", none ? "text-amber-700 dark:text-amber-500" : "text-muted-foreground")}>
+          {none && <TriangleAlert className="mt-0.5 size-3 shrink-0" />}
+          <span>No matrix covers {gapText}. Then each way&apos;s own rate and share is used{none ? ": 0 veh/h here, so no cars come in (those already in drive off). Add a matrix for those hours, make one all day, or set the ways' rates below." : ` (${Math.round(gap.fallback)} veh/h in all).`}</span>
+        </p>
+      )}
       {clash.length > 0 && <p className="flex gap-1.5 text-[11px] text-amber-700 dark:text-amber-500"><TriangleAlert className="mt-0.5 size-3 shrink-0" /> Periods overlap ({clash.map(([a, b]) => `${a} and ${b}`).join("; ")}): by the time of day, the one listed first is used.</p>}
       {!readOnly && (
         <div className="flex gap-1.5">

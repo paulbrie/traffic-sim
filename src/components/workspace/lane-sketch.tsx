@@ -84,7 +84,7 @@ import { resolveTuning } from "@/lib/sketch-tuning";
 import { CarWhy, EdgeLink, PlaceLink, SketchGoContext, SketchText, type SketchPlace } from "./car-explain";
 import { deadEndTurnarounds } from "@/lib/dead-ends";
 import { looseSurfaces } from "@/lib/loose-surface";
-import { matrixAt, matrixGrid, startClock } from "@/lib/demand-matrix";
+import { MATRIX_BY_TIME, hhmm, matrixAt, matrixGrid, startClock, uncovered } from "@/lib/demand-matrix";
 
 /** what can be shown on the sketch, or hidden (kept in the browser) */
 type Layers = SketchLayers;
@@ -351,6 +351,15 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (ticket #93: some of the lanes the menu is for locked, theirs or their road's: what would change them offered greyed)
   const menuLocked = !!menu?.lanes.some(id => laneLocked(sketch, id));
   const [stats, setStats] = useState<SimStats | null>(() => sketchSim()?.stats() ?? null);
+  // (ticket #123) by the time of day: the run passing out of the matrices' periods into a time no matrix covers, the ways' own
+  // rates 0 there: said once, as it happens (no more cars come in; the map empties)
+  const demandWas = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const d = stats?.demand, was = demandWas.current;
+    demandWas.current = d ? d.matrix : undefined;
+    if (!d || was === undefined || d.matrix !== null || was === null || sketch.matrixOn !== MATRIX_BY_TIME || uncovered(sketch).fallback > 0) return;
+    toast.warning(`${hhmm(d.clock)}: no matrix covers this time`, { description: "The ways' own rates are 0 here, so no more cars come in. Add a matrix for these hours (Demand), or make one all day." });
+  }, [stats, sketch]);
   // (a junction's traffic over time for its live graph, ticket #109: asked of the cars' worker; one function, so the graph isn't asked again each render)
   const loadSeries = useCallback((id: string) => sim.current?.junctionSeries(id) ?? Promise.resolve(null), []);
   /** the zebras' pedestrians, as the last frame had them (for the crossing's panel) */
