@@ -5,7 +5,7 @@
  * matrix in use, the run as before; cells set, scaled, copied as text and read back.   npm run matrix:check
  */
 import { demandWays, MATRIX_BY_TIME, sanitizeSketch, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
-import { addMatrix, currentDemand, inPeriod, matrixAt, matrixGrid, matrixText, overlaps, parseCells, reachable, scaleMatrix, setCells, setStartClock, updateMatrix, setMatrixOn } from "../src/lib/demand-matrix";
+import { addMatrix, moveLostCell, currentDemand, inPeriod, matrixAt, matrixGrid, matrixText, overlaps, parseCells, reachable, scaleMatrix, setCells, setStartClock, updateMatrix, setMatrixOn } from "../src/lib/demand-matrix";
 import { SketchSim } from "../src/lib/lane-sketch-sim";
 
 let ok = true;
@@ -93,6 +93,24 @@ const count = (xs: { lane: string; dest: string }[], lane: string | null, dest: 
   check("scaled by 1.5", g.cell.get(A.key)?.get(X.key) === 300 && g.total === 1200, `${g.total}`);
   sk = setCells(sk, m.id, [{ from: A, to: Y, rate: 0 }]);
   check("a cell set to 0: gone", sk.matrices![0].od.A?.Y === undefined && matrixGrid(sk, sk.matrices![0]).rows.get(A.key) === 300);
+}
+
+// ticket #120: a way out carried on (its lane now leads on to another): its cells follow; carried on past a fork: kept apart, to move
+{
+  const [s0, m] = addMatrix(base, "empty", "Follow")!;
+  const sk0 = setCells(s0, m.id, [{ from: A, to: X, rate: 300 }]);
+  const on: Sketch = { ...sk0, lanes: [...sk0.lanes, line("X2", [[210, 20], [300, 20]])], connectors: [...sk0.connectors, conn("cXX2", "X", 120, "X2")] };
+  const X2 = demandWays(on).exits.find(w => w.lanes.includes("X2"))!;
+  const g = matrixGrid(on, on.matrices![0]);
+  check("a way out carried on to a new end: its cells follow there", g.cell.get(A.key)?.get(X2.key) === 300 && !g.lost.length, JSON.stringify([...g.cols]));
+  const set = setCells(on, m.id, [{ from: A, to: X2, rate: 50 }]), g2 = matrixGrid(set, set.matrices![0]);
+  check("…a cell set there then: the one kept under the old lane goes (not counted twice)", g2.cell.get(A.key)?.get(X2.key) === 50 && g2.total === 50, JSON.stringify(set.matrices![0].od));
+  const fork: Sketch = { ...on, lanes: [...on.lanes, line("X3", [[210, 40], [300, 60]])], connectors: [...on.connectors, conn("cXX3", "X", 120, "X3")] };
+  const g3 = matrixGrid(fork, fork.matrices![0]);
+  check("carried on past a fork: the cell can't be placed, listed (not simulated)", g3.lost.length === 1 && g3.lost[0].rate === 300 && g3.lost[0].toWay === null && g3.total === 0, JSON.stringify(g3.lost));
+  const X3 = demandWays(fork).exits.find(w => w.lanes.includes("X3"))!, moved = moveLostCell(fork, m.id, g3.lost[0], { from: A, to: X3 });
+  const g4 = matrixGrid(moved, moved.matrices![0]);
+  check("…moved to a way out picked: placed there", g4.cell.get(A.key)?.get(X3.key) === 300 && !g4.lost.length, JSON.stringify(moved.matrices![0].od));
 }
 
 console.log(ok ? "demand matrix check: all ok" : "demand matrix check: FAILED");

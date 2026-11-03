@@ -16,8 +16,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { NumberField } from "@/components/workspace/fields";
 import { cn } from "@/lib/utils";
-import { hhmm, matrixGrid, matrixText, parseCells, parseHhmm, reachable, scaleMatrix, setCells, updateMatrix } from "@/lib/demand-matrix";
-import type { DemandWay, Sketch } from "@/lib/lane-sketch";
+import { hhmm, matrixGrid, matrixText, moveLostCell, parseCells, parseHhmm, reachable, scaleMatrix, setCells, updateMatrix, type MatrixGrid } from "@/lib/demand-matrix";
+import { laneById, roadOf, type DemandWay, type Sketch } from "@/lib/lane-sketch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSketchStore } from "@/state/lane-sketch";
 
 const ROW_H = 26, COL_W = 78, HEAD_W = 190, HEAD_H = 64, OVER = 4;
@@ -183,7 +184,7 @@ export function MatrixDialog({ sketch, id, entries, exits, readOnly, onClose }: 
               onClick={() => void navigator.clipboard.writeText(matrixText(sketch, m, { entries, exits })).then(() => toast("Matrix copied, with the ways' names"))}><Copy /> Copy all</Button>
           </div>
         </div>
-        {g.orphans > 0 && <p className="text-[11px] text-amber-700 dark:text-amber-500">{g.orphans} cell{g.orphans === 1 ? " is" : "s are"} for ways that are gone (lanes deleted): left out.</p>}
+        {g.lost.length > 0 && <LostCells sketch={sketch} id={id} lost={g.lost} entries={entries} exits={exits} readOnly={readOnly} />}
         {!R || !C ? <p className="text-sm text-muted-foreground">This sketch has no ways in or no ways out yet.</p> : (
           <div ref={box} className="relative min-h-0 flex-1 overflow-auto rounded-md border text-xs select-none"
             onScroll={e => { const el = e.currentTarget; setScroll(s => ({ ...s, x: el.scrollLeft, y: el.scrollTop })); }}>
@@ -259,3 +260,45 @@ export function TimeField({ label, value, onCommit, disabled, className }: { lab
       onChange={e => setDraft(e.target.value)} onBlur={done} onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setDraft(null); }} />
   );
 }
+
+/**
+ * (ticket #120) Cells kept under lanes that no longer lead to a way in or out (the street changed past a fork, or the lane
+ * went): each with its vehicles per hour, the end that is lost, to move to a way picked (added to what is there) or drop.
+ */
+function LostCells({ sketch, id, lost, entries, exits, readOnly }: {
+  sketch: Sketch; id: string; lost: MatrixGrid["lost"]; entries: DemandWay[]; exits: DemandWay[]; readOnly: boolean;
+}) {
+  const { edit: editSketch } = useSketchStore();
+  const name = (ways: DemandWay[], key: string | null, lane: string) => {
+    const w = key ? ways.find(x => x.key === key) : null;
+    if (w) return w.name;
+    const r = roadOf(sketch, lane);
+    return laneById(sketch, lane) ? `lane ${lane}${r ? ` (${r.name})` : ""}, no longer a way ${ways === entries ? "in" : "out"}` : `lane ${lane}, deleted`;
+  };
+  const total = lost.reduce((a, x) => a + x.rate, 0);
+  return (
+    <div className="grid gap-1 rounded-md border border-amber-300 bg-amber-50 p-2 text-[11px] dark:border-amber-800 dark:bg-amber-950/40">
+      <p className="text-amber-800 dark:text-amber-400">
+        {lost.length} cell{lost.length === 1 ? "" : "s"} ({Math.round(total * 10) / 10} veh/h) can&apos;t be placed: the street changed past a fork, or a lane went. Not simulated: move each to a way, or drop it.
+      </p>
+      {lost.map(x => (
+        <div key={`${x.from}>${x.to}`} className="flex flex-wrap items-center gap-1.5">
+          <span className="min-w-0 flex-1 truncate" title={`kept under lanes ${x.from} → ${x.to}`}>
+            {name(entries, x.fromWay, x.from)} → {name(exits, x.toWay, x.to)} · <span className="font-mono tabular">{x.rate}</span> veh/h
+          </span>
+          {!readOnly && (x.fromWay || x.toWay) && (
+            <Select value="" onValueChange={k => {
+              const from = x.fromWay ? entries.find(w => w.key === x.fromWay)! : entries.find(w => w.key === k)!, to = x.toWay ? exits.find(w => w.key === x.toWay)! : exits.find(w => w.key === k)!;
+              if (from && to) editSketch(s => moveLostCell(s, id, x, { from, to }));
+            }}>
+              <SelectTrigger size="sm" className="h-6 w-48 text-[11px]" aria-label={`Move ${x.from} → ${x.to} to`}><SelectValue placeholder={x.toWay ? "Move to the way in…" : "Move to the way out…"} /></SelectTrigger>
+              <SelectContent>{(x.toWay ? entries : exits).map(w => <SelectItem key={w.key} value={w.key} className="text-xs">{w.name}</SelectItem>)}</SelectContent>
+            </Select>
+          )}
+          {!readOnly && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => editSketch(s => moveLostCell(s, id, x, null))}>Drop</Button>}
+        </div>
+      ))}
+    </div>
+  );
+}
+

@@ -61,24 +61,63 @@ export const periodText = (m: DemandMatrix) => (m.start === undefined || m.end =
 
 // ---------------------------------------------------------------- reading a matrix by its ways
 
-/** a matrix's cells by way: entries' keys to exits' keys to vehicles per hour; and cells whose ways are gone */
-export interface MatrixGrid { cell: Map<string, Map<string, number>>; rows: Map<string, number>; cols: Map<string, number>; total: number; orphans: number }
-const grids = new LastFew<DemandMatrix, { ways: object; grid: MatrixGrid }>(12);
+/**
+ * Each cell's way in and way out (keys; null: none found) by the lanes it is kept under (ticket #120): a lane of a way, that way;
+ * a lane that is no longer one (the street carried on past it, or begun before it), the way it leads on to (a way out's) or
+ * comes from (a way in's) along a run with no branching: every lane leaving it (or into it) the same one, or all of one way's.
+ */
+export function cellWays(sk: Sketch): (from: string, to: string) => [string | null, string | null] {
+  let x = resolvers.get(sk);
+  if (x) return x;
+  const ways = demandWays(sk), inWay = new Map(ways.entries.flatMap(w => w.lanes.map(l => [l, w.key]))), outWay = new Map(ways.exits.flatMap(w => w.lanes.map(l => [l, w.key])));
+  const ons = new Map<string, Set<string>>(), backs = new Map<string, Set<string>>();
+  for (const c of sk.connectors) { (ons.get(c.from.lane) ?? ons.set(c.from.lane, new Set()).get(c.from.lane)!).add(c.to.lane); (backs.get(c.to.lane) ?? backs.set(c.to.lane, new Set()).get(c.to.lane)!).add(c.from.lane); }
+  const memo = new Map<string, string | null>();
+  const follow = (lane: string, way: Map<string, string>, next: Map<string, Set<string>>, tag: string): string | null => {
+    const k = `${tag}${lane}`;
+    if (memo.has(k)) return memo.get(k)!;
+    let cur = lane, found: string | null = null;
+    const seen = new Set<string>();
+    for (let n = 0; n < 40 && !seen.has(cur); n++) {
+      if (way.has(cur)) { found = way.get(cur)!; break; }
+      if (!laneById(sk, cur)) break;
+      seen.add(cur);
+      const nx = [...(next.get(cur) ?? [])];
+      if (!nx.length) break;
+      // (several lanes, all of one way: that way)
+      const ks = new Set(nx.map(l => way.get(l) ?? null));
+      if (nx.length > 1) { if (ks.size === 1 && !ks.has(null)) found = [...ks][0]; break; }
+      cur = nx[0];
+    }
+    memo.set(k, found);
+    return found;
+  };
+  x = (f, t) => [follow(f, inWay, backs, "<"), follow(t, outWay, ons, ">")];
+  resolvers.set(sk, x);
+  return x;
+}
+const resolvers = new LastFew<Sketch, (from: string, to: string) => [string | null, string | null]>(6);
+
+/** a matrix's cells by way: entries' keys to exits' keys to vehicles per hour; and cells no way in and out could be found for (`lost`) */
+export interface MatrixGrid { cell: Map<string, Map<string, number>>; rows: Map<string, number>; cols: Map<string, number>; total: number; orphans: number;
+  /** cells kept under lanes that lead to no way in or out (now): their lanes, rate, and the way found at either end (null: none) */
+  lost: { from: string; to: string; rate: number; fromWay: string | null; toWay: string | null }[] }
+const grids = new LastFew<DemandMatrix, { sk: Sketch; grid: MatrixGrid }>(12);
 export function matrixGrid(sk: Sketch, m: DemandMatrix): MatrixGrid {
-  const ways = demandWays(sk), was = grids.get(m);
-  if (was && was.ways === ways) return was.grid;
-  const inWay = new Map(ways.entries.flatMap(w => w.lanes.map(l => [l, w.key]))), outWay = new Map(ways.exits.flatMap(w => w.lanes.map(l => [l, w.key])));
-  const cell = new Map<string, Map<string, number>>(), rows = new Map<string, number>(), cols = new Map<string, number>();
+  const was = grids.get(m);
+  if (was && was.sk === sk) return was.grid;
+  const ways = cellWays(sk);
+  const cell = new Map<string, Map<string, number>>(), rows = new Map<string, number>(), cols = new Map<string, number>(), lost: MatrixGrid["lost"] = [];
   let total = 0, orphans = 0;
   for (const [f, row] of Object.entries(m.od)) for (const [t, v] of Object.entries(row)) {
-    const a = inWay.get(f), b = outWay.get(t);
-    if (!a || !b) { orphans++; continue; }
+    const [a, b] = ways(f, t);
+    if (!a || !b) { orphans++; lost.push({ from: f, to: t, rate: v, fromWay: a, toWay: b }); continue; }
     const r = cell.get(a) ?? cell.set(a, new Map()).get(a)!;
     r.set(b, (r.get(b) ?? 0) + v);
     rows.set(a, (rows.get(a) ?? 0) + v); cols.set(b, (cols.get(b) ?? 0) + v); total += v;
   }
-  const grid = { cell, rows, cols, total, orphans };
-  grids.set(m, { ways, grid });
+  const grid = { cell, rows, cols, total, orphans, lost };
+  grids.set(m, { sk, grid });
   return grid;
 }
 /** for the simulation: each way in with traffic, its lanes, vehicles per hour in all, and where they go (each way out's lanes and rate) */
@@ -159,14 +198,31 @@ export function setCells(sk: Sketch, id: string, cells: { from: DemandWay; to: D
   return withMatrices(sk, (sk.matrices ?? []).map(m => {
     if (m.id !== id) return m;
     const od: Record<string, Record<string, number>> = Object.fromEntries(Object.entries(m.od).map(([f, r]) => [f, { ...r }]));
+    // (whatever is kept for a pair set goes: under its lanes, or under lanes followed to it, ticket #120; found once, by pair)
+    const ways = cellWays(sk), byPair = new Map<string, [string, string][]>();
+    for (const [f, r] of Object.entries(od)) for (const t of Object.keys(r)) { const [a, b] = ways(f, t); if (a && b) (byPair.get(`${a}|${b}`) ?? byPair.set(`${a}|${b}`, []).get(`${a}|${b}`)!).push([f, t]); }
     for (const c of cells) {
-      for (const f of c.from.lanes) if (od[f]) { for (const t of c.to.lanes) delete od[f][t]; if (!Object.keys(od[f]).length) delete od[f]; }
+      for (const [f, t] of byPair.get(`${c.from.key}|${c.to.key}`) ?? []) { if (od[f]) { delete od[f][t]; if (!Object.keys(od[f]).length) delete od[f]; } }
+      byPair.delete(`${c.from.key}|${c.to.key}`);
       const v = Math.round(Math.min(MAX_CELL, Math.max(0, c.rate)) * 10) / 10;
       if (v > 0) (od[c.from.lanes[0]] ??= {})[c.to.lanes[0]] = v;
     }
     return { ...m, od };
   }));
 }
+/** a cell no way could be found for, moved to a way in and out (added to what is there; ticket #120), or dropped (`to` null) */
+export function moveLostCell(sk: Sketch, id: string, cell: { from: string; to: string }, to: { from: DemandWay; to: DemandWay } | null): Sketch {
+  const m = sk.matrices?.find(x => x.id === id), v = m?.od[cell.from]?.[cell.to];
+  if (!m || v === undefined) return sk;
+  const od: DemandMatrix["od"] = Object.fromEntries(Object.entries(m.od).map(([f, r]) => [f, { ...r }]));
+  delete od[cell.from][cell.to];
+  if (!Object.keys(od[cell.from]).length) delete od[cell.from];
+  const out = withMatrices(sk, (sk.matrices ?? []).map(x => (x.id === id ? { ...x, od } : x)));
+  if (!to) return out;
+  const now = matrixGrid(out, out.matrices!.find(x => x.id === id)!).cell.get(to.from.key)?.get(to.to.key) ?? 0;
+  return setCells(out, id, [{ from: to.from, to: to.to, rate: now + v }]);
+}
+
 /** every cell times `f` (rounded to a tenth) */
 export function scaleMatrix(sk: Sketch, id: string, f: number): Sketch {
   return withMatrices(sk, (sk.matrices ?? []).map(m => (m.id !== id ? m : {
