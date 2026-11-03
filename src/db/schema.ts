@@ -2,6 +2,7 @@ import { boolean, customType, index, integer, jsonb, pgEnum, pgTable, primaryKey
 import type { Network, PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 import type { Sketch } from "@/lib/lane-sketch";
+import type { SimResultData, SimResultMeta } from "@/lib/sim-results";
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
@@ -120,6 +121,31 @@ export const agentPatches = pgTable(
     rejectNote: text("reject_note"),
   },
   (t) => [index("agent_patches_plan_idx").on(t.planId, t.status)],
+);
+
+/**
+ * A run's results, saved to compare variants (ticket #124): what was counted, with what it was a run of and the names then
+ * (src/lib/sim-results.ts). Seen by anyone who can see the plan; kept apart from it, so plan saves and versions stay small.
+ */
+export const simResults = pgTable(
+  "sim_results",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    planId: uuid("plan_id").notNull().references(() => plans.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    /** the plan's sketch it was a run of (its id and name then) */
+    sketchId: text("sketch_id").notNull().default(""),
+    sketchName: text("sketch_name").notNull().default(""),
+    /** seconds counted (from the warm-up's end), the flows every 5 s kept or not, its size */
+    seconds: integer("seconds").notNull(),
+    series: boolean("series").notNull().default(false),
+    bytes: integer("bytes").notNull(),
+    meta: jsonb("meta").$type<SimResultMeta>().notNull(),
+    data: jsonb("data").$type<SimResultData>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("sim_results_plan_idx").on(t.planId, t.createdAt)],
 );
 
 /** Reference image bytes, one per plan (kept apart so plan saves stay small). */

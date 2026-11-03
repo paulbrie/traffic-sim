@@ -20,6 +20,8 @@ import { userIsAdmin } from "./proofs/user-is-admin";
 import { versionOfPlan } from "./proofs/version-of-plan";
 import { restoreFromFile, type RestoreFileDeps, type RestoreFileInput, type RestoreFileResult } from "./restore-file";
 import * as agentPatches from "./data/agent-patches";
+import * as simResults from "./data/sim-results";
+import { MAX_RESULT_BYTES, type SimResult, type SimResultData, type SimResultInfo, type SimResultMeta } from "@/lib/sim-results";
 import { patchNote } from "@/lib/agent-patch";
 import { canEditCity, canEditPlan, canOwnCity, canOwnPlan, refusal } from "./proofs/policy";
 import * as cities from "./data/cities";
@@ -459,6 +461,60 @@ export async function rejectAgentPatch(planId: string, id: number, note: string)
     if (!edit) return { ok: false, error: "You can't change this plan." };
     const done = await agentPatches.decideAgentPatch(plan, user, id, { status: "rejected", note: typeof note === "string" ? note.replace(/\s+/g, " ").trim().slice(0, 500) : "" }, edit);
     return done ? { ok: true } : { ok: false, error: "That patch was already decided, or isn't this plan's." };
+  });
+}
+
+// ---------------------------------------------------------------- saved run results (ticket #124)
+
+/** The plan's saved results (what each is), for anyone who can see the plan. */
+export async function listSimResults(planId: string): Promise<SimResultInfo[]> {
+  const me = await assertUser();
+  assertId(planId);
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const view = await planAccess(user, plan);
+    return view ? simResults.listSimResults(plan, view) : [];
+  });
+}
+
+/** Some of the plan's saved results, with their data, for anyone who can see the plan. */
+export async function getSimResults(planId: string, ids: string[]): Promise<SimResult[]> {
+  const me = await assertUser();
+  assertId(planId);
+  const want = (Array.isArray(ids) ? ids : []).filter((x): x is string => typeof x === "string" && UUID.test(x)).slice(0, 12);
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const view = await planAccess(user, plan);
+    return view ? simResults.getSimResults(plan, want, view) : [];
+  });
+}
+
+/** A run's results saved with the plan, by one who may edit it (the plan itself isn't changed). */
+export async function saveSimResult(planId: string, input: { name: string; meta: SimResultMeta; data: SimResultData }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  const me = await assertUser();
+  assertId(planId);
+  const meta = input?.meta, data = input?.data;
+  if (!meta || typeof meta !== "object" || !data || typeof data !== "object" || data.v !== 1 || !Array.isArray(data.junctions) || !Array.isArray(data.roads) || !Array.isArray(data.od)) return { ok: false, error: "That isn't a run's results." };
+  const bytes = JSON.stringify(meta).length + JSON.stringify(data).length;
+  if (bytes > MAX_RESULT_BYTES) return { ok: false, error: `Too big to keep (${(bytes / 1e6).toFixed(1)} MB): save it without the flows every 5 s.` };
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const edit = canEditPlan(await planAccess(user, plan));
+    if (!edit) return { ok: false, error: "You can't save to this plan." };
+    const id = await simResults.saveSimResult(plan, user, {
+      name: clean(input.name, 80) || "Results", sketchId: clean(meta.sketch?.id, 40), sketchName: clean(meta.sketch?.name, 80),
+      seconds: Math.max(0, Math.round((Number(data.t) || 0) - (Number(data.from) || 0))), series: Array.isArray(data.series), bytes, meta, data,
+    }, edit);
+    return id ? { ok: true, id } : { ok: false, error: "This plan keeps 200 results at most: delete some first." };
+  });
+}
+
+/** A saved result deleted, by one who may edit the plan. */
+export async function deleteSimResult(planId: string, id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const me = await assertUser();
+  assertId(planId);
+  if (typeof id !== "string" || !UUID.test(id)) return { ok: false, error: "Unknown result." };
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const edit = canEditPlan(await planAccess(user, plan));
+    if (!edit) return { ok: false, error: "You can't change this plan." };
+    return (await simResults.deleteSimResult(plan, id, edit)) ? { ok: true } : { ok: false, error: "That result is gone already." };
   });
 }
 

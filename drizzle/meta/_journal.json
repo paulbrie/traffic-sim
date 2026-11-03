@@ -71,6 +71,13 @@
       "when": 1791642050655,
       "tag": "0009_agent_patches",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793732420274,
+      "tag": "0010_sim_results",
+      "breakpoints": true
     }
   ]
 }

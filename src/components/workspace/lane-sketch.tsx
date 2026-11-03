@@ -48,6 +48,7 @@ import { trafficColor, TRAFFIC_NO_DATA, type TrafficMatch } from "@/lib/tomtom";
 import { SignalGroupSection } from "@/components/v2/signal-groups-v2";
 import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
+import { ResultsPanel } from "@/components/v2/results-panel";
 import { ZonePanel } from "@/components/v2/zone-panel";
 import { ALIGN_BUTTONS, AlignLanes } from "@/components/v2/align-lanes";
 import { alignLanes, canAlign } from "@/lib/lane-align";
@@ -303,7 +304,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [structureOpen, setStructureOpen] = useUiPath<boolean>("structure/open");
   // (saved with the sketch: changing them isn't an undo step)
   const params: SimParams = sketch.traffic ?? DEFAULT_SIM;
-  const setParams = (p: SimParams) => store.show({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}), ...(live.current.sketch.traffic?.clock ? { clock: live.current.sketch.traffic.clock } : {}) } });
+  const setParams = (p: SimParams) => store.show({ ...live.current.sketch, traffic: { rate: p.rate, speed: p.speed, ...(p.seed !== undefined ? { seed: p.seed } : {}), ...(p.tune ? { tune: p.tune } : {}), ...(live.current.sketch.traffic?.clock ? { clock: live.current.sketch.traffic.clock } : {}), ...(live.current.sketch.traffic?.warmup ? { warmup: live.current.sketch.traffic.warmup } : {}) } });
   const [readOnly] = useDeepSubject(ui, "readOnly");
   // (the cars coloured by speed, or all one colour: in the V2 UI store, kept in the browser)
   const [bySpeed] = useUiPath<boolean>("display/carsBySpeed");
@@ -2215,6 +2216,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           {page && <RoutePanel sketch={sketch} onGo={x => goTo({ kind: x.kind, id: x.id })} onSendTest={() => sendTestCar().catch((e: Error) => toast.error("No test car", { description: e.message }))} />}
           <DemandPanel sketch={sketch} readOnly={readOnly} results={stats?.journeys} heldBack={stats?.heldBackBy} now={stats?.demand}
             onGo={p => centerOnPts([{ x: p.x - 125, y: p.y - 125 }, { x: p.x + 125, y: p.y + 125 }], true)} onFocus={lanes => { hover.current = lanes ? { lanes } : null; redraw(); }} />
+          {/* (ticket #124: a run's results saved, and compared) */}
+          {store.kind !== "whole" && <ResultsPanel sketch={sketch} stats={stats} readOnly={readOnly} />}
           <BusLinesPanel sketch={sketch} readOnly={readOnly}
             onPick={id => { const x = sketch.stops?.find(s => s.id === id); const l = x && laneById(sketch, x.lane); if (x && l) { setSel({ ...NO_SEL, stop: x.id }); centerOnPts([pointAt(l.shape, x.s).p]); } }} />
           <div className="mt-auto flex gap-1.5 border-t p-2">

@@ -176,6 +176,8 @@ export class SketchSimClient {
   explain(id: number, t: number) { return this.ask<Extract<FromSimWorker, { type: "explain" }>>({ type: "explain", id, t }).then(r => r.explain); }
   /** junction `id`'s traffic over time (ticket #109) */
   junctionSeries(id: string) { return this.ask<Extract<FromSimWorker, { type: "junctionSeries" }>>({ type: "junctionSeries", id }).then(r => r.series); }
+  /** (ticket #124) the run's results so far, counted from the warm-up's end; `series`: each junction's flows every 5 s too */
+  results(series: boolean) { return this.ask<Extract<FromSimWorker, { type: "results" }>>({ type: "results", series }).then(r => r.results); }
   moment(t: number, box: Parameters<SketchSim["moment"]>[1]) { return this.ask<Extract<FromSimWorker, { type: "moment" }>>({ type: "moment", t, box }).then(r => r.moment); }
   /** a car's last 10 s and what happened to it */
   car(id: number) { return this.ask<Extract<FromSimWorker, { type: "car" }>>({ type: "car", id }).then(r => ({ frames: r.frames, events: r.events })); }

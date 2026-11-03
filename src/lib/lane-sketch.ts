@@ -114,7 +114,8 @@ export interface Sketch {
   /** road ends joined so the road carries on (see `SketchLink`) */
   links?: SketchLink[];
   /** the cars run on it: vehicles per hour at each entry, the speed on straight lanes (km/h), the random numbers' seed, the simulation settings changed (see sketch-tuning.ts) */
-  traffic?: { rate: number; speed: number; seed?: number; tune?: Partial<Tuning>; /** (ticket #113) the time of day the simulation starts at, minutes after midnight (default 0) */ clock?: number };
+  traffic?: { rate: number; speed: number; seed?: number; tune?: Partial<Tuning>; /** (ticket #113) the time of day the simulation starts at, minutes after midnight (default 0) */ clock?: number;
+    /** (ticket #124) minutes into a run before its results are counted (the network filling up first; default 0) */ warmup?: number };
   /** where it is on Earth: the latitude / longitude of its origin (x east, y south, metres; as a V1 plan's `geo`), for the satellite imagery under it */
   geo?: { lat: number; lon: number };
   /** zebra crossings drawn by hand (see `SketchCrossing`) */
@@ -2678,8 +2679,8 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;
   const t = o.traffic as Sketch["traffic"];
   const tune = t ? sanitizeTuning(t.tune) : null, seed = t && num(t.seed) ? Math.round(Math.min(1e9, Math.max(1, t.seed))) : undefined;
-  const clock = t && num(t.clock) ? Math.round(Math.min(1439, Math.max(0, t.clock))) : 0;
-  const traffic = t && num(t.rate) && num(t.speed) ? { rate: Math.min(3000, Math.max(0, t.rate)), speed: Math.min(130, Math.max(10, t.speed)), ...(seed !== undefined ? { seed } : {}), ...(tune ? { tune } : {}), ...(clock ? { clock } : {}) } : undefined;
+  const clock = t && num(t.clock) ? Math.round(Math.min(1439, Math.max(0, t.clock))) : 0, warmup = t && num(t.warmup) ? Math.round(Math.min(240, Math.max(0, t.warmup))) : 0;
+  const traffic = t && num(t.rate) && num(t.speed) ? { rate: Math.min(3000, Math.max(0, t.rate)), speed: Math.min(130, Math.max(10, t.speed)), ...(seed !== undefined ? { seed } : {}), ...(tune ? { tune } : {}), ...(clock ? { clock } : {}), ...(warmup ? { warmup } : {}) } : undefined;
   const end = (e: unknown): RoadEnd | null => { const x = e as RoadEnd; return x && roads.some(r => r.id === x.road) && (x.end === "start" || x.end === "end") ? { road: x.road, end: x.end } : null; };
   const links: SketchLink[] = [];
   for (const k of Array.isArray(o.links) ? o.links : []) {

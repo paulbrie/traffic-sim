@@ -48,6 +48,14 @@ import { speedLimitOf,
 } from "./lane-sketch";
 import { resolveTuning, type Tuning } from "./sketch-tuning";
 import { clockAt, matrixAt, matrixRows, type MatrixRow } from "./demand-matrix";
+import type { SimResultData } from "./sim-results";
+
+/** (ticket #124) what was counted when the counting for a run's results began */
+interface Baseline {
+  t: number; spawned: number; finished: number; collisions: number; deadlocks: number; jSince: number; peds: number; fuel: FuelStats;
+  j: Map<string, { through: number; delay: number; queueSum: number; fuel: number; dist: number; time: number; ins: Map<string, number>; outs: Map<string, number> }>;
+  r: Map<string, { through: number; vehKm: number; vehHours: number; delay: number; lanes: Record<string, number> }>;
+}
 import { bumpFrame, bumpHeavySpeed, bumpSpeed, onBump } from "./sketch-bumps";
 import { FUEL_STILL, fuelRate, hasStopStart } from "../engine/fuel";
 import type { CarExplain, ExplainRule } from "./car-explain";
@@ -409,6 +417,8 @@ export interface SimVehicle {
   /** the road out it drew at a way in with turning shares (`at`: the junction and way in), kept while it is on that way in */
   turn: { at: string; out: string } | null;
   born: number;
+  /** (ticket #124) the lane it came in on (traffic coming in, not a test car or a bus): its trip counted by where it came from and went */
+  src?: string;
   /** seconds stopped, not counting the time at red lights (kept through them) */
   held: number;
   /** the connectors it gave up waiting to take (each looked past once), when it last did, and how many times it went another way */
@@ -724,6 +734,12 @@ export class SketchSim {
    * roundabout's ring in a road of its own: going round it is not going out and in again) */
   private jInside = new Map<Edge, number>();
   private jSince = 0;
+  /** (ticket #124) when the counting for a run's results begins (s: the sketch's warm-up), what was counted till then (taken off), the
+   * longest queues since, and the trips since by where they came in and went out (`in>out` lane ids) */
+  private measureFrom = 0;
+  private base: Baseline | null = null;
+  private qMax = new Map<string, number>();
+  private od = new Map<string, { n: number; sum: number; max: number }>();
   /** per road: its tally, and the road each of its lanes is in */
   private rTally: (RoadStats & { now: number })[] = [];
   private rOn = new Map<Edge, number>();
@@ -806,6 +822,8 @@ export class SketchSim {
   }
 
   private build() {
+    // (ticket #124: the counting for results begins after the sketch's warm-up)
+    this.measureFrom = Math.max(0, (this.sketch.traffic?.warmup ?? 0) * 60);
     const sk = this.sketch;
     // (where it is drawn moves with the lanes: an edit isn't a jump)
     this.drawn.clear(); this.unseen = true;
@@ -1119,7 +1137,7 @@ export class SketchSim {
   reset() {
     this.posed = null;
     this.vehicles = []; this.t = 0; this.spawned = 0; this.finished = 0; this.jumps = 0; this.offWait.clear(); this.hopWait.clear(); this.ringPick.clear();
-    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.problemList = []; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, newTally(j.id)); for (const r of this.rTally) Object.assign(r, { through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0, lanes: {} }); this.jSince = 0; this.breakdowns = 0; this.towed = 0;
+    this.log = []; this.frames = []; this.drawn.clear(); this.checkAt = 0; this.turnCounts.clear(); this.problemList = []; this.collisions = 0; this.touching.clear(); this.deadlocks = 0; this.changes = 0; this.reroutes = 0; this.fuel = noFuel(); for (const j of this.jTally) Object.assign(j, newTally(j.id)); for (const r of this.rTally) Object.assign(r, { through: 0, vehKm: 0, vehHours: 0, delay: 0, queueMax: 0, now: 0, lanes: {} }); this.jSince = 0; this.breakdowns = 0; this.towed = 0; this.base = null; this.qMax.clear(); this.od.clear();
     this.watchTrace = null; this.watchState = null; this.watchLog = []; this.watchRejected = [];
     this.replay = []; this.replayBytes = 0; this.replayCapped = false; this.tags = [""]; this.tagIndex = new Map([["", 0]]);
     for (const c of this.signals) c.reset();
@@ -2298,6 +2316,7 @@ export class SketchSim {
       const zone = s.lane.conflicts.reduce((m, k) => (k.join || k.at - k.before < 0 ? m : Math.min(m, k.at - k.before)), Infinity);
       const v0 = Math.min(s.lane.vmax, (0.6 * this.params.speed) / 3.6, Math.sqrt(2 * B_COMF * Math.max(0, first - S0 - 1)), Math.sqrt(2 * B_COMF * Math.max(0, zone - 1)));
       const v: SimVehicle = { id: this.nextId++, seenX: NaN, seenY: NaN, edge: s.lane, pos: 0, v: v0, exit: null, goal: null, dest: jw ? jw.dest : this.pickDest(s.lane.id, 0), changedAt: -Infinity, left: null, goalKey: null, goalSince: -Infinity, shift: null, still: 0, run: len, trail: null, why: null, stopped: false, blocking: false, forceUntil: 0, forced: 0, commitUntil: 0, gap: Infinity, vf: truck ? this.tuning.truckSpeed / 100 : this.tuning.speedVsLimit, truck, len, held: 0, gaveUp: null, rerouteT: -Infinity, reroutes: 0, journey: jw?.journey || null, turn: null, born: this.t, fuel: 0, broken: null, bus: false, busLine: null, stopIdx: 0, dwell: 0, pax: 0, cap: 0 };
+      v.src = s.lane.id;
       if (jw?.journey) this.journeys.find(j => j.def.id === jw.journey)!.sent++;
       else if (!jw) s.truck = undefined;
       // (speeds varying: its own share of the lanes' speed; no random number drawn when they don't, so runs stay as they were)
@@ -3036,6 +3055,11 @@ export class SketchSim {
           // (a test car isn't the traffic asked for: not counted as a trip)
           if (v.id < 0) this.testOut = { id: v.id, lane: e.id };
           else { this.finished++; F.trips++; F.tripFuel += v.fuel / 1000; }
+          // (its trip, by where it came in and went out: once the counting began, ticket #124)
+          if (v.src && v.id > 0 && this.t >= this.measureFrom) {
+            const k = `${v.src}>${e.id}`, o = this.od.get(k) ?? this.od.set(k, { n: 0, sum: 0, max: 0 }).get(k)!, tt = this.t - v.born;
+            o.n++; o.sum += tt; if (tt > o.max) o.max = tt;
+          }
           const j = v.journey ? this.journeys.find(x => x.def.id === v.journey) : null;
           if (j && j.to.includes(e.id)) { j.arrived++; j.tripSum += this.t - v.born; }
         }
@@ -3043,6 +3067,12 @@ export class SketchSim {
     }
     // (the junctions' queues: how many stand there now, over the time so far)
     for (const J of this.jTally) { J.queueSum += J.now * dt; if (J.now > J.queueMax) J.queueMax = J.now; }
+    // (ticket #124: the counting begun after the warm-up, the longest queues since; at its moment, what was counted till then kept, to take off)
+    if (this.t >= this.measureFrom) {
+      if (!this.base) this.takeBase();
+      for (const J of this.jTally) if (J.now > (this.qMax.get(`j:${J.id}`) ?? 0)) this.qMax.set(`j:${J.id}`, J.now);
+      for (const R of this.rTally) if (R.now > (this.qMax.get(`r:${R.id}`) ?? 0)) this.qMax.set(`r:${R.id}`, R.now);
+    }
     // (the junctions' series, ticket #109: every SERIES_DT s, on a sketch with few junctions)
     if (this.jTally.length <= SERIES_MAX && Math.floor(this.t / SERIES_DT) !== Math.floor((this.t - dt) / SERIES_DT)) {
       for (const J of this.jTally) {
@@ -3319,6 +3349,47 @@ export class SketchSim {
       collisions: this.log.filter(e => e.what === "collision").slice(-40),
       events: this.log.filter(e => e.what !== "jump" && e.what !== "collision" && e.t >= this.t - 60).slice(-1500),
       frameFields: FRAME_FIELDS, frames: this.frames.filter(f => f.t >= this.t - 10).map(f => ({ t: f.t, cars: this.frameRows(f) })),
+    };
+  }
+
+  /** (ticket #124) what was counted when the counting for results began (taken off what is counted by the end) */
+  private takeBase() {
+    this.base = {
+      // (no warm-up: from the start, the first step's moment aside)
+      t: this.measureFrom > 0 ? this.t : 0, spawned: this.spawned, finished: this.finished, collisions: this.collisions, deadlocks: this.deadlocks, jSince: this.jSince,
+      peds: this.crossings.reduce((a, x) => a + x.ped.crossed, 0), fuel: { ...this.fuel },
+      j: new Map(this.jTally.map(J => [J.id, { through: J.through, delay: J.delay, queueSum: J.queueSum, fuel: J.fuel, dist: J.dist, time: J.time, ins: new Map(J.ins), outs: new Map(J.outs) }])),
+      r: new Map(this.rTally.map(R => [R.id, { through: R.through, vehKm: R.vehKm, vehHours: R.vehHours, delay: R.delay, lanes: { ...(R.lanes ?? {}) } }])),
+    };
+  }
+  /**
+   * (ticket #124) The run's results so far, counted from the warm-up's end (all of it, before then: none yet): per junction (and lane
+   * in and out of it), per road, per trip from where it came in to where it went out, in all; `series`: each junction's flows too.
+   */
+  results(opts: { series?: boolean } = {}): SimResultData {
+    const b = this.base, since = (m: Map<string, number>, was?: Map<string, number>) => Object.fromEntries([...m].map(([k, n]) => [k, n - (was?.get(k) ?? 0)]).filter(([, n]) => (n as number) > 0));
+    const F = this.fuel, F0 = b?.fuel ?? F, jSince = this.jSince - (b?.jSince ?? this.jSince);
+    const roads = this.rTally.map(R => {
+      const o = b?.r.get(R.id);
+      return { id: R.id, through: R.through - (o?.through ?? R.through), vehKm: R.vehKm - (o?.vehKm ?? R.vehKm), vehHours: R.vehHours - (o?.vehHours ?? R.vehHours), delay: R.delay - (o?.delay ?? R.delay), queueMax: this.qMax.get(`r:${R.id}`) ?? 0,
+        lanes: Object.fromEntries(Object.entries(R.lanes ?? {}).map(([k, n]) => [k, n - (o?.lanes[k] ?? (b ? 0 : n))]).filter(([, n]) => (n as number) > 0)) };
+    });
+    return {
+      v: 1, t: r2(this.t), from: r2(b?.t ?? this.measureFrom),
+      totals: {
+        in: this.spawned - (b?.spawned ?? this.spawned), out: this.finished - (b?.finished ?? this.finished), collisions: this.collisions - (b?.collisions ?? this.collisions),
+        deadlocks: this.deadlocks - (b?.deadlocks ?? this.deadlocks), stuck: this.vehicles.filter(v => v.still >= STUCK_AFTER).length,
+        pedsCrossed: this.crossings.reduce((a, x) => a + x.ped.crossed, 0) - (b?.peds ?? 0), fuel: F.total - F0.total, co2: F.co2 - F0.co2,
+        vehKm: roads.reduce((a, r) => a + r.vehKm, 0), vehHours: roads.reduce((a, r) => a + r.vehHours, 0),
+      },
+      junctions: this.jTally.map(J => {
+        const o = b?.j.get(J.id);
+        return { id: J.id, through: J.through - (o?.through ?? J.through), delay: J.delay - (o?.delay ?? J.delay), queueMean: jSince > 0 ? (J.queueSum - (o?.queueSum ?? J.queueSum)) / jSince : 0, queueMax: this.qMax.get(`j:${J.id}`) ?? 0,
+          fuel: J.fuel - (o?.fuel ?? J.fuel), dist: J.dist - (o?.dist ?? J.dist), time: J.time - (o?.time ?? J.time), ins: b ? since(J.ins, o?.ins) : {}, outs: b ? since(J.outs, o?.outs) : {} };
+      }),
+      roads,
+      od: [...this.od].map(([k, o]) => { const [from, to] = k.split(">"); return { from, to, n: o.n, sum: r2(o.sum), max: r2(o.max) }; }),
+      ...(opts.series ? { series: this.jTally.map(J => ({ id: J.id, ins: [...J.ins.keys()], outs: [...J.outs.keys()], samples: J.series.filter(x => x.t >= (b?.t ?? Infinity)) })) } : {}),
     };
   }
 
