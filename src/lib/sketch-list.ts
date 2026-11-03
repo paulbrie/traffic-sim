@@ -113,3 +113,23 @@ export function addAsNewSketch(sk: Sketch, content: Sketch, name: string, now = 
   const { list, open } = sketchList(sk), id = nextSketchId(sk), n = freeName(sk, name);
   return { sketch: withList(sk, [...list, { id, name: n, created: now, updated: now, sketch: inner(content)! }], open, sk.scratch), id, name: n };
 }
+
+/** a name as an address part: lower case, accents off, anything but letters and digits a dash ("Var 800 800" → "var-800-800") */
+const slugOf = (name: string) => name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+/**
+ * A sketch's part of its page's address (ticket #120: /plans/<plan>/sketch/<this>): its name as an address part, its id after it
+ * where another sketch's would read the same (or the name has nothing to make one of)
+ */
+export function sketchSlug(list: SavedSketch[], id: string): string {
+  const x = list.find(y => y.id === id);
+  if (!x) return id;
+  const s = slugOf(x.name);
+  return !s || list.some(y => y.id !== id && slugOf(y.name) === s) ? (s ? `${s}-${id}` : id) : s;
+}
+/** the sketch an address part names (its slug, its id, or its name as typed); null: none */
+export function sketchBySlug(list: SavedSketch[], part: string): string | null {
+  let want = part;
+  try { want = decodeURIComponent(part); } catch { /* as it is */ }
+  return list.find(x => sketchSlug(list, x.id) === want)?.id ?? list.find(x => x.id === want)?.id ?? list.find(x => x.name === want || slugOf(x.name) === slugOf(want))?.id ?? null;
+}
+

@@ -1,6 +1,7 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import Link from "next/link";
 import { ArrowLeft, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,8 +13,9 @@ import { AgentPatchesButton } from "@/components/workspace/agent-patches";
 import { LaneSketch } from "@/components/workspace/lane-sketch";
 import { FrameRate, MemoryGauge, SketchLayerPicker } from "./top-bar-tools";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
-import { loadPlan } from "@/state/store";
-import { scratchSketch, SketchStoreContext, takeSketchPut } from "@/state/lane-sketch";
+import { laneSketch$, loadPlan } from "@/state/store";
+import { changeSketches, scratchSketch, SketchStoreContext, takeSketchPut } from "@/state/lane-sketch";
+import { openSketch, sketchBySlug, sketchList, sketchSlug } from "@/lib/sketch-list";
 import { startUnderlayImage } from "@/state/underlay-image";
 
 /**
@@ -22,7 +24,7 @@ import { startUnderlayImage } from "@/state/underlay-image";
  * network loads alongside it (the sketch is saved with the plan, not apart from it), but only `scratchSketch` is
  * edited here; `planSketch` stays loaded for anything that reads across both (a route traced, say).
  */
-export function SketchPageClient({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
+export function SketchPageClient({ plan, user, want }: { plan: WorkspacePlan; user: MenuUser; /** (ticket #120) the sketch the address names (its part of it) */ want?: string }) {
   const [loaded, setLoaded] = useState(false);
   // (what "Test in Sketch" on the plan's page sent here, put in once the plan is loaded; kept for Strict Mode's second run, which loads it again)
   const put = useRef<(() => void) | null | undefined>(undefined);
@@ -30,6 +32,12 @@ export function SketchPageClient({ plan, user }: { plan: WorkspacePlan; user: Me
     loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read", plan.sketch);
     if (put.current === undefined) put.current = takeSketchPut(plan.id);
     put.current?.();
+    // (the sketch the address names opened, as the picker would; one there is none of: said, the one open kept)
+    if (want) {
+      const k = laneSketch$.getValue(), { list, open } = sketchList(k), id = sketchBySlug(list, want);
+      if (id && id !== open) changeSketches(x => openSketch(x, id));
+      else if (!id) setTimeout(() => toast.error(`This plan has no sketch "${decodeURIComponentSafe(want)}"`, { description: `Showing ${list.find(x => x.id === open)?.name ?? "the one open"} instead.` }), 0);
+    }
     startUnderlayImage();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the stores are outside React: loaded, the page can show
     setLoaded(true);
@@ -37,6 +45,23 @@ export function SketchPageClient({ plan, user }: { plan: WorkspacePlan; user: Me
   }, []);
   useAutosave(plan.id);
   useLive(plan.id);
+  // (ticket #120) the address shows the sketch open, /plans/<plan>/sketch/<its name>, as it changes (the picker): a link to it, or
+  // the page loaded again, opens that one; the address put in place, the page not loaded again (Next's router keeps up)
+  useEffect(() => {
+    if (!loaded) return;
+    const sync = () => {
+      const { list, open } = sketchList(laneSketch$.getValue()), base = `/plans/${plan.id}/sketch`, at = location.pathname.indexOf(base);
+      if (at < 0 || !list.some(x => x.id === open)) return;
+      const path = `${location.pathname.slice(0, at)}${base}/${sketchSlug(list, open)}`;
+      if (path !== location.pathname) window.history.replaceState(null, "", path + location.search + location.hash);
+      // (and the tab's title, as the server puts it)
+      const title = `${list.find(x => x.id === open)!.name} · Sketch · ${plan.name} · ${plan.cityName} — Gridlock`;
+      if (document.title !== title) document.title = title;
+    };
+    sync();
+    const sub = laneSketch$.subscribe(sync);
+    return () => sub.unsubscribe();
+  }, [loaded, plan.id, plan.name, plan.cityName]);
   if (!loaded) return null;
   return (
     <TooltipProvider>
@@ -69,3 +94,6 @@ export function SketchPageClient({ plan, user }: { plan: WorkspacePlan; user: Me
     </TooltipProvider>
   );
 }
+
+const decodeURIComponentSafe = (s: string) => { try { return decodeURIComponent(s); } catch { return s; } };
+
