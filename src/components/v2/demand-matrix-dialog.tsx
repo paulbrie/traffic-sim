@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { NumberField } from "@/components/workspace/fields";
 import { cn } from "@/lib/utils";
-import { hhmm, matrixGrid, matrixText, moveLostCell, parseCells, parseHhmm, reachable, scaleMatrix, setCells, updateMatrix, type MatrixGrid } from "@/lib/demand-matrix";
+import { hhmm, sameStreet, matrixGrid, matrixText, moveLostCell, parseCells, parseHhmm, reachable, scaleMatrix, setCells, updateMatrix, type MatrixGrid } from "@/lib/demand-matrix";
 import { laneById, roadOf, type DemandWay, type Sketch } from "@/lib/lane-sketch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSketchStore } from "@/state/lane-sketch";
@@ -60,7 +60,10 @@ export function MatrixDialog({ sketch, id, entries, exits, readOnly, onClose }: 
   if (!m || !g) return null;
 
   const value = (r: number, c: number) => g.cell.get(entries[r].key)?.get(exits[c].key) ?? 0;
-  const open = (r: number, c: number) => !!can.get(entries[r].key)?.has(exits[c].key);
+  // (a pair takes demand where a way leads there, and it isn't the same street back out: a U-turn, not a trip, ticket #122)
+  const same = (r: number, c: number) => sameStreet(sketch, entries[r], exits[c]);
+  const open = (r: number, c: number) => !!can.get(entries[r].key)?.has(exits[c].key) && !same(r, c);
+  const why = (r: number, c: number) => (same(r, c) ? "the same street: in and back out again is a U-turn, not a trip" : "no way there");
   const range = { r0: Math.min(sel.r, anchor.r), r1: Math.max(sel.r, anchor.r), c0: Math.min(sel.c, anchor.c), c1: Math.max(sel.c, anchor.c) };
   const inRange = (r: number, c: number) => r >= range.r0 && r <= range.r1 && c >= range.c0 && c <= range.c1;
   /** cells set, one undo step; those with no way between them left out (how many, said) */
@@ -152,7 +155,7 @@ export function MatrixDialog({ sketch, id, entries, exits, readOnly, onClose }: 
         onEscapeKeyDown={e => { if (editing !== null) e.preventDefault(); }}>
         <DialogHeader>
           <DialogTitle>Demand matrix</DialogTitle>
-          <DialogDescription>Vehicles per hour from each way in (rows) to each way out (columns). Click a cell and type, or paste a block from a spreadsheet (numbers only, from the cell picked); Shift takes in a block, ⌘C / Ctrl+C copies it. Grey: no way leads there.</DialogDescription>
+          <DialogDescription>Vehicles per hour from each way in (rows) to each way out (columns). Click a cell and type, or paste a block from a spreadsheet (numbers only, from the cell picked); Shift takes in a block, ⌘C / Ctrl+C copies it. Grey: no way leads there, or it is the same street back out.</DialogDescription>
         </DialogHeader>
         <div className="flex flex-wrap items-end gap-3 text-xs">
           <label className="grid gap-1">
@@ -200,7 +203,7 @@ export function MatrixDialog({ sketch, id, entries, exits, readOnly, onClose }: 
                   <div key={`${r}:${c}`} role="gridcell" aria-selected={inRange(r, c)}
                     className={cn("absolute flex items-center justify-end border-r border-b px-1.5", num, !ok && "bg-muted/60 text-muted-foreground", inRange(r, c) && "bg-primary/10", picked && "outline-2 -outline-offset-2 outline-primary", !ok && v > 0 && "text-amber-700")}
                     style={{ left: HEAD_W + c * COL_W, top: HEAD_H + r * ROW_H, width: COL_W, height: ROW_H }}
-                    title={`${entries[r].name} → ${exits[c].name}${ok ? "" : " (no way there)"}`}>
+                    title={`${entries[r].name} → ${exits[c].name}${ok ? "" : ` (${why(r, c)})`}`}>
                     {picked && editing !== null ? (
                       <input autoFocus value={editing} aria-label={`${entries[r].name} to ${exits[c].name}, vehicles per hour`} inputMode="decimal"
                         className="absolute inset-0 w-full bg-background px-1.5 text-right outline-2 -outline-offset-2 outline-primary"
@@ -237,7 +240,7 @@ export function MatrixDialog({ sketch, id, entries, exits, readOnly, onClose }: 
           </div>
         )}
         <p className="text-[11px] text-muted-foreground">
-          {entries[sel.r] && exits[sel.c] ? <>{entries[sel.r].name} → {exits[sel.c].name}: <span className={num}>{fmt(value(sel.r, sel.c)) || "0"}</span> veh/h{open(sel.r, sel.c) ? "" : " · no way leads there"}</> : null}
+          {entries[sel.r] && exits[sel.c] ? <>{entries[sel.r].name} → {exits[sel.c].name}: <span className={num}>{fmt(value(sel.r, sel.c)) || "0"}</span> veh/h{open(sel.r, sel.c) ? "" : ` · ${why(sel.r, sel.c)}`}</> : null}
           {range.r1 > range.r0 || range.c1 > range.c0 ? ` · block ${range.r1 - range.r0 + 1} × ${range.c1 - range.c0 + 1}` : ""}
         </p>
       </DialogContent>
@@ -279,7 +282,7 @@ function LostCells({ sketch, id, lost, entries, exits, readOnly }: {
   return (
     <div className="grid gap-1 rounded-md border border-amber-300 bg-amber-50 p-2 text-[11px] dark:border-amber-800 dark:bg-amber-950/40">
       <p className="text-amber-800 dark:text-amber-400">
-        {lost.length} cell{lost.length === 1 ? "" : "s"} ({Math.round(total * 10) / 10} veh/h) can&apos;t be placed: the street changed past a fork, or a lane went. Not simulated: move each to a way, or drop it.
+        {lost.length} cell{lost.length === 1 ? "" : "s"} ({Math.round(total * 10) / 10} veh/h) can&apos;t be placed: {lost.some(x => x.same) ? "in and back out by the same street (a U-turn, not a trip)" : ""}{lost.some(x => x.same) && lost.some(x => !x.same) ? "; or " : ""}{lost.some(x => !x.same) ? "the street changed past a fork, or a lane went" : ""}. Not simulated: move each to a way, or drop it.
       </p>
       {lost.map(x => (
         <div key={`${x.from}>${x.to}`} className="flex flex-wrap items-center gap-1.5">
@@ -287,12 +290,14 @@ function LostCells({ sketch, id, lost, entries, exits, readOnly }: {
             {name(entries, x.fromWay, x.from)} → {name(exits, x.toWay, x.to)} · <span className="font-mono tabular">{x.rate}</span> veh/h
           </span>
           {!readOnly && (x.fromWay || x.toWay) && (
+            // (the way that is lost picked; both found (the same street), another way out)
             <Select value="" onValueChange={k => {
-              const from = x.fromWay ? entries.find(w => w.key === x.fromWay)! : entries.find(w => w.key === k)!, to = x.toWay ? exits.find(w => w.key === x.toWay)! : exits.find(w => w.key === k)!;
+              const pickIn = !!x.toWay && !x.fromWay;
+              const from = pickIn ? entries.find(w => w.key === k) : entries.find(w => w.key === x.fromWay), to = pickIn ? exits.find(w => w.key === x.toWay) : exits.find(w => w.key === k);
               if (from && to) editSketch(s => moveLostCell(s, id, x, { from, to }));
             }}>
-              <SelectTrigger size="sm" className="h-6 w-48 text-[11px]" aria-label={`Move ${x.from} → ${x.to} to`}><SelectValue placeholder={x.toWay ? "Move to the way in…" : "Move to the way out…"} /></SelectTrigger>
-              <SelectContent>{(x.toWay ? entries : exits).map(w => <SelectItem key={w.key} value={w.key} className="text-xs">{w.name}</SelectItem>)}</SelectContent>
+              <SelectTrigger size="sm" className="h-6 w-48 text-[11px]" aria-label={`Move ${x.from} → ${x.to} to`}><SelectValue placeholder={x.toWay && !x.fromWay ? "Move to the way in…" : "Move to the way out…"} /></SelectTrigger>
+              <SelectContent>{(x.toWay && !x.fromWay ? entries : exits).filter(w => x.toWay && !x.fromWay ? true : !sameStreet(sketch, entries.find(e => e.key === x.fromWay)!, w)).map(w => <SelectItem key={w.key} value={w.key} className="text-xs">{w.name}</SelectItem>)}</SelectContent>
             </Select>
           )}
           {!readOnly && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => editSketch(s => moveLostCell(s, id, x, null))}>Drop</Button>}

@@ -7,7 +7,7 @@
  * lanes are added beside them. Framework-free.
  */
 import {
-  LastFew, MATRIX_BY_TIME, MAX_CELL, MAX_MATRICES, RouteTable, demandWays, laneById, laneInRate, laneOutWeight,
+  LastFew, MATRIX_BY_TIME, MAX_CELL, MAX_MATRICES, RouteTable, demandWays, dist, laneById, laneInRate, laneOutWeight, roadOf,
   type DemandMatrix, type DemandWay, type Sketch,
 } from "./lane-sketch";
 
@@ -101,17 +101,19 @@ const resolvers = new LastFew<Sketch, (from: string, to: string) => [string | nu
 /** a matrix's cells by way: entries' keys to exits' keys to vehicles per hour; and cells no way in and out could be found for (`lost`) */
 export interface MatrixGrid { cell: Map<string, Map<string, number>>; rows: Map<string, number>; cols: Map<string, number>; total: number; orphans: number;
   /** cells kept under lanes that lead to no way in or out (now): their lanes, rate, and the way found at either end (null: none) */
-  lost: { from: string; to: string; rate: number; fromWay: string | null; toWay: string | null }[] }
+  lost: { from: string; to: string; rate: number; fromWay: string | null; toWay: string | null; /** both ways found, but of one street (ticket #122) */ same?: true }[] }
 const grids = new LastFew<DemandMatrix, { sk: Sketch; grid: MatrixGrid }>(12);
 export function matrixGrid(sk: Sketch, m: DemandMatrix): MatrixGrid {
   const was = grids.get(m);
   if (was && was.sk === sk) return was.grid;
-  const ways = cellWays(sk);
+  const ways = cellWays(sk), dw = demandWays(sk), byKey = { entries: new Map(dw.entries.map(w => [w.key, w])), exits: new Map(dw.exits.map(w => [w.key, w])) };
   const cell = new Map<string, Map<string, number>>(), rows = new Map<string, number>(), cols = new Map<string, number>(), lost: MatrixGrid["lost"] = [];
   let total = 0, orphans = 0;
   for (const [f, row] of Object.entries(m.od)) for (const [t, v] of Object.entries(row)) {
     const [a, b] = ways(f, t);
     if (!a || !b) { orphans++; lost.push({ from: f, to: t, rate: v, fromWay: a, toWay: b }); continue; }
+    // (in and back out by the same street: no trip, kept apart, ticket #122)
+    if (sameStreet(sk, byKey.entries.get(a)!, byKey.exits.get(b)!)) { orphans++; lost.push({ from: f, to: t, rate: v, fromWay: a, toWay: b, same: true }); continue; }
     const r = cell.get(a) ?? cell.set(a, new Map()).get(a)!;
     r.set(b, (r.get(b) ?? 0) + v);
     rows.set(a, (rows.get(a) ?? 0) + v); cols.set(b, (cols.get(b) ?? 0) + v); total += v;
@@ -232,6 +234,18 @@ export function scaleMatrix(sk: Sketch, id: string, f: number): Sketch {
 
 // ---------------------------------------------------------------- reaching, and the demand the ways make now
 
+/** metres apart a way in and a way out of the same name may be and still be one street's (its two directions at one end) */
+const SAME_STREET = 60;
+/**
+ * (ticket #122) a way in and a way out of the same street: of one road, or of the same name at the same place (its two
+ * directions, drawn as two roads). Going in there and out again is a U-turn back, not a trip: no demand between them.
+ */
+export function sameStreet(sk: Sketch, a: DemandWay, b: DemandWay): boolean {
+  const ra = roadOf(sk, a.lanes[0]), rb = roadOf(sk, b.lanes[0]);
+  if (ra && rb && ra.id === rb.id) return true;
+  return !!ra && !!rb && !!ra.name && ra.name === rb.name && dist(a.at, b.at) < SAME_STREET;
+}
+
 const reach = new LastFew<Sketch, Map<string, Set<string>>>(4);
 /** for each way in (key), the ways out (keys) a car coming in there can get to */
 export function reachable(sk: Sketch): Map<string, Set<string>> {
@@ -243,14 +257,14 @@ export function reachable(sk: Sketch): Map<string, Set<string>> {
   return x;
 }
 /**
- * The demand the ways' rates and shares make now, as a matrix: each way in's vehicles an hour over the ways out it can reach,
- * by their shares (as the simulation sends them); tenths of a vehicle an hour and less left out
+ * The demand the ways' rates and shares make now, as a matrix: each way in's vehicles an hour over the ways out it can reach
+ * (not back out by the same street), by their shares; tenths of a vehicle an hour and less left out
  */
 export function currentDemand(sk: Sketch): DemandMatrix["od"] {
   const ways = demandWays(sk), can = reachable(sk), od: DemandMatrix["od"] = {};
   const lane = (id: string) => laneById(sk, id)!, weight = (w: DemandWay) => w.lanes.reduce((a, id) => a + laneOutWeight(lane(id)), 0);
   for (const a of ways.entries) {
-    const rate = a.lanes.reduce((s, id) => s + laneInRate(lane(id), sk), 0), to = ways.exits.filter(b => can.get(a.key)?.has(b.key) && weight(b) > 0);
+    const rate = a.lanes.reduce((s, id) => s + laneInRate(lane(id), sk), 0), to = ways.exits.filter(b => can.get(a.key)?.has(b.key) && weight(b) > 0 && !sameStreet(sk, a, b));
     const sum = to.reduce((s, b) => s + weight(b), 0);
     if (!(rate > 0) || !(sum > 0)) continue;
     for (const b of to) { const v = Math.round(((rate * weight(b)) / sum) * 10) / 10; if (v > 0) (od[a.lanes[0]] ??= {})[b.lanes[0]] = v; }

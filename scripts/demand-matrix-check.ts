@@ -5,7 +5,7 @@
  * matrix in use, the run as before; cells set, scaled, copied as text and read back.   npm run matrix:check
  */
 import { demandWays, MATRIX_BY_TIME, sanitizeSketch, type Sketch, type SketchConnector, type SketchLane } from "../src/lib/lane-sketch";
-import { addMatrix, moveLostCell, currentDemand, inPeriod, matrixAt, matrixGrid, matrixText, overlaps, parseCells, reachable, scaleMatrix, setCells, setStartClock, updateMatrix, setMatrixOn } from "../src/lib/demand-matrix";
+import { addMatrix, moveLostCell, sameStreet, currentDemand, inPeriod, matrixAt, matrixGrid, matrixText, overlaps, parseCells, reachable, scaleMatrix, setCells, setStartClock, updateMatrix, setMatrixOn } from "../src/lib/demand-matrix";
 import { SketchSim } from "../src/lib/lane-sketch-sim";
 
 let ok = true;
@@ -111,6 +111,25 @@ const count = (xs: { lane: string; dest: string }[], lane: string | null, dest: 
   const X3 = demandWays(fork).exits.find(w => w.lanes.includes("X3"))!, moved = moveLostCell(fork, m.id, g3.lost[0], { from: A, to: X3 });
   const g4 = matrixGrid(moved, moved.matrices![0]);
   check("…moved to a way out picked: placed there", g4.cell.get(A.key)?.get(X3.key) === 300 && !g4.lost.length, JSON.stringify(moved.matrices![0].od));
+}
+
+// ticket #122: in and back out by the same street (a road's way in and its way out, or two roads of one name at one place): no trip
+{
+  const street: Sketch = { ...base, roads: [{ id: "rAY", name: "Strada A", lanes: ["A", "Y"] }] };
+  const w = demandWays(street), a = w.entries.find(x => x.lanes.includes("A"))!, y = w.exits.find(x => x.lanes.includes("Y"))!, xw = w.exits.find(x => x.lanes.includes("X"))!;
+  check("a road's way in and its way out: the same street", sameStreet(street, a, y) && !sameStreet(street, a, xw));
+  // (Z: Strada A's other direction, ending beside where A starts; Y, a road of that name too, ends 200 m away)
+  const named: Sketch = { ...base, lanes: [...base.lanes, line("Z", [[50, 4], [0, 4]])], roads: [{ id: "r1", name: "Strada A", lanes: ["A"] }, { id: "r2", name: "Strada A", lanes: ["Z"] }, { id: "r3", name: "Strada A", lanes: ["Y"] }] }, wn = demandWays(named);
+  const na = wn.entries.find(x => x.lanes.includes("A"))!;
+  check("…two roads of one name, A's start and Z's end together: the same street", sameStreet(named, na, wn.exits.find(x => x.lanes.includes("Z"))!));
+  check("…of that name but its far end (200 m off): not", !sameStreet(named, na, wn.exits.find(x => x.lanes.includes("Y"))!));
+  const od = currentDemand(street);
+  check("the demand now as a matrix: none back out by the same street, all of A's to X", od.A?.Y === undefined && od.A?.X === 400, JSON.stringify(od));
+  const [s0, m] = addMatrix(street, "empty")!, sk = { ...s0, matrices: [{ ...m, od: { A: { Y: 120, X: 30 } } }] };
+  const g = matrixGrid(sk, sk.matrices[0]);
+  check("…a cell kept there already: listed apart (not simulated), the rest as it was", g.lost.length === 1 && g.lost[0].same === true && g.lost[0].rate === 120 && g.total === 30, JSON.stringify(g.lost));
+  const moved = moveLostCell(sk, m.id, g.lost[0], { from: a, to: xw }), g2 = matrixGrid(moved, moved.matrices![0]);
+  check("…moved to another way out: added to what is there", g2.cell.get(a.key)?.get(xw.key) === 150 && !g2.lost.length, JSON.stringify(moved.matrices![0].od));
 }
 
 console.log(ok ? "demand matrix check: all ok" : "demand matrix check: FAILED");
