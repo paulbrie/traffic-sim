@@ -19,7 +19,7 @@ import {
   junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, edgeLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, laneLocked, leadOf, setLocked, type LockIds, removePoint, settle, toggleCurve, roadMiddle,
-  type Band, type SketchLink, type SketchJunction, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
+  type Band, type SketchLink, type SketchJunction, type SketchRoad, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
 import { addBump, bumpFrame, bumpHeavySpeed, bumpNotes, bumpShapes, bumpSpeed, deleteBump, onBump, updateBump, BUMP_KIND, BUMP_KIND_IDS, BUMP_KINDS, type BumpKind, type BumpPatch, type SketchBump } from "@/lib/sketch-bumps";
 import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
@@ -2746,7 +2746,7 @@ function takeLanesOut(sk: Sketch, ids: string[], edit: (f: (s: Sketch) => Sketch
   edit(s => takeOutOfRoad(s, inRoad).sketch);
   setSel({ ...NO_SEL, lanes: inRoad });
   toast.success(`${inRoad.length === 1 ? `Lane ${inRoad[0]}` : `${inRoad.length} lanes`} taken out of ${road.name}`, {
-    description: [roadsGone.length ? `${roadsGone.join(", ")}: no lane left, the road went` : `${road.name} keeps the rest, where they are`, road.speed !== undefined ? `now in no road, with the road's speed limit (${road.speed} km/h) as its own` : "now in no road", "⌘Z brings it back"].join(" · "),
+    description: [roadsGone.length ? `${roadsGone.join(", ")}: no lane left, the road went` : `${road.name} keeps the rest, where they are`, road.speed !== undefined && inRoad.some(id => laneById(sk, id)?.speed === undefined) ? `now in no road, with the road's speed limit (${road.speed} km/h) as its own` : "now in no road", "⌘Z brings it back"].join(" · "),
   });
 }
 
@@ -2855,6 +2855,16 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
         <GeometrySection sketch={sketch} lanes={road.align ? [road.align.ref] : road.lanes} lead={road.align?.ref ?? road.lanes[0]} />
         <LevelRow sketch={sketch} lanes={road.lanes} />
         <SpeedRow sketch={sketch} id={`road-${road.id}`} own={road.speed} of="road" onSet={v => editSketch(sk => setRoadSpeed(sk, road.id, v))} />
+        {(() => {
+          // (ticket #126: its lanes with a speed limit of their own keep it, whatever the road's)
+          const own = road.lanes.flatMap(id => { const l = laneById(sketch, id); return l?.speed !== undefined ? [l] : []; });
+          return !!own.length && (
+            <p className="text-[11px] text-muted-foreground">
+              {own.length === road.lanes.length ? "Every lane has" : own.length === 1 ? `Lane ${own[0].id} has` : `Lanes ${own.map(l => l.id).join(", ")} have`} a speed limit of {own.length === 1 ? "its" : "their"} own ({[...new Set(own.map(l => l.speed))].join(", ")} km/h), kept whatever the road&apos;s.{" "}
+              <button type="button" className="underline hover:text-foreground" title="Those lanes take the road's speed limit" onClick={() => editSketch(sk => own.reduce((x, l) => setLaneSpeed(x, l.id, null), sk))}>The road&apos;s for all</button>
+            </p>
+          );
+        })()}
         <div className="flex gap-1.5">
           <SmoothButton sketch={sketch} ids={road.lanes} className="flex-1" />
           <Button size="sm" variant="outline" className="flex-1" onClick={() => editSketch(sk => ({ ...sk, roads: sk.roads.filter(r => r.id !== road.id) }))}>Ungroup</Button>
@@ -2988,9 +2998,7 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
         </div>
         {!lead && <GeometrySection sketch={sketch} lanes={[lane.id]} lead={lane.id} />}
         <LevelRow sketch={sketch} lanes={inRoad?.align ? inRoad.lanes : [lane.id]} />
-        {inRoad
-          ? <p className="text-xs text-muted-foreground">Speed limit: {inRoad.speed ?? sketch.traffic?.speed ?? 50} km/h{inRoad.speed === undefined ? " (the sketch's)" : ""}, its road&apos;s.</p>
-          : <SpeedRow sketch={sketch} id={`lane-${lane.id}`} own={lane.speed} of="lane" onSet={v => editSketch(sk => setLaneSpeed(sk, lane.id, v))} />}
+        <SpeedRow sketch={sketch} id={`lane-${lane.id}`} own={lane.speed} of="lane" road={inRoad} onSet={v => editSketch(sk => setLaneSpeed(sk, lane.id, v))} />
         <div className="flex items-center gap-2">
           <span className="text-xs" id={`sk-use-${lane.id}`}>Lane for</span>
           <ToggleGroup type="single" aria-labelledby={`sk-use-${lane.id}`} className="h-7" value={laneUse(lane)} onValueChange={v => v && editSketch(sk => setLaneUse(sk, lane.id, v as LaneUse))}>
@@ -3648,14 +3656,16 @@ function TestInSketchPanel({ options: o, setOptions, onTest }: { options: TestOp
 }
 
 /** a road's (or a lone lane's) speed limit: its own, or the sketch's traffic speed until one is set */
-function SpeedRow({ sketch, id, own, of, onSet }: { sketch: Sketch; id: string; own: number | undefined; of: "road" | "lane"; onSet: (kmh: number | null) => void }) {
-  const all = sketch.traffic?.speed ?? 50;
+/** a road's or lane's own speed limit, or what it has without one: a lane in a road its road's (ticket #126), else the sketch's */
+function SpeedRow({ sketch, id, own, of, road, onSet }: { sketch: Sketch; id: string; own: number | undefined; of: "road" | "lane"; road?: SketchRoad; onSet: (kmh: number | null) => void }) {
+  const all = sketch.traffic?.speed ?? 50, byRoad = road?.speed !== undefined;
+  const base = byRoad ? road!.speed! : all, whose = byRoad ? "road's" : "sketch's", where = byRoad ? `${road!.name}'s speed limit` : "the sketch's speed (Traffic)";
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
-      <NumberField id={`sk-speed-${id}`} label="Speed limit" unit="km/h" digits={0} min={5} max={130} step={5} value={own ?? all} onCommit={v => onSet(Math.round(v))} />
+      <NumberField id={`sk-speed-${id}`} label="Speed limit" unit="km/h" digits={0} min={5} max={130} step={5} value={own ?? base} onCommit={v => onSet(Math.round(v))} />
       {own !== undefined
-        ? <Button size="sm" variant="ghost" className="h-8 text-xs" title={`Back to the sketch's speed (${all} km/h, set in Traffic)`} onClick={() => onSet(null)}>The sketch&apos;s</Button>
-        : <span className="pb-2 text-[11px] text-muted-foreground" title={`Until one is set here, the ${of} has the sketch's speed (Traffic)`}>the sketch&apos;s</span>}
+        ? <Button size="sm" variant="ghost" className="h-8 text-xs" title={`Back to ${where}: ${base} km/h`} onClick={() => onSet(null)}>The {whose}</Button>
+        : <span className="pb-2 text-[11px] text-muted-foreground" title={`Until one is set here, the ${of} has ${where}${of === "lane" && road ? "; one set here is this lane's alone, the road's other lanes keep theirs" : ""}`}>the {whose}</span>}
     </div>
   );
 }

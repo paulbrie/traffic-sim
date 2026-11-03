@@ -41,7 +41,7 @@ export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, J
       title: `Lane ${l.id}`, sub: r ? r.name : "in no road",
       rows: [
         ["Length", `${isFullCircle(l.shape) ? "ring · " : ""}${m(laneLength(l.shape))}`],
-        ["Speed limit", `${lim ?? all} km/h${lim === undefined ? " (the sketch's)" : ""}`],
+        ["Speed limit", `${lim ?? all} km/h${lim === undefined ? " (the sketch's)" : l.speed === undefined && r ? " (the road's)" : r ? " (its own)" : ""}`],
         ...(l.level ? [["Level", l.level > 0 ? `+${l.level} (bridge)` : `${l.level} (under)`] as [string, string]] : []),
         ...(l.control ? [["At its end", l.control === "stop" ? "Stop" : "Yield"] as [string, string]] : []),
       ],

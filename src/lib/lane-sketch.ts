@@ -36,7 +36,7 @@ export interface SketchLane {
   level?: number;
   /** (ticket #93) locked: its properties can't be changed on the map or in the inspectors until it is unlocked (see `lockedChange`) */
   locked?: true;
-  /** a lane in no road: its speed limit (km/h; default: its road's, else the sketch's traffic speed) */
+  /** its own speed limit (km/h; ticket #126: in a road too, before the road's; default: its road's, else the sketch's traffic speed) */
   speed?: number;
   /** a bus lane: closed to ordinary cars, at the road's border or in the middle */
   bus?: true;
@@ -75,16 +75,15 @@ export interface SketchRoad { id: string; name: string; lanes: string[]; align?:
   /** (ticket #93) locked: it and its lanes can't be changed until it is unlocked */
   locked?: true;
 }
-/** a lane's speed limit (km/h): its road's, else its own (in no road), else none of its own (the sketch's traffic speed) */
+/** a lane's speed limit (km/h): its own (ticket #126: in a road too), else its road's, else none of its own (the sketch's traffic speed) */
 export function speedLimitOf(sk: Sketch, lane: string): number | undefined {
-  const r = sk.roads.find(x => x.lanes.includes(lane));
-  return r?.speed ?? (r ? undefined : laneById(sk, lane)?.speed);
+  return laneById(sk, lane)?.speed ?? sk.roads.find(x => x.lanes.includes(lane))?.speed;
 }
 /** a road's speed limit set (km/h), or back to the sketch's (null) */
 export function setRoadSpeed(sk: Sketch, id: string, kmh: number | null): Sketch {
   return { ...sk, roads: sk.roads.map(r => { if (r.id !== id) return r; const { speed: _, ...rest } = r; return kmh === null ? rest : { ...rest, speed: kmh }; }) };
 }
-/** a lane's own speed limit set (km/h; a lane in no road), or back to the sketch's (null) */
+/** a lane's own speed limit set (km/h), or back to its road's, else the sketch's (null) */
 export function setLaneSpeed(sk: Sketch, id: string, kmh: number | null): Sketch {
   return { ...sk, lanes: sk.lanes.map(l => { if (l.id !== id) return l; const { speed: _, ...rest } = l; return kmh === null ? rest : { ...rest, speed: kmh }; }) };
 }

@@ -828,7 +828,7 @@ export class SketchSim {
     // (where it is drawn moves with the lanes: an edit isn't a jump)
     this.drawn.clear(); this.unseen = true;
     const v0 = this.params.speed / 3.6, edges = new Map<string, Edge>(), paths = new Map<string, Pt[]>(), bf = this.tuning.bendSpeed, rd = this.tuning.ringDriving >= 0.5;
-    // (each lane's speed limit: its road's, or its own, else the sketch's)
+    // (each lane's speed limit: its own, or its road's, else the sketch's)
     const limit = (lane: string) => { const k = speedLimitOf(sk, lane); return k !== undefined ? k / 3.6 : v0; };
     // (lanes into a junction with lights: those, not lines; the lights carried on as they were)
     const prevSignals = this.signals;
