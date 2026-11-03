@@ -3,10 +3,11 @@
 /**
  * A run's results saved, and saved results compared (ticket #124): when the counting begins (the warm-up), "Save this run's
  * results" (named; the flows every 5 s kept or not), the plan's saved results (any of its sketches; seen by all who can see the
- * plan), and those ticked compared side by side (compare-results-dialog.tsx). Saved apart from the plan: its saves stay small.
+ * plan), renamed (ticket #125), and those ticked compared side by side (compare-results-dialog.tsx). Saved apart from the plan: its
+ * saves stay small.
  */
 import { useCallback, useEffect, useState } from "react";
-import { BarChart3, Save, Trash2 } from "lucide-react";
+import { BarChart3, Pencil, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +18,7 @@ import type { SimStats } from "@/lib/lane-sketch-sim";
 import { hhmm, startClock } from "@/lib/demand-matrix";
 import { sketchList } from "@/lib/sketch-list";
 import { resultMeta, type SimResult, type SimResultInfo } from "@/lib/sim-results";
-import { deleteSimResult, getSimResults, listSimResults, saveSimResult } from "@/server/actions";
+import { deleteSimResult, getSimResults, listSimResults, renameSimResult, saveSimResult } from "@/server/actions";
 import { useSketchStore } from "@/state/lane-sketch";
 import { laneSketch$, ui } from "@/state/store";
 import { CompareResultsDialog } from "./compare-results-dialog";
@@ -33,6 +34,7 @@ export function ResultsPanel({ sketch, stats, readOnly }: { sketch: Sketch; stat
   const [saving, setSaving] = useState<{ name: string; series: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [comparing, setComparing] = useState<SimResult[] | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const reload = useCallback(() => { if (planId) void listSimResults(planId).then(setList).catch(() => setList([])); }, [planId]);
   useEffect(() => { reload(); }, [reload]);
   const warmup = sketch.traffic?.warmup ?? 0, from = warmup * 60, start = startClock(sketch);
@@ -57,6 +59,14 @@ export function ResultsPanel({ sketch, stats, readOnly }: { sketch: Sketch; stat
       toast.success("Results saved", { description: `${span(data.t - data.from)} counted` });
       setSaving(null); setTicked(x => [...x, r.id]); reload();
     } finally { setBusy(false); }
+  };
+  const rename = () => {
+    if (!planId || !renaming) return;
+    const { id, name } = renaming, was = list?.find(x => x.id === id)?.name;
+    setRenaming(null);
+    if (!name.trim() || name.trim() === was) return;
+    setList(l => l && l.map(x => (x.id === id ? { ...x, name: name.trim() } : x)));
+    void renameSimResult(planId, id, name).then(r => { if (!r.ok) toast.error("Not renamed", { description: r.error }); reload(); });
   };
   const compare = async () => {
     if (!planId) return;
@@ -90,12 +100,18 @@ export function ResultsPanel({ sketch, stats, readOnly }: { sketch: Sketch; stat
           onClick={() => setSaving({ name: defaultName(), series: false })}><Save /> Save this run&apos;s results</Button>
       ))}
       <div className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
-        {list === null ? <p className="text-[11px] text-muted-foreground">…</p> : !list.length ? <p className="text-[11px] text-muted-foreground">None saved yet.</p> : list.map(x => (
+        {list === null ? <p className="text-[11px] text-muted-foreground">…</p> : !list.length ? <p className="text-[11px] text-muted-foreground">None saved yet.</p> : list.map(x => renaming?.id === x.id ? (
+          <Input key={x.id} value={renaming.name} onChange={e => setRenaming({ id: x.id, name: e.target.value })} maxLength={80} className="h-7 text-xs" aria-label="Results' name" autoFocus
+            onFocus={e => e.currentTarget.select()} onBlur={rename}
+            onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") rename(); if (e.key === "Escape") setRenaming(null); }} />
+        ) : (
           <label key={x.id} className={cn("flex items-center gap-1.5 rounded px-1 text-xs hover:bg-muted", ticked.includes(x.id) && "bg-primary/10")}
             title={`${x.name}\n${x.sketch} · ${span(x.seconds)} counted${x.series ? " · flows every 5 s" : ""}\n${x.by ? `${x.by}, ` : ""}${new Date(x.createdAt).toLocaleString()}`}>
             <input type="checkbox" className="accent-primary" checked={ticked.includes(x.id)} onChange={e => setTicked(t => (e.target.checked ? [...t, x.id] : t.filter(y => y !== x.id)))} />
-            <span className="min-w-0 flex-1 truncate">{x.name}</span>
+            <span className="min-w-0 flex-1 truncate" onDoubleClick={readOnly ? undefined : e => { e.preventDefault(); setRenaming({ id: x.id, name: x.name }); }}>{x.name}</span>
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular">{span(x.seconds)}</span>
+            {!readOnly && <Button variant="ghost" size="icon" className="size-6 shrink-0" aria-label={`Rename ${x.name}`} title="Rename it"
+              onClick={e => { e.preventDefault(); setRenaming({ id: x.id, name: x.name }); }}><Pencil className="size-3.5" /></Button>}
             {!readOnly && <Button variant="ghost" size="icon" className="size-6 shrink-0" aria-label={`Delete ${x.name}`} title="Delete it"
               onClick={e => { e.preventDefault(); if (!planId) return; void deleteSimResult(planId, x.id).then(r => { if (!r.ok) toast.error(r.error); setTicked(t => t.filter(y => y !== x.id)); reload(); }); }}><Trash2 className="size-3.5" /></Button>}
           </label>

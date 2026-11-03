@@ -48,3 +48,9 @@ export async function deleteSimResult<U, P>(plan: Named<P, PlanId>, id: string, 
   const done = await db.delete(r).where(and(eq(r.id, id), eq(r.planId, plan.value))).returning({ id: r.id });
   return done.length > 0;
 }
+
+/** a result of the plan renamed (ticket #125); false if there was none */
+export async function renameSimResult<U, P>(plan: Named<P, PlanId>, id: string, name: string, _proof: CanEditPlan<U, P>): Promise<boolean> {
+  const done = await db.update(r).set({ name }).where(and(eq(r.id, id), eq(r.planId, plan.value))).returning({ id: r.id });
+  return done.length > 0;
+}

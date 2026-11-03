@@ -506,6 +506,20 @@ export async function saveSimResult(planId: string, input: { name: string; meta:
   });
 }
 
+/** A saved result renamed, by one who may edit the plan (ticket #125). */
+export async function renameSimResult(planId: string, id: string, newName: string): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
+  const me = await assertUser();
+  assertId(planId);
+  if (typeof id !== "string" || !UUID.test(id)) return { ok: false, error: "Unknown result." };
+  const n = clean(newName, 80);
+  if (!n) return { ok: false, error: "Give it a name." };
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const edit = canEditPlan(await planAccess(user, plan));
+    if (!edit) return { ok: false, error: "You can't change this plan." };
+    return (await simResults.renameSimResult(plan, id, n, edit)) ? { ok: true, name: n } : { ok: false, error: "That result is gone." };
+  });
+}
+
 /** A saved result deleted, by one who may edit the plan. */
 export async function deleteSimResult(planId: string, id: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const me = await assertUser();
