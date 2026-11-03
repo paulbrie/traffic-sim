@@ -172,13 +172,22 @@ let PED_WALK = 8, PED_YIELD = 5, PED_V = 1.2;
 const PED_ROW = 1, LANE_HALF = 1.75;
 /** m/s: a car on a zebra slower than this is standing there (in a queue): people cross past it, and it waits for them (ticket #108) */
 const PED_STAND = 0.3;
-/** pedestrians at a zebra: waiting at the kerb (since when), the group on it (from, until), their claim on it, and the counts so far */
-interface PedState { waiting: number; since: number; crossing: number; from: number; until: number; redSince: number; claim: boolean; crossed: number; waitSum: number }
+/** pedestrians at a zebra: waiting at the kerb (since when), those on it (in all, from the first setting off until the last is
+ * across), their claim on it, and the counts so far */
+interface PedState { waiting: number; since: number; crossing: number; from: number; until: number; redSince: number; claim: boolean; crossed: number; waitSum: number;
+  /** (ticket #119) the groups on it, each at its own pace: those who set off later in a pedestrian phase follow as a group of their
+   * own (they used to join the first, its every member then taking as long as the last: x2's 13.5 m in 22 to 34 s) */
+  groups: PedGroup[] }
+interface PedGroup { n: number; from: number; until: number }
+/** groups drawn on a zebra at most (one more joins the last) */
+const PED_GROUPS = 3;
 /** a zebra as the cars see it: where it runs over each lane and connector (s0..s1), the lights over it (the connectors they hold), and its pedestrians */
 interface SimCrossing { def: SketchCrossing; len: number; on: { edge: Edge; s0: number; s1: number }[]; lit: { c: SignalController; conns: string[] }[];
   /** (ticket #112) the lights' phase its pedestrians cross in, if they have one: only then */ walk: { c: SignalController; phase: number } | null; ped: PedState }
-/** a zebra's pedestrians, to draw and show: waiting at kerb a, crossing to b (how far across, 0..1) */
-export interface PedView { id: string; waiting: number; crossing: number; progress: number; /** (live only) crossed so far, and their mean wait (s) */ crossed?: number; avgWait?: number }
+/** a zebra's pedestrians, to draw and show: waiting at kerb a, crossing to b (how far across, 0..1: the first group's) */
+export interface PedView { id: string; waiting: number; crossing: number; progress: number;
+  /** (more than one group on it) each group: how many, how far across */ groups?: { n: number; progress: number }[];
+  /** (live only) crossed so far, and their mean wait (s) */ crossed?: number; avgWait?: number }
 
 /** something that happened in the run */
 export type SimEvent = { t: number; what: "in" | "onto" | "out" | "gone" | "jump" | "collision" | "deadlock" | "edit" | "params" | "change" | "reroute" | "breakdown" | "towed"; car?: number } & Record<string, unknown>;
@@ -1207,8 +1216,15 @@ export class SketchSim {
   private stepPeds(dt: number, byEdge: Map<Edge, SimVehicle[]>) {
     for (const x of this.crossings) {
       const p = x.ped;
+      // (kept from before groups were: one group, as it was)
+      p.groups ??= p.crossing ? [{ n: p.crossing, from: p.from, until: p.until }] : [];
       if (x.def.peds > 0 && this.pedRnd() < (x.def.peds / 3600) * dt) { if (!p.waiting) p.since = this.t; p.waiting++; }
-      if (p.crossing && this.t >= p.until) p.crossing = 0;
+      // (the groups across by now off it; what is left on it, in all)
+      if (p.groups.length && p.groups.some(g => this.t >= g.until)) {
+        p.groups = p.groups.filter(g => this.t < g.until);
+        p.crossing = p.groups.reduce((a, g) => a + g.n, 0);
+        if (p.groups.length) { p.from = p.groups[0].from; p.until = Math.max(...p.groups.map(g => g.until)); }
+      }
       const lights = x.lit.length > 0;
       const red = lights && x.lit.every(({ c, conns }) => conns.every(id => c.stateOf(id) === "red"));
       if (lights) { if (!red) p.redSince = -1; else if (p.redSince < 0) p.redSince = this.t; }
@@ -1219,9 +1235,12 @@ export class SketchSim {
       const allowed = w && wp ? walkNow : lights ? red && this.t - p.redSince < PED_WALK : this.t >= p.until + PED_YIELD;
       p.claim = allowed;
       if (!allowed || this.crossingBusy(x, byEdge)) continue;
-      // (in their phase, those come since follow the group already on it, not left for the next cycle)
-      if (p.crossing) { p.crossing += p.waiting; p.until = Math.max(p.until, this.t + x.len / PED_V + 1.5); }
-      else { p.crossing = p.waiting; p.from = this.t; p.until = this.t + x.len / PED_V + 1.5; }
+      // (in their phase, those come since follow the group already on it as a group of their own, not left for the next cycle;
+      // one that set off within the last second and a half, or one group too many, they join)
+      const until = this.t + x.len / PED_V + 1.5, last = p.groups[p.groups.length - 1];
+      if (last && (this.t - last.from < 1.5 || p.groups.length >= PED_GROUPS)) last.n += p.waiting;
+      else p.groups.push({ n: p.waiting, from: this.t, until });
+      p.crossing += p.waiting; p.from = p.groups[0].from; p.until = Math.max(p.until, ...p.groups.map(g => g.until));
       p.crossed += p.waiting; p.waitSum += p.waiting * (this.t - p.since);
       p.waiting = 0; p.claim = false;
     }
@@ -1245,10 +1264,15 @@ export class SketchSim {
   }
   /** the zebras' pedestrians now, to draw */
   peds(): PedView[] {
-    return this.crossings.map(x => ({
-      id: x.def.id, waiting: x.ped.waiting, crossing: x.ped.crossing, progress: x.ped.crossing ? Math.min(1, (this.t - x.ped.from) / Math.max(0.1, x.ped.until - x.ped.from)) : 0,
-      crossed: x.ped.crossed, avgWait: x.ped.crossed ? x.ped.waitSum / x.ped.crossed : 0,
-    }));
+    const across = (g: PedGroup) => Math.min(1, (this.t - g.from) / Math.max(0.1, g.until - g.from));
+    return this.crossings.map(x => {
+      const gs = x.ped.groups;
+      return {
+        id: x.def.id, waiting: x.ped.waiting, crossing: x.ped.crossing, progress: gs.length ? across(gs[0]) : 0,
+        ...(gs.length > 1 ? { groups: gs.map(g => ({ n: g.n, progress: across(g) })) } : {}),
+        crossed: x.ped.crossed, avgWait: x.ped.crossed ? x.ped.waitSum / x.ped.crossed : 0,
+      };
+    });
   }
   /** a zebra's numbers: waiting and crossing now, crossed so far, their mean wait (s) */
   crossingStats(id: string) {
@@ -3166,7 +3190,13 @@ export class SketchSim {
     const tr = f.trailers;
     if (tr) for (let i = 0; i < tr.length; i += 6) cars[tr[i]].trailer = { p: { x: tr[i + 1], y: tr[i + 2] }, d: { x: tr[i + 3], y: tr[i + 4] }, len: tr[i + 5] };
     const peds: PedView[] = [];
-    if (f.peds) for (let i = 0; i < f.peds.ids.length; i++) peds.push({ id: this.tags[f.peds.ids[i]], waiting: f.peds.nums[i * 3], crossing: f.peds.nums[i * 3 + 1], progress: f.peds.nums[i * 3 + 2] });
+    // (per zebra: those waiting, then each group's number and how far across; see `record`)
+    const K = 1 + 2 * PED_GROUPS;
+    if (f.peds) for (let i = 0; i < f.peds.ids.length; i++) {
+      const a = f.peds.nums.subarray(i * K, i * K + K), groups: { n: number; progress: number }[] = [];
+      for (let k = 0; k < PED_GROUPS; k++) if (a[1 + 2 * k] > 0) groups.push({ n: a[1 + 2 * k], progress: a[2 + 2 * k] });
+      peds.push({ id: this.tags[f.peds.ids[i]], waiting: a[0], crossing: groups.reduce((s, g) => s + g.n, 0), progress: groups[0]?.progress ?? 0, ...(groups.length > 1 ? { groups } : {}) });
+    }
     return { t: f.t, cars, peds, ...(f.explain ? { explain: f.explain } : {}) };
   }
   /** the recorded car under `p` at time `t` (on its body, or within `tol` metres) */
@@ -3220,8 +3250,11 @@ export class SketchSim {
         tags.set([this.tag(v.edge.key), this.tag(v.exit?.key ?? null), this.tag(v.why), this.tag(v.dest)], i * 4);
         aux[i * 2] = Number.isFinite(v.gap) ? Math.min(65534, Math.round(Math.max(0, v.gap) * 10)) : 65535; aux[i * 2 + 1] = Math.min(65535, Math.round(v.still * 10));
       });
-      // (the zebras' pedestrians: waiting, crossing, how far across)
-      const peds = this.crossings.length ? { ids: Uint32Array.from(this.crossings, x => this.tag(x.def.id)), nums: Float32Array.from(this.peds().flatMap(q => [q.waiting, q.crossing, q.progress])) } : undefined;
+      // (the zebras' pedestrians: waiting, then each group on it (PED_GROUPS of them, 0 where none): how many, how far across)
+      const peds = this.crossings.length ? { ids: Uint32Array.from(this.crossings, x => this.tag(x.def.id)), nums: Float32Array.from(this.peds().flatMap(q => {
+        const gs = q.groups ?? (q.crossing ? [{ n: q.crossing, progress: q.progress }] : []);
+        return [q.waiting, ...Array.from({ length: PED_GROUPS }, (_, k) => [gs[k]?.n ?? 0, gs[k]?.progress ?? 0]).flat()];
+      })) } : undefined;
       const explain = this.watchId !== null ? this.explain(this.watchId) : null;
       const f: ReplayFrame = { t: r2(this.t), nums, tags, aux, ...(explain ? { explain } : {}), ...(peds ? { peds } : {}), ...(trailers.length ? { trailers: Float32Array.from(trailers) } : {}) };
       this.replay.push(f); this.replayBytes += frameBytes(f);
@@ -3716,4 +3749,4 @@ export class SketchSim {
   }
 }
 
-const newPed = (): PedState => ({ waiting: 0, since: 0, crossing: 0, from: 0, until: -Infinity, redSince: -1, claim: false, crossed: 0, waitSum: 0 });
+const newPed = (): PedState => ({ waiting: 0, since: 0, crossing: 0, from: 0, until: -Infinity, redSince: -1, claim: false, crossed: 0, waitSum: 0, groups: [] });

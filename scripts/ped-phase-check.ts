@@ -44,22 +44,26 @@ const show = (sk: Sketch) => plan(sk).phases.map(p => `${p.name}: ${[...p.ways, 
 // a run: who is on the zebra when
 function run(sk: Sketch, T: number) {
   const sim = new SketchSim(sk, { rate: 500, speed: 50 }, 1), c = sim.signals.find(x => x.plan.junction === "j1")!;
-  let onInGreen = 0, pedPhases = 0, wasPed = false;
+  let onInGreen = 0, pedPhases = 0, wasPed = false, slowest = 0;
+  const X = (sim as unknown as { crossings: { def: { id: string }; ped: { groups: { from: number; until: number }[] } }[] }).crossings.find(c => c.def.id === "x1")!;
   while (sim.t < T) {
     sim.step(0.1);
     const ph = c.plan.phases[c.phase], v = sim.peds().find(x => x.id === "x1")!;
     if (v.crossing && c.stage === "green" && ph.conns.length) onInGreen += 0.1;
+    for (const g of X.ped.groups) slowest = Math.max(slowest, g.until - g.from);
     const isPed = !!ph.peds?.length && c.stage === "green";
     if (isPed && !wasPed) pedPhases++;
     wasPed = isPed;
   }
   const v = sim.peds().find(x => x.id === "x1")!, st = sim.stats();
-  return { onInGreen, pedPhases, crossed: v.crossed ?? 0, wait: v.avgWait ?? 0, finished: st.finished, collisions: st.collisions, stuck: st.stuck };
+  return { onInGreen, pedPhases, slowest, crossed: v.crossed ?? 0, wait: v.avgWait ?? 0, finished: st.finished, collisions: st.collisions, stuck: st.stuck };
 }
 {
   const r = run(road({}), 900);
   check("run: nobody on the zebra while a car has green", r.onInGreen < 0.05, `${r.onInGreen.toFixed(1)} s`);
   check("…people get across, without long waits", r.crossed > 100 && r.wait < 40, `${r.crossed} crossed, mean wait ${r.wait.toFixed(1)} s, ${r.pedPhases} pedestrian phases`);
+  // (ticket #119: those setting off later in the phase follow as a group of their own, each across in its own time)
+  check("…each group across in the time the zebra takes (8 m at 1.2 m/s, and a moment), late ones too", r.slowest < 8 / 1.2 + 1.6, `slowest ${r.slowest.toFixed(1)} s`);
   check("…and so do the cars", r.finished > 150 && r.collisions === 0 && r.stuck === 0, `${r.finished} out, ${r.collisions} collisions, ${r.stuck} stuck`);
   const quiet = run(road({}, "both", 0), 300);
   check("nobody at the zebra: no pedestrian phase (actuated: on demand)", quiet.pedPhases === 0, `${quiet.pedPhases}`);

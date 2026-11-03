@@ -4246,7 +4246,9 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, Math.PI * 2); ctx.fillStyle = "#f59e0b"; ctx.fill();
       ctx.strokeStyle = "rgba(20,28,34,0.7)"; ctx.lineWidth = Math.min(0.12, px); ctx.stroke();
     };
-    for (let i = 0; i < Math.min(q.crossing, 9); i++) person(0.6 + q.progress * (f.len - 1.2) - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
+    // (each group at its own pace, ticket #119; nine people drawn at most)
+    let shown = 0;
+    for (const g of q.groups ?? [{ n: q.crossing, progress: q.progress }]) for (let i = 0; i < g.n && shown < 9; i++, shown++) person(0.6 + g.progress * (f.len - 1.2) - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
     for (let i = 0; i < Math.min(q.waiting, 9); i++) person(-GAP - Math.floor(i / 3) * GAP, ((i % 3) - 1) * GAP);
   }
   drawCars(split ? carsNow.filter(x => carLevel(x) >= 0.5) : carsNow);
