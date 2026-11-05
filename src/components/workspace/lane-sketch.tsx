@@ -2144,7 +2144,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           )}
           {wayEdit && <WayEditor key={`${wayEdit.lanes.join()}:${wayEdit.kind}`} edit={wayEdit} onSave={v => saveWay(wayEdit, v)} onCancel={() => { setWayEdit(null); panel.current?.focus(); }} />}
           {hoverCard && (() => {
-            const info = describeHover(hoverCard.hit, sketch, contents, stats, hoverCard.car);
+            const info = describeHover(hoverCard.hit, sketch, contents, stats, hoverCard.car, flow);
             return info ? <SketchHoverCard info={info} x={hoverCard.x} y={hoverCard.y} /> : null;
           })()}
           {searchShown && <SketchSearch sketch={sketch} contents={contents} cars={searchCars}

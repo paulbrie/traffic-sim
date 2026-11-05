@@ -4,20 +4,29 @@
  * A card by the pointer on the V2 editor's map with what it is over, as V1's hover card (hover-info.tsx): a lane (its
  * road, length, level, sign, speed limit), a junction (its kind, roads, and how traffic does there while the cars run),
  * a connector, a zebra crossing, a speed bump, or a car (its speed, where it is going, what it waits for). Shown after the pointer
- * rests a moment, not while drawing (see LaneSketch).
+ * rests a moment, not while drawing (see LaneSketch). With TomTom's live traffic fetched (ticket #131), a lane's card has
+ * TomTom's speed on it and on its road.
  */
 import { connectorPts, isFullCircle, laneById, laneLength, speedLimitOf, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
 import type { SimStats, SketchSim } from "@/lib/lane-sketch-sim";
 import { formatArea, zoneArea } from "@/lib/sketch-zones";
 import { BUMP_KINDS, bumpHeavySpeed, bumpSpeed } from "@/lib/sketch-bumps";
+import type { LaneTraffic, TrafficMatch } from "@/lib/tomtom";
 
 export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { bump: string } | { link: string } | { zone: string } | { car: number };
 export interface HoverInfo { title: string; sub?: string; rows: [string, string][] }
 
 const m = (x: number) => (x >= 1000 ? `${(x / 1000).toFixed(2)} km` : `${x.toFixed(x < 10 ? 1 : 0)} m`);
 const s = (x: number) => (x < 60 ? `${x.toFixed(x < 10 ? 1 : 0)} s` : `${Math.floor(x / 60)}:${String(Math.round(x % 60)).padStart(2, "0")}`);
+/** TomTom's word on a lane or a road: its speed now, of its free flow, and how much of it TomTom covers if not all */
+const tomtom = (t: LaneTraffic | undefined): string | null => {
+  if (!t || (t.kmh === null && !t.closed)) return null;
+  if (t.closed) return "closed";
+  const part = t.cover < 0.95 ? ` · over ${Math.round(t.cover * 100)}%` : "";
+  return `${Math.round(t.kmh!)} km/h${t.rel !== null && t.free !== null ? ` (${Math.round(t.rel * 100)}% of free flow, ${Math.round(t.free)})` : ""}${part}`;
+};
 
-export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, JunctionContents>, stats: SimStats | null, car: ReturnType<SketchSim["inspect"]> | null): HoverInfo | null {
+export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, JunctionContents>, stats: SimStats | null, car: ReturnType<SketchSim["inspect"]> | null, flow: TrafficMatch | null = null): HoverInfo | null {
   const roadOf = (lane: string) => sk.roads.find(r => r.lanes.includes(lane)) ?? null;
   const all = sk.traffic?.speed ?? 50;
   if ("car" in hit) {
@@ -37,6 +46,7 @@ export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, J
     const l = laneById(sk, hit.lane);
     if (!l) return null;
     const r = roadOf(l.id), lim = speedLimitOf(sk, l.id);
+    const ttLane = flow ? tomtom(flow.lanes.get(l.id)) : null, ttRoad = flow && r && r.lanes.length > 1 ? tomtom(flow.roads.get(r.id)) : null;
     return {
       title: `Lane ${l.id}`, sub: r ? r.name : "in no road",
       rows: [
@@ -44,6 +54,8 @@ export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, J
         ["Speed limit", `${lim ?? all} km/h${lim === undefined ? " (the sketch's)" : l.speed === undefined && r ? " (the road's)" : r ? " (its own)" : ""}`],
         ...(l.level ? [["Level", l.level > 0 ? `+${l.level} (bridge)` : `${l.level} (under)`] as [string, string]] : []),
         ...(l.control ? [["At its end", l.control === "stop" ? "Stop" : "Yield"] as [string, string]] : []),
+        ...(flow ? [["TomTom now", ttLane ?? "no data"] as [string, string]] : []),
+        ...(ttRoad ? [["Its road", ttRoad] as [string, string]] : []),
       ],
     };
   }
