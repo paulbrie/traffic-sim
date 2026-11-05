@@ -12,7 +12,9 @@ import { AgentPatchesButton } from "@/components/workspace/agent-patches";
 import { LaneSketch } from "@/components/workspace/lane-sketch";
 import { FrameRate, MemoryGauge, SketchLayerPicker } from "./top-bar-tools";
 import { SaveIndicator, useAutosave, useLive, type WorkspacePlan } from "@/components/workspace/workspace";
-import { loadPlan } from "@/state/store";
+import { loadPlan, ui } from "@/state/store";
+import { heliKeys$ } from "@/state/heli-keys";
+import type { UserPrefs } from "@/server/queries";
 import { planSketch, SketchStoreContext } from "@/state/lane-sketch";
 import { useUiPath } from "@/state/sketch-ui";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -24,7 +26,8 @@ import { startUnderlayImage } from "@/state/underlay-image";
  * stays empty). Its Sketch button goes to a page of its own (src/app/plans/[planId]/sketch), for ideas
  * sketched apart from the plan (saved with it, in the sketch's `scratch`).
  */
-export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUser }) {
+/** `prefs`: the user's own settings (the helicopter's keys, war mode: ticket #129) */
+export function WorkspaceV2({ plan, user, prefs }: { plan: WorkspacePlan; user: MenuUser; prefs: UserPrefs }) {
   // load once per mount (keyed by plan id), before the editor reads the stores: in a layout effect, the page
   // shown only once it has run. (Not while rendering: going from one plan to another, this page renders while
   // the last one is still up, and loading then put the new sketch under the old plan's header and updated
@@ -32,6 +35,7 @@ export function WorkspaceV2({ plan, user }: { plan: WorkspacePlan; user: MenuUse
   const [loaded, setLoaded] = useState(false);
   useLayoutEffect(() => {
     loadPlan(plan.id, plan.network, plan.settings, plan.revision, plan.updatedAt, plan.underlay, plan.access === "read", plan.sketch);
+    heliKeys$.next(prefs.heliKeys); ui.getValue().warMode = prefs.warMode;
     startUnderlayImage();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the stores are outside React: loaded, the page can show
     setLoaded(true);
@@ -84,7 +88,7 @@ function ModeToggle() {
   return (
     <ToggleGroup type="single" value={mode} onValueChange={v => v && setMode(v as "plan" | "3d")} aria-label="View" className="h-8">
       <ToggleGroupItem value="plan" className="h-8 px-2.5 text-xs" title="The plan from above">Plan</ToggleGroupItem>
-      <ToggleGroupItem value="3d" className="h-8 px-2.5 text-xs" title="The plan in 3D, its cars driving (drag to turn, right-drag to pan, wheel to zoom)">3D</ToggleGroupItem>
+      <ToggleGroupItem value="3d" className="h-8 px-2.5 text-xs" title="The plan in 3D, its cars driving (drag to turn, right-drag to pan, wheel to zoom); fly a helicopter over it">3D</ToggleGroupItem>
     </ToggleGroup>
   );
 }

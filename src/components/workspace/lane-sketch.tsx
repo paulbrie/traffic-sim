@@ -58,7 +58,7 @@ import { addZone, deleteZone, formatArea, insertZoneCorner, moveZoneCorner, next
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
 import { streetLabel, streetLabelSize } from "@/render/street-label";
-import { describeHover, SketchHoverCard, type HoverHit } from "@/components/v2/sketch-hover-card";
+import { describeHover, SketchHoverCard, type HoverHit, type HoverInfo } from "@/components/v2/sketch-hover-card";
 import { View3DV2, type View3DApi } from "@/components/v2/view-3d-v2";
 import { RoutePanel } from "@/components/v2/route-panel";
 import { keepForSearch, searchTypeahead, SketchSearch, type SearchTarget } from "@/components/v2/sketch-search";
@@ -1606,9 +1606,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (ticket #93: a drag that would change something locked shows nothing moving, and says so)
   const dragShow = (sk: Sketch) => { if (lockRefused(store.sketch$.getValue(), sk)) return; if (!dragSk.current) store.beginEdit(); dragSk.current = sk; redraw(); };
   /** a click in the 3D view at `p` on level `lv`: a car there, else what the plan view would pick there if it is on that level */
-  const pickAt3d = (p: Pt, lv: number) => {
-    const sk = live.current.sketch, car = live.current.replayT === null ? sim.current?.carAt(p, 1.5) ?? null : null;
+  const pickAt3d = (p: Pt, lv: number, flying?: { tol: number }) => {
+    const sk = live.current.sketch, car = live.current.replayT === null ? sim.current?.carAt(p, flying?.tol ?? 1.5) ?? null : null;
     if (car !== null && Math.abs((sim.current?.poses().find(c => c.id === car)?.z ?? 0) - lv) < 0.5) { setSel(NO_SEL); setSelCar(car); return true; }
+    // (from the helicopter (ticket #129), only cars)
+    if (flying) return false;
     const hit = pick(p);
     if (!hit) return false;
     if ("lane" in hit) {
@@ -1627,6 +1629,22 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     else setSel({ ...NO_SEL, zones: [hit.zone] });
     setSelCar(null);
     return true;
+  };
+  /** what is at `p` on level `lv` in 3D, as the hover card says it (ticket #129: the card, and the helicopter's screen) */
+  const hoverAt3d = (p: Pt, lv: number, tol: number): HoverInfo | null => {
+    const sk = live.current.sketch, s = sim.current, car = live.current.replayT === null ? s?.carAt(p, tol) ?? null : null;
+    const pose = car !== null ? s?.poses().find(c => c.id === car) : undefined;
+    if (car !== null && pose && Math.abs((pose.z ?? 0) - lv) < 0.5) {
+      // (the car picked, as it is; another, only what its pose says: asking the sim about it would stop it watching the one picked)
+      if (car === live.current.selCar && carInfo) return describeHover({ car }, sk, live.current.contents, stats, carInfo);
+      return { title: `${pose.trailer ? "Truck" : pose.bus ? "Bus" : "Car"} ${car}`, sub: "click to pick it", rows: [["Speed", `${Math.round(Math.min(1, pose.share) * 100)}% of what it wants`]] };
+    }
+    const hit = pick(p) as HoverHit | null;
+    if (!hit) return null;
+    if ("lane" in hit) { const l = laneById(sk, hit.lane); if (!l || Math.abs(zAt(sk, l.id, nearestOn(l.shape, p).s) - lv) > 0.5) return null; }
+    else if ("junction" in hit) { const c = live.current.contents.get(hit.junction); if (c && junctionLevel(sk, c) !== lv) return null; }
+    else if (lv !== 0) return null;
+    return describeHover(hit, sk, live.current.contents, stats, null, live.current.flow);
   };
   // what the pointer is over, in a card by it once it rests a moment (as V1's): not while drawing, dragging or pressing
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2133,14 +2151,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           </div>
           {in3d && (
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed} blinkers={blinkers}
+              hoverAt={hoverAt3d} carInfo={selCar !== null ? carInfo : null} carAbout={selCar !== null && carInfo ? describeHover({ car: selCar }, sketch, contents, stats, carInfo) : null}
+              breakDown={ids => { for (const id of ids) sim.current?.breakDown(id); }} raiseCockpit={(replayRange && replayRange.frames >= 2 ? 52 : 0) + (consoleOpen ? CONSOLE_HEIGHT : 0)}
               selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c ? carWay(live.current.sketch, c)?.pts ?? null : null; }} carWhy={() => carsShown().why} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
-          )}
-          {in3d && (
-            <div className="pointer-events-none absolute inset-x-2 top-2 z-[6] rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
-              <span className="font-medium text-foreground">3D:</span> drag turns and tilts (up towards the horizon, down to straight down) · right-drag or Shift-drag pans · scroll zooms · click picks · F the whole sketch · Esc back where it arrived
-            </div>
           )}
           {wayEdit && <WayEditor key={`${wayEdit.lanes.join()}:${wayEdit.kind}`} edit={wayEdit} onSave={v => saveWay(wayEdit, v)} onCancel={() => { setWayEdit(null); panel.current?.focus(); }} />}
           {hoverCard && (() => {

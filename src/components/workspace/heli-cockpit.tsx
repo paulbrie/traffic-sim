@@ -1,12 +1,6 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode, type RefObject } from "react";
-import { useDeepSubject, useSubject } from "subjecto/react";
-import { simController } from "@/state/sim-controller";
-import { network$, stats$, ui } from "@/state/store";
-import { junctionRefs } from "@/engine/refs";
-import { minSec } from "@/lib/time";
-import { describe, type Hovered } from "./hover-info";
 
 /** what the 3D view tells the cockpit every frame */
 export interface Flight {
@@ -23,7 +17,8 @@ export interface Flight {
 }
 export interface CockpitApi { update(f: Flight): void }
 
-const GREEN = "#62f5a0", AMBER = "#ffb83d", CYAN = "#6fd8ff", MAG = "#ff6bd6";
+export const GREEN = "#62f5a0", AMBER = "#ffb83d", CYAN = "#6fd8ff";
+const MAG = "#ff6bd6";
 const MONO = "ui-monospace,SFMono-Regular,Menlo,monospace";
 
 // the display's drawing (units): the vehicle screen and, right of it, the flight display (PFD)
@@ -37,8 +32,10 @@ const VIEW = { x: I.x - 14, y: M.y - 14, w: P.x + P.w + 14 - (I.x - 14), h: M.h 
  * What the pilot sees besides the helicopter's own cabin (the 3D model): sights on the tracked vehicle and
  * a display at the bottom with the selected (or tracked) vehicle's live data and the flight instruments.
  * The view drives the instruments every frame through `apiRef` (direct DOM writes, no React renders).
+ * The two screens left of the instruments are the engine's own (V1's heli-screens.tsx, V2's heli-screens-v2.tsx):
+ * `inspect`, what the pointer is over; `vehicle`, the selected (or tracked) vehicle.
  */
-export function Cockpit({ apiRef, tracking, hovered }: { apiRef: RefObject<CockpitApi | null>; tracking: boolean; hovered: Hovered | null }) {
+export function Cockpit({ apiRef, tracking, inspect, vehicle, raise = 0 }: { apiRef: RefObject<CockpitApi | null>; tracking: boolean; inspect: ReactNode; vehicle: ReactNode; /** the display this far (px) further up from the bottom */ raise?: number }) {
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,13 +79,13 @@ export function Cockpit({ apiRef, tracking, hovered }: { apiRef: RefObject<Cockp
         </svg>
         <span data-g="range" className="absolute top-full left-1/2 mt-1 -translate-x-1/2 font-mono text-[11px] whitespace-nowrap" />
       </div>
-      <div className="absolute bottom-3 left-1/2 w-[min(900px,88%)] -translate-x-1/2 rounded-xl bg-[#111316]/90 shadow-lg ring-1 ring-black/60 backdrop-blur-sm">
+      <div style={{ bottom: 12 + raise }} className="absolute left-1/2 w-[min(900px,88%)] -translate-x-1/2 rounded-xl bg-[#111316]/90 shadow-lg ring-1 ring-black/60 backdrop-blur-sm">
         <svg viewBox={`${VIEW.x} ${VIEW.y} ${VIEW.w} ${VIEW.h}`} className="block w-full">
           <Defs />
           <Bezel x={I.x} y={I.y} w={I.w} h={I.h} />
-          <foreignObject x={I.x} y={I.y} width={I.w} height={I.h}><InspectScreen at={hovered} /></foreignObject>
+          <foreignObject x={I.x} y={I.y} width={I.w} height={I.h}>{inspect}</foreignObject>
           <Bezel x={M.x} y={M.y} w={M.w} h={M.h} />
-          <foreignObject x={M.x} y={M.y} width={M.w} height={M.h}><VehicleScreen tracking={tracking} /></foreignObject>
+          <foreignObject x={M.x} y={M.y} width={M.w} height={M.h}>{vehicle}</foreignObject>
           <Bezel x={P.x} y={P.y} w={P.w} h={P.h} />
           <Pfd tracking={tracking} />
         </svg>
@@ -185,82 +182,8 @@ function Pfd({ tracking }: { tracking: boolean }) {
   );
 }
 
-const TURN = { L: "LEFT", S: "AHEAD", R: "RIGHT", U: "U-TURN" } as const;
-
-/** the screen on the left of the display: live data of the selected vehicle */
-function VehicleScreen({ tracking }: { tracking: boolean }) {
-  useSubject(stats$); // re-render with the stats cadence (~4×/s)
-  const [selection] = useDeepSubject(ui, "selection");
-  const sim = simController.sim, id = selection?.kind === "vehicle" ? selection.id : null;
-  const d = id && sim?.vehicle && String(sim.vehicle.id) === id && sim.vehicles.some(x => x.id === sim.vehicle!.id) ? sim.vehicle : null;
-  const body = (() => {
-    if (!id) return <Center>NO TARGET<small>click a vehicle, then Track</small></Center>;
-    if (!d) return <Center>{sim?.vehicles.some(x => String(x.id) === id) ? "ACQUIRING…" : "TARGET LOST"}<small>#{id}</small></Center>;
-    const kmh = d.v * 3.6, want = Math.max(1, d.v0 * 3.6), share = Math.min(1, kmh / want);
-    const nt = d.nextTurn, ref = nt ? junctionRefs(simController.compiled).get(nt.node) : undefined;
-    const rows: [string, string][] = [
-      ["ROAD", d.road],
-      ["LANE", d.lane !== null && d.lanes !== null ? `${d.lane + 1} / ${d.lanes}` : "–"],
-      ["NEXT", nt ? `${TURN[nt.turn]}${ref ? ` @ ${ref}` : ""}` : "–"],
-      ["TO", d.heading],
-      ["GAP", Number.isFinite(d.gap) && d.gap < 100 ? `${d.gap.toFixed(1)} m` : "CLEAR"],
-      ["TRIP", minSec(d.trip)],
-      ["IN TRAFFIC", `${minSec(d.jam)}${d.trip > 0 ? ` · ${Math.round((100 * d.jam) / d.trip)}%` : ""}`],
-      ["WAIT", `${d.wait.toFixed(0)} s`],
-      ["LN CHG", `${d.laneChanges}  RRT ${d.reroutes}`],
-    ];
-    if (d.kind === "bus") rows.push(["PAX", `${d.pax} / ${d.cap}`]);
-    return (
-      <div className="grid h-full grid-cols-[auto_1fr] gap-x-3">
-        <div className="flex flex-col justify-between">
-          <div className="text-[9px] text-[#6fd8ff]">{tracking ? "TRACKING" : "SELECTED"} · {d.kind.toUpperCase()} #{d.id}</div>
-          <div className="leading-none"><span className="text-[30px] font-semibold tabular-nums">{kmh.toFixed(0)}</span><span className="ml-1 text-[9px] opacity-70">KM/H</span></div>
-          <div>
-            <div className="h-1.5 w-24 overflow-hidden rounded-sm bg-white/10"><div className="h-full" style={{ width: `${share * 100}%`, background: share < 0.3 ? "#ff5a4f" : share < 0.7 ? AMBER : GREEN }} /></div>
-            <div className="mt-0.5 text-[8px] opacity-70">OF {want.toFixed(0)} WANTED</div>
-          </div>
-          <div className="text-[10px]">
-            <span className={d.acc < -0.3 ? "text-[#ff5a4f]" : d.acc > 0.3 ? "" : "opacity-70"}>{d.acc >= 0 ? "+" : "−"}{Math.abs(d.acc).toFixed(2)} m/s²</span>
-          </div>
-          <div className="w-fit max-w-28 truncate rounded-sm border border-current/40 px-1 text-[8px]">{d.state.toUpperCase()}</div>
-        </div>
-        <dl className="grid min-w-0 auto-rows-min grid-cols-[auto_1fr] content-center gap-x-2 gap-y-[3px] text-[9.5px] leading-tight">
-          {rows.map(([k, v]) => <div key={k} className="contents"><dt className="text-[#6fd8ff]/80">{k}</dt><dd className="truncate text-right">{v}</dd></div>)}
-        </dl>
-      </div>
-    );
-  })();
-  return (
-    <div className="relative size-full overflow-hidden rounded-[3px] bg-[#03100a] px-2.5 py-2 font-mono" style={{ color: GREEN, textShadow: `0 0 4px ${GREEN}55` }}>
-      {body}
-      {/* scanlines and a little glare on the glass */}
-      <div className="pointer-events-none absolute inset-0 opacity-25" style={{ background: "repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,0,0,0.6) 2px 3px)" }} />
-      <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(125deg, rgba(255,255,255,0.06) 0 30%, transparent 30%)" }} />
-    </div>
-  );
-}
-/** the screen left of the vehicle's: what the pointer is over (a road, junction, building, marker, vehicle) */
-function InspectScreen({ at }: { at: Hovered | null }) {
-  useSubject(stats$); // live figures (~4×/s)
-  const [net] = useSubject(network$);
-  const info = at ? describe(at, net, simController.compiled) : null;
-  return (
-    <Screen>
-      {!info ? <Center>INSPECT<small>point at a road, a junction, a building…</small></Center> : (
-        <div className="flex h-full flex-col">
-          <div className="text-[9px] text-[#6fd8ff]">INSPECT · {({ link: "ROAD", node: "JUNCTION", building: "BUILDING", marker: "MARKER", vehicle: "VEHICLE" } as const)[at!.kind]}</div>
-          <div className="mt-1 truncate text-[15px] font-semibold leading-tight">{info.title}</div>
-          {info.sub && <div className="truncate text-[9.5px] opacity-70">{info.sub}</div>}
-          <dl className="mt-auto grid grid-cols-[auto_1fr] gap-x-2 gap-y-[3px] text-[9.5px] leading-tight">
-            {info.rows.map(([k, v]) => <div key={k} className="contents"><dt className="text-[#6fd8ff]/80 uppercase">{k}</dt><dd className="truncate text-right">{v}</dd></div>)}
-          </dl>
-        </div>
-      )}
-    </Screen>
-  );
-}
 /** a green display: dark glass, scanlines, a little glare */
-function Screen({ children }: { children: ReactNode }) {
+export function Screen({ children }: { children: ReactNode }) {
   return (
     <div className="relative size-full overflow-hidden rounded-[3px] bg-[#03100a] px-2.5 py-2 font-mono" style={{ color: GREEN, textShadow: `0 0 4px ${GREEN}55` }}>
       {children}
@@ -269,6 +192,6 @@ function Screen({ children }: { children: ReactNode }) {
     </div>
   );
 }
-function Center({ children }: { children: ReactNode }) {
+export function Center({ children }: { children: ReactNode }) {
   return <div className="flex h-full flex-col items-center justify-center gap-1 text-sm tracking-widest [&_small]:text-[9px] [&_small]:tracking-normal [&_small]:opacity-60">{children}</div>;
 }

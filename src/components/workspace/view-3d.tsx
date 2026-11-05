@@ -26,6 +26,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Cockpit, type CockpitApi } from "./heli-cockpit";
+import { InspectScreen, VehicleScreen } from "./heli-screens";
 import { ReversibleControls, placeReversibleControls } from "./reversible-3d";
 import { HoverInfo, type Hovered } from "./hover-info";
 import { heliKeys$ } from "@/state/heli-keys";
@@ -1081,7 +1082,7 @@ export function View3D() {
   return (
     <>
       <div ref={wrapRef} className="absolute inset-0 overflow-hidden" aria-label="3D view of the street plan" />
-      {mode !== "orbit" && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} hovered={hover?.at ?? null} />}
+      {mode !== "orbit" && <Cockpit apiRef={cockpitApi} tracking={mode === "track"} inspect={<InspectScreen at={hover?.at ?? null} />} vehicle={<VehicleScreen tracking={mode === "track"} />} />}
       <div ref={revRef} className="pointer-events-none absolute inset-0 z-[6] overflow-hidden"><ReversibleControls /></div>
       {credits && (
         // the tiles' makers, as their terms ask (Google: its logo and the data credits)

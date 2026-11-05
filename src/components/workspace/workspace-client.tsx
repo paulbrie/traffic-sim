@@ -16,6 +16,6 @@ const Workspace = dynamic(() => import("./workspace").then(m => m.Workspace), {
 
 /** `engine`: the plan's engine, V2 (the lane sketch as the plan) or V1 */
 export function WorkspaceClient({ plan, user, prefs, assistant = false, engine = "v1" }: { plan: WorkspacePlan; user: MenuUser; prefs: UserPrefs; assistant?: boolean; engine?: "v1" | "v2" }) {
-  if (engine === "v2") return <WorkspaceV2 key={plan.id} plan={plan} user={user} />;
+  if (engine === "v2") return <WorkspaceV2 key={plan.id} plan={plan} user={user} prefs={prefs} />;
   return <Workspace key={plan.id} plan={plan} user={user} prefs={prefs} assistant={assistant} />;
 }

@@ -5,12 +5,16 @@
  * editor staying up underneath (its cars, its state), so the same cars drive here. An orbit camera (drag to turn, right
  * drag to pan, wheel to zoom), arriving over where the plan view was (and eased back there by `home`) and leaving it where the 3D view is; the ground, the
  * satellite imagery where the sketch has a place on Earth, and the reference image. Drawn only while shown and the tab is
- * visible; everything it made is let go when it goes.
+ * visible; everything it made is let go when it goes. And V1's helicopter (ticket #129, heli-v2.ts): fly over the plan, or
+ * follow the car picked, from the cockpit or from behind; war mode where the user has it on.
  *
  * World axes: x east as on the plan, y up, z the plan's y (south).
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useDeepSubject, useSubject } from "subjecto/react";
 import * as THREE from "three";
+import { toast } from "sonner";
+import { Crosshair, Eye, Gauge, Keyboard, Orbit, Plane, Plus, Settings, Swords, Volume2, VolumeX } from "lucide-react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { baseLaneId, isTwinId, wayFrom, connectorPts, junctionLevel, shownCarZ, shownZ, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
 import { LEVEL_H } from "@/engine/compile";
@@ -23,6 +27,23 @@ import { isDark, onThemeChange, readPalette } from "@/render/palette";
 import { satelliteMosaic, type SatSource } from "@/render/satellite";
 import type { SatOptions } from "@/state/sat-options";
 import type { EditorUi } from "@/state/sketch-ui";
+import type { SketchSim } from "@/lib/lane-sketch-sim";
+import { ui } from "@/state/store";
+import { heliKeys$ } from "@/state/heli-keys";
+import { keyLabel, type HeliAction } from "@/lib/heli-keys";
+import { saveWarMode } from "@/server/actions";
+import { ENEMY_MAX } from "@/render/enemies";
+import { HELI_MODEL_CREDIT } from "@/render/helicopter";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Cockpit, type CockpitApi } from "@/components/workspace/heli-cockpit";
+import { HeliKeysDialog } from "@/components/workspace/heli-keys-dialog";
+import { HeliRig, type CamMode, type HeliCar, type HeliView } from "./heli-v2";
+import { InspectScreenV2, VehicleScreenV2 } from "./heli-screens-v2";
+import { SketchHoverCard, type HoverInfo } from "./sketch-hover-card";
 
 /** the plan view's place: its middle (m) and zoom (px a metre) */
 export interface PlanView { cx: number; cy: number; scale: number }
@@ -52,8 +73,17 @@ export interface View3DProps {
   selection: Piece; car: number | null;
   /** the route traced (orange), and a test car's other way (blue) */
   route: { lanes: Set<string>; conns: Set<string>; driven: { lanes: Set<string>; conns: Set<string> } } | null;
-  /** a click on the scene at `p`, on level `level` (the highest first): true if it picked something there */
-  pickAt: (p: Pt, level: number) => boolean;
+  /** a click on the scene at `p`, on level `level` (the highest first): true if it picked something there (flying, only a
+   * car, within `tol` metres: from high up they are small) */
+  pickAt: (p: Pt, level: number, flying?: { tol: number }) => boolean;
+  /** what is at `p` on level `level`, as the map's hover card says it, a car within `tol` metres (null: nothing there, or not on that level) */
+  hoverAt: (p: Pt, level: number, tol: number) => HoverInfo | null;
+  /** the car picked, live (its speed, what it does), and what the hover card says of it: the cockpit's screen */
+  carInfo: ReturnType<SketchSim["inspect"]>; carAbout: HoverInfo | null;
+  /** cars destroyed in war mode: broken down where they are, until towed */
+  breakDown: (ids: number[]) => void;
+  /** how far up from the bottom the cockpit's display sits (px): above what the editor has there */
+  raiseCockpit?: number;
   /** a click on nothing */
   pickNone: () => void;
   /** the canvas, for the bridge's screenshot (with a frame drawn just before it is read) */
@@ -70,7 +100,7 @@ const BLINK_MS = 380;
 /** how long the camera takes back to where it arrived (ms) */
 const HOME_MS = 700;
 /** a car as the editor shows it: its middle, heading, length, speed as a share of what it wants; a truck's trailer; broken down; its level */
-export interface Car3D { p: { x: number; y: number }; d: { x: number; y: number }; len: number; share: number; trailer?: { p: { x: number; y: number }; d: { x: number; y: number }; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1; z?: number }
+export interface Car3D { id?: number; p: { x: number; y: number }; d: { x: number; y: number }; len: number; share: number; trailer?: { p: { x: number; y: number }; d: { x: number; y: number }; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1; z?: number }
 /** instances at most: bodies (a truck's cab and trailer two), their glass, hazard lamps */
 const MAXV = 24000, MAXL = 4000;
 /** how high a car's body is, and a truck's */
@@ -80,6 +110,24 @@ export function View3DV2(props: View3DProps) {
   const wrap = useRef<HTMLDivElement>(null);
   const live = useRef(props);
   useEffect(() => { live.current = props; });
+  // (ticket #129) the helicopter: the camera's mode, seen from where, war mode (where the user has it on in the
+  // settings), its sound; what the overlay shows of the flight, and what the pointer is over
+  const [mode, setMode] = useState<CamMode>("orbit");
+  const [view, setView] = useState<HeliView>("cockpit");
+  const [warMode] = useDeepSubject(ui, "warMode");
+  const [armedOn, setArmed] = useState(false);
+  const war = armedOn && warMode;
+  const [sound, setSound] = useState(true);
+  const [note, setNote] = useState("");
+  const [foes, setFoes] = useState({ count: 0, kills: 0, hull: 1 });
+  const [kills, setKills] = useState(0);
+  const [hover, setHover] = useState<{ info: HoverInfo; x: number; y: number } | null>(null);
+  const rig = useRef<HeliRig | null>(null);
+  const hudRef = useRef<HTMLSpanElement>(null), cockpitApi = useRef<CockpitApi>(null), markersRef = useRef<HTMLDivElement>(null), flashRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { rig.current?.setMode(mode); }, [mode]);
+  useEffect(() => { rig.current?.setView(view); }, [view]);
+  useEffect(() => { if (rig.current) rig.current.war = war; }, [war]);
+  useEffect(() => { if (rig.current) rig.current.sound = sound; }, [sound]);
 
   useEffect(() => {
     const el = wrap.current!;
@@ -99,6 +147,29 @@ export function View3DV2(props: View3DProps) {
     const sun = new THREE.DirectionalLight(0xffffff, 0.6); sun.position.set(-300, 600, 200); scene.add(sun);
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), new THREE.MeshLambertMaterial({ color: pal.ground }));
     ground.rotation.x = -Math.PI / 2; scene.add(ground);
+    // (the grass, then the imagery on it, drawn first and writing no depth, as V1's: looked at from far off and low down
+    // (from the helicopter, ticket #129) they would otherwise fight over which is in front, and the grass won)
+    (ground.material as THREE.MeshLambertMaterial).depthWrite = false; ground.renderOrder = -2;
+    // the helicopter (its cars: those drawn now, worked out once a frame when it asks)
+    let heliCars: HeliCar[] | null = null;
+    const carsForHeli = () => {
+      if (heliCars) return heliCars;
+      const p = live.current;
+      return (heliCars = (p.cars() ?? []).flatMap(c => (c.id === undefined ? [] : [{
+        id: c.id, x: c.p.x, y: c.p.y, h: shownCarZ(p.sketch, c.p, c.z ?? 0) * LEVEL_H, heading: Math.atan2(c.d.y, c.d.x), len: c.len, width: c.trailer ? TRUCK_W : CAR_W,
+      }])));
+    };
+    const heli = new HeliRig(scene, camera, controls, renderer.domElement, {
+      cars: carsForHeli, picked: () => live.current.car, destroy: ids => live.current.breakDown(ids),
+      modeChanged: setMode, viewChanged: setView, note: setNote,
+      hud: t => { if (hudRef.current) hudRef.current.textContent = t; },
+      flight: f => cockpitApi.current?.update(f), foes: setFoes, kills: setKills,
+      hit: () => flashRef.current?.animate([{ opacity: 0.5 }, { opacity: 0 }], { duration: 450, easing: "ease-out" }),
+      markers: () => markersRef.current,
+    });
+    rig.current = heli;
+    // (flying, Esc and F land back on the orbit camera, over where the helicopter looks)
+    const land = () => { heli.setMode("orbit"); setMode("orbit"); };
 
     // (where the view looks from: over the plan view's middle, as far as shows what it showed across)
     const place = (cx: number, cy: number, across: number) => {
@@ -117,7 +188,7 @@ export function View3DV2(props: View3DProps) {
     // (where it arrived: Escape, with nothing else to do, eases it back there; a drag or the wheel stops that)
     const homeAt = { target: controls.target.clone(), offset: new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target)) };
     let homing: { t0: number; target: THREE.Vector3; offset: THREE.Spherical } | null = null;
-    const home = () => { homing = { t0: performance.now(), target: controls.target.clone(), offset: new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target)) }; };
+    const home = () => { if (heli.flying) { land(); return; } homing = { t0: performance.now(), target: controls.target.clone(), offset: new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target)) }; };
     const stepHome = (now: number) => {
       if (!homing) return;
       const u = Math.min(1, (now - homing.t0) / HOME_MS), k = u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2, a = homing.offset, b = homeAt.offset;
@@ -135,10 +206,16 @@ export function View3DV2(props: View3DProps) {
     controls.addEventListener("change", onChange);
     const cameraNow = (): Camera3DUi => {
       const t = controls.target, r = (x: number) => Math.round(x * 10) / 10;
+      if (heli.flying) {
+        // (flying: the ground it looks at, the way it looks)
+        const g = heli.groundAhead(), d = camera.getWorldDirection(new THREE.Vector3());
+        return { x: r(g.x), y: r(g.z), distance: r(g.dist), heading: r((((Math.atan2(d.x, -d.z) * 180) / Math.PI) % 360 + 360) % 360), tilt: r((Math.acos(Math.max(-1, Math.min(1, -d.y))) * 180) / Math.PI) };
+      }
       return { x: r(t.x), y: r(t.z), distance: r(camera.position.distanceTo(t)), heading: r((((-controls.getAzimuthalAngle() * 180) / Math.PI) % 360 + 360) % 360), tilt: r((controls.getPolarAngle() * 180) / Math.PI) };
     };
     // (the whole sketch in view)
     const fit = () => {
+      if (heli.flying) land();
       const sk = live.current.sketch;
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       for (const l of sk.lanes) { const L = laneLength(l.shape); for (let s = 0; s <= L; s += Math.max(1, L / 8)) { const p = pointAt(l.shape, s).p; x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } }
@@ -147,6 +224,7 @@ export function View3DV2(props: View3DProps) {
       place((x0 + x1) / 2, (y0 + y1) / 2, Math.max(60, (x1 - x0) * 1.15, ((y1 - y0) * 1.15 * (el.clientWidth || 1)) / (el.clientHeight || 1)));
     };
     const dolly = (f: number) => {
+      if (heli.flying) { heli.zoom(1 / f); return; }
       homing = null;
       const t = controls.target, d = camera.position.clone().sub(t);
       camera.position.copy(t).add(d.multiplyScalar(Math.min(controls.maxDistance / d.length(), Math.max(controls.minDistance / d.length(), 1 / f))));
@@ -177,9 +255,9 @@ export function View3DV2(props: View3DProps) {
     };
 
     // the satellite imagery under the sketch (where it has a place on Earth), and the reference image
-    const satMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const satMat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthWrite: false });
     const satMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), satMat);
-    satMesh.rotation.x = -Math.PI / 2; satMesh.visible = false; scene.add(satMesh);
+    satMesh.rotation.x = -Math.PI / 2; satMesh.visible = false; satMesh.renderOrder = -1; scene.add(satMesh);
     let satKey = "", satGen = 0;
     const syncSat = () => {
       const p = live.current, geo = p.sketch.geo;
@@ -238,6 +316,8 @@ export function View3DV2(props: View3DProps) {
       let nb = 0, ng = 0, nl = 0;
       for (const c of cars) {
         if (nb + 2 > MAXV) break;
+        // (destroyed in war mode: its wreck is drawn instead)
+        if (c.id !== undefined && heli.isGone(c.id)) continue;
         const y = shownCarZ(p.sketch, c.p, c.z ?? 0) * LEVEL_H + 0.06, yaw = -Math.atan2(c.d.y, c.d.x), truck = !!c.trailer;
         const col = p.bySpeed ? speedColor(pal, Math.round(Math.min(1, c.share) * 15) / 15) : truck ? pal.truck : pal.car;
         put(bodies, nb, c.p.x, y + 0.25, c.p.y, yaw, c.len, truck ? TRUCK_H : CAR_H, truck ? TRUCK_W : CAR_W); bodies.setColorAt(nb++, colorOf(col));
@@ -433,33 +513,68 @@ export function View3DV2(props: View3DProps) {
     const onUp = (e: PointerEvent) => {
       if (e.button !== 0 || !downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 4) { downAt = null; return; }
       downAt = null;
+      const levels = levelsAt(e);
+      // armed, a click fires a burst there; flying, only cars are picked (more forgivingly: from high up they are
+      // small), and a miss keeps the pick (and what is tracked)
+      if (heli.armed) { if (levels.length) heli.burstAt(new THREE.Vector3(levels[levels.length - 1].p.x, 0, levels[levels.length - 1].p.y)); return; }
+      for (const { p, lv, dist } of levels) if (live.current.pickAt(p, lv, heli.flying ? { tol: Math.max(3, dist * 0.025) } : undefined)) return;
+      if (!heli.flying) live.current.pickNone();
+    };
+    /** where the ray under the pointer meets each level the lanes are on, the highest first */
+    const levelsAt = (e: { clientX: number; clientY: number }) => {
       const r = renderer.domElement.getBoundingClientRect();
       ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-      ray.setFromCamera(ndc, camera);
-      const sk = live.current.sketch, levels = [...new Set([0, ...sk.lanes.map(l => l.level ?? 0)])].sort((a, b) => b - a);
-      for (const lv of levels) {
+      ray.setFromCamera(ndc, heli.viewCam());
+      const sk = live.current.sketch, out: { p: Pt; lv: number; dist: number }[] = [];
+      for (const lv of [...new Set([0, ...sk.lanes.map(l => l.level ?? 0)])].sort((a, b) => b - a)) {
         plane.constant = -(lv * LEVEL_H + 0.06);
-        if (!ray.ray.intersectPlane(plane, hitP)) continue;
-        if (live.current.pickAt({ x: hitP.x, y: hitP.z }, lv)) return;
+        if (ray.ray.intersectPlane(plane, hitP)) out.push({ p: { x: hitP.x, y: hitP.z }, lv, dist: ray.ray.origin.distanceTo(hitP) });
       }
-      live.current.pickNone();
+      return out;
     };
+    // what the pointer is over (no button held): in a card by it, flying on the cockpit's screen; a few times a second,
+    // and again while it rests (the cars move on)
+    let hoverWas: { clientX: number; clientY: number } | null = null, hoverAt = 0;
+    const hoverNow = (e: { clientX: number; clientY: number }) => {
+      hoverWas = { clientX: e.clientX, clientY: e.clientY };
+      const r = renderer.domElement.getBoundingClientRect();
+      let info: HoverInfo | null = null;
+      for (const { p, lv, dist } of levelsAt(e)) if ((info = live.current.hoverAt(p, lv, Math.max(1.5, dist * (heli.flying ? 0.025 : 0.012))))) break;
+      setHover(h => (!info ? (h ? null : h) : { info, x: e.clientX - r.left, y: e.clientY - r.top }));
+    };
+    const onHover = (e: PointerEvent) => {
+      if (e.buttons !== 0 || e.timeStamp - hoverAt < 80) return;
+      hoverAt = e.timeStamp;
+      hoverNow(e);
+    };
+    const onHoverOut = () => { hoverWas = null; setHover(null); };
+    renderer.domElement.addEventListener("pointermove", onHover);
+    renderer.domElement.addEventListener("pointerleave", onHoverOut);
+    renderer.domElement.addEventListener("pointerdown", onHoverOut);
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointerup", onUp);
 
     // drawn while shown and the tab is visible
-    let disposed = false, frame = 0, lastSync = 0;
+    let disposed = false, frame = 0, lastSync = 0, lastNow = 0, movedAt = 0;
     const draw = () => {
-      controls.update();
+      // (flying, the helicopter moves the camera: the orbit's controls let be)
+      if (!heli.flying) controls.update();
       // (the haze far off, further the further out the view is: a whole city seen from above stays clear)
-      const d = camera.position.distanceTo(controls.target), fog = scene.fog as THREE.Fog;
-      fog.near = Math.max(1500, d * 1.5); fog.far = Math.max(6000, d * 4); camera.far = Math.max(12000, d * 5); camera.updateProjectionMatrix();
-      renderer.render(scene, camera);
+      const cam = heli.viewCam(), d = heli.flying ? Math.max(300, camera.position.y * 4) : camera.position.distanceTo(controls.target), fog = scene.fog as THREE.Fog;
+      fog.near = Math.max(1500, d * 1.5); fog.far = Math.max(6000, d * 4); cam.far = Math.max(12000, d * 5); cam.updateProjectionMatrix();
+      renderer.render(scene, cam);
+      heli.drawCabin(renderer);
     };
     const tick = (now: number) => {
       frame = 0;
       if (disposed) return;
+      const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
+      lastNow = now; heliCars = null;
       if (now - lastSync > 500) { lastSync = now; syncSat(); syncUnderlay(); }
+      // (the helicopter moves first: the car tracked is drawn where it flies to)
+      heli.step(dt, now);
+      if (heli.flying && now - movedAt > 250) { movedAt = now; live.current.onMove(); }
+      if (hoverWas && now - hoverAt > 300) { hoverAt = now; hoverNow(hoverWas); }
       syncRoads(); syncZones(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now); syncWhy(now);
       stepHome(now);
       draw();
@@ -484,10 +599,14 @@ export function View3DV2(props: View3DProps) {
       document.removeEventListener("visibilitychange", onVisible);
       ro.disconnect(); mo.disconnect(); offTheme();
       renderer.domElement.removeEventListener("pointerdown", onDown); renderer.domElement.removeEventListener("pointerup", onUp);
+      renderer.domElement.removeEventListener("pointermove", onHover); renderer.domElement.removeEventListener("pointerleave", onHoverOut); renderer.domElement.removeEventListener("pointerdown", onHoverOut);
       controls.removeEventListener("start", onStart); controls.removeEventListener("change", onChange);
-      // (the plan view to where the 3D view looks: its middle, and a zoom showing as much across)
-      const t = controls.target, d = camera.position.distanceTo(t), across = 2 * d * Math.tan(((FOV * Math.PI) / 180) / 2) * camera.aspect;
-      live.current.onLeave({ cx: t.x, cy: t.z, scale: Math.min(80, Math.max(0.3, (el.clientWidth || 1) / Math.max(1, across))) });
+      // (the plan view to where the 3D view looks: its middle, and a zoom showing as much across; flying, the ground the
+      // helicopter looks at)
+      const g = heli.flying ? heli.groundAhead() : { x: controls.target.x, z: controls.target.z, dist: camera.position.distanceTo(controls.target) };
+      const across = 2 * g.dist * Math.tan(((FOV * Math.PI) / 180) / 2) * camera.aspect;
+      live.current.onLeave({ cx: g.x, cy: g.z, scale: Math.min(80, Math.max(0.3, (el.clientWidth || 1) / Math.max(1, across))) });
+      heli.dispose(); rig.current = null;
       live.current.canvasRef.current = null; live.current.apiRef.current = null;
       if (built) { scene.remove(built.group); built.dispose(); }
       if (zonesBuilt) { scene.remove(zonesBuilt.group); zonesBuilt.dispose(); }
@@ -503,9 +622,148 @@ export function View3DV2(props: View3DProps) {
     };
   }, []);
 
+  const flying = mode !== "orbit";
   return (
     <div className="absolute inset-0 z-[5]">
       <div ref={wrap} className="size-full" aria-label="3D view" role="img" />
+      {flying
+        ? <Cockpit apiRef={cockpitApi} tracking={mode === "track"} raise={props.raiseCockpit}
+          inspect={<InspectScreenV2 info={hover?.info ?? null} />} vehicle={<VehicleScreenV2 id={props.car} info={props.carInfo} about={props.carAbout} tracking={mode === "track"} />} />
+        : (
+          <div className="pointer-events-none absolute top-2 left-2 z-[6] max-w-[calc(100%-24rem)] rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
+            <span className="font-medium text-foreground">3D:</span> drag turns and tilts (up towards the horizon, down to straight down) · right-drag or Shift-drag pans · scroll zooms · click picks · F the whole sketch · Esc back where it arrived
+          </div>
+        )}
+      {/* (flying, it shows on the cockpit's screen instead) */}
+      {hover && !flying && <SketchHoverCard info={hover.info} x={hover.x} y={hover.y} />}
+      {flying && war && (
+        <>
+          {/* red at the edges when hit; the enemies' markers; the gunsight in the middle of the view */}
+          <div ref={flashRef} className="pointer-events-none absolute inset-0 z-[5] opacity-0 shadow-[inset_0_0_140px_40px_rgba(220,38,38,0.85)]" aria-hidden />
+          <div ref={markersRef} className="pointer-events-none absolute inset-0 z-[6] overflow-hidden" aria-hidden />
+          <svg viewBox="-40 -40 80 80" className="pointer-events-none absolute top-1/2 left-1/2 z-[6] size-16 -translate-x-1/2 -translate-y-1/2 text-red-500 drop-shadow-[0_0_3px_rgba(239,68,68,0.7)]" aria-hidden>
+            <circle r="18" fill="none" stroke="currentColor" strokeWidth="1.6" />
+            <path d="M0 -34 V-22 M0 22 V34 M-34 0 H-22 M22 0 H34" stroke="currentColor" strokeWidth="1.8" />
+            <circle r="1.8" fill="currentColor" />
+          </svg>
+        </>
+      )}
+      <HeliControls mode={mode} setMode={m => { setNote(""); setMode(m); }} canTrack={props.car !== null} view={view} setView={setView}
+        warMode={warMode} war={war} setWar={on => { setArmed(on); setNote(""); }} sound={sound} setSound={setSound} hudRef={hudRef}
+        foes={foes} kills={kills} onEnemy={() => rig.current?.spawnEnemy()} onClear={() => rig.current?.clearEnemies()} note={note} />
+    </div>
+  );
+}
+
+/**
+ * The helicopter's controls over the 3D view (top right, as V1's): the camera (Orbit, Helicopter, Track the car picked),
+ * the settings (the keys, war mode); flying, from the seat or outside, war, the sound, its height and speed and the keys;
+ * war mode's panel; a line of news; the model's credit.
+ */
+function HeliControls({ mode, setMode, canTrack, view, setView, warMode, war, setWar, sound, setSound, hudRef, foes, kills, onEnemy, onClear, note }: {
+  mode: CamMode; setMode: (m: CamMode) => void; canTrack: boolean; view: HeliView; setView: (v: HeliView) => void;
+  warMode: boolean; war: boolean; setWar: (on: boolean) => void; sound: boolean; setSound: (on: boolean) => void;
+  hudRef: React.RefObject<HTMLSpanElement | null>; foes: { count: number; kills: number; hull: number }; kills: number; onEnemy: () => void; onClear: () => void; note: string;
+}) {
+  const [keys] = useSubject(heliKeys$);
+  const [keysOpen, setKeysOpen] = useState(false);
+  const flying = mode !== "orbit";
+  /** an action's keys, as the help shows them (e.g. Z/↑) */
+  const keysOf = (a: HeliAction) => keys[a].length
+    ? <span className="whitespace-nowrap">{keys[a].map((k, i) => <span key={k}>{i > 0 && "/"}<Kbd>{keyLabel(k)}</Kbd></span>)}</span>
+    : <span className="italic">(no key)</span>;
+  // (saved with the user's account; turned back if that fails)
+  const toggleWarMode = async (on: boolean) => {
+    ui.getValue().warMode = on;
+    const res = await saveWarMode(on).catch(() => ({ ok: false as const, error: "Couldn't save war mode." }));
+    if (!res.ok) { ui.getValue().warMode = !on; toast.error(res.error); }
+  };
+  const keep = (e: Event) => e.preventDefault();
+  return (
+    <div className="absolute top-2 right-2 z-10 flex max-w-80 flex-col items-end gap-1.5">
+      <HeliKeysDialog open={keysOpen} onOpenChange={setKeysOpen} />
+      <div className="flex gap-1.5">
+        <ToggleGroup type="single" value={mode} aria-label="Camera" onValueChange={v => v && setMode(v as CamMode)} className="bg-background/95 shadow-sm backdrop-blur">
+          <ToggleGroupItem value="orbit" aria-label="Orbit camera" title="Orbit camera" className="h-8 px-2 text-xs"><Orbit /> Orbit</ToggleGroupItem>
+          <ToggleGroupItem value="heli" aria-label="Fly a helicopter" title="Fly a helicopter over the plan" className="h-8 px-2 text-xs"><Plane /> Helicopter</ToggleGroupItem>
+          <ToggleGroupItem value="track" disabled={!canTrack && mode !== "track"} aria-label="Track the car picked" className="h-8 px-2 text-xs"
+            title={canTrack ? "The helicopter follows the car picked" : "Click a car first, then track it"}><Crosshair /> Track</ToggleGroupItem>
+        </ToggleGroup>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="icon-sm" variant="outline" className="size-8 bg-background/95 shadow-sm" aria-label="Helicopter settings" title="Helicopter settings: its keys, war mode"><Settings /></Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-60">
+            <DropdownMenuItem onSelect={() => setKeysOpen(true)}><Keyboard /> Helicopter keys…</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem checked={warMode} onCheckedChange={v => void toggleWarMode(!!v)} onSelect={keep}>War mode</DropdownMenuCheckboxItem>
+            <DropdownMenuLabel className="pt-0 text-[10px] font-normal text-muted-foreground">Arms the helicopter: a War button appears while flying, for its gun and guided rockets. Saved with your account (V1 plans too).</DropdownMenuLabel>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      {flying && (
+        <div className="flex gap-1.5">
+          <ToggleGroup type="single" value={view} aria-label="Seen from" onValueChange={v => v && setView(v as HeliView)} className="bg-background/95 shadow-sm backdrop-blur">
+            <ToggleGroupItem value="cockpit" aria-label="From the cockpit" title={`From the pilot's seat (${keys.view.map(keyLabel).join(" or ") || "no key"})`} className="h-8 px-2 text-xs"><Gauge /> Cockpit</ToggleGroupItem>
+            <ToggleGroupItem value="outside" aria-label="From outside" title={`From behind the helicopter (${keys.view.map(keyLabel).join(" or ") || "no key"})`} className="h-8 px-2 text-xs"><Eye /> Outside</ToggleGroupItem>
+          </ToggleGroup>
+          {warMode && (
+            <Button size="sm" variant={war ? "destructive" : "outline"} aria-pressed={war} onClick={e => { setWar(!war); e.currentTarget.blur(); }}
+              title="War mode: the gun (Space, or click) and guided rockets (R)" className={cn("h-8 shadow-sm", !war && "bg-background/95")}><Swords /> War</Button>
+          )}
+          <Button size="icon-sm" variant="outline" aria-pressed={sound} onClick={e => { setSound(!sound); e.currentTarget.blur(); }}
+            aria-label={sound ? "Turn the rotor sound off" : "Turn the rotor sound on"} title={sound ? "Sound on" : "Sound off"}
+            className="size-8 bg-background/95 shadow-sm">{sound ? <Volume2 /> : <VolumeX />}</Button>
+        </div>
+      )}
+      {flying && (
+        <div className="rounded-lg border bg-background/95 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground shadow-sm backdrop-blur">
+          <div className="mb-1 font-medium text-foreground tabular-nums"><span ref={hudRef} /></div>
+          {mode === "heli" ? (
+            <>
+              <div>{keysOf("forward")} {keysOf("back")} forward, back · {keysOf("left")} {keysOf("right")} left, right</div>
+              <div>Mouse left / right turns · up / down looks far ahead or below</div>
+              <div>{keysOf("climb")} climb · {keysOf("descend")} descend · or scroll</div>
+              <div>{keysOf("faster")} faster · {keysOf("view")} cockpit / outside · click a car, then Track</div>
+              <div><Kbd>Esc</Kbd> or <Kbd>F</Kbd> back to the orbit camera</div>
+            </>
+          ) : (
+            <>
+              <div>Following the car picked; click another to switch</div>
+              <div>Drag to circle round it · {keysOf("left")} {keysOf("right")} too</div>
+              <div>{keysOf("forward")} {keysOf("back")} closer, further · scroll zooms</div>
+              <div>{keysOf("climb")} {keysOf("descend")} higher, lower · {keysOf("view")} cockpit / outside</div>
+            </>
+          )}
+        </div>
+      )}
+      {flying && war && (
+        <div className="rounded-lg border border-red-500/40 bg-background/95 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground shadow-sm backdrop-blur">
+          <div className="mb-0.5 font-medium text-red-600 dark:text-red-400">War mode · {kills} destroyed</div>
+          <div><Kbd>Space</Kbd> gun at the sight · click: a burst there</div>
+          <div><Kbd>R</Kbd> rocket, locked on the enemy or car nearest the sight{mode === "track" ? " (the tracked one)" : ""}</div>
+          <div className="mt-1.5 flex items-center gap-2">
+            <span>Hull</span>
+            <div className="h-1.5 flex-1 overflow-hidden rounded bg-muted" role="meter" aria-label="Hull" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(foes.hull * 100)}>
+              <div className={cn("h-full transition-[width]", foes.hull > 0.5 ? "bg-emerald-500" : foes.hull > 0.25 ? "bg-amber-500" : "bg-red-500")} style={{ width: `${foes.hull * 100}%` }} />
+            </div>
+          </div>
+          <div className="mt-1 flex items-center gap-1.5">
+            {/* (blurred after a click: Space, the gun, mustn't press it again) */}
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={foes.count >= ENEMY_MAX}
+              onClick={e => { onEnemy(); e.currentTarget.blur(); }} title="An enemy helicopter, a kilometre off, coming for you"><Plus /> Enemy</Button>
+            {foes.count > 0 && <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={e => { onClear(); e.currentTarget.blur(); }}>Clear</Button>}
+            <span className="ml-auto tabular-nums">{foes.count} up · {foes.kills} down</span>
+          </div>
+        </div>
+      )}
+      {note && <div className="rounded-md bg-background/95 px-2 py-1 text-[11px] shadow-sm">{note}</div>}
+      {flying && (
+        // the model's licence asks for its author to be named
+        <a href={HELI_MODEL_CREDIT.url} target="_blank" rel="noreferrer" className="rounded bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground">
+          {HELI_MODEL_CREDIT.title} model by {HELI_MODEL_CREDIT.author} · {HELI_MODEL_CREDIT.license}
+        </a>
+      )}
     </div>
   );
 }
