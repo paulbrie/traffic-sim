@@ -134,6 +134,8 @@ function joinLanes(sk0: Sketch, first: string, second: string, via: SketchConnec
     id: keep, shape, width: base.width,
     ...(base.level !== undefined ? { level: base.level } : {}), ...(base.speed !== undefined ? { speed: base.speed } : {}),
     ...(a0.inRate !== undefined ? { inRate: a0.inRate } : {}),
+    // (heights set by hand, ticket #130: at its start the first's, at its end the second's)
+    ...(a0.ground?.a !== undefined || b0.ground?.b !== undefined ? { ground: { ...(a0.ground?.a !== undefined ? { a: a0.ground.a } : {}), ...(b0.ground?.b !== undefined ? { b: b0.ground.b } : {}) } } : {}),
     ...(b0.control ? { control: b0.control } : {}), ...(b0.outWeight !== undefined ? { outWeight: b0.outWeight } : {}),
     // (both ways: its way back's traffic coming in the second's, at its end; its sign and share out the first's, at its start)
     ...(twoWayOk(a0) ? { twoWay: a0.twoWay, ...(b0.backInRate !== undefined ? { backInRate: b0.backInRate } : {}), ...(a0.backControl ? { backControl: a0.backControl } : {}), ...(a0.backOutWeight !== undefined ? { backOutWeight: a0.backOutWeight } : {}) } : {}),

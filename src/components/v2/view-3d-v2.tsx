@@ -16,7 +16,7 @@ import * as THREE from "three";
 import { toast } from "sonner";
 import { Crosshair, Eye, Gauge, Keyboard, Orbit, Plane, Plus, Settings, Swords, Volume2, VolumeX } from "lucide-react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { baseLaneId, isTwinId, wayFrom, connectorPts, junctionLevel, shownCarZ, shownZ, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
+import { baseLaneId, isTwinId, wayFrom, connectorPts, junctionLevel, shownCarZ, shownZ, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, edgeGround, groundAt, groundBase, groundUnder, hasHeights, terrainOf, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
 import { LEVEL_H } from "@/engine/compile";
 import { speedColor } from "@/render/palette";
 import { buildSketch3D, type Sketch3D } from "@/render/sketch3d";
@@ -25,6 +25,7 @@ import type { SketchLayers } from "@/state/sketch-layers";
 import type { Underlay } from "@/lib/underlay";
 import { isDark, onThemeChange, readPalette } from "@/render/palette";
 import { satelliteMosaic, type SatSource } from "@/render/satellite";
+import { terrainAt, terrainHeights } from "@/lib/terrain";
 import type { SatOptions } from "@/state/sat-options";
 import type { EditorUi } from "@/state/sketch-ui";
 import type { SketchSim } from "@/lib/lane-sketch-sim";
@@ -100,7 +101,9 @@ const BLINK_MS = 380;
 /** how long the camera takes back to where it arrived (ms) */
 const HOME_MS = 700;
 /** a car as the editor shows it: its middle, heading, length, speed as a share of what it wants; a truck's trailer; broken down; its level */
-export interface Car3D { id?: number; p: { x: number; y: number }; d: { x: number; y: number }; len: number; share: number; trailer?: { p: { x: number; y: number }; d: { x: number; y: number }; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1; z?: number }
+export interface Car3D { id?: number; p: { x: number; y: number }; d: { x: number; y: number }; len: number; share: number; trailer?: { p: { x: number; y: number }; d: { x: number; y: number }; len: number }; broken?: boolean; /** its turn signal on: -1 left, 1 right */ blink?: -1 | 1; z?: number;
+  /** (ticket #130) the ground's height under it (m; live, from the sim), or where it is (replayed: its edge and how far along it) to work it out */
+  g?: number; edge?: string; pos?: number }
 /** instances at most: bodies (a truck's cab and trailer two), their glass, hazard lamps */
 const MAXV = 24000, MAXL = 4000;
 /** how high a car's body is, and a truck's */
@@ -150,17 +153,34 @@ export function View3DV2(props: View3DProps) {
     // (the grass, then the imagery on it, drawn first and writing no depth, as V1's: looked at from far off and low down
     // (from the helicopter, ticket #129) they would otherwise fight over which is in front, and the grass won)
     (ground.material as THREE.MeshLambertMaterial).depthWrite = false; ground.renderOrder = -2;
+    // heights (ticket #130): everything on the ground's height, the lowest (`groundBase`) at y = 0; none, all at 0 as before
+    let hFor: Sketch | null = null, hOn = false, hBase = 0;
+    const heights = () => { const sk = live.current.sketch; if (sk !== hFor) { hFor = sk; hOn = hasHeights(sk); hBase = groundBase(sk); } return hOn; };
+    /** the ground's y along a lane, under a point (the nearest lane's, else the terrain's), and fast (the terrain's alone, if any: for rays) */
+    const gLane = (lane: string, s: number) => (heights() ? groundAt(live.current.sketch, lane, s) - hBase : 0);
+    const gUnder = (p: Pt) => (heights() ? groundUnder(live.current.sketch, p) - hBase : 0);
+    const gFast = (x: number, z: number) => {
+      if (!heights()) return 0;
+      const t = terrainOf(live.current.sketch);
+      return (t ? terrainAt(t, x, z) : groundUnder(live.current.sketch, { x, y: z })) - hBase;
+    };
+    /** a car's road's y: the ground under it (the sim's, or worked out from where it is), and its level over it */
+    const carY = (c: Car3D) => {
+      const sk = live.current.sketch, lv = shownCarZ(sk, c.p, c.z ?? 0) * LEVEL_H;
+      if (!heights()) return lv;
+      return lv + (c.g ?? (c.edge ? edgeGround(sk, c.edge, c.pos ?? 0) : groundUnder(sk, c.p))) - hBase;
+    };
     // the helicopter (its cars: those drawn now, worked out once a frame when it asks)
     let heliCars: HeliCar[] | null = null;
     const carsForHeli = () => {
       if (heliCars) return heliCars;
       const p = live.current;
       return (heliCars = (p.cars() ?? []).flatMap(c => (c.id === undefined ? [] : [{
-        id: c.id, x: c.p.x, y: c.p.y, h: shownCarZ(p.sketch, c.p, c.z ?? 0) * LEVEL_H, heading: Math.atan2(c.d.y, c.d.x), len: c.len, width: c.trailer ? TRUCK_W : CAR_W,
+        id: c.id, x: c.p.x, y: c.p.y, h: carY(c), heading: Math.atan2(c.d.y, c.d.x), len: c.len, width: c.trailer ? TRUCK_W : CAR_W,
       }])));
     };
     const heli = new HeliRig(scene, camera, controls, renderer.domElement, {
-      cars: carsForHeli, picked: () => live.current.car, destroy: ids => live.current.breakDown(ids),
+      cars: carsForHeli, picked: () => live.current.car, groundAt: (x, z) => gFast(x, z), destroy: ids => live.current.breakDown(ids),
       modeChanged: setMode, viewChanged: setView, note: setNote,
       hud: t => { if (hudRef.current) hudRef.current.textContent = t; },
       flight: f => cockpitApi.current?.update(f), foes: setFoes, kills: setKills,
@@ -175,8 +195,9 @@ export function View3DV2(props: View3DProps) {
     const place = (cx: number, cy: number, across: number) => {
       const w = el.clientWidth || 1, h = el.clientHeight || 1, fitW = across / 2 / Math.tan(((FOV * Math.PI) / 180) / 2) / (w / h);
       const d = Math.max(20, Math.min(5000, fitW));
-      controls.target.set(cx, 0, cy);
-      camera.position.set(cx, d * Math.sin(TILT), cy + d * Math.cos(TILT));
+      const g = gFast(cx, cy);
+      controls.target.set(cx, g, cy);
+      camera.position.set(cx, g + d * Math.sin(TILT), cy + d * Math.cos(TILT));
       controls.update();
     };
     const size = () => {
@@ -261,7 +282,8 @@ export function View3DV2(props: View3DProps) {
     let satKey = "", satGen = 0;
     const syncSat = () => {
       const p = live.current, geo = p.sketch.geo;
-      satMesh.visible = !!geo && p.satellite && !!satMat.map;
+      satMesh.visible = !!geo && p.satellite && !!satMat.map && !terrainMesh;
+      syncTerrain();
       if (!geo || !p.satellite) return;
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       for (const l of p.sketch.lanes) for (const s of [0, laneLength(l.shape)]) { const q = pointAt(l.shape, s).p; x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }
@@ -280,8 +302,42 @@ export function View3DV2(props: View3DProps) {
         satMat.map = tex; satMat.needsUpdate = true;
         satMesh.scale.set(m.rect.maxX - m.rect.minX, m.rect.maxY - m.rect.minY, 1);
         satMesh.position.set((m.rect.minX + m.rect.maxX) / 2, 0.02, (m.rect.minY + m.rect.maxY) / 2);
-        satMesh.visible = live.current.satellite;
+        satMesh.visible = live.current.satellite && !terrainMesh;
+        satRect = m.rect; drapeFor = null; syncTerrain();
       });
+    };
+    // the terrain (ticket #130): its grid as a surface, from the lowest point (y = 0) up, a little under the roads (which follow
+    // the lanes' heights, eased); the satellite imagery on it while shown, else the grass's colour, shaded by the slopes
+    const terrainMat = new THREE.MeshLambertMaterial({ color: pal.ground, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
+    let terrainMesh: THREE.Mesh | null = null, terrainFor: unknown = null, satRect: { minX: number; minY: number; maxX: number; maxY: number } | null = null, drapeFor: unknown[] | null = null;
+    const syncTerrain = () => {
+      const p = live.current, t = terrainOf(p.sketch);
+      if (t !== terrainFor) {
+        terrainFor = t; drapeFor = null;
+        if (terrainMesh) { scene.remove(terrainMesh); terrainMesh.geometry.dispose(); terrainMesh = null; }
+        if (t) {
+          const H = terrainHeights(t), pos = new Float32Array(t.cols * t.rows * 3), idx: number[] = [];
+          for (let j = 0; j < t.rows; j++) for (let i = 0; i < t.cols; i++) { const k = j * t.cols + i; pos[3 * k] = t.x0 + i * t.cell; pos[3 * k + 1] = H[k] - t.base - 0.3; pos[3 * k + 2] = t.y0 + j * t.cell; }
+          for (let j = 0; j < t.rows - 1; j++) for (let i = 0; i < t.cols - 1; i++) { const a = j * t.cols + i, b = a + 1, c = a + t.cols, d = c + 1; idx.push(a, c, b, b, c, d); }
+          const g = new THREE.BufferGeometry();
+          g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(t.cols * t.rows * 2), 2)); g.setIndex(idx); g.computeVertexNormals();
+          terrainMesh = new THREE.Mesh(g, terrainMat); terrainMesh.name = "terrain"; scene.add(terrainMesh);
+        }
+        satMesh.visible = !!p.sketch.geo && p.satellite && !!satMat.map && !terrainMesh;
+      }
+      if (!terrainMesh || !t) return;
+      const on = p.satellite && !!satMat.map && !!satRect, key = [on, satMat.map, satRect, p.sat.brightness, pal.ground];
+      if (drapeFor && key.every((x, i) => x === drapeFor![i])) return;
+      drapeFor = key;
+      if (on) {
+        // (each point of the grid where it is in the imagery)
+        const r = satRect!, uv = terrainMesh.geometry.getAttribute("uv") as THREE.BufferAttribute;
+        for (let j = 0; j < t.rows; j++) for (let i = 0; i < t.cols; i++) uv.setXY(j * t.cols + i, (t.x0 + i * t.cell - r.minX) / (r.maxX - r.minX), 1 - (t.y0 + j * t.cell - r.minY) / (r.maxY - r.minY));
+        uv.needsUpdate = true;
+        satMat.map!.wrapS = satMat.map!.wrapT = THREE.ClampToEdgeWrapping;
+        terrainMat.map = satMat.map; terrainMat.color.setScalar(p.sat.brightness);
+      } else { terrainMat.map = null; terrainMat.color.set(pal.ground); }
+      terrainMat.needsUpdate = true;
     };
     const ulMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false });
     const ulMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), ulMat);
@@ -296,7 +352,19 @@ export function View3DV2(props: View3DProps) {
       ulMesh.scale.set(u.w * u.mpp, u.h * u.mpp, 1);
       ulMesh.position.set(u.x, 0.04, u.y);
       ulMesh.rotation.z = -(u.rot * Math.PI) / 180;
+      // (over hills, ticket #130: a grid on the ground, each point at its height (the plane's own z, stood up, is the world's y))
+      const key = [hFor, heights(), u.x, u.y, u.w, u.h, u.mpp, u.rot];
+      if (ulKey && key.every((x, i) => x === ulKey![i])) return;
+      ulKey = key;
+      ulMesh.geometry.dispose();
+      ulMesh.geometry = new THREE.PlaneGeometry(1, 1, hOn ? 64 : 1, hOn ? 64 : 1);
+      if (!hOn) return;
+      ulMesh.updateMatrixWorld(true);
+      const pos = ulMesh.geometry.getAttribute("position") as THREE.BufferAttribute, w = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i++) { w.set(pos.getX(i), pos.getY(i), 0); ulMesh.localToWorld(w); pos.setZ(i, gFast(w.x, w.z)); }
+      pos.needsUpdate = true;
     };
+    let ulKey: unknown[] | null = null;
 
     // the cars: boxes, one instance each (a truck's cab and its trailer two), a darker box of glass on each car,
     // hazard lamps flashing on those broken down
@@ -318,7 +386,7 @@ export function View3DV2(props: View3DProps) {
         if (nb + 2 > MAXV) break;
         // (destroyed in war mode: its wreck is drawn instead)
         if (c.id !== undefined && heli.isGone(c.id)) continue;
-        const y = shownCarZ(p.sketch, c.p, c.z ?? 0) * LEVEL_H + 0.06, yaw = -Math.atan2(c.d.y, c.d.x), truck = !!c.trailer;
+        const y = carY(c) + 0.06, yaw = -Math.atan2(c.d.y, c.d.x), truck = !!c.trailer;
         const col = p.bySpeed ? speedColor(pal, Math.round(Math.min(1, c.share) * 15) / 15) : truck ? pal.truck : pal.car;
         put(bodies, nb, c.p.x, y + 0.25, c.p.y, yaw, c.len, truck ? TRUCK_H : CAR_H, truck ? TRUCK_W : CAR_W); bodies.setColorAt(nb++, colorOf(col));
         if (c.trailer) { const t = c.trailer; put(bodies, nb, t.p.x, y + 0.5, t.p.y, -Math.atan2(t.d.y, t.d.x), t.len, TRAILER_H, TRUCK_W); bodies.setColorAt(nb++, colorOf("#e9e6dd")); }
@@ -357,7 +425,7 @@ export function View3DV2(props: View3DProps) {
           for (const [lane, conns] of held) {
             const l = laneById(sk, lane);
             if (!l || n >= 2000) continue;
-            const L = laneLength(l.shape), e = pointAt(l.shape, L), r = { x: e.d.y, y: -e.d.x }, o = l.width / 2 + 0.6, h = (isTwinId(lane) ? shownZ(sk, baseLaneId(lane), 0) : shownZ(sk, lane, L)) * LEVEL_H;
+            const L = laneLength(l.shape), e = pointAt(l.shape, L), r = { x: e.d.y, y: -e.d.x }, o = l.width / 2 + 0.6, h = isTwinId(lane) ? shownZ(sk, baseLaneId(lane), 0) * LEVEL_H + gLane(baseLaneId(lane), 0) : shownZ(sk, lane, L) * LEVEL_H + gLane(lane, L);
             const x = e.p.x + r.x * o, z = e.p.y + r.y * o;
             P.set(x, h, z); S.set(1, 4.2, 1); M.compose(P, Q.identity(), S); poles.setMatrixAt(n, M);
             put(heads, n, x, h + 4.2, z, -Math.atan2(e.d.y, e.d.x), 0.35, 0.9, 0.35);
@@ -419,20 +487,20 @@ export function View3DV2(props: View3DProps) {
       const flat = (loop: Pt[], h: number) => {
         if (loop.length < 3) return;
         const tris = THREE.ShapeUtils.triangulateShape(loop.map(q => new THREE.Vector2(q.x, q.y)), []), base = pos.length / 3;
-        for (const q of loop) pos.push(q.x, h + 0.15, q.y);
+        for (const q of loop) pos.push(q.x, h + gUnder(q) + 0.15, q.y);
         for (const t of tris) idx.push(base + t[0], base + t[2], base + t[1]);
       };
       for (const id of sel.lanes) {
         const l = laneById(sk, id);
         if (!l) continue;
         const L = laneLength(l.shape), pts: Pt[] = [], hs: number[] = [];
-        for (let s2 = 0; s2 <= L + 1e-6; s2 += Math.max(0.5, Math.min(2, L / 40))) { pts.push(pointAt(l.shape, Math.min(s2, L)).p); hs.push(shownZ(sk, id, Math.min(s2, L)) * LEVEL_H); }
+        for (let s2 = 0; s2 <= L + 1e-6; s2 += Math.max(0.5, Math.min(2, L / 40))) { pts.push(pointAt(l.shape, Math.min(s2, L)).p); hs.push(shownZ(sk, id, Math.min(s2, L)) * LEVEL_H + gLane(id, Math.min(s2, L))); }
         ribbon(pts, hs, l.width);
       }
       for (const id of sel.connectors) {
         const c = sk.connectors.find(x => x.id === id), pts = c && connectorPts(sk, c);
         if (!c || !pts) continue;
-        const h0 = zAt(sk, c.from.lane, c.from.s) * LEVEL_H, h1 = zAt(sk, c.to.lane, c.to.s) * LEVEL_H;
+        const h0 = zAt(sk, c.from.lane, c.from.s) * LEVEL_H + gLane(c.from.lane, c.from.s), h1 = zAt(sk, c.to.lane, c.to.s) * LEVEL_H + gLane(c.to.lane, c.to.s);
         ribbon(pts, pts.map((_, i) => h0 + ((h1 - h0) * i) / Math.max(1, pts.length - 1)), 1.2);
       }
       for (const id of sel.junctions) {
@@ -456,7 +524,7 @@ export function View3DV2(props: View3DProps) {
       const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === id);
       if (!c) return;
       const s2 = Math.max(3.2, c.len * 0.8);
-      ring.position.set(c.p.x, shownCarZ(live.current.sketch, c.p, c.z ?? 0) * LEVEL_H + 0.2, c.p.y); ring.scale.set(s2, s2, s2); ring.visible = true;
+      ring.position.set(c.p.x, carY(c) + 0.2, c.p.y); ring.scale.set(s2, s2, s2); ring.visible = true;
     };
     // the car picked: its way on to the end of its trip, a ribbon on the road in the selection's colour (made again at most 4 times a second)
     // (the blue the map draws it in, the selection's there: the 3D view's own green is lost on the asphalt)
@@ -471,17 +539,17 @@ export function View3DV2(props: View3DProps) {
       const p = live.current, pts = p.car !== null ? p.carWay?.() ?? null : null;
       wayLine.visible = !!pts && pts.length > 1;
       if (!wayLine.visible) return;
-      const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car), y = (c ? shownCarZ(p.sketch, c.p, c.z ?? 0) : 0) * LEVEL_H + 0.3;
-      setRibbon(wayLine, pts!, y, 1.2);
+      const c = (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car), y = (c ? carY(c) : 0) + 0.3;
+      setRibbon(wayLine, pts!, y, 1.2, heights() ? q => gUnder(q) + (c ? carY(c) - gUnder(c.p) : 0) + 0.3 : undefined);
     };
-    /** `mesh` made a ribbon `hw` either side of `pts` at height `y`: a quad a piece */
-    const setRibbon = (mesh: THREE.Mesh, pts: Pt[], y: number, hw: number) => {
+    /** `mesh` made a ribbon `hw` either side of `pts` at height `y` (or each point's, `yAt`: over hills): a quad a piece */
+    const setRibbon = (mesh: THREE.Mesh, pts: Pt[], y: number, hw: number, yAt?: (p: Pt) => number) => {
       const pos: number[] = [];
       for (let i = 1; i < pts.length; i++) {
         const a = pts[i - 1], b = pts[i], l = Math.hypot(b.x - a.x, b.y - a.y);
         if (l < 1e-3) continue;
-        const nx = (-(b.y - a.y) / l) * hw, ny = ((b.x - a.x) / l) * hw;
-        pos.push(a.x + nx, y, a.y + ny, b.x + nx, y, b.y + ny, b.x - nx, y, b.y - ny, a.x + nx, y, a.y + ny, b.x - nx, y, b.y - ny, a.x - nx, y, a.y - ny);
+        const nx = (-(b.y - a.y) / l) * hw, ny = ((b.x - a.x) / l) * hw, ya = yAt ? yAt(a) : y, yb = yAt ? yAt(b) : y;
+        pos.push(a.x + nx, ya, a.y + ny, b.x + nx, yb, b.y + ny, b.x - nx, yb, b.y - ny, a.x + nx, ya, a.y + ny, b.x - nx, yb, b.y - ny, a.x - nx, ya, a.y - ny);
       }
       mesh.geometry.dispose();
       mesh.geometry = new THREE.BufferGeometry();
@@ -500,11 +568,13 @@ export function View3DV2(props: View3DProps) {
       if (now - whyAt < 250) return;
       whyAt = now;
       const p = live.current, w = p.car !== null ? p.carWhy?.() ?? null : null;
-      const c = w ? (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car) : null, y = (c ? shownCarZ(p.sketch, c.p, c.z ?? 0) : 0) * LEVEL_H + 0.35;
+      const c = w ? (p.cars() ?? []).find(x => (x as Car3D & { id?: number }).id === p.car) : null, y = (c ? carY(c) : 0) + 0.35;
       // (a zone shorter than the 1 m its points are apart: a small square where it is)
       const zone = (pts: Pt[] | undefined) => (!pts?.length ? null : pts.length > 1 ? pts : [{ x: pts[0].x - 1.6, y: pts[0].y }, { x: pts[0].x + 1.6, y: pts[0].y }]);
       const lines: [Pt[] | null, number][] = [[zone(w?.zone?.mine), 1.6], [zone(w?.zone?.theirs), 1.6], [c && w?.leader ? [c.p, w.leader] : null, 0.15], [c && w?.blocker ? [c.p, w.blocker] : null, 0.3]];
-      lines.forEach(([pts, hw], i) => { const m = whyMeshes[i]; m.visible = !!pts && pts.length > 1; if (m.visible) setRibbon(m, pts!, y + i * 0.02, hw); });
+      // (over hills: each point at the ground's under it, as high over it as the car's road)
+      const over = c ? carY(c) - gUnder(c.p) : 0;
+      lines.forEach(([pts, hw], i) => { const m = whyMeshes[i]; m.visible = !!pts && pts.length > 1; if (m.visible) setRibbon(m, pts!, y + i * 0.02, hw, heights() ? q => gUnder(q) + over + 0.35 + i * 0.02 : undefined); });
     };
     // a click (not a drag) picks what is under it: the highest level first (a bridge before the road under it)
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hitP = new THREE.Vector3();
@@ -516,7 +586,7 @@ export function View3DV2(props: View3DProps) {
       const levels = levelsAt(e);
       // armed, a click fires a burst there; flying, only cars are picked (more forgivingly: from high up they are
       // small), and a miss keeps the pick (and what is tracked)
-      if (heli.armed) { if (levels.length) heli.burstAt(new THREE.Vector3(levels[levels.length - 1].p.x, 0, levels[levels.length - 1].p.y)); return; }
+      if (heli.armed) { if (levels.length) { const q = levels[levels.length - 1].p; heli.burstAt(new THREE.Vector3(q.x, gFast(q.x, q.y), q.y)); } return; }
       for (const { p, lv, dist } of levels) if (live.current.pickAt(p, lv, heli.flying ? { tol: Math.max(3, dist * 0.025) } : undefined)) return;
       if (!heli.flying) live.current.pickNone();
     };
@@ -527,10 +597,30 @@ export function View3DV2(props: View3DProps) {
       ray.setFromCamera(ndc, heli.viewCam());
       const sk = live.current.sketch, out: { p: Pt; lv: number; dist: number }[] = [];
       for (const lv of [...new Set([0, ...sk.lanes.map(l => l.level ?? 0)])].sort((a, b) => b - a)) {
+        if (heights()) {
+          // (over hills: where the ray comes down to the ground's height, that level up)
+          const t = surfaceHit(ray.ray, lv * LEVEL_H + 0.06);
+          if (t !== null) { ray.ray.at(t, hitP); out.push({ p: { x: hitP.x, y: hitP.z }, lv, dist: t }); }
+          continue;
+        }
         plane.constant = -(lv * LEVEL_H + 0.06);
         if (ray.ray.intersectPlane(plane, hitP)) out.push({ p: { x: hitP.x, y: hitP.z }, lv, dist: ray.ray.origin.distanceTo(hitP) });
       }
       return out;
+    };
+    /** how far along a ray it comes down to `up` metres over the ground (null: not within 12 km) */
+    const surfaceHit = (r: THREE.Ray, up: number): number | null => {
+      const o = r.origin, d = r.direction, below = (t: number) => o.y + d.y * t <= gFast(o.x + d.x * t, o.z + d.z * t) + up;
+      if (below(0)) return 0;
+      for (let t = 0, t0 = 0; t < 12000; t0 = t) {
+        t = Math.min(12000, t + Math.max(1, t * 0.01));
+        if (below(t)) {
+          let a = t0, b = t;
+          for (let i = 0; i < 24; i++) { const m = (a + b) / 2; if (below(m)) b = m; else a = m; }
+          return b;
+        }
+      }
+      return null;
     };
     // what the pointer is over (no button held): in a card by it, flying on the cockpit's screen; a few times a second,
     // and again while it rests (the cars move on)

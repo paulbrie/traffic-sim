@@ -11,6 +11,7 @@
 import { sanitizeTuning, type Tuning } from "./sketch-tuning";
 import { copyZones, pasteZones, sanitizeZones, type SketchZone } from "./sketch-zones";
 import { sanitizeBumps, type SketchBump } from "./sketch-bumps";
+import { sanitizeTerrain, terrainAt, terrainFits, type SketchTerrain } from "./terrain";
 
 export interface Pt { x: number; y: number }
 /**
@@ -34,6 +35,12 @@ export interface SketchLane {
    * its ends ramp to the level of the lanes it joins there (see `zAt`).
    */
   level?: number;
+  /**
+   * (ticket #130) the ground's height under it set by hand (m above sea level), at its start `a` and its end `b`: it climbs
+   * evenly between them (a cutting, an embankment, a road graded smoothly), the terrain's height at an end not set; none
+   * set: the terrain's all along (see `groundAt`). Levels stay relative to it.
+   */
+  ground?: { a?: number; b?: number };
   /** (ticket #93) locked: its properties can't be changed on the map or in the inspectors until it is unlocked (see `lockedChange`) */
   locked?: true;
   /** its own speed limit (km/h; ticket #126: in a road too, before the road's; default: its road's, else the sketch's traffic speed) */
@@ -117,6 +124,8 @@ export interface Sketch {
     /** (ticket #124) minutes into a run before its results are counted (the network filling up first; default 0) */ warmup?: number };
   /** where it is on Earth: the latitude / longitude of its origin (x east, y south, metres; as a V1 plan's `geo`), for the satellite imagery under it */
   geo?: { lat: number; lon: number };
+  /** (ticket #130) the ground's heights under it, fetched for `geo` (see terrain.ts): used while it is still for where the sketch is */
+  terrain?: SketchTerrain;
   /** zebra crossings drawn by hand (see `SketchCrossing`) */
   crossings?: SketchCrossing[];
   /** speed bumps, humps, tables and cushions (see sketch-bumps.ts) */
@@ -889,7 +898,9 @@ export function reverseLane(sk: Sketch, id: string): Sketch {
     if (r.align.lanes.some(x => x.id === id)) return { ...r, align: { ...r.align, lanes: r.align.lanes.map(x => (x.id === id ? { ...x, reverse: !x.reverse } : x)) } };
     return r;
   });
-  return { ...sk, roads, lanes: sk.lanes.map(l => (l.id === id ? (twoWayOk(l) ? swapWays({ ...l, shape }) : { ...l, shape }) : l)), connectors: sk.connectors.map(c => ({ ...c, from: flip(c.from), to: flip(c.to) })) };
+  // (heights set by hand: its start's now its end's)
+  const ground = (l: SketchLane): SketchLane => (l.ground ? { ...l, ground: { ...(l.ground.b !== undefined ? { a: l.ground.b } : {}), ...(l.ground.a !== undefined ? { b: l.ground.a } : {}) } } : l);
+  return { ...sk, roads, lanes: sk.lanes.map(l => (l.id === id ? ground(twoWayOk(l) ? swapWays({ ...l, shape }) : { ...l, shape }) : l)), connectors: sk.connectors.map(c => ({ ...c, from: flip(c.from), to: flip(c.to) })) };
 }
 /** a lane both ways turned round (ticket #53): its way back now the lane's way, so what each way had swapped, the one with priority still the one */
 function swapWays(l: SketchLane): SketchLane {
@@ -939,6 +950,8 @@ export function sliceLane(sk: Sketch, id: string, s: number, newId: string): Ske
     ...(both ? { twoWay: lane.twoWay, ...(lane.backControl ? { backControl: lane.backControl } : {}), ...(lane.backOutWeight !== undefined ? { backOutWeight: lane.backOutWeight } : {}) } : {}) };
   const second: SketchLane = { ...lane, id: newId, shape: parts[1] };
   delete second.inRate; delete second.backControl; delete second.backOutWeight;
+  // (heights set by hand: each stretch from its own end's to the height at the cut)
+  if (lane.ground) { const mid = Math.round(groundAt(sk, id, cut) * 10) / 10; first.ground = { a: groundAt(sk, id, 0), b: mid }; second.ground = { a: mid, b: groundAt(sk, id, laneLength(lane.shape)) }; }
   // (its way back runs from the second to the first: one leaving it right at the cut leaves the second's start, one joining there
   // joins the first's end)
   const move = (a: LaneAt, leaving: boolean) => {
@@ -1225,6 +1238,7 @@ export function twinOf(l: SketchLane): SketchLane {
       id: twinId(l.id), shape: reversed(l.shape), width: l.width, twoWay: l.twoWay, ...(l.backControl ? { control: l.backControl } : {}),
       ...(l.backInRate !== undefined ? { inRate: l.backInRate } : {}), ...(l.backOutWeight !== undefined ? { outWeight: l.backOutWeight } : {}),
       ...(l.level !== undefined ? { level: l.level } : {}), ...(l.speed !== undefined ? { speed: l.speed } : {}), ...(l.bus ? { bus: true as const } : {}),
+      ...(l.ground ? { ground: { ...(l.ground.b !== undefined ? { a: l.ground.b } : {}), ...(l.ground.a !== undefined ? { b: l.ground.a } : {}) } } : {}),
     };
     twins.set(l, t);
   }
@@ -2638,6 +2652,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
     lanes.push({ id: l.id, shape, width: num(l.width) ? Math.min(8, Math.max(2, l.width)) : LANE_WIDTH, ...(l.control === "stop" || l.control === "yield" ? { control: l.control } : {}),
       ...(num(l.inRate) && l.inRate >= 0 ? { inRate: Math.min(5000, l.inRate) } : {}), ...(num(l.outWeight) && l.outWeight >= 0 ? { outWeight: Math.min(100, l.outWeight) } : {}),
       ...(num(l.level) && Math.round(l.level) !== 0 ? { level: Math.min(LEVELS.max, Math.max(LEVELS.min, Math.round(l.level))) } : {}),
+      ...(sanitizeGround(l.ground) ? { ground: sanitizeGround(l.ground)! } : {}),
       // (its own speed limit, km/h, as the traffic's speed is kept)
       ...(num(l.speed) ? { speed: Math.min(130, Math.max(10, l.speed)) } : {}),
       ...(l.bus === true && l.bike !== true ? { bus: true as const } : {}),
@@ -2676,6 +2691,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   }
   const g = o.geo as Sketch["geo"];
   const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;
+  const terrain = sanitizeTerrain(o.terrain);
   const t = o.traffic as Sketch["traffic"];
   const tune = t ? sanitizeTuning(t.tune) : null, seed = t && num(t.seed) ? Math.round(Math.min(1e9, Math.max(1, t.seed))) : undefined;
   const clock = t && num(t.clock) ? Math.round(Math.min(1439, Math.max(0, t.clock))) : 0, warmup = t && num(t.warmup) ? Math.round(Math.min(240, Math.max(0, t.warmup))) : 0;
@@ -2760,7 +2776,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const zones = sanitizeZones(o.zones);
   const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.bumps?.length || sc.zones?.length) ? sc : null;
   if (!lanes.length && !junctions.length && !geo && !crossings.length && !bumps.length && !zones.length && !scratch && !sketches.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(matrices.length ? { matrices } : {}), ...(matrixOn ? { matrixOn } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(terrain ? { terrain } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(matrices.length ? { matrices } : {}), ...(matrixOn ? { matrixOn } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
 }
 
 // ---------------------------------------------------------------- locks (ticket #93)
@@ -3039,4 +3055,156 @@ export function turnArrows(sk: Sketch): TurnArrow[] {
   }
   arrowsKept.set(sk, x);
   return x;
+}
+
+// ---------------------------------------------------------------- terrain (ticket #130)
+
+/** heights set by hand at a lane's ends, checked (null: none) */
+function sanitizeGround(g: unknown): SketchLane["ground"] | null {
+  const o = g as { a?: unknown; b?: unknown } | null, ok = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= -500 && v <= 9000;
+  if (!o || typeof o !== "object" || (!ok(o.a) && !ok(o.b))) return null;
+  return { ...(ok(o.a) ? { a: Math.round(o.a * 10) / 10 } : {}), ...(ok(o.b) ? { b: Math.round(o.b * 10) / 10 } : {}) };
+}
+
+/** the sketch's terrain, while it is still for where the sketch is on Earth */
+export const terrainOf = (sk: Sketch): SketchTerrain | null => (sk.terrain && terrainFits(sk.terrain, sk.geo) ? sk.terrain : null);
+/** the sketch has heights: terrain, or a lane's set by hand (none: flat ground, as before ticket #130) */
+export const hasHeights = (sk: Sketch): boolean => !!terrainOf(sk) || sk.lanes.some(l => l.ground);
+/** metres between the heights kept along a lane */
+export const GROUND_STEP = 5;
+
+/** the terrain's height at a lane's start and end (null: no terrain) */
+export function terrainEnds(sk: Sketch, l: SketchLane): { a: number; b: number } | null {
+  const t = terrainOf(sk);
+  if (!t) return null;
+  const p0 = pointAt(l.shape, 0).p, p1 = pointAt(l.shape, laneLength(l.shape)).p;
+  return { a: terrainAt(t, p0.x, p0.y), b: terrainAt(t, p1.x, p1.y) };
+}
+
+/**
+ * Each lane's ground heights every GROUND_STEP m (and at its end): set by hand, climbing evenly from one end's to the
+ * other's; else the terrain's, eased over 20 m (the elevation model's bumps), its ends the terrain's own, where the
+ * connectors carry on from them. Kept per sketch.
+ */
+const groundKept = new LastFew<Sketch, Map<string, Float32Array>>();
+function groundProfile(sk: Sketch, id: string): Float32Array | null {
+  let m = groundKept.get(sk);
+  if (!m) groundKept.set(sk, (m = new Map()));
+  const kept = m.get(id);
+  if (kept) return kept;
+  const l = laneById(sk, id);
+  if (!l) return null;
+  const len = laneLength(l.shape), n = Math.max(2, Math.ceil(len / GROUND_STEP) + 1), out = new Float32Array(n), t = terrainOf(sk);
+  const at = (i: number) => Math.min(len, i * GROUND_STEP);
+  if (l.ground) {
+    const ends = terrainEnds(sk, l), a = l.ground.a ?? ends?.a ?? l.ground.b ?? 0, b = l.ground.b ?? ends?.b ?? a;
+    for (let i = 0; i < n; i++) out[i] = a + ((b - a) * at(i)) / Math.max(len, 1e-6);
+  } else if (t) {
+    const raw = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const p = pointAt(l.shape, at(i)).p; raw[i] = terrainAt(t, p.x, p.y); }
+    for (let i = 0; i < n; i++) {
+      const k = Math.min(2, i, n - 1 - i);
+      let sum = 0;
+      for (let j = i - k; j <= i + k; j++) sum += raw[j];
+      out[i] = sum / (2 * k + 1);
+    }
+  }
+  m.set(id, out);
+  return out;
+}
+
+/** the ground's height (m) under a lane `s` metres along it (0: a sketch without heights) */
+export function groundAt(sk: Sketch, lane: string, s: number): number {
+  const p = hasHeights(sk) ? groundProfile(sk, lane) : null;
+  if (!p) return 0;
+  const len = laneLength(laneById(sk, lane)!.shape), f = Math.max(0, Math.min(len, s)) / GROUND_STEP, i = Math.min(p.length - 2, Math.floor(f));
+  // (the last step shorter than the others: to the lane's end)
+  const end = Math.min(len, (i + 1) * GROUND_STEP), u = end > i * GROUND_STEP ? (Math.max(0, Math.min(len, s)) - i * GROUND_STEP) / (end - i * GROUND_STEP) : 0;
+  return p[i] + (p[i + 1] - p[i]) * Math.max(0, Math.min(1, u));
+}
+
+/** the ground's height (m) on a connector, a share `u` (0–1) of the way along: from its lane's where it leaves to its lane's where it joins */
+export function connectorGround(sk: Sketch, c: SketchConnector, u: number): number {
+  if (!hasHeights(sk)) return 0;
+  const a = groundAt(sk, c.from.lane, c.from.s), b = groundAt(sk, c.to.lane, c.to.s);
+  return a + (b - a) * Math.max(0, Math.min(1, u));
+}
+
+/** the height drawn as the 3D view's ground (y = 0): the terrain's lowest, else the lowest set by hand (0: no heights) */
+export function groundBase(sk: Sketch): number {
+  const t = terrainOf(sk);
+  if (t) return t.base;
+  let min = Infinity;
+  for (const l of sk.lanes) if (l.ground) for (const v of [l.ground.a, l.ground.b]) if (v !== undefined && v < min) min = v;
+  return Number.isFinite(min) ? min : 0;
+}
+
+/** a lane's grade `s` metres along it (rise over run, + uphill along it), over 10 m either side */
+export function groundGrade(sk: Sketch, lane: string, s: number): number {
+  const l = laneById(sk, lane);
+  if (!l || !hasHeights(sk)) return 0;
+  const len = laneLength(l.shape), s0 = Math.max(0, s - 10), s1 = Math.min(len, s + 10);
+  return s1 - s0 < 0.5 ? 0 : (groundAt(sk, lane, s1) - groundAt(sk, lane, s0)) / (s1 - s0);
+}
+
+/** the lanes' ground heights set by hand (`patch`: a value sets that end, null clears it; nothing left set: none) */
+export function setGround(sk: Sketch, ids: Iterable<string>, patch: { a?: number | null; b?: number | null }): Sketch {
+  const want = new Set(ids);
+  let changed = false;
+  const lanes = sk.lanes.map(l => {
+    if (!want.has(l.id)) return l;
+    const g = { ...(l.ground ?? {}) };
+    for (const k of ["a", "b"] as const) { const v = patch[k]; if (v === null) delete g[k]; else if (v !== undefined && Number.isFinite(v)) g[k] = Math.round(v * 10) / 10; }
+    const next = { ...l }, clean = sanitizeGround(g);
+    if (clean) next.ground = clean; else delete next.ground;
+    if (JSON.stringify(next.ground) === JSON.stringify(l.ground)) return l;
+    changed = true;
+    return next;
+  });
+  return changed ? { ...sk, lanes } : sk;
+}
+
+/** the area the terrain is fetched for: the lanes' and junctions' extent, TERRAIN_MARGIN m round it (null: nothing drawn) */
+export function terrainArea(sk: Sketch, margin = 150): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const l of sk.lanes) for (const p of samples(l.shape, 10)) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+  if (!Number.isFinite(minX)) return null;
+  return { minX: Math.floor(minX - margin), minY: Math.floor(minY - margin), maxX: Math.ceil(maxX + margin), maxY: Math.ceil(maxY + margin) };
+}
+
+/**
+ * The ground's height (m) at a plan point: on or beside a lane or a connector (within 6 m of its side), the nearest one's
+ * (its own heights, set by hand or not); elsewhere the terrain's; with no terrain, the nearest lane's within 60 m (else the
+ * lowest set by hand, `groundBase`). 0 for a sketch without heights.
+ */
+export function groundUnder(sk: Sketch, p: Pt): number {
+  if (!hasHeights(sk)) return 0;
+  const t = terrainOf(sk), near = sketchIndex(sk).near(p, t ? 12 : 60);
+  let best = Infinity, h = NaN;
+  for (const id of near.lanes) {
+    const l = laneById(sk, id);
+    if (!l) continue;
+    const q = nearestOn(l.shape, p), d = q.d - l.width / 2;
+    if (d < best) { best = d; h = groundAt(sk, id, q.s); }
+  }
+  for (const id of near.conns) {
+    const c = connectorById(sk, id), ps = c && connectorPts(sk, c);
+    if (!c || !ps || ps.length < 2) continue;
+    const q = nearestOn({ kind: "line", pts: ps }, p), d = q.d - LANE_WIDTH / 2;
+    if (d < best) { best = d; h = connectorGround(sk, c, q.s / Math.max(1e-6, laneLength({ kind: "line", pts: ps }))); }
+  }
+  if (t && !(best <= 6)) return terrainAt(t, p.x, p.y);
+  return Number.isFinite(h) ? h : groundBase(sk);
+}
+
+/** the ground's height (m) under a car `pos` metres along the edge it is on (`lane:…`, a lane both ways' way back too, or `conn:…`) */
+export function edgeGround(sk: Sketch, edge: string, pos: number): number {
+  if (!hasHeights(sk)) return 0;
+  const [kind, id] = [edge.slice(0, edge.indexOf(":")), edge.slice(edge.indexOf(":") + 1)];
+  if (kind === "lane") {
+    if (isTwinId(id)) { const b = baseLaneId(id), l = laneById(sk, b); return l ? groundAt(sk, b, laneLength(l.shape) - pos) : 0; }
+    return groundAt(sk, id, pos);
+  }
+  const c = connectorById(sk, id), ps = c && connectorPts(sk, c);
+  return c ? connectorGround(sk, c, ps && ps.length > 1 ? pos / Math.max(1e-6, laneLength({ kind: "line", pts: ps })) : 0.5) : 0;
 }

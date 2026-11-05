@@ -43,7 +43,7 @@
  */
 import { speedLimitOf,
   CHANGE_COST, drivable, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
-  onCrossing, crossingFrame, twinId, twoWayOk, MATRIX_BY_TIME,
+  onCrossing, crossingFrame, twinId, twoWayOk, MATRIX_BY_TIME, hasHeights, groundAt, connectorGround,
   type DemandMatrix, type LaneControl, type TwoWay, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
 } from "./lane-sketch";
 import { resolveTuning, type Tuning } from "./sketch-tuning";
@@ -58,6 +58,7 @@ interface Baseline {
 }
 import { bumpFrame, bumpHeavySpeed, bumpSpeed, onBump } from "./sketch-bumps";
 import { FUEL_STILL, fuelRate, hasStopStart } from "../engine/fuel";
+import { LEVEL_H } from "../engine/compile";
 import type { CarExplain, ExplainRule } from "./car-explain";
 
 export interface SimParams {
@@ -299,6 +300,10 @@ interface Edge {
   len: number;
   /** its elevation (in levels) `pos` metres along it; null: on the ground all along (a sketch without levels) */
   z: ((pos: number) => number) | null;
+  /** (ticket #130) its grade every GRADE_STEP m along it (rise over run, + uphill), the ground's and its levels' climb; null: flat (a sketch without heights) */
+  grade?: Float32Array | null;
+  /** (ticket #130) the ground's height (m) every GRADE_STEP m along it, for drawing the cars on it; null: flat */
+  ground?: Float32Array | null;
   /** a full ring: positions wrap round */
   ring: boolean;
   /** m/s: the desired speed, lower on bends */
@@ -453,6 +458,10 @@ let TRUCK_A = 1, TRUCK_HW = 1.8;
 const reach = (v: SimVehicle) => (v.truck ? v.len + SWEEP : v.len);
 /** roundabout driving (`ringDriving`, T172): livelier at a roundabout (on a ring, a way on or off one, the last 40 m before a way on) */
 let RING_DRIVE = false;
+/** hills (ticket #130, `grades`): the slope counts, where the sketch has heights */
+let GRADES = true;
+/** m/s²; metres between the grades kept along an edge; the share of a slope's pull a car's engine doesn't make up for (a truck's or a bus's: all of it) */
+const G = 9.81, GRADE_STEP = 2, CAR_GRADE = 0.35, MAX_GRADE = 0.25;
 const RING_A = 2.5, RING_HW = 0.9, RING_YIELD_V = 6, RING_BEND = 1.3;
 const atRing = (v: SimVehicle) => RING_DRIVE && (v.edge.atRing || (v.edge.kind === "lane" && v.edge.len - v.pos < 40 && v.edge.outs.some(o => o.conn.atRing && o.conn.to!.lane.ring)));
 const accOf = (v: SimVehicle) => (v.truck ? TRUCK_A : atRing(v) ? Math.max(A_MAX, RING_A) : A_MAX);
@@ -492,6 +501,7 @@ function applyTuning(t: Tuning) {
   LC_PAUSE = t.laneChangePause; OVERTAKE_ROOM = t.overtakeRoom; RING_GAP = t.ringGap;
   VISION = t.visionCone >= 0.5;
   RING_DRIVE = t.ringDriving >= 0.5;
+  GRADES = t.grades >= 0.5;
 }
 /** drivers' field of view (`visionCone`, T179): crossing foes outside it aren't considered */
 let VISION = false;
@@ -901,6 +911,26 @@ export class SketchSim {
     if (hasLevels(sk)) for (const e of edges.values()) {
       if (e.kind === "lane") { const id = e.id; e.z = pos => zAt(sk, id, pos); }
       else { const c = connectorById(sk, e.id), lv = c ? connectorLevel(sk, c) : 0; e.z = () => lv; }
+    }
+    // (heights, ticket #130: each edge's grade along it, the ground's climb and its levels' (a ramp's); over 10 m either side, a
+    // connector's even from where it leaves to where it joins)
+    if (hasHeights(sk)) for (const e of edges.values()) {
+      const n = Math.max(2, Math.ceil(e.len / GRADE_STEP) + 1), gr = new Float32Array(n), gh = new Float32Array(n);
+      if (e.kind === "lane") {
+        for (let i = 0; i < n; i++) gh[i] = groundAt(sk, e.id, Math.min(e.len, i * GRADE_STEP));
+        const id = e.id, h = (pos: number) => groundAt(sk, id, pos) + (e.z ? e.z(pos) : 0) * LEVEL_H;
+        for (let i = 0; i < n; i++) {
+          const pos = Math.min(e.len, i * GRADE_STEP), a = Math.max(0, pos - 10), b = Math.min(e.len, pos + 10);
+          gr[i] = b - a > 0.5 ? (h(b) - h(a)) / (b - a) : 0;
+        }
+      } else {
+        const c = connectorById(sk, e.id), g0 = c ? (connectorGround(sk, c, 1) - connectorGround(sk, c, 0)) / Math.max(e.len, 1) : 0;
+        gr.fill(g0);
+        if (c) for (let i = 0; i < n; i++) gh[i] = connectorGround(sk, c, Math.min(1, (i * GRADE_STEP) / Math.max(e.len, 1e-6)));
+      }
+      for (let i = 0; i < n; i++) gr[i] = Math.max(-MAX_GRADE, Math.min(MAX_GRADE, gr[i]));
+      e.grade = gr.some(x => Math.abs(x) > 1e-4) ? gr : null;
+      e.ground = gh;
     }
     // lanes of a road beside each other the same way (about a lane's width apart): the longest stretch, at least 10 m; two rings
     // of a road, beside each other all the way round (a two-lane roundabout's), the whole of them
@@ -1428,6 +1458,11 @@ export class SketchSim {
   private zOf(e: Edge, pos: number) { return e.z ? e.z(pos) : 0; }
   /** a vehicle's elevation, where its front is */
   private zOfV(v: SimVehicle) { return v.edge.z ? v.edge.z(v.pos) : 0; }
+  /** the grade where a car is (rise over run, + uphill the way it goes; 0 on the flat) */
+  private gradeOfV(v: SimVehicle) {
+    const g = v.edge.grade;
+    return g ? g[Math.max(0, Math.min(g.length - 1, Math.round(v.pos / GRADE_STEP)))] : 0;
+  }
   private along(e: Edge, a: number, b: number) {
     return e.ring ? (((b - a) % e.len) + e.len) % e.len : b - a;
   }
@@ -2868,6 +2903,11 @@ export class SketchSim {
         const s = S0 + v.v * hwOf(v) + (v.v * (v.v - lead)) / (2 * Math.sqrt(A * B_COMF));
         a = A * (free - (Math.max(S0, s) / Math.max(gap, 0.1)) ** 2);
       }
+      // (on a slope, ticket #130: uphill the slope's pull less what the engine makes up for, all of it for a truck or a bus; downhill
+      // gravity helps it up to its speed, never past it)
+      const gr = GRADES && v.edge.grade ? this.gradeOfV(v) : 0;
+      if (gr > 0) a -= G * gr * (v.truck || v.bus ? 1 : CAR_GRADE);
+      else if (gr < 0) a += Math.min(-G * gr, A * Math.max(0, free));
       acc.set(v, Math.max(-9, a));
       held.set(v, { gap, lead });
       v.gap = gap;
@@ -2984,7 +3024,7 @@ export class SketchSim {
       // (fuel: idling standing still, unless its engine stops; more with speed and speeding up)
       const vAvg = (v.v + nv) / 2, still = vAvg < FUEL_STILL;
       const idle = v.broken !== null || (still && hasStopStart(v.id, T.stopStartShare)) ? 0 : (v.truck ? T.fuelIdleTruck : T.fuelIdleCar) / 3.6;
-      const mL = fuelRate(v.truck ? "truck" : "car", vAvg, (nv - v.v) / dt, idle) * dt;
+      const mL = fuelRate(v.truck ? "truck" : "car", vAvg, (nv - v.v) / dt, idle, GRADES && v.edge.grade ? this.gradeOfV(v) : 0) * dt;
       v.fuel += mL; F.total += mL / 1000; F.km += move / 1000; F.co2 += (mL / 1000) * (v.truck ? CO2_DIESEL : CO2_PETROL);
       if (still) { F.idle += mL / 1000; F.idleTime += dt; }
       // (a junction's: on it, or on the last metres of a way into it)
@@ -3429,7 +3469,7 @@ export class SketchSim {
   poses() {
     return this.vehicles.map(v => {
       const blink = this.blinker(v);
-      return { id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax), ...(v.broken !== null ? { broken: true } : {}), ...(blink ? { blink } : {}), ...(v.edge.z ? { z: v.edge.z(v.pos) } : {}), ...(v.bus ? { bus: true as const } : {}) };
+      return { id: v.id, ...(this.posed?.get(v) ?? this.poseOf(v)), share: v.v / Math.max(1, v.edge.vmax), ...(v.broken !== null ? { broken: true } : {}), ...(blink ? { blink } : {}), ...(v.edge.z ? { z: v.edge.z(v.pos) } : {}), ...(v.edge.ground ? { g: v.edge.ground[Math.max(0, Math.min(v.edge.ground.length - 1, Math.round(v.pos / GRADE_STEP)))] } : {}), ...(v.bus ? { bus: true as const } : {}) };
     });
   }
 

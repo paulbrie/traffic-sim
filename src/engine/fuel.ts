@@ -1,9 +1,9 @@
 /**
  * Fuel use, by Akçelik's power-based model (Bowyer, Akçelik & Biggs 1985; Akçelik & Besley 2003):
  *
- *   f = α + β1·R·v + β2·M·a²·v / 1000 (the last term only while accelerating),  R = b1 + b2·v² + M·a / 1000
+ *   f = α + β1·R·v + β2·M·a²·v / 1000 (the last term only while accelerating),  R = b1 + b2·v² + M·a / 1000 + 9.81·M·G / 1000
  *
- * f in mL/s, v in m/s, a in m/s², M in kg, R the total tractive force in kN (on level road). When R
+ * f in mL/s, v in m/s, a in m/s², M in kg, G the grade (rise over run, + uphill; 0 on level road), R the total tractive force in kN. When R
  * is not positive (coasting, braking) or the vehicle stands still, it burns only its idle rate α.
  * The light-vehicle constants are the published ones; the heavy-vehicle ones are rounded for a
  * typical rigid truck / city bus. The idle rate comes from the simulation parameters (fuelIdleCar,
@@ -21,11 +21,11 @@ export const FUEL_MODELS: Record<Kind, FuelModel> = { car: LIGHT, truck: TRUCK, 
 /** below this speed (m/s) a vehicle counts as standing still: its engine only idles */
 export const FUEL_STILL = 0.3;
 
-/** fuel burnt per second (mL/s) at speed `v` and acceleration `a`, with idle rate `idle` (mL/s) */
-export function fuelRate(kind: Kind, v: number, a: number, idle: number): number {
+/** fuel burnt per second (mL/s) at speed `v` and acceleration `a` on grade `grade` (0: level), with idle rate `idle` (mL/s) */
+export function fuelRate(kind: Kind, v: number, a: number, idle: number, grade = 0): number {
   if (v < FUEL_STILL) return idle;
   const m = FUEL_MODELS[kind];
-  const R = m.b1 + m.b2 * v * v + (m.M * a) / 1000;
+  const R = m.b1 + m.b2 * v * v + (m.M * a) / 1000 + (9.81 * m.M * grade) / 1000;
   if (R <= 0) return idle;
   return idle + m.beta1 * R * v + (a > 0 ? (m.beta2 * m.M * a * a * v) / 1000 : 0);
 }

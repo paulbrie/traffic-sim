@@ -3,7 +3,7 @@
  * functions): the road surfaces (each lane's band, with its kerb) and the junctions' (drawn outlines, smoothed loops or
  * bands, and the ground they shut in), the links between road ends, the markings, the turn arrows, the stop and yield
  * lines and the zebras; each at its height (bridges and underpasses: `shownZ` levels of LEVEL_H metres, as V1), bridges with
- * their sides and pillars. A few merged meshes, made again only when the sketch changes. x east, y up, z the plan's y.
+ * their sides and pillars; with heights (terrain, or set by hand: ticket #130) all of it on the ground's, `groundBase` at y = 0. A few merged meshes, made again only when the sketch changes. x east, y up, z the plan's y.
  */
 import * as THREE from "three";
 import { arrowGlyph } from "@/render/draw2d";
@@ -17,6 +17,7 @@ import { bumpShapes } from "@/lib/sketch-bumps";
 import {
   bandPolygon, crossingStripes, isFullCircle, junctionBands, junctionLevel, laneLevel, laneLength, linkGeometry,
   outlinePath, densePoints, hasLevels, pointAt, roadMarkings, samples, shownZ, smoothJunction, turnArrows, twoWayOk, twinOf, isTwinId, baseLaneId,
+  groundAt, groundBase, groundUnder, hasHeights,
   type JunctionContents, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
 
@@ -42,13 +43,13 @@ class Mesh {
     const segs = closed ? n : n - 1;
     for (let i = 0; i < segs; i++) { const a = base + 2 * i, b = base + 2 * ((i + 1) % n); this.idx.push(a, b, a + 1, b, b + 1, a + 1); }
   }
-  /** a flat polygon (its holes cut out) at height `y` */
-  polygon(outer: Pt[], holes: Pt[][], y: number) {
+  /** a polygon (its holes cut out) at height `y`, or at each corner's (on the ground's) */
+  polygon(outer: Pt[], holes: Pt[][], y: number | ((p: Pt) => number)) {
     if (outer.length < 3) return;
     const v2 = (ps: Pt[]) => ps.map(p => new THREE.Vector2(p.x, p.y));
     const o = v2(outer), hs = holes.filter(h => h.length >= 3).map(v2);
     const tris = THREE.ShapeUtils.triangulateShape(o, hs), all = [o, ...hs].flat(), base = this.pos.length / 3;
-    for (const p of all) this.pos.push(p.x, y, p.y);
+    for (const p of all) this.pos.push(p.x, typeof y === "number" ? y : y({ x: p.x, y: p.y }), p.y);
     for (const t of tris) this.idx.push(base + t[0], base + t[2], base + t[1]);
   }
   /** a quad from four corners (x, y, z) */
@@ -87,15 +88,18 @@ export function simplify(pts: Pt[], tol: number, keep?: (i: number) => boolean):
   }
   return pts.filter((_, i) => on[i]);
 }
-/** a lane's points (every `step` metres, those it needs), with their heights */
-function laneLine(sk: Sketch, id: string, shape: Parameters<typeof samples>[0], step: number) {
-  // (with levels, a straight run cut up too, so a ramp on it is one; else its points as they are, all at 0)
-  const dense = hasLevels(sk) ? densePoints(shape, step) : samples(shape, step).map(p => ({ p, s: 0 }));
-  const all = dense.map(x => x.p), ha = dense.map(x => shownZ(sk, id, x.s) * LEVEL_H);
-  // (where its height changes, every point kept: a ramp stays a ramp)
-  const keep = (i: number) => i > 0 && i < all.length - 1 && Math.abs(ha[i + 1] - 2 * ha[i] + ha[i - 1]) > 1e-4;
+/**
+ * A lane's points (every `step` metres, those it needs), with their heights (`hs`: the ground's, from `base`, and its level's
+ * over it) and their levels' alone (`up`: a bridge's sides and pillars where it is up off the ground)
+ */
+function laneLine(sk: Sketch, id: string, shape: Parameters<typeof samples>[0], step: number, base: number) {
+  // (with levels or heights, a straight run cut up too, so a ramp or a hill on it is one; else its points as they are, all at 0)
+  const heights = hasHeights(sk), dense = hasLevels(sk) || heights ? densePoints(shape, heights ? Math.max(step, 2) : step) : samples(shape, step).map(p => ({ p, s: 0 }));
+  const all = dense.map(x => x.p), up = dense.map(x => shownZ(sk, id, x.s) * LEVEL_H), ha = dense.map((x, i) => up[i] + (heights ? groundAt(sk, id, x.s) - base : 0));
+  // (where its height changes, every point kept: a ramp stays a ramp; a hill to within 2 cm)
+  const keep = (i: number) => i > 0 && i < all.length - 1 && Math.abs(ha[i + 1] - 2 * ha[i] + ha[i - 1]) > (heights ? 0.02 : 1e-4);
   const kept = simplify(all.map((p, i) => ({ ...p, i })), TOL, keep) as (Pt & { i: number })[];
-  return { pts: kept.map(p => ({ x: p.x, y: p.y })), hs: kept.map(p => ha[p.i]) };
+  return { pts: kept.map(p => ({ x: p.x, y: p.y })), hs: kept.map(p => ha[p.i]), up: kept.map(p => up[p.i]) };
 }
 /** dashes along a polyline: `on` metres drawn, `off` left (its points' heights `h`, if they have them, carried along) */
 function dashes<P extends Pt & { h?: number }>(pts: P[], on: number, off: number): P[][] {
@@ -132,21 +136,25 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
   const kerb = new Mesh(), asphalt = new Mesh(), paint = new Mesh(), yellow = new Mesh(), concrete = new Mesh();
   const red = new Mesh(), bike = new Mesh();
   const cOf = (id: string) => contents.get(id) ?? { lanes: [], connectors: [], roads: [] };
+  // (heights, ticket #130: the ground's under a point and along a lane, from the lowest (y = 0); none: 0 everywhere, as before)
+  const base = groundBase(sk), heights = hasHeights(sk);
+  const G = (p: Pt) => (heights ? groundUnder(sk, p) - base : 0), GL = (lane: string, s: number) => (heights ? groundAt(sk, lane, s) - base : 0);
+  const on = (y: number) => (heights ? (p: Pt) => y + G(p) : y);
   if (layers.surfaces) {
     // each lane's band, on its kerb; a bridge's sides and pillars where it is up
     for (const l of sk.lanes) {
       if (laneLength(l.shape) < 0.3) continue;
-      const ring = isFullCircle(l.shape), { pts, hs } = laneLine(sk, l.id, l.shape, 1);
+      const ring = isFullCircle(l.shape), { pts, hs, up } = laneLine(sk, l.id, l.shape, 1, base);
       kerb.ribbon(pts, hs, l.width + KERB, Y.kerb, ring);
       // (a bike lane: its asphalt in the 2D tint's green)
       (l.bike ? bike : asphalt).ribbon(pts, hs, l.width, Y.asphalt, ring);
-      if (hs.some(h => h > 0.5)) {
+      if (up.some(h => h > 0.5)) {
         const hw = (l.width + KERB) / 2;
         let since = 0;
         for (let i = 1; i < pts.length; i++) {
-          const a = pts[i - 1], b = pts[i], ha = hs[i - 1], hb = hs[i];
+          const a = pts[i - 1], b = pts[i], ha = hs[i - 1], hb = hs[i], ga = ha - up[i - 1];
           since += Math.hypot(b.x - a.x, b.y - a.y);
-          if (ha < 0.5 && hb < 0.5) continue;
+          if (up[i - 1] < 0.5 && up[i] < 0.5) continue;
           const dx = b.x - a.x, dz = b.y - a.y, m = Math.hypot(dx, dz) || 1, nx = (-dz / m) * hw, nz = (dx / m) * hw;
           for (const sgn of [1, -1]) {
             const ax = a.x + nx * sgn, az = a.y + nz * sgn, bx = b.x + nx * sgn, bz = b.y + nz * sgn;
@@ -156,15 +164,16 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
           }
           // (its underside)
           concrete.quad([a.x - nx, ha - DECK, a.y - nz], [b.x - nx, hb - DECK, b.y - nz], [b.x + nx, hb - DECK, b.y + nz], [a.x + nx, ha - DECK, a.y + nz]);
-          if (since >= 25 && ha > 3) {
+          if (since >= 25 && up[i - 1] > 3) {
             since = 0;
             const s2 = 0.5;
             for (const [cx, cz] of [[a.x, a.y]]) {
-              const top = ha - DECK, P = (x: number, z: number, y: number) => [cx + x, y, cz + z];
-              concrete.quad(P(-s2, -s2, 0), P(s2, -s2, 0), P(s2, -s2, top), P(-s2, -s2, top));
-              concrete.quad(P(s2, s2, 0), P(-s2, s2, 0), P(-s2, s2, top), P(s2, s2, top));
-              concrete.quad(P(s2, -s2, 0), P(s2, s2, 0), P(s2, s2, top), P(s2, -s2, top));
-              concrete.quad(P(-s2, s2, 0), P(-s2, -s2, 0), P(-s2, -s2, top), P(-s2, s2, top));
+              // (from the ground under it, the terrain's where there is terrain, up to the deck)
+              const top = ha - DECK, g = heights ? G({ x: cx, y: cz }) : ga, P = (x: number, z: number, y: number) => [cx + x, y, cz + z];
+              concrete.quad(P(-s2, -s2, g), P(s2, -s2, g), P(s2, -s2, top), P(-s2, -s2, top));
+              concrete.quad(P(s2, s2, g), P(-s2, s2, g), P(-s2, s2, top), P(s2, s2, top));
+              concrete.quad(P(s2, -s2, g), P(s2, s2, g), P(s2, s2, top), P(s2, -s2, top));
+              concrete.quad(P(-s2, s2, g), P(-s2, -s2, g), P(-s2, -s2, top), P(-s2, s2, top));
             }
           }
         }
@@ -175,30 +184,30 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       if (j.outline.length < 3) continue;
       const c = cOf(j.id), h = junctionLevel(sk, c) * LEVEL_H;
       const loop = (ps: Pt[]) => simplify(ps, TOL_J);
-      if (j.shape !== "auto") { asphalt.polygon(loop(outlinePath(j)), [], h + Y.asphalt); continue; }
-      if (j.smooth) { const [outer, ...holes] = smoothJunction(sk, j, c); if (outer) asphalt.polygon(loop(outer), holes.map(loop), h + Y.asphalt); }
+      if (j.shape !== "auto") { asphalt.polygon(loop(outlinePath(j)), [], on(h + Y.asphalt)); continue; }
+      if (j.smooth) { const [outer, ...holes] = smoothJunction(sk, j, c); if (outer) asphalt.polygon(loop(outer), holes.map(loop), on(h + Y.asphalt)); }
       else for (const b of junctionBands(sk, c)) {
-        if (b.w1 !== undefined) asphalt.polygon(loop(bandPolygon(b)), [], h + Y.asphalt);
-        else { const ps = b.closed ? b.pts : simplify(b.pts, TOL); asphalt.ribbon(ps, ps.map(() => h), b.width, Y.asphalt, b.closed); }
+        if (b.w1 !== undefined) asphalt.polygon(loop(bandPolygon(b)), [], on(h + Y.asphalt));
+        else { const ps = b.closed ? b.pts : simplify(b.pts, TOL); asphalt.ribbon(ps, ps.map(p => h + G(p)), b.width, Y.asphalt, b.closed); }
       }
       // (the ground it shuts in, and with "Fill holes" its whole inside: an island inside that is a hole in it)
-      for (const p of nestLoops(junctionSurfaceHoles(sk, j, c))) asphalt.polygon(loop(p.outer), p.holes.map(loop), h + Y.asphalt);
+      for (const p of nestLoops(junctionSurfaceHoles(sk, j, c))) asphalt.polygon(loop(p.outer), p.holes.map(loop), on(h + Y.asphalt));
     }
-    for (const k of sk.links ?? []) { const g = linkGeometry(sk, k); if (g) asphalt.polygon(g.outline, [], Y.asphalt); }
+    for (const k of sk.links ?? []) { const g = linkGeometry(sk, k); if (g) asphalt.polygon(g.outline, [], on(Y.asphalt)); }
     // (ticket #111: the connectors on no junction, and the slivers between those leaving or joining a lane's end)
     for (const x of looseSurfaces(sk, contents)) {
       const h = x.level * LEVEL_H;
       for (const b of x.bands) {
-        if (b.w1 !== undefined) asphalt.polygon(simplify(bandPolygon(b), TOL_J), [], h + Y.asphalt);
-        else { const ps = simplify(b.pts, TOL); asphalt.ribbon(ps, ps.map(() => h), b.width, Y.asphalt, false); }
+        if (b.w1 !== undefined) asphalt.polygon(simplify(bandPolygon(b), TOL_J), [], on(h + Y.asphalt));
+        else { const ps = simplify(b.pts, TOL); asphalt.ribbon(ps, ps.map(p => h + G(p)), b.width, Y.asphalt, false); }
       }
-      for (const p of nestLoops(x.fill)) asphalt.polygon(simplify(p.outer, TOL_J), p.holes.map(q => simplify(q, TOL_J)), h + Y.asphalt);
+      for (const p of nestLoops(x.fill)) asphalt.polygon(simplify(p.outer, TOL_J), p.holes.map(q => simplify(q, TOL_J)), on(h + Y.asphalt));
     }
     // (a dead end with a turnaround: a turning circle of road, on its kerb, under the U-turn; drawn only)
     for (const d of deadEndTurnarounds(sk)) {
       const h = d.level * LEVEL_H;
-      kerb.polygon(circlePts(d.c, d.r + KERB / 2), [], h + Y.kerb);
-      asphalt.polygon(circlePts(d.c, d.r), [], h + Y.asphalt);
+      kerb.polygon(circlePts(d.c, d.r + KERB / 2), [], on(h + Y.kerb));
+      asphalt.polygon(circlePts(d.c, d.r), [], on(h + Y.asphalt));
     }
   }
   if (layers.surfaces && layers.markings) {
@@ -207,24 +216,24 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       const to = m.kind === "center" ? yellow : paint;
       // (beside a lane off the ground: at its height point by point, down its ramps)
       if (m.lane && m.at) {
-        const hs = m.at.map(s => shownZ(sk, m.lane!, s) * LEVEL_H), line = m.pts.map((p, i) => ({ ...p, h: hs[i] }));
+        const hs = m.at.map(s => shownZ(sk, m.lane!, s) * LEVEL_H + GL(m.lane!, s)), line = m.pts.map((p, i) => ({ ...p, h: hs[i] }));
         for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(p => p.h), PAINT_W, Y.paint);
         continue;
       }
       const h = (m.level ?? 0) * LEVEL_H, line = simplify(m.pts, TOL);
-      for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(() => h), PAINT_W, Y.paint);
+      for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(p => h + G(p)), PAINT_W, Y.paint);
     }
-    for (const a of turnArrows(sk)) for (const line of arrowLines(a.p, a.d, a.turns)) paint.ribbon(line, line.map(() => a.level * LEVEL_H), 0.18, Y.paint);
+    for (const a of turnArrows(sk)) { const g = G(a.p); for (const line of arrowLines(a.p, a.d, a.turns)) paint.ribbon(line, line.map(() => a.level * LEVEL_H + g), 0.18, Y.paint); }
     // speed bumps: their bodies raised by their height (red), their markings on top (white, or a short bump's yellow), on the ground
     for (const x of sk.bumps ?? []) {
       const sh = bumpShapes(x), top = Y.asphalt + x.height / 100;
-      for (const b of sh.body) red.polygon(b, [], top);
-      for (const m of sh.marks) (sh.markColor === "#ffffff" ? paint : yellow).polygon(m, [], top + 0.01);
+      for (const b of sh.body) red.polygon(b, [], on(top));
+      for (const m of sh.marks) (sh.markColor === "#ffffff" ? paint : yellow).polygon(m, [], on(top + 0.01));
     }
     // zebras: stripes along the traffic (or turned as it says), across the road, cut to its shape (on a table: on top of it)
     for (const x of sk.crossings ?? []) {
-      const on = (sk.bumps ?? []).find(b => b.kind === "table" && Math.hypot((x.a.x + x.b.x) / 2 - (b.a.x + b.b.x) / 2, (x.a.y + x.b.y) / 2 - (b.a.y + b.b.y) / 2) < b.length / 2);
-      for (const bar of crossingStripes(x)) paint.polygon(bar, [], Y.paint + (on ? on.height / 100 : 0));
+      const on2 = on, table = (sk.bumps ?? []).find(b => b.kind === "table" && Math.hypot((x.a.x + x.b.x) / 2 - (b.a.x + b.b.x) / 2, (x.a.y + x.b.y) / 2 - (b.a.y + b.b.y) / 2) < b.length / 2);
+      for (const bar of crossingStripes(x)) paint.polygon(bar, [], on2(Y.paint + (table ? table.height / 100 : 0)));
     }
   }
   if (layers.signs) {
@@ -232,7 +241,7 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
     // (a lane both ways' way back's too, at the lane's start, ticket #53)
     for (const l of sk.lanes.flatMap(x => (twoWayOk(x) ? [x, twinOf(x)] : [x]))) {
       if (!l.control || isFullCircle(l.shape)) continue;
-      const L = laneLength(l.shape), { p, d } = pointAt(l.shape, L), n = { x: -d.y, y: d.x }, hw = l.width / 2, h = (isTwinId(l.id) ? shownZ(sk, baseLaneId(l.id), 0) : shownZ(sk, l.id, L)) * LEVEL_H + Y.paint;
+      const L = laneLength(l.shape), { p, d } = pointAt(l.shape, L), n = { x: -d.y, y: d.x }, hw = l.width / 2, h = (isTwinId(l.id) ? shownZ(sk, baseLaneId(l.id), 0) * LEVEL_H + GL(baseLaneId(l.id), 0) : shownZ(sk, l.id, L) * LEVEL_H + GL(l.id, L)) + Y.paint;
       if (l.control === "stop") {
         const A = { x: p.x - d.x * 0.5, y: p.y - d.y * 0.5 };
         paint.polygon([{ x: A.x + n.x * hw, y: A.y + n.y * hw }, { x: p.x + n.x * hw, y: p.y + n.y * hw }, { x: p.x - n.x * hw, y: p.y - n.y * hw }, { x: A.x - n.x * hw, y: A.y - n.y * hw }], [], h);
@@ -255,6 +264,6 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
   };
 }
 
-/** a lane's height (m) at `s` metres along it */
-export const laneHeight = (sk: Sketch, lane: string, s: number) => shownZ(sk, lane, s) * LEVEL_H;
+/** a lane's height (m) at `s` metres along it, from the 3D view's ground (`groundBase`) */
+export const laneHeight = (sk: Sketch, lane: string, s: number) => shownZ(sk, lane, s) * LEVEL_H + (hasHeights(sk) ? groundAt(sk, lane, s) - groundBase(sk) : 0);
 export { laneLevel };

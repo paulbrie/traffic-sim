@@ -7,7 +7,7 @@
 
 export type TuneKey = "accel" | "brake" | "headway" | "minGap" | "speedSpread" | "patience" | "yieldGap" | "yieldSpeed" | "pedWalk" | "pedYield" | "pedSpeed"
   | "rerouteAfter" | "breakdownsPerHour" | "brokenTowAfter" | "fuelIdleCar" | "fuelIdleTruck" | "stopStartShare" | "truckShare" | "truckLength" | "truckAccel" | "truckHeadway" | "truckSpeed"
-  | "speedVsLimit" | "laneChangePause" | "overtakeRoom" | "bendSpeed" | "ringGap" | "junctionRules" | "ringLanes" | "ringKeepLane" | "visionCone" | "ringDriving";
+  | "speedVsLimit" | "laneChangePause" | "overtakeRoom" | "bendSpeed" | "ringGap" | "junctionRules" | "ringLanes" | "ringKeepLane" | "visionCone" | "ringDriving" | "grades";
 export type Tuning = Record<TuneKey, number>;
 export type TuneGroup = "Drivers" | "Trucks" | "Junctions" | "Pedestrians" | "Breakdowns" | "Fuel";
 export interface TuneInfo { key: TuneKey; group: TuneGroup; label: string; unit: string; min: number; max: number; step: number; def: number; help: string }
@@ -30,6 +30,7 @@ export const TUNING: TuneInfo[] = [
   { key: "patience", group: "Junctions", label: "Let in after waiting", unit: "s", min: 2, max: 30, step: 1, def: 6, help: "A car kept waiting this long to join a queued lane is let in by the next car along (zip merging); and where paths cross with neither having priority (first come, first served), the one that has waited this long goes before one that can still stop for it." },
   { key: "yieldGap", group: "Junctions", label: "Gap wanted at a give-way line", unit: "s", min: 0.5, max: 5, step: 0.1, def: 1.5, help: "A car at a stop or yield line goes when it would be through this long before the next car gets there." },
   { key: "yieldSpeed", group: "Junctions", label: "Speed up to a yield line", unit: "m/s", min: 1, max: 12, step: 0.5, def: 4, help: "How fast cars come up to a yield line (they go on without stopping if it is clear)." },
+  { key: "grades", group: "Drivers", label: "Hills", unit: "", min: 0, max: 1, step: 1, def: 1, help: "Only with heights (terrain fetched, or a lane's ground set by hand; ticket #130). 1: the slope counts: uphill a car pulls away and keeps its speed less well (a truck far less: 1 m/s² less at 10%), downhill it gets up to its speed sooner (never past it), and fuel goes up and down with the climb. 0: flat, as without heights." },
   { key: "bendSpeed", group: "Junctions", label: "Speed through bends and junctions", unit: "×", min: 0.6, max: 1.5, step: 0.05, def: 1, help: "How fast drivers take bends, roundabouts and turns at junctions, against the speed at which the bend pushes them sideways as hard as is comfortable." },
   { key: "ringGap", group: "Junctions", label: "Roundabout gap accepted", unit: "s", min: 1, max: 5, step: 0.1, def: 2, help: "The gap in time a car joining a roundabout's ring wants before the next car on the ring (at least 8 m)." },
   { key: "junctionRules", group: "Junctions", label: "Who goes first", unit: "", min: 0, max: 1, step: 1, def: 0, help: "0: first come, first served where paths cross (as before). 1: by the rules of the road: a roundabout's ring first, give-way lines, the main road, left turns give way, then the car from the right; first come only as a last resort." },

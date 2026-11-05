@@ -16,7 +16,7 @@ import { project, unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, crossingStripes, stripeDir, CROSSING_WIDTH, type CrossingPatch, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   addStop, updateStop, deleteStop, type SketchStop, speedLimitOf, setTwoWay, twoWayOk, twinOf, twinId, baseLaneId, connectorEnd, wayFrom, wayTo, type TwoWay,
-  junctionContents, laneById, laneLength, nearestOn, nextId, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
+  junctionContents, laneById, laneLength, nearestOn, nextId, groundAt, setGround, terrainEnds, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, edgeLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, laneLocked, leadOf, setLocked, type LockIds, removePoint, settle, toggleCurve, roadMiddle,
   type Band, type SketchLink, type SketchJunction, type SketchRoad, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
@@ -2651,6 +2651,48 @@ function LevelRow({ sketch, lanes }: { sketch: Sketch; lanes: string[] }) {
 }
 
 /**
+ * The ground's height under a lane, or a road's lanes (ticket #130), at its start and its end (by its lead lane's ends, a lane
+ * running the other way the other way round): the terrain's, or set by hand over it (a cutting, an embankment: the lane
+ * climbs evenly between them); and the grade that makes.
+ */
+function GroundRow({ sketch, lanes, lead }: { sketch: Sketch; lanes: string[]; lead: string }) {
+  const { edit: editSketch } = useSketchStore();
+  const L = laneById(sketch, lead);
+  if (!L) return null;
+  const len = laneLength(L.shape), a = groundAt(sketch, lead, 0), b = groundAt(sketch, lead, len), t = terrainEnds(sketch, L);
+  const set = L.ground ?? {}, hand = set.a !== undefined || set.b !== undefined;
+  // (each lane's own ends: the lead's start where it starts nearer it)
+  const p0 = pointAt(L.shape, 0).p;
+  const patch = (end: "a" | "b", v: number | null) => editSketch(s => {
+    let out = s;
+    for (const id of lanes) {
+      const l = laneById(s, id);
+      if (!l) continue;
+      const q0 = pointAt(l.shape, 0).p, q1 = pointAt(l.shape, laneLength(l.shape)).p, same = Math.hypot(q0.x - p0.x, q0.y - p0.y) <= Math.hypot(q1.x - p0.x, q1.y - p0.y);
+      out = setGround(out, [id], { [same ? end : end === "a" ? "b" : "a"]: v });
+    }
+    return out;
+  });
+  const grade = len > 1 ? ((b - a) / len) * 100 : 0;
+  return (
+    <div className="grid gap-1">
+      <span className="text-xs">Ground height{hand ? " (set by hand)" : t ? " (terrain)" : ""}</span>
+      <div className="grid grid-cols-2 gap-2">
+        <NumberField id={`sk-ground-a-${lead}`} label="At its start" unit="m" digits={1} min={-500} max={9000} value={a} onCommit={v => patch("a", v)} />
+        <NumberField id={`sk-ground-b-${lead}`} label="At its end" unit="m" digits={1} min={-500} max={9000} value={b} onCommit={v => patch("b", v)} />
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-muted-foreground">
+          {t || hand ? `${grade >= 0 ? "+" : "−"}${Math.abs(grade).toFixed(1)}% on average along it.` : "Flat ground: fetch the terrain (Background), or set heights here."}
+          {hand && t ? ` The terrain has ${t.a.toFixed(1)} and ${t.b.toFixed(1)} m.` : ""}
+        </span>
+        {hand && <Button size="sm" variant="ghost" className="ml-auto h-6 px-1.5 text-xs" title={t ? "Back to the terrain's heights" : "Flat ground again"} onClick={() => editSketch(s => setGround(s, lanes, { a: null, b: null }))}><RotateCcw /> {t ? "Terrain" : "Clear"}</Button>}
+      </div>
+    </div>
+  );
+}
+
+/**
  * A lane's (or a road's, by its lead lane) geometry, as in V1's inspector: how far its end is from its
  * start and which way (a compass bearing), how long it is along the curve, and where its ends are. A
  * new length stretches it (a road: all its lanes) along that line from its start; a new bearing turns
@@ -2869,6 +2911,7 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
         )}
         <GeometrySection sketch={sketch} lanes={road.align ? [road.align.ref] : road.lanes} lead={road.align?.ref ?? road.lanes[0]} />
         <LevelRow sketch={sketch} lanes={road.lanes} />
+        <GroundRow sketch={sketch} lanes={road.lanes} lead={road.align?.ref ?? road.lanes[0]} />
         <SpeedRow sketch={sketch} id={`road-${road.id}`} own={road.speed} of="road" onSet={v => editSketch(sk => setRoadSpeed(sk, road.id, v))} />
         {(() => {
           // (ticket #126: its lanes with a speed limit of their own keep it, whatever the road's)
@@ -3013,6 +3056,7 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
         </div>
         {!lead && <GeometrySection sketch={sketch} lanes={[lane.id]} lead={lane.id} />}
         <LevelRow sketch={sketch} lanes={inRoad?.align ? inRoad.lanes : [lane.id]} />
+        <GroundRow sketch={sketch} lanes={inRoad?.align ? inRoad.lanes : [lane.id]} lead={inRoad?.align ? inRoad.align.ref : lane.id} />
         <SpeedRow sketch={sketch} id={`lane-${lane.id}`} own={lane.speed} of="lane" road={inRoad} onSet={v => editSketch(sk => setLaneSpeed(sk, lane.id, v))} />
         <div className="flex items-center gap-2">
           <span className="text-xs" id={`sk-use-${lane.id}`}>Lane for</span>

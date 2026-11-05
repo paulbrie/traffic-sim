@@ -44,6 +44,8 @@ export interface HeliCar { id: number; x: number; y: number; h: number; heading:
 export interface HeliHooks {
   /** the cars as drawn now (live or replayed) */
   cars(): HeliCar[];
+  /** (ticket #130) the ground's height (world y) under a point (x, z): the terrain's; none, flat at 0 */
+  groundAt?(x: number, z: number): number;
   /** the car picked: the one tracked */
   picked(): number | null;
   /** cars destroyed in war mode: broken down where they are (wrecks in the traffic, until towed) */
@@ -108,7 +110,6 @@ export class HeliRig {
   private lastForget = 0;
   private aimRay = new THREE.Raycaster();
   private aimAt = new THREE.Vector3();
-  private ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private world: World;
   private disposed = false;
   private off: (() => void)[] = [];
@@ -155,13 +156,14 @@ export class HeliRig {
     if (m === "orbit") {
       // orbit round the ground point the helicopter was looking at (or straight below)
       camera.getWorldDirection(dir);
-      if (dir.y < -0.05) {
-        const t = Math.min(camera.position.y / -dir.y, 2000);
-        this.controls.target.set(camera.position.x + dir.x * t, 0, camera.position.z + dir.z * t);
+      const hit = dir.y < -0.05 ? this.hitGround(camera.position, dir, 2000) ?? 2000 : null;
+      if (hit !== null) {
+        this.controls.target.set(camera.position.x + dir.x * hit, 0, camera.position.z + dir.z * hit);
       } else {
-        const flat = Math.hypot(dir.x, dir.z) || 1, t = Math.max(30, camera.position.y);
+        const flat = Math.hypot(dir.x, dir.z) || 1, t = Math.max(30, this.aloft);
         this.controls.target.set(camera.position.x + (dir.x / flat) * t, 0, camera.position.z + (dir.z / flat) * t);
       }
+      this.controls.target.y = this.gAt(this.controls.target.x, this.controls.target.z);
       this.controls.enabled = true; this.controls.update();
       this.hooks.note("");
     } else {
@@ -171,7 +173,8 @@ export class HeliRig {
         // the instrument panel)
         camera.getWorldDirection(dir);
         const l = Math.hypot(dir.x, dir.z), hx = l > 1e-3 ? dir.x / l : 0, hz = l > 1e-3 ? dir.z / l : -1, t = this.controls.target;
-        camera.position.set(t.x - hx * 300, HELI_START, t.z - hz * 300);
+        camera.position.set(t.x - hx * 300, 0, t.z - hz * 300);
+        camera.position.y = Math.max(this.gAt(camera.position.x, camera.position.z), this.gAt(t.x, t.z)) + HELI_START;
         this.yaw = Math.atan2(-hx, -hz); this.pitch = -Math.atan2(HELI_START, 300);
         camera.rotation.order = "YXZ"; camera.rotation.set(this.pitch, this.yaw, 0);
       }
@@ -190,17 +193,46 @@ export class HeliRig {
 
   /** zoom keys and buttons while flying: lower or higher (closer or further, tracking) */
   zoom(k: number) {
-    if (this.mode === "heli") this.camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, this.camera.position.y * k));
+    if (this.mode === "heli") this.keepAloft(k);
     else if (this.mode === "track") this.chase.dist = Math.max(8, Math.min(600, this.chase.dist * k));
   }
   /** facing north (flying), or the view swung round behind the car to face it (tracking) */
   north() { if (this.mode === "heli") this.yaw = 0; else if (this.mode === "track") this.chase.angle = -Math.PI / 2 - this.chase.heading; }
+  /** the ground's height under (x, z) (0: flat ground) */
+  private gAt(x: number, z: number) { return this.hooks.groundAt?.(x, z) ?? 0; }
+  /** how high the camera is over the ground under it */
+  private get aloft() { return this.camera.position.y - this.gAt(this.camera.position.x, this.camera.position.z); }
+  /** the camera kept between HELI_MIN and HELI_MAX over the ground under it (`k`: its height over it scaled first) */
+  private keepAloft(k = 1, max = HELI_MAX) {
+    const p = this.camera.position, g = this.gAt(p.x, p.z);
+    p.y = g + Math.max(HELI_MIN, Math.min(max, (p.y - g) * k));
+  }
+  /**
+   * How far along a ray (from `o`, unit `d`) it meets the ground, up to `maxT` (null: not that near): flat, where it crosses
+   * y = 0; on terrain, stepped along and then narrowed down
+   */
+  private hitGround(o: THREE.Vector3, d: THREE.Vector3, maxT: number): number | null {
+    if (!this.hooks.groundAt) { const t = d.y < -1e-6 ? o.y / -d.y : Infinity; return t <= maxT ? t : null; }
+    let t0 = 0;
+    for (let t = 0; t <= maxT;) {
+      const step = Math.max(2, t * 0.01), t1 = Math.min(maxT, t + step);
+      if (o.y + d.y * t1 <= this.gAt(o.x + d.x * t1, o.z + d.z * t1)) {
+        let a = t0, b = t1;
+        for (let i = 0; i < 20; i++) { const m = (a + b) / 2; if (o.y + d.y * m <= this.gAt(o.x + d.x * m, o.z + d.z * m)) b = m; else a = m; }
+        return b;
+      }
+      if (t1 >= maxT) break;
+      t0 = t = t1;
+    }
+    return null;
+  }
   /** the ground point the view looks at (straight below, looking above the horizon) and how far it is */
   groundAhead(): { x: number; z: number; dist: number } {
     const camera = this.camera, dir = this.dir;
     camera.getWorldDirection(dir);
-    if (dir.y < -0.02) { const t = Math.min(5000, camera.position.y / -dir.y); return { x: camera.position.x + dir.x * t, z: camera.position.z + dir.z * t, dist: t }; }
-    return { x: camera.position.x, z: camera.position.z, dist: Math.max(100, camera.position.y) };
+    const t = dir.y < -0.02 ? this.hitGround(camera.position, dir, 5000) ?? 5000 : null;
+    if (t !== null) return { x: camera.position.x + dir.x * t, z: camera.position.z + dir.z * t, dist: t };
+    return { x: camera.position.x, z: camera.position.z, dist: Math.max(100, this.aloft) };
   }
   /** war: a burst of the gun at a point (a click) */
   burstAt(p: THREE.Vector3) { this.gun.at.copy(p); this.gun.burst = 5; this.gun.next = 0; }
@@ -263,7 +295,7 @@ export class HeliRig {
     e.preventDefault();
     // like zooming: scroll up comes down closer, scroll down climbs
     const k = Math.exp(Math.max(-1, Math.min(1, e.deltaY * 0.0015)));
-    if (this.mode === "heli") this.camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, this.camera.position.y * k));
+    if (this.mode === "heli") this.keepAloft(k);
     else { this.chase.dist = Math.max(8, Math.min(600, this.chase.dist * k)); this.chase.height = Math.max(TRACK_MIN, Math.min(400, this.chase.height * k)); }
   }
 
@@ -328,14 +360,14 @@ export class HeliRig {
         this.pitch += (want - this.pitch) * (1 - Math.exp(-dt * 3));
       }
       // faster high up, slower near the ground; the helicopter eases in and out of motion
-      const cruise = Math.min(HELI_VMAX, Math.max(12, camera.position.y * 0.9) * fast);
+      const cruise = Math.min(HELI_VMAX, Math.max(12, this.aloft * 0.9) * fast);
       // (diagonally no faster than straight ahead)
       const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw), k = cruise / Math.max(1, Math.hypot(fwd, side));
       const want = new THREE.Vector3((-sy * fwd + cy * side) * k, climb * Math.max(6, cruise * 0.5), (-cy * fwd - sy * side) * k);
       // (a helicopter gathers and loses speed slowly: some 3 s to 63 % of the change)
       vel.lerp(want, 1 - Math.exp(-dt * HELI_RESPONSE));
       camera.position.addScaledVector(vel, dt);
-      camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, camera.position.y));
+      this.keepAloft();
       // the airframe faces where the pilot looks, dips its nose to speed up and leans into sideways flight
       const ease = 1 - Math.exp(-dt * 2), vf = -vel.x * sy - vel.z * cy, vside = vel.x * cy - vel.z * sy;
       air.yaw = this.yaw;
@@ -374,7 +406,7 @@ export class HeliRig {
       if (flat > HELI_VMAX) { aim.x *= HELI_VMAX / flat; aim.z *= HELI_VMAX / flat; }
       vel.lerp(aim, 1 - Math.exp(-dt * HELI_RESPONSE));
       camera.position.addScaledVector(vel, dt);
-      camera.position.y = Math.max(HELI_MIN, camera.position.y);
+      this.keepAloft(1, Infinity);
       speed = Math.hypot(vel.x, vel.z);
       this.lookAt.set(c.x, c.h + 1.5, c.y);
       camera.lookAt(this.lookAt);
@@ -402,12 +434,13 @@ export class HeliRig {
       camera.rotateZ(0.0002 * Math.sin(t * 17 + 1) + (Math.random() - 0.5) * 0.014 * this.jolt);
     }
     this.jolt = Math.max(0, this.jolt - dt * 4);
-    const text = `${Math.round(camera.position.y)} m up · ${Math.round(speed * 3.6)} km/h`;
+    // (over the ground under it)
+    const up = this.aloft, text = `${Math.round(up)} m up · ${Math.round(speed * 3.6)} km/h`;
     if (text !== this.hudText) { this.hudText = text; this.hooks.hud(text); }
     if (dt > 0) {
       const vs = (camera.position.y - this.lastPos.y) / dt, ease = 1 - Math.exp(-dt * 4);
       camera.getWorldDirection(dir);
-      flight.alt = camera.position.y; flight.vs += (vs - flight.vs) * ease; flight.speed += (speed - flight.speed) * ease;
+      flight.alt = up; flight.vs += (vs - flight.vs) * ease; flight.speed += (speed - flight.speed) * ease;
       flight.heading = (Math.atan2(dir.x, -dir.z) * 180) / Math.PI; flight.pitch = Math.asin(Math.max(-1, Math.min(1, dir.y)));
       this.hooks.flight(flight);
     }
@@ -417,13 +450,14 @@ export class HeliRig {
   private fromCamera() {
     this.camera.getWorldDirection(this.dir);
     this.yaw = Math.atan2(-this.dir.x, -this.dir.z); this.pitch = Math.max(-1.5, Math.min(0.5, Math.asin(this.dir.y)));
-    this.camera.position.y = Math.max(HELI_MIN, Math.min(HELI_MAX, this.camera.position.y));
+    this.keepAloft();
   }
 
   /** the ground point under the sight (or far ahead, looking above the horizon) */
   private sightPoint(cam: THREE.Camera, out: THREE.Vector3) {
     this.aimRay.setFromCamera(new THREE.Vector2(0, 0), cam);
-    if (!this.aimRay.ray.intersectPlane(this.ground, out) || out.distanceTo(cam.position) > 3000) out.copy(this.aimRay.ray.origin).addScaledVector(this.aimRay.ray.direction, 1500);
+    const r = this.aimRay.ray, t = this.hitGround(r.origin, r.direction, 3000);
+    out.copy(r.origin).addScaledVector(r.direction, t ?? 1500);
     return out;
   }
   /** a point on the airframe (body frame: x right, y up, −z ahead) in the world */

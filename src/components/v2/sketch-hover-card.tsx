@@ -2,12 +2,12 @@
 
 /**
  * A card by the pointer on the V2 editor's map with what it is over, as V1's hover card (hover-info.tsx): a lane (its
- * road, length, level, sign, speed limit), a junction (its kind, roads, and how traffic does there while the cars run),
+ * road, length, level, ground height and grade (ticket #130), sign, speed limit), a junction (its kind, roads, and how traffic does there while the cars run),
  * a connector, a zebra crossing, a speed bump, or a car (its speed, where it is going, what it waits for). Shown after the pointer
  * rests a moment, not while drawing (see LaneSketch). With TomTom's live traffic fetched (ticket #131), a lane's card has
  * TomTom's speed on it and on its road.
  */
-import { connectorPts, isFullCircle, laneById, laneLength, speedLimitOf, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
+import { connectorPts, groundAt, hasHeights, isFullCircle, laneById, laneLength, speedLimitOf, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
 import type { SimStats, SketchSim } from "@/lib/lane-sketch-sim";
 import { formatArea, zoneArea } from "@/lib/sketch-zones";
 import { BUMP_KINDS, bumpHeavySpeed, bumpSpeed } from "@/lib/sketch-bumps";
@@ -25,6 +25,15 @@ const tomtom = (t: LaneTraffic | undefined): string | null => {
   const part = t.cover < 0.95 ? ` · over ${Math.round(t.cover * 100)}%` : "";
   return `${Math.round(t.kmh!)} km/h${t.rel !== null && t.free !== null ? ` (${Math.round(t.rel * 100)}% of free flow, ${Math.round(t.free)})` : ""}${part}`;
 };
+
+/** a lane's ground: from its start's height to its end's, and the grade on average (its steepest 20 m too, if much more) */
+function ground(sk: Sketch, id: string): string {
+  const L = laneLength(laneById(sk, id)!.shape), a = groundAt(sk, id, 0), b = groundAt(sk, id, L), pct = (g: number) => `${g >= 0 ? "+" : "−"}${Math.abs(g * 100).toFixed(1)}%`;
+  let steep = 0;
+  for (let x = 0; x + 20 <= L; x += 5) { const g = (groundAt(sk, id, x + 20) - groundAt(sk, id, x)) / 20; if (Math.abs(g) > Math.abs(steep)) steep = g; }
+  const mean = L > 1 ? (b - a) / L : 0;
+  return `${Math.round(a)} → ${Math.round(b)} m, ${pct(mean)}${Math.abs(steep) > Math.abs(mean) + 0.02 ? ` (${pct(steep)} at most)` : ""}`;
+}
 
 export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, JunctionContents>, stats: SimStats | null, car: ReturnType<SketchSim["inspect"]> | null, flow: TrafficMatch | null = null): HoverInfo | null {
   const roadOf = (lane: string) => sk.roads.find(r => r.lanes.includes(lane)) ?? null;
@@ -53,6 +62,7 @@ export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, J
         ["Length", `${isFullCircle(l.shape) ? "ring · " : ""}${m(laneLength(l.shape))}`],
         ["Speed limit", `${lim ?? all} km/h${lim === undefined ? " (the sketch's)" : l.speed === undefined && r ? " (the road's)" : r ? " (its own)" : ""}`],
         ...(l.level ? [["Level", l.level > 0 ? `+${l.level} (bridge)` : `${l.level} (under)`] as [string, string]] : []),
+        ...(hasHeights(sk) ? [["Ground", ground(sk, l.id)] as [string, string]] : []),
         ...(l.control ? [["At its end", l.control === "stop" ? "Stop" : "Yield"] as [string, string]] : []),
         ...(flow ? [["TomTom now", ttLane ?? "no data"] as [string, string]] : []),
         ...(ttRoad ? [["Its road", ttRoad] as [string, string]] : []),
