@@ -3511,7 +3511,7 @@ export class SketchSim {
    * A car's turn signal, as V1's (src/engine/sim, `blinker`): -1 left, 1 right, 0 off. Lit while it changes lane
    * (toward the lane it slides to, until it is within half a metre of it; or, still waiting for a gap, toward the
    * lane it means to), within 45 m before the connector it turns onto, and while it turns along it. On a roundabout
-   * (ticket #58): left from the way on and round the ring, right once its way off is at the next arm (from the way on,
+   * (ticket #58): left from the way on and round the ring, right once its way off is at the next arm past its back (from the way on,
    * and the 45 m up to it, when that is the first) and on the way off. Broken down: off here (its hazard lights are
    * `broken`). Reads the car only, so it can't change a run.
    */
@@ -3540,7 +3540,10 @@ export class SketchSim {
     const G = e.kind === "lane" ? this.ringOfLane.get(e) : undefined;
     if (G) {
       const off = v.exit ?? v.goal?.conn ?? null;
-      return off && !off.to!.lane.ring && this.nextArm(G, e.locate(v.pos).p, off) ? 1 : -1;
+      // (ticket #260: the next arm from its back, not its front: its body still beside an arm's ways off, it is passing that arm,
+      // and a right signal there would say it takes it; its back no further back than where it came onto the ring)
+      const back = (((v.pos - Math.min(v.len, v.run)) % e.len) + e.len) % e.len;
+      return off && !off.to!.lane.ring && this.nextArm(G, e.locate(back).p, off) ? 1 : -1;
     }
     if (e.kind === "conn" && e.from!.lane.ring) return e.to!.lane.ring ? -1 : 1;
     const c = e.kind === "conn" ? e : v.exit && v.exit.from && v.exit.from.s - v.pos < 45 ? v.exit : null;
