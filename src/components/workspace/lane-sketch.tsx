@@ -2619,7 +2619,26 @@ function JunctionLightsPanel({ sketch, junction, contents, onHover, now, onPick 
             </div>
           ))}
           <Button size="sm" variant="outline" disabled={phases.length >= MAX_PHASES} onClick={() => setPhases([...phases, { green: L.green, conns: [] }])}><Plus /> Add phase</Button>
-          {plan.controlled.some(id => !phases.some(p => p.conns.includes(id))) && (
+          {/* (ticket #264: phases naming connectors since taken out, as when the junction's connectors are drawn again) */}
+          {plan.stale && (
+            <div className="grid gap-1.5 rounded-md border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+              <p>
+                These phases name connectors no longer there ({plan.stale.gone.join(", ")}).{" "}
+                {plan.stale.workedOut
+                  ? `A way in has green in none of them, so the lights run worked out (${L.mode === "each" ? "one way at a time" : "ways facing each other together"}) until they are set again.`
+                  : plan.stale.took.length
+                    ? `The connectors in their place (${plan.stale.took.join(", ")}) get green where the others from their lane do.`
+                    : "Every way in still has green in them."}
+              </p>
+              <Button size="sm" variant="outline" className="h-7 justify-self-start text-xs" title="The phases as the lights run them now, set by hand: the connectors no longer there taken out"
+                onClick={() => setPhases(plan.stale!.workedOut
+                  ? plan.phases.map(p => ({ name: p.name, green: p.green, conns: [...p.conns], ...(p.peds?.length ? { peds: [...p.peds] } : {}) }))
+                  : phases.map((p, i) => ({ ...p, conns: [...(plan.phases[i]?.conns ?? [])] })))}>
+                Set them from what runs now
+              </Button>
+            </div>
+          )}
+          {plan.controlled.some(id => !plan.phases.some(p => p.conns.includes(id))) && (
             <p className="text-[11px] text-amber-700 dark:text-amber-400">Some connectors are in no phase: they never get green.</p>
           )}
         </div>

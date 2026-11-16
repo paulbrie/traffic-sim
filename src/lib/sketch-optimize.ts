@@ -124,8 +124,9 @@ const nameOf = (sk: Sketch, id: string) => sk.junctions.find(j => j.id === id)?.
 function byHand(sk: Sketch, id: string): JunctionLights | null {
   const j = sk.junctions.find(x => x.id === id), L = j?.lights;
   if (!j || !L) return null;
-  if (L.phases?.length) return L;
   const plan = signalPlan(sk, j, junctionContents(sk, j));
+  // (set by hand: those, unless they name connectors no longer there: then those that run, ticket #264)
+  if (L.phases?.length && !plan?.stale) return L;
   if (!plan || plan.phases.length < 2) return null;
   return { ...L, phases: plan.phases.map((p): LightsPhase => ({ name: p.name, green: p.green, conns: [...p.conns], ...(p.peds?.length ? { peds: [...p.peds] } : {}) })) };
 }

@@ -1387,6 +1387,12 @@ export interface SignalPlan {
   crossings: LitCrossing[];
   junction: string; cycle: number; amber: number; allRed: number; actuated: boolean; custom: boolean; phases: SignalPhase[];
   /** every connector the lights hold (the ways in), green in a phase or not */ controlled: string[];
+  /**
+   * Phases set by hand that name connectors no longer there (`gone`, ticket #264): those there now in no phase
+   * green where the others from their lane (or else way) are (`took`); `workedOut`: a way in still had green in none, so the
+   * phases run are worked out (by `mode`), not the ones set by hand
+   */
+  stale?: { gone: string[]; took: string[]; workedOut: boolean };
   /** in a signal group: its id, the coordinated phase (it starts the cycle) and when, in the group's cycle, it turns green; the cycle its phases need when the group's is too short */
   coord?: { group: string; groupName: string; phase: number; offset: number; stretched?: number };
 }
@@ -1539,15 +1545,36 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
   const conns = wayConns(sk, c, ways), controlled = conns.flat(), key = (i: number) => ways[i].road ?? `lane:${ways[i].lanes[0]}`;
   const minGreen = Math.min(L.minGreen ?? DEFAULT_LIGHTS.minGreen, L.green);
   const crossings = lightsCrossings(sk, controlled), xs = L.pedPhase === false ? [] : crossings;
-  let raw: { name: string; ways: string[]; lanes: string[]; conns: string[]; green: number; minGreen: number; peds?: string[] }[];
+  let raw: { name: string; ways: string[]; lanes: string[]; conns: string[]; green: number; minGreen: number; peds?: string[] }[] | null = null;
+  let stale: SignalPlan["stale"];
   if (L.phases?.length) {
     // (by hand: each phase's connectors, still there and held by the lights; its lanes and ways those they leave)
-    raw = L.phases.map((p, i) => {
-      const cs = p.conns.filter(id => controlled.includes(id)), lanes = [...new Set(cs.map(id => wayFrom(sk, sk.connectors.find(x => x.id === id)!).lane))];
+    const fromLane = (id: string) => wayFrom(sk, sk.connectors.find(x => x.id === id)!).lane;
+    let sets = L.phases.map(p => p.conns.filter(id => controlled.includes(id)));
+    // (ticket #264: phases naming connectors since taken out, as when the junction's connectors are drawn again. The ones
+    // there now in no phase have green where the others from their lane (or way) do; and if a way in still has green in none,
+    // the phases no longer fit the junction: the lights run worked out until they are set again. Junction 5's rings
+    // made smaller took all its connectors with them, the new ones were in no phase: every way in red, for good)
+    const there = new Set(sk.connectors.map(x => x.id)), gone = [...new Set(L.phases.flatMap(p => p.conns.filter(id => !there.has(id))))];
+    if (gone.length) {
+      const dark = controlled.filter(id => !sets.some(s => s.includes(id))), took = new Set<string>();
+      // (from their lane; a lane with none in a phase, from their way's)
+      const wayOf = (id: string) => conns.findIndex(cs => cs.includes(id));
+      for (const by of [fromLane, wayOf] as ((id: string) => string | number)[]) {
+        const left = dark.filter(id => !took.has(id));
+        if (!left.length) break;
+        sets = sets.map(s => { const has = new Set(s.map(by)), add = left.filter(id => has.has(by(id))); add.forEach(id => took.add(id)); return add.length ? [...s, ...add] : s; });
+      }
+      const fits = conns.every(cs => !cs.length || cs.some(id => sets.some(s => s.includes(id))));
+      stale = { gone, took: [...took], workedOut: !fits };
+    }
+    if (!stale?.workedOut) raw = L.phases.map((p, i) => {
+      const cs = sets[i], lanes = [...new Set(cs.map(fromLane))];
       const peds = (p.peds ?? []).filter(id => crossings.some(x => x.id === id));
       return { name: p.name || `Phase ${i + 1}`, ways: [...new Set(lanes.map(l => { const k = ways.findIndex(w => w.lanes.includes(l)); return key(k); }))], lanes, conns: cs, green: p.green, minGreen: peds.length ? p.green : Math.min(p.minGreen ?? minGreen, p.green), ...(peds.length ? { peds } : {}) };
     });
-  } else {
+  }
+  if (!raw) {
     // (worked out: the way each faces where its lanes end, and those facing each other paired)
     const facing = ways.map(w => {
       const ds = w.lanes.map(id => { const l = laneById(sk, id)!; return pointAt(l.shape, laneLength(l.shape)).d; });
@@ -1570,9 +1597,10 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
       }
       groups.push(g);
     }
-    raw = groups.map((g, i) => ({ name: `Phase ${i + 1}`, ways: g.map(key), lanes: g.flatMap(k => ways[k].lanes), conns: g.flatMap(k => conns[k]), green: L.green, minGreen }));
+    const worked = groups.map((g, i) => ({ name: `Phase ${i + 1}`, ways: g.map(key), lanes: g.flatMap(k => ways[k].lanes), conns: g.flatMap(k => conns[k]), green: L.green, minGreen }));
+    raw = worked;
     // (a zebra whose traffic is green in every phase: a phase of its own, all its traffic red, ticket #112)
-    const needs = xs.filter(x => raw.every(p => p.conns.some(id => x.conns.includes(id))));
+    const needs = xs.filter(x => worked.every(p => p.conns.some(id => x.conns.includes(id))));
     if (needs.length) {
       const walk = L.walk ?? pedWalkTime(Math.max(...needs.map(x => x.len)));
       raw.push({ name: "Pedestrians", ways: [], lanes: [], conns: [], green: walk, minGreen: walk, peds: needs.map(x => x.id) });
@@ -1591,13 +1619,13 @@ export function signalPlan(sk: Sketch, j: SketchJunction, c: JunctionContents): 
     for (let k = 0; k < n; k++) { const i = (c + k) % n; starts[i] = t; t += raw[i].green + L.amber + L.allRed; }
     const phases = raw.map((p, i) => ({ ...p, start: starts[i] }));
     return {
-      crossings, junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: false, custom: !!L.phases?.length, phases, controlled,
+      crossings, junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: false, custom: !!L.phases?.length && !stale?.workedOut, phases, controlled, ...(stale ? { stale } : {}),
       coord: { group: g.id, groupName: g.name, phase: c, offset: m.offset, ...(t > g.cycle + 0.05 ? { stretched: t } : {}) },
     };
   }
   let t = 0;
   const phases = raw.map(p => { const out = { ...p, start: t }; t += p.green + L.amber + L.allRed; return out; });
-  return { crossings, junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: L.actuated ?? DEFAULT_LIGHTS.actuated, custom: !!L.phases?.length, phases, controlled };
+  return { crossings, junction: j.id, cycle: t, amber: L.amber, allRed: L.allRed, actuated: L.actuated ?? DEFAULT_LIGHTS.actuated, custom: !!L.phases?.length && !stale?.workedOut, phases, controlled, ...(stale ? { stale } : {}) };
 }
 
 /** the light a lane has at time `t` in the fixed cycle (green if any of its connectors is), or null if the lights don't hold it */
