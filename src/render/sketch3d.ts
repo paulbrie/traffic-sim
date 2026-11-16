@@ -11,7 +11,7 @@ import { mix, type Palette } from "@/render/palette";
 import type { SketchLayers } from "@/state/sketch-layers";
 import type { NamedRun } from "@/render/street-names3d";
 import { LEVEL_H } from "@/engine/compile";
-import { junctionSurfaceHoles, nestLoops } from "@/lib/junction-fill";
+import { junctionSurfaceHoles, nonzeroAreas } from "@/lib/junction-fill";
 import { circlePts, deadEndTurnarounds } from "@/lib/dead-ends";
 import { looseSurfaces } from "@/lib/loose-surface";
 import { bumpShapes } from "@/lib/sketch-bumps";
@@ -43,6 +43,34 @@ class Mesh {
     }
     const segs = closed ? n : n - 1;
     for (let i = 0; i < segs; i++) { const a = base + 2 * i, b = base + 2 * ((i + 1) % n); this.idx.push(a, b, a + 1, b, b + 1, a + 1); }
+  }
+  /**
+   * A line `w` wide along `pts` (their heights `hs`), as the plan view's canvas strokes it (butt ends, round joins): a
+   * quad on each piece, a fan round each bend; where `ribbon` would pinch or fold over at a sharp turn, this one doesn't
+   */
+  stroke(pts: Pt[], hs: number[], w: number, y: number, closed = false) {
+    const n = pts.length, h = w / 2;
+    if (n < 2) return;
+    const segs = closed ? n : n - 1, dir = (i: number) => { const a = pts[i], b = pts[(i + 1) % n], m = Math.hypot(b.x - a.x, b.y - a.y); return m > 1e-9 ? { x: (b.x - a.x) / m, y: (b.y - a.y) / m } : null; };
+    for (let i = 0; i < segs; i++) {
+      const d = dir(i);
+      if (!d) continue;
+      const a = pts[i], b = pts[(i + 1) % n], ya = hs[i] + y, yb = hs[(i + 1) % n] + y, nx = -d.y * h, nz = d.x * h;
+      this.quad([a.x + nx, ya, a.y + nz], [b.x + nx, yb, b.y + nz], [b.x - nx, yb, b.y - nz], [a.x - nx, ya, a.y - nz]);
+    }
+    // (the joins: a round fan where the line turns, at the bend's own height)
+    for (let i = closed ? 0 : 1; i < (closed ? n : n - 1); i++) {
+      const d0 = dir((i - 1 + n) % n), d1 = dir(i);
+      if (!d0 || !d1) continue;
+      const turn = Math.atan2(d0.x * d1.y - d0.y * d1.x, d0.x * d1.x + d0.y * d1.y);
+      if (Math.abs(turn) < 0.02) continue;
+      // (on the outside of the bend: from the incoming piece's side to the outgoing one's)
+      const p = pts[i], yy = hs[i] + y, sg = turn > 0 ? -1 : 1, a0 = Math.atan2(d0.y, d0.x) + (sg * Math.PI) / 2, k = Math.max(2, Math.ceil(Math.abs(turn) / 0.3));
+      const base = this.pos.length / 3;
+      this.pos.push(p.x, yy, p.y);
+      for (let q = 0; q <= k; q++) { const a = a0 + (turn * q) / k; this.pos.push(p.x + Math.cos(a) * h, yy, p.y + Math.sin(a) * h); }
+      for (let q = 0; q < k; q++) this.idx.push(base, base + 1 + q, base + 2 + q);
+    }
   }
   /** a polygon (its holes cut out) at height `y`, or at each corner's (on the ground's) */
   polygon(outer: Pt[], holes: Pt[][], y: number | ((p: Pt) => number)) {
@@ -79,10 +107,12 @@ export function simplify(pts: Pt[], tol: number, keep?: (i: number) => boolean):
   const on = new Uint8Array(n); on[0] = on[n - 1] = 1;
   const stack: [number, number][] = [[0, n - 1]];
   while (stack.length) {
-    const [a, b] = stack.pop()!, A = pts[a], B = pts[b], dx = B.x - A.x, dy = B.y - A.y, L = Math.hypot(dx, dy) || 1e-9;
+    const [a, b] = stack.pop()!, A = pts[a], B = pts[b], dx = B.x - A.x, dy = B.y - A.y, L = Math.hypot(dx, dy);
     let far = -1, fd = tol;
     for (let i = a + 1; i < b; i++) {
-      const d = keep?.(i) ? Infinity : Math.abs((pts[i].x - A.x) * dy - (pts[i].y - A.y) * dx) / L;
+      // (its ends one point, a closed loop's (a ring's: ticket #262, Junction 5): how far from that point; else from the line
+      // through them. From the line, every point of a ring was 0 off it, and the ring was left out of the 3D view altogether)
+      const d = keep?.(i) ? Infinity : L < 1e-9 ? Math.hypot(pts[i].x - A.x, pts[i].y - A.y) : Math.abs((pts[i].x - A.x) * dy - (pts[i].y - A.y) * dx) / L;
       if (d > fd) { fd = d; far = i; }
     }
     if (far >= 0) { on[far] = 1; stack.push([a, far], [far, b]); }
@@ -189,10 +219,12 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       if (j.smooth) { const [outer, ...holes] = smoothJunction(sk, j, c); if (outer) asphalt.polygon(loop(outer), holes.map(loop), on(h + Y.asphalt)); }
       else for (const b of junctionBands(sk, c)) {
         if (b.w1 !== undefined) asphalt.polygon(loop(bandPolygon(b)), [], on(h + Y.asphalt));
-        else { const ps = b.closed ? b.pts : simplify(b.pts, TOL); asphalt.ribbon(ps, ps.map(p => h + G(p)), b.width, Y.asphalt, b.closed); }
+        // (stroked as the plan view strokes them, round at their bends)
+        else { const ps = b.closed ? b.pts : simplify(b.pts, TOL); asphalt.stroke(ps, ps.map(p => h + G(p)), b.width, Y.asphalt, b.closed); }
       }
-      // (the ground it shuts in, and with "Fill holes" its whole inside: an island inside that is a hole in it)
-      for (const p of nestLoops(junctionSurfaceHoles(sk, j, c))) asphalt.polygon(loop(p.outer), p.holes.map(loop), on(h + Y.asphalt));
+      // (the ground it shuts in, and with "Fill holes" its whole inside)
+      // (painted as the plan view does, all at once by the nonzero rule: the ground shut in inside the whole inside filled, paved too)
+      for (const p of nonzeroAreas(junctionSurfaceHoles(sk, j, c))) asphalt.polygon(loop(p.outer), p.holes.map(loop), on(h + Y.asphalt));
     }
     for (const k of sk.links ?? []) { const g = linkGeometry(sk, k); if (g) asphalt.polygon(g.outline, [], on(Y.asphalt)); }
     // (ticket #111: the connectors on no junction, and the slivers between those leaving or joining a lane's end)
@@ -200,9 +232,9 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       const h = x.level * LEVEL_H;
       for (const b of x.bands) {
         if (b.w1 !== undefined) asphalt.polygon(simplify(bandPolygon(b), TOL_J), [], on(h + Y.asphalt));
-        else { const ps = simplify(b.pts, TOL); asphalt.ribbon(ps, ps.map(p => h + G(p)), b.width, Y.asphalt, false); }
+        else { const ps = simplify(b.pts, TOL); asphalt.stroke(ps, ps.map(p => h + G(p)), b.width, Y.asphalt, false); }
       }
-      for (const p of nestLoops(x.fill)) asphalt.polygon(simplify(p.outer, TOL_J), p.holes.map(q => simplify(q, TOL_J)), on(h + Y.asphalt));
+      for (const p of nonzeroAreas(x.fill)) asphalt.polygon(simplify(p.outer, TOL_J), p.holes.map(q => simplify(q, TOL_J)), on(h + Y.asphalt));
     }
     // (a dead end with a turnaround: a turning circle of road, on its kerb, under the U-turn; drawn only)
     for (const d of deadEndTurnarounds(sk)) {

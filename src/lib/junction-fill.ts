@@ -116,6 +116,31 @@ export function fillAllJunctions(sk: Sketch): { sketch: Sketch; n: number } {
   return { sketch: { ...sk, junctions: sk.junctions.map(j => (todo.has(j.id) ? { ...j, fill: true as const } : j)) }, n: todo.size };
 }
 
+/**
+ * Loops grouped into the areas the plan view paints filling them all at once by the nonzero rule (as `ctx.fill("nonzero")`):
+ * a place is paved if the loops round it, each counted by which way it runs, don't cancel out. So a loop inside another
+ * running the same way (the ground a junction shuts in, inside its whole inside filled) is paved; one running the other
+ * way is a hole. Each paved area: its outside and the holes in it.
+ */
+export function nonzeroAreas(loops: Pt[][]): { outer: Pt[]; holes: Pt[][] }[] {
+  const ls = loops.filter(l => l.length >= 3), n = ls.length;
+  const sign = ls.map(l => Math.sign(l.reduce((a, p, i) => { const q = l[(i + 1) % l.length]; return a + p.x * q.y - q.x * p.y; }, 0)));
+  // (what each is inside: the loops round it; its parent, the one of those with the most round it)
+  const around = ls.map((l, i) => ls.flatMap((m, k) => (k !== i && insidePolygon(l[0], m) ? [k] : [])));
+  const parent = around.map(a => (a.length ? a.reduce((b, k) => (around[k].length > around[b].length ? k : b)) : -1));
+  const wind = around.map((a, i) => a.reduce((w, k) => w + sign[k], sign[i]));
+  const kids = ls.map((_, i) => parent.flatMap((p, k) => (p === i ? [k] : [])));
+  const out: { outer: Pt[]; holes: Pt[][] }[] = [];
+  for (let i = 0; i < n; i++) {
+    // (each paved area once, from its outside: a paved loop whose parent isn't; its holes the first unpaved ones in it)
+    if (!wind[i] || (parent[i] >= 0 && wind[parent[i]])) continue;
+    const holes: Pt[][] = [], todo = [...kids[i]];
+    while (todo.length) { const k = todo.pop()!; if (wind[k]) todo.push(...kids[k]); else holes.push(ls[k]); }
+    out.push({ outer: ls[i], holes });
+  }
+  return out;
+}
+
 /** loops (a polygon's outside and its holes, in any order) grouped: each outside with the holes right inside it */
 export function nestLoops(loops: Pt[][]): { outer: Pt[]; holes: Pt[][] }[] {
   const depth = loops.map((l, i) => loops.reduce((n, m, k) => (k !== i && l.length && insidePolygon(l[0], m) ? n + 1 : n), 0));
