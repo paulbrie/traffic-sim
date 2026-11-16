@@ -37,6 +37,7 @@
     "matrix:check": "tsx scripts/demand-matrix-check.ts",
     "results:check": "tsx scripts/sim-results-check.ts",
     "align:check": "tsx scripts/lane-align-check.ts",
+    "lines:check": "tsx scripts/lane-lines-check.ts",
     "bus:check": "tsx scripts/bus-lane-check.ts",
     "bike:check": "tsx scripts/bike-lane-check.ts",
     "crossing:check": "tsx scripts/crossing-shape-check.ts",

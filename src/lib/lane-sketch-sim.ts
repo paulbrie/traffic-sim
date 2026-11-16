@@ -42,7 +42,7 @@
  * further from where it was drawn a step before than it drove.
  */
 import { speedLimitOf,
-  CHANGE_COST, drivable, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
+  CHANGE_COST, drivable, laneById, mayChangeLane, onLeftOf, connectorPts, connectorById, connectorLevel, hasLevels, zAt, contentsOf, junctionApproaches, approachKey, wayKey, demandWays, dist, entryLanes, EXIT_CLEAR, laneOutWeight, RouteTable, isFullCircle, laneLength, pointAt, samples, SignalController, signalPlans,
   onCrossing, crossingFrame, twinId, twoWayOk, MATRIX_BY_TIME, hasHeights, groundAt, connectorGround,
   type DemandMatrix, type LaneControl, type TwoWay, type LaneShape, type Pt, type Sketch, type SketchCrossing, type SketchJourney,
 } from "./lane-sketch";
@@ -281,7 +281,9 @@ const JOIN_PATIENCE = 15, JOIN_EASE = 20, JOIN_FLOOR = 0.25;
  * at the latest; round two rings, also where its way off leaves, as beside its own ring */
 interface Hop { n: Neighbor; hops: number; by: number; leave?: number }
 /** a lane of the same road running beside this one the same way: along this one from `a0` to `a1`, and the place beside it there (every metre from `a0`) */
-interface Neighbor { lane: Edge; a0: number; a1: number; map: number[]; /** two rings round one middle (a two-lane roundabout): beside all the way round, places on both wrapping round */ round?: boolean }
+interface Neighbor { lane: Edge; a0: number; a1: number; map: number[]; /** two rings round one middle (a two-lane roundabout): beside all the way round, places on both wrapping round */ round?: boolean;
+  /** (ticket #263) a line between them that the cars on this one may not cross: beside it still, no changing over to it */
+  solid?: true }
 // (join: two connectors running together into the same place on a lane, see the zip in step)
 interface Conflict {
   other: Edge; at: number; otherAt: number; before: number; after: number; otherBefore: number; otherAfter: number; join: boolean;
@@ -970,6 +972,13 @@ export class SketchSim {
     // lanes of a road beside each other the same way (about a lane's width apart): the longest stretch, at least 10 m; two rings
     // of a road, beside each other all the way round (a two-lane roundabout's), the whole of them
     const width = new Map(sk.lanes.map(l => [`lane:${l.id}`, l.width ?? 3.5]));
+    // (the lines set between them, ticket #263: may the cars on A change over to B, B's side told at `s` on A, `t` on B)
+    const solid = (A: Edge, B: Edge, s: number, t: number): { solid?: true } => {
+      const a = laneById(sk, A.id), b = laneById(sk, B.id);
+      if (!a || !b || (!a.lines && !b.lines)) return {};
+      const m = A.locate(s);
+      return mayChangeLane(a, b, onLeftOf(m.p, m.d, B.locate(t).p)) ? {} : { solid: true };
+    };
     for (const road of sk.roads) {
       const ls = road.lanes.map(id => edges.get(`lane:${id}`)).filter((e): e is Edge => !!e);
       for (const A of ls) for (const B of ls) {
@@ -986,7 +995,7 @@ export class SketchSim {
             if (q.d <= 0.5 || q.d > far || a.d.x * d.x + a.d.y * d.y < 0.8) break;
             map.push(q.s);
           }
-          if (map.length > Math.ceil(A.len) && Math.abs(this.zOf(A, 0) - this.zOf(B, map[0])) < 0.5) A.neighbors.push({ lane: B, a0: 0, a1: A.len, map, round: true });
+          if (map.length > Math.ceil(A.len) && Math.abs(this.zOf(A, 0) - this.zOf(B, map[0])) < 0.5) A.neighbors.push({ lane: B, a0: 0, a1: A.len, map, round: true, ...solid(A, B, 0, map[0]) });
           continue;
         }
         let best: Neighbor | null = null, cur: Neighbor | null = null;
@@ -999,7 +1008,10 @@ export class SketchSim {
           if (cur && (!best || cur.a1 - cur.a0 > best.a1 - best.a0)) best = cur;
         }
         // (not one at another level: a lane over or under it is no lane to change to)
-        if (best && best.a1 - best.a0 >= 10 && Math.abs(this.zOf(A, (best.a0 + best.a1) / 2) - this.zOf(B, best.map[best.map.length >> 1])) < 0.5) A.neighbors.push(best);
+        if (best && best.a1 - best.a0 >= 10 && Math.abs(this.zOf(A, (best.a0 + best.a1) / 2) - this.zOf(B, best.map[best.map.length >> 1])) < 0.5) {
+          const k = best.map.length >> 1;
+          A.neighbors.push({ ...best, ...solid(A, B, best.a0 + k, best.map[k]) });
+        }
       }
     }
     // where lanes and connectors come close: crossing, side by side, ending at the same place (and,
@@ -1540,7 +1552,8 @@ export class SketchSim {
       if (ownLane) break;
       for (const n of lane.neighbors) {
         const there = Math.max(at, n.a0) + 20;
-        if (seen.has(n.lane) || (!n.round && there > n.a1)) continue;
+        // (nor across a line its cars may not cross, ticket #263)
+        if (seen.has(n.lane) || n.solid || (!n.round && there > n.a1)) continue;
         // (a bus lane is no lane for an ordinary car to change into; a bus may)
         if (n.lane.bus && !v.bus) continue;
         // (keeping its ring (`ringKeepLane`): not over from the outer ring to the inner, unless no other way leads there)
@@ -1744,7 +1757,7 @@ export class SketchSim {
     while (todo.length) {
       const l = todo.shift()!;
       for (const n of l.neighbors) {
-        if (depth.has(n.lane)) continue;
+        if (depth.has(n.lane) || n.solid) continue;
         depth.set(n.lane, depth.get(l)! + 1);
         first.set(n.lane, l === e ? n : first.get(l)!);
         todo.push(n.lane);
@@ -3038,7 +3051,7 @@ export class SketchSim {
         // (far enough from where it leaves to come back)
         if ((g.conn ? this.exitS(g.conn) : e.len) - v.pos < 80) continue;
         const best = e.neighbors
-          .filter(n => !n.round && n.a1 - v.pos > 60 && !(n.lane.bus && !v.bus))
+          .filter(n => !n.round && !n.solid && n.a1 - v.pos > 60 && !(n.lane.bus && !v.bus))
           .map(n => ({ n, q: this.room(v, n, byEdge, ghosts) }))
           .filter(x => x.q && x.q.ahead > gap + OVERTAKE_ROOM)
           .sort((a, b) => b.q!.ahead - a.q!.ahead)[0];

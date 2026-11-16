@@ -5,7 +5,7 @@
  * the lanes' speed limits (a bend no faster than it can be taken), or why there is none. Framework-free.
  */
 import {
-  CHANGE_COST, LastFew, RouteTable, connectorPts, dist, drivable, isFullCircle, laneById, laneLength, nearestOn, pointAt, speedLimitOf,
+  CHANGE_COST, LastFew, RouteTable, connectorPts, dist, drivable, isFullCircle, laneById, laneLength, mayChangeAt, nearestOn, pointAt, speedLimitOf,
   type Pt, type Sketch,
 } from "./lane-sketch";
 
@@ -35,7 +35,8 @@ function besideLanes(sk: Sketch, id: string) {
     const Bl = laneById(sk, b);
     if (!Bl) return [];
     const q = nearestOn(Bl.shape, m.p), d = pointAt(Bl.shape, q.s).d;
-    return q.d <= (L.width + Bl.width) / 2 + 0.75 && m.d.x * d.x + m.d.y * d.y >= 0.5 ? [Bl] : [];
+    // (nor across a line its cars may not cross, ticket #263)
+    return q.d <= (L.width + Bl.width) / 2 + 0.75 && m.d.x * d.x + m.d.y * d.y >= 0.5 && mayChangeAt(L, Bl, laneLength(L.shape) / 2) ? [Bl] : [];
   });
 }
 

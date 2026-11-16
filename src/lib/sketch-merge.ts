@@ -84,6 +84,7 @@ function differences(a: SketchLane, b: SketchLane, endOfA: SketchLane, startOfB:
   if (a.width !== b.width) out.push(`lane ${b.id}'s width (${b.width} m; kept ${a.width} m)`);
   if ((a.level ?? 0) !== (b.level ?? 0)) out.push(`lane ${b.id}'s level (${b.level ?? 0}; kept ${a.level ?? 0})`);
   if (a.speed !== b.speed && (a.speed !== undefined || b.speed !== undefined)) out.push(`lane ${b.id}'s speed limit (${b.speed ?? "the sketch's"}; kept ${a.speed ?? "the sketch's"})`);
+  if (a.lines?.left !== b.lines?.left || a.lines?.right !== b.lines?.right) out.push(`lane ${b.id}'s side lines (kept lane ${a.id}'s)`);
   if (endOfA.control) out.push(`the ${endOfA.control} line at the end of lane ${endOfA.id} (now partway along)`);
   if (startOfB.inRate !== undefined) out.push(`lane ${startOfB.id}'s traffic coming in (${startOfB.inRate}/h)`);
   if (endOfA.outWeight !== undefined) out.push(`lane ${endOfA.id}'s share of the trips out`);
@@ -133,6 +134,8 @@ function joinLanes(sk0: Sketch, first: string, second: string, via: SketchConnec
   const lane: SketchLane = {
     id: keep, shape, width: base.width,
     ...(base.level !== undefined ? { level: base.level } : {}), ...(base.speed !== undefined ? { speed: base.speed } : {}),
+    // (its side lines, ticket #263: the kept one's)
+    ...(base.lines ? { lines: base.lines } : {}),
     ...(a0.inRate !== undefined ? { inRate: a0.inRate } : {}),
     // (heights set by hand, ticket #130: at its start the first's, at its end the second's)
     ...(a0.ground?.a !== undefined || b0.ground?.b !== undefined ? { ground: { ...(a0.ground?.a !== undefined ? { a: a0.ground.a } : {}), ...(b0.ground?.b !== undefined ? { b: b0.ground.b } : {}) } } : {}),

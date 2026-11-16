@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { project, unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, crossingStripes, stripeDir, CROSSING_WIDTH, type CrossingPatch, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
-  addStop, updateStop, deleteStop, type SketchStop, speedLimitOf, setTwoWay, twoWayOk, twinOf, twinId, baseLaneId, connectorEnd, wayFrom, wayTo, type TwoWay,
+  addStop, updateStop, deleteStop, type SketchStop, speedLimitOf, setTwoWay, setLaneLine, type SideLine, twoWayOk, twinOf, twinId, baseLaneId, connectorEnd, wayFrom, wayTo, type TwoWay,
   junctionContents, laneById, laneLength, nearestOn, nextId, groundAt, setGround, terrainEnds, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, edgeLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, laneLocked, leadOf, setLocked, type LockIds, removePoint, settle, toggleCurve, roadMiddle,
@@ -3065,6 +3065,22 @@ function SelectionPanel({ warnings, onWarning, sketch, sel, setSel, contents, ju
             <ToggleGroupItem value="bus" className="h-7 px-2 text-xs" title="Closed to ordinary cars; at the road's border or in the middle">Bus</ToggleGroupItem>
             <ToggleGroupItem value="bike" className="h-7 px-2 text-xs" title="A bike lane (2 m): no vehicles run on it for now, and the cars leave it and its connectors out">Bike</ToggleGroupItem>
           </ToggleGroup>
+        </div>
+        {/* (ticket #263) the lines painted along its sides, and whether its cars may cross them */}
+        <div className="grid gap-1">
+          <span className="text-xs text-muted-foreground">Lines along it, as it runs</span>
+          {(["left", "right"] as const).map(side => (
+            <div key={side} className="flex items-center gap-2">
+              <span className="w-9 text-xs" id={`sk-line-${side}-${lane.id}`}>{side === "left" ? "Left" : "Right"}</span>
+              <ToggleGroup type="single" aria-labelledby={`sk-line-${side}-${lane.id}`} className="h-7 flex-1" value={lane.lines?.[side] ?? "auto"}
+                onValueChange={v => v && editSketch(s => setLaneLine(s, lane.id, side, v === "auto" ? null : (v as SideLine)))}>
+                <ToggleGroupItem value="auto" className="h-7 flex-1 px-1 text-xs" title="As by default: dashed between lanes running the same way, the centre line between ways running opposite, solid beside a bike lane; none at the road's edge (or as the lane beyond has it set)">Auto</ToggleGroupItem>
+                <ToggleGroupItem value="solid" className="h-7 flex-1 px-1 text-xs" title="A solid line: cars on this lane don't cross it, nor change lanes over it">Solid</ToggleGroupItem>
+                <ToggleGroupItem value="dashed" className="h-7 flex-1 px-1 text-xs" title="A dashed line: cars on this lane may cross it and change lanes over it">Dashed</ToggleGroupItem>
+                <ToggleGroupItem value="mixed" className="h-7 flex-1 px-1 text-xs" title="A solid line with a dashed one on this lane's side: cars on this lane may cross it, those on the lane beyond may not">Mixed</ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+          ))}
         </div>
         {!isFullCircle(sh) && !lane.bike && (
           <div className="grid gap-1">
