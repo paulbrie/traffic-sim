@@ -562,16 +562,47 @@ function bounds(pts: Pt[]) {
   for (const p of pts) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
   return { minX, minY, maxX, maxY };
 }
+type Box = ReturnType<typeof bounds>;
+/**
+ * (ticket #259) The pairs `[i, j]` (i < j) of boxes within `NEAR` of each other, in the order of a loop over every i and every j
+ * after it: as that loop finds them, without trying every pair (7,000 edges are 25 million pairs, seconds of building). A sweep
+ * along x, boxes in order of their left side, each with those starting before its right side (and `NEAR`) is passed.
+ */
+function nearPairs(boxes: Box[]): [number, number][] {
+  const n = boxes.length, after: number[][] = Array.from({ length: n }, () => []);
+  const pair = (i: number, j: number) => { if (i < j) after[i].push(j); else after[j].push(i); };
+  // (a box not a number somewhere fails every test of the loop's, so it is near everything: kept out of the sweep, paired with all)
+  const bad = (b: Box) => Number.isNaN(b.minX) || Number.isNaN(b.maxX) || Number.isNaN(b.minY) || Number.isNaN(b.maxY);
+  const order: number[] = [], odd: number[] = [];
+  for (let i = 0; i < n; i++) (bad(boxes[i]) ? odd : order).push(i);
+  order.sort((a, b) => boxes[a].minX - boxes[b].minX || a - b);
+  for (let x = 0; x < order.length; x++) {
+    const A = boxes[order[x]];
+    for (let y = x + 1; y < order.length; y++) {
+      const B = boxes[order[y]];
+      if (B.minX > A.maxX + NEAR) break;
+      if (A.minY > B.maxY + NEAR || B.minY > A.maxY + NEAR) continue;
+      pair(order[x], order[y]);
+    }
+  }
+  for (const i of odd) for (let j = 0; j < n; j++) if (j !== i && !(bad(boxes[j]) && j < i)) pair(i, j);
+  const out: [number, number][] = [];
+  for (let i = 0; i < n; i++) for (const j of after[i].sort((a, b) => a - b)) out.push([i, j]);
+  return out;
+}
 /** the nearest point of a polyline to `p`: how far, and where along it */
 function nearestOnPolyline(pts: Pt[], cum: number[], p: Pt) {
-  let best = { d: Infinity, s: 0 };
+  let bd = Infinity, bs = 0;
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1], b = pts[i], dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
     const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
-    const d = Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
-    if (d < best.d) best = { d, s: cum[i - 1] + t * Math.sqrt(l2) };
+    const ex = p.x - (a.x + dx * t), ey = p.y - (a.y + dy * t);
+    // (ticket #259: Math.hypot, slow, only for a point that may be nearer: its square, a hair over for the rounding, not further)
+    if (ex * ex + ey * ey > bd * bd * (1 + 1e-9)) continue;
+    const d = Math.hypot(ex, ey);
+    if (d < bd) { bd = d; bs = cum[i - 1] + t * Math.sqrt(l2); }
   }
-  return best;
+  return { d: bd, s: bs };
 }
 interface Run { a0: number; a1: number; at: number; otherAt: number; otherBefore: number; otherAfter: number; b1: number; best: number }
 /**
@@ -589,8 +620,12 @@ function nearRuns(pa: Pt[], ringA: boolean, pb: Pt[], ringB: boolean): Run[] {
     cur = null;
   };
   const n = Math.max(1, Math.ceil(A.len / 0.5));
+  // (ticket #259: a point further than NEAR off B's box, and a hair more for the rounding, is no nearer B itself: not looked for on it)
+  const bb = bounds(pb), off = NEAR + 1e-6;
   for (let i = 0; i <= n; i++) {
-    const sA = (A.len * i) / n, q = nearestOnPolyline(pb, B.cum, A.locate(sA).p);
+    const sA = (A.len * i) / n, p = A.locate(sA).p;
+    if (p.x < bb.minX - off || p.x > bb.maxX + off || p.y < bb.minY - off || p.y > bb.maxY + off) { finish(); continue; }
+    const q = nearestOnPolyline(pb, B.cum, p);
     if (q.d >= NEAR) { finish(); continue; }
     if (!cur) cur = { a0: sA, a1: sA, best: q.d, at: sA, bAt: q.s, bs: [] };
     cur.a1 = sA; cur.bs.push(q.s);
@@ -975,14 +1010,12 @@ export class SketchSim {
     const chained = (X: Edge, Y: Edge) => X.kind === "lane" && Y.kind === "lane" && X.outs.some(o => o.conn.to!.lane === Y && o.conn.len < CHAIN_GAP && o.s >= X.len - 1 && o.conn.to!.s <= 1
       // (going on the same way: not turning back, a U-turn's lanes side by side)
       && X.locate(X.len).d.x * Y.locate(0).d.x + X.locate(X.len).d.y * Y.locate(0).d.y > 0.7);
-    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+    for (const [i, j] of nearPairs(all.map(e => boxes.get(e)!))) {
       let A = all[i], B = all[j];
       // (a lane both ways and its way back, one on top of the other: never on it together, its rule sees to that)
       if (A.twoWay && A.twoWay === B.twoWay) continue;
       // (the connector first, where one is attached to the other)
       if (attached(B, A)) [A, B] = [B, A];
-      const ba = boxes.get(A)!, bb = boxes.get(B)!;
-      if (ba.minX > bb.maxX + NEAR || bb.minX > ba.maxX + NEAR || ba.minY > bb.maxY + NEAR || bb.minY > ba.maxY + NEAR) continue;
       // (each side's stretch measured along its own path)
       const back = nearRuns(paths.get(B.key)!, B.ring, paths.get(A.key)!, A.ring);
       const sideB = (at: number) => {
@@ -3110,8 +3143,9 @@ export class SketchSim {
     // (ticket #124: the counting begun after the warm-up, the longest queues since; at its moment, what was counted till then kept, to take off)
     if (this.t >= this.measureFrom) {
       if (!this.base) this.takeBase();
-      for (const J of this.jTally) if (J.now > (this.qMax.get(`j:${J.id}`) ?? 0)) this.qMax.set(`j:${J.id}`, J.now);
-      for (const R of this.rTally) if (R.now > (this.qMax.get(`r:${R.id}`) ?? 0)) this.qMax.set(`r:${R.id}`, R.now);
+      // (ticket #259: none kept is 0, so only one with a queue now can be longer; most have none, and the key's text costs)
+      for (const J of this.jTally) if (J.now > 0 && J.now > (this.qMax.get(`j:${J.id}`) ?? 0)) this.qMax.set(`j:${J.id}`, J.now);
+      for (const R of this.rTally) if (R.now > 0 && R.now > (this.qMax.get(`r:${R.id}`) ?? 0)) this.qMax.set(`r:${R.id}`, R.now);
     }
     // (the junctions' series, ticket #109: every SERIES_DT s, on a sketch with few junctions)
     if (this.jTally.length <= SERIES_MAX && Math.floor(this.t / SERIES_DT) !== Math.floor((this.t - dt) / SERIES_DT)) {

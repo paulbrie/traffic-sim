@@ -1932,9 +1932,22 @@ export function contentsOf(sk: Sketch): Map<string, JunctionContents> {
   return out;
 }
 
+/** (ticket #259) a sketch's lanes not in a road with their points every metre, and its connectors with their paths: the same for every
+ * junction looked at, worked out once (a sketch is never changed, only replaced) */
+const contentsInput = new WeakMap<Sketch, { lanes: { l: SketchLane; ends: Pt[] }[]; conns: { c: SketchConnector; p: Pt[] | null }[] }>();
+function contentsInputOf(sk: Sketch) {
+  let x = contentsInput.get(sk);
+  if (!x) {
+    const inRoad = lanesInRoads(sk);
+    x = { lanes: sk.lanes.filter(l => !inRoad.has(l.id)).map(l => ({ l, ends: samples(l.shape, 1) })), conns: sk.connectors.map(c => ({ c, p: connectorPts(sk, c) })) };
+    contentsInput.set(sk, x);
+  }
+  return x;
+}
+
 export function junctionContents(sk: Sketch, j: SketchJunction): JunctionContents {
   if (j.outline.length < 3) return { lanes: [], connectors: [], roads: [] };
-  const inRoad = lanesInRoads(sk);
+  const input = contentsInputOf(sk);
   const border = outlinePath(j);
   // (only what has a point in the border's box can be mostly on it)
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -1942,14 +1955,12 @@ export function junctionContents(sk: Sketch, j: SketchJunction): JunctionContent
   const inBox = (p: Pt) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
   const near = (pts: Pt[]) => inBox(pts[0]) || inBox(pts[pts.length - 1]) || inBox(pts[pts.length >> 1]);
   // (a lane's points every metre along it: a straight lane's own points are only its two ends)
-  const lanes = sk.lanes.filter(l => {
-    if (inRoad.has(l.id)) return false;
-    const ends = samples(l.shape, 1);
+  const lanes = input.lanes.filter(({ l, ends }) => {
     if (!near(ends)) return false;
     const L = laneLength(l.shape), n = Math.max(2, Math.ceil(L));
     return mostlyInside(Array.from({ length: n + 1 }, (_, i) => pointAt(l.shape, (L * i) / n).p), border);
-  }).map(l => l.id);
-  const connectors = sk.connectors.filter(c => { const p = connectorPts(sk, c); return p && near(p) && mostlyInside(p, border); });
+  }).map(x => x.l.id);
+  const connectors = input.conns.filter(({ p }) => p && near(p) && mostlyInside(p, border)).map(x => x.c);
   const roads = new Set<string>();
   for (const c of connectors) for (const e of [c.from, c.to]) { const r = roadOf(sk, e.lane); if (r) roads.add(r.id); }
   return { lanes, connectors: connectors.map(c => c.id), roads: [...roads] };
