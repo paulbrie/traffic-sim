@@ -5,6 +5,7 @@ import { DEFAULT_MARKER_COLOR, markerBase } from "@/engine/markers";
 import type { BuildingDef, Network, Vec } from "@/engine/types";
 import type { HeightFn, LaneSign, On, RoadGeo, Strip } from "./geometry";
 import { buildingColor, type Palette } from "./palette";
+import type { NamedRun } from "./street-names3d";
 
 class Batch {
   pos: number[] = [];
@@ -196,6 +197,22 @@ export function buildRoads(geo: RoadGeo, pal: Palette, hf?: HeightFn, show: Show
     trunk.position.set(j.ring.c.x, 1.2 + z, j.ring.c.y); g.add(trunk);
   }
   return g;
+}
+
+/**
+ * The roads with names, to write on them in 3D (ticket #262): each road piece along its middle, as wide as its asphalt
+ * half way along, at its height there
+ */
+export function streetNameRuns(geo: RoadGeo, net: Network, hf: HeightFn): NamedRun[] {
+  const named = new Map(net.links.filter(l => l.name?.trim()).map(l => [l.id, l.name.trim()]));
+  return geo.surfaces.flatMap(sf => {
+    const name = named.get(sf.linkId), c = sf.center, n = c.pts.length / 2;
+    if (!name || n < 2) return [];
+    const pts = Array.from({ length: n }, (_, k) => ({ x: c.pts[2 * k], y: c.pts[2 * k + 1] }));
+    const L = sf.asphalt.left.pts, R = sf.asphalt.right.pts, m = (Math.min(L.length, R.length) >> 2) << 1;
+    const width = L.length && R.length ? Math.hypot(L[m] - R[m], L[m + 1] - R[m + 1]) : 7;
+    return [{ name, pts, width, y: hf.flat ? () => 0 : (s: number) => { const p = c.at(s); return hf.at(sf.on, p.x, p.y); } }];
+  });
 }
 
 export function buildFurniture(geo: RoadGeo, pal: Palette, sigMats: Record<"green" | "yellow" | "red" | "off", THREE.Material>, hf?: HeightFn, laneMats?: Record<LaneSign, THREE.Material>, show: Shown = ALL): Furniture {

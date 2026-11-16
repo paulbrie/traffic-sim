@@ -9,6 +9,7 @@ import * as THREE from "three";
 import { arrowGlyph } from "@/render/draw2d";
 import { mix, type Palette } from "@/render/palette";
 import type { SketchLayers } from "@/state/sketch-layers";
+import type { NamedRun } from "@/render/street-names3d";
 import { LEVEL_H } from "@/engine/compile";
 import { junctionSurfaceHoles, nestLoops } from "@/lib/junction-fill";
 import { circlePts, deadEndTurnarounds } from "@/lib/dead-ends";
@@ -17,7 +18,7 @@ import { bumpShapes } from "@/lib/sketch-bumps";
 import {
   bandPolygon, crossingStripes, isFullCircle, junctionBands, junctionLevel, laneLevel, laneLength, linkGeometry,
   outlinePath, densePoints, hasLevels, pointAt, roadMarkings, samples, shownZ, smoothJunction, turnArrows, twoWayOk, twinOf, isTwinId, baseLaneId,
-  groundAt, groundBase, groundUnder, hasHeights,
+  groundAt, groundBase, groundUnder, hasHeights, laneById, roadMiddle,
   type JunctionContents, type Pt, type Sketch,
 } from "@/lib/lane-sketch";
 
@@ -262,6 +263,28 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
     group,
     dispose: () => { for (const o of group.children) (o as THREE.Mesh).geometry.dispose(); for (const m of mats) m.dispose(); },
   };
+}
+
+/**
+ * The roads with names, to write on them (ticket #262): each along its middle, as wide as its lanes, at its lead
+ * lane's height (a point on the middle `s` metres along it as far along the lane, in proportion)
+ */
+export function streetNameRuns(sk: Sketch): NamedRun[] {
+  // (whether there are levels and heights, worked out once: per letter, `laneHeight` would look over every lane each time)
+  const levels = hasLevels(sk), heights = hasHeights(sk), base = heights ? groundBase(sk) : 0;
+  return sk.roads.flatMap(r => {
+    const lead = laneById(sk, r.lanes[0] ?? ""), pts = r.name?.trim() && lead ? roadMiddle(sk, r) : null;
+    if (!lead || !pts || pts.length < 2) return [];
+    let Lm = 0;
+    for (let i = 1; i < pts.length; i++) Lm += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    const Ll = laneLength(lead.shape), f = Lm > 0 ? Ll / Lm : 1;
+    const width = r.lanes.reduce((a, id) => a + (laneById(sk, id)?.width ?? 0), 0);
+    const y = (s: number) => {
+      const sl = Math.max(0, Math.min(Ll, s * f));
+      return (levels ? shownZ(sk, lead.id, sl) * LEVEL_H : 0) + (heights ? groundAt(sk, lead.id, sl) - base : 0);
+    };
+    return [{ name: r.name, pts, width, y: levels || heights ? y : () => 0 }];
+  });
 }
 
 /** a lane's height (m) at `s` metres along it, from the 3D view's ground (`groundBase`) */

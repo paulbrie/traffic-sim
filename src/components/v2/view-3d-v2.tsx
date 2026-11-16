@@ -19,7 +19,8 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { baseLaneId, isTwinId, wayFrom, connectorPts, junctionLevel, shownCarZ, shownZ, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, edgeGround, groundAt, groundBase, groundUnder, hasHeights, terrainOf, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
 import { LEVEL_H } from "@/engine/compile";
 import { speedColor } from "@/render/palette";
-import { buildSketch3D, type Sketch3D } from "@/render/sketch3d";
+import { buildSketch3D, streetNameRuns, type Sketch3D } from "@/render/sketch3d";
+import { buildStreetNames3D, type StreetNames3D } from "@/render/street-names3d";
 import { buildZones3D, type Zones3D } from "@/render/zones3d";
 import type { SketchLayers } from "@/state/sketch-layers";
 import type { Underlay } from "@/lib/underlay";
@@ -262,6 +263,20 @@ export function View3DV2(props: View3DProps) {
       if (built) { scene.remove(built.group); built.dispose(); }
       built = buildSketch3D(p.sketch, p.contents, pal, p.layers);
       scene.add(built.group);
+    };
+    // the streets' names (ticket #262), written on the roads: made again when the sketch (or the names layer) changes
+    let namesBuilt: StreetNames3D | null = null, namesFor: unknown[] = [];
+    const syncNames = () => {
+      const p = live.current, key = [p.sketch, p.layers.names, pal];
+      // (how tall the view is, for how big a name looks: cheap, each frame)
+      namesBuilt?.setViewport(el.clientHeight || 1);
+      if (key.every((x, i) => x === namesFor[i])) return;
+      namesFor = key;
+      if (namesBuilt) { scene.remove(namesBuilt.group); namesBuilt.dispose(); namesBuilt = null; }
+      if (!p.layers.names) return;
+      namesBuilt = buildStreetNames3D(streetNameRuns(p.sketch), pal.sans, renderer.capabilities.getMaxAnisotropy());
+      namesBuilt.setViewport(el.clientHeight || 1);
+      scene.add(namesBuilt.group);
     };
     // the zones (T129): tinted areas on the ground with their names, made again when they (or their layer) change
     let zonesBuilt: Zones3D | null = null, zonesFor: unknown[] = [];
@@ -665,7 +680,7 @@ export function View3DV2(props: View3DProps) {
       heli.step(dt, now);
       if (heli.flying && now - movedAt > 250) { movedAt = now; live.current.onMove(); }
       if (hoverWas && now - hoverAt > 300) { hoverAt = now; hoverNow(hoverWas); }
-      syncRoads(); syncZones(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now); syncWhy(now);
+      syncRoads(); syncNames(); syncZones(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now); syncWhy(now);
       stepHome(now);
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
@@ -700,6 +715,7 @@ export function View3DV2(props: View3DProps) {
       live.current.canvasRef.current = null; live.current.apiRef.current = null;
       if (built) { scene.remove(built.group); built.dispose(); }
       if (zonesBuilt) { scene.remove(zonesBuilt.group); zonesBuilt.dispose(); }
+      if (namesBuilt) { scene.remove(namesBuilt.group); namesBuilt.dispose(); }
       controls.dispose();
       scene.traverse(o => {
         const m = o as THREE.Mesh;

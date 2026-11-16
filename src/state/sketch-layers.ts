@@ -14,7 +14,7 @@ export const SKETCH_LAYERS: { id: SketchLayer; label: string; hint: string; page
   { id: "connectors", label: "Connectors", hint: "The yellow connectors between lanes (the selected ones always show)" },
   { id: "signs", label: "Signs and lights", hint: "Stop and yield lines and signs, traffic lights" },
   { id: "cars", label: "Cars", hint: "The cars, while the simulation is on" },
-  { id: "names", label: "Names", hint: "Road and junction names" },
+  { id: "names", label: "Names", hint: "Road and junction names (in 3D, the roads' written on them)" },
   { id: "demand", label: "Ways in and out", hint: "Where traffic comes in (vehicles per hour) and leaves (share of trips)" },
   { id: "grid", label: "Grid", hint: "A line every metre close up, every 10 m stronger" },
   { id: "satellite", label: "Satellite imagery", hint: "The imagery where the plan is on the map (V2 plans placed on the map)", page: true },

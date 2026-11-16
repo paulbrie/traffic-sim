@@ -6,7 +6,8 @@ import { Building2, Crosshair, Eye, Gauge, Orbit, Plane, Plus, Swords, Volume2, 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { buildRoadGeo, heightFn, laneSign } from "@/render/geometry";
-import { buildBuildings, buildFurniture, buildMarkers, buildRoads, buildingShell, laneSignMaterials, type Furniture } from "@/render/scene3d";
+import { buildBuildings, buildFurniture, buildMarkers, buildRoads, buildingShell, laneSignMaterials, streetNameRuns, type Furniture } from "@/render/scene3d";
+import { buildStreetNames3D, type StreetNames3D } from "@/render/street-names3d";
 import { satelliteMosaic } from "@/render/satellite";
 import { HELI_LAYER, HELI_MODEL_CREDIT, loadHelicopter, type Helicopter } from "@/render/helicopter";
 import { RotorSound } from "@/render/rotor-sound";
@@ -158,6 +159,9 @@ export function View3D() {
     };
     const laneMats = laneSignMaterials();
     let roads: THREE.Group | null = null, furniture: Furniture | null = null, markers: THREE.Group | null = null, builtVersion = -1, builtLayers = "";
+    // the streets' names on the roads (ticket #262), with the roads; shown as on the plan's map (labels on, roads not masked)
+    let names: StreetNames3D | null = null;
+    const namesOn = () => u.display.labels && !u.display.maskRoads;
     /** is this layer on (drawn) */
     const shown = (l: string) => u.layers.includes(l as LayerId);
     // photorealistic 3D tiles, when turned on (they replace the ground, the satellite image and the plan's buildings)
@@ -280,6 +284,14 @@ export function View3D() {
       if (furniture) { scene.remove(furniture.group); }
       const geo = buildRoadGeo(simController.compiled, network$.getValue()), hf = heightFn(simController.compiled, network$.getValue());
       roads = buildRoads(geo, pal, hf, shown); scene.add(roads);
+      if (names) { scene.remove(names.group); names.dispose(); names = null; }
+      if (shown("roads")) {
+        // (over the lane lines, at 0.2 m)
+        names = buildStreetNames3D(streetNameRuns(geo, network$.getValue(), hf), pal.sans, renderer.capabilities.getMaxAnisotropy(), 0.24);
+        names.setViewport(wrap.clientHeight || 1);
+        names.group.visible = namesOn();
+        scene.add(names.group);
+      }
       furniture = buildFurniture(geo, pal, sigMats, hf, laneMats, shown); scene.add(furniture.group);
       // markers (on the roof of a building they stand on)
       if (markers) { scene.remove(markers); markers.traverse(o => { if (o instanceof THREE.Sprite) o.material.map?.dispose(); }); }
@@ -348,11 +360,12 @@ export function View3D() {
       const r = wrap.getBoundingClientRect();
       renderer.setSize(Math.max(1, r.width), Math.max(1, r.height));
       camera.aspect = Math.max(1, r.width) / Math.max(1, r.height); camera.updateProjectionMatrix();
+      names?.setViewport(Math.max(1, r.height));
     };
     const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
 
     const subs = [
-      ui.subscribe("**", () => { u = ui.getValue(); if (houses) houses.mesh.visible = buildingsOn(); syncSatellite(); }),
+      ui.subscribe("**", () => { u = ui.getValue(); if (houses) houses.mesh.visible = buildingsOn(); if (names) names.group.visible = namesOn(); syncSatellite(); }),
       underlay$.subscribe(syncUnderlay),
       underlayImg$.subscribe(syncUnderlay),
       viewCmd$.subscribe(c => {
@@ -1070,6 +1083,7 @@ export function View3D() {
       combat.dispose();
       controls.dispose();
       if (houses) { houses.mesh.geometry.dispose(); (houses.mesh.material as THREE.Material).dispose(); }
+      names?.dispose();
       ulMat.map?.dispose(); ulMat.dispose(); ulMesh.geometry.dispose();
       for (const m of Object.values(laneMats)) { m.map?.dispose(); m.dispose(); }
       satMat.map?.dispose(); satMat.dispose(); satMesh.geometry.dispose();
