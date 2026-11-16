@@ -1,8 +1,10 @@
 import { boolean, customType, index, integer, jsonb, pgEnum, pgTable, primaryKey, serial, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
-import type { Network, PlanSettings } from "@/engine/types";
+import type { GeoArea, Network, PlanSettings } from "@/engine/types";
 import type { Underlay } from "@/lib/underlay";
 import type { Sketch } from "@/lib/lane-sketch";
 import type { SimResultData, SimResultMeta } from "@/lib/sim-results";
+import type { LaneTuple } from "@/lib/traffic-history";
+import type { Incident } from "@/lib/tomtom-api";
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
@@ -146,6 +148,33 @@ export const simResults = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("sim_results_plan_idx").on(t.planId, t.createdAt)],
+);
+
+/**
+ * TomTom's traffic over a plan's area, recorded every 5 minutes in the hours set (ticket #261; src/lib/traffic-history.ts,
+ * scripts/traffic-collect.ts): each lane's match then, the incidents, and the lines themselves (gzipped) to match again.
+ */
+export const trafficSamples = pgTable(
+  "traffic_samples",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    planId: uuid("plan_id").notNull().references(() => plans.id, { onDelete: "cascade" }),
+    /** when it was fetched */
+    at: timestamp("at", { withTimezone: true }).notNull(),
+    /** the plan's revision its lanes were matched on, the area fetched, its flow tiles (of each kind) */
+    revision: integer("revision").notNull(),
+    area: jsonb("area").$type<GeoArea>().notNull(),
+    tiles: integer("tiles").notNull().default(0),
+    /** each lane TomTom covers: [km/h, share of free flow, free-flow km/h, share covered, closed] */
+    lanes: jsonb("lanes").$type<Record<string, LaneTuple>>().notNull(),
+    incidents: jsonb("incidents").$type<Incident[]>().notNull(),
+    /** the flow lines, gzipped JSON { speeds, ratios } (null when the fetch failed), its size */
+    data: bytea("data"),
+    bytes: integer("bytes").notNull().default(0),
+    /** why it has no data */
+    error: text("error"),
+  },
+  (t) => [index("traffic_samples_plan_idx").on(t.planId, t.at)],
 );
 
 /** Reference image bytes, one per plan (kept apart so plan saves stay small). */

@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
-import { Gauge, RefreshCw, TrafficCone, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Download, Gauge, RefreshCw, TrafficCone, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import type { Sketch } from "@/lib/lane-sketch";
 import { freeFlowLimits, sketchArea, LIMIT_MIN_COVER, TRAFFIC_BANDS, TRAFFIC_CLOSED, TRAFFIC_NO_DATA, type TrafficMatch } from "@/lib/tomtom";
 import { cn } from "@/lib/utils";
-import { fetchLiveTraffic } from "@/server/traffic";
+import { basePath } from "@/lib/base-path";
+import type { TrafficHistoryInfo } from "@/server/data/traffic-history";
+import { fetchLiveTraffic, getTrafficHistoryInfo } from "@/server/traffic";
 import { useSketchStore } from "@/state/lane-sketch";
 import { clearLiveTraffic, logTrafficPull, setLiveTraffic, type LiveTraffic } from "@/state/live-traffic";
 import { InspectorPanel } from "./inspector-panel";
@@ -83,7 +85,38 @@ export function LiveTrafficPanel({ planId, sketch, live, match, readOnly }: {
           </Button>
         </>
       )}
+      <RecordedTraffic planId={planId} />
       <p className="text-[10px] text-muted-foreground">Traffic data © TomTom. Kept in this page only, never saved with the plan.</p>
     </InspectorPanel>
+  );
+}
+
+const utc = (iso: string) => `${new Date(iso).toLocaleDateString([], { day: "numeric", month: "short", timeZone: "UTC" })} ${iso.slice(11, 16)}`;
+
+/**
+ * (ticket #261) TomTom's traffic the server records for the plan (every 5 minutes in the hours set: scripts/traffic-collect.ts),
+ * if it records any: how much, and the last 14 days' as a file to analyse. Nothing shown for a plan not recorded.
+ */
+function RecordedTraffic({ planId }: { planId: string }) {
+  const [info, setInfo] = useState<TrafficHistoryInfo | null>(null);
+  useEffect(() => {
+    let on = true;
+    getTrafficHistoryInfo(planId).then(x => { if (on) setInfo(x); }, () => {});
+    return () => { on = false; };
+  }, [planId]);
+  if (!info?.samples || !info.first || !info.last) return null;
+  const url = `${basePath}/api/plans/${planId}/traffic/history`;
+  return (
+    <div className="grid gap-1 border-t pt-2 text-[11px]">
+      <span title="The server fetches TomTom's traffic for this plan every 5 minutes in the hours set, and keeps it: speeds and incidents, to analyse later.">
+        Recorded: {info.samples} snapshot{info.samples === 1 ? "" : "s"}{info.ok < info.samples ? ` (${info.samples - info.ok} failed)` : ""}, {utc(info.first)} – {utc(info.last)} UTC
+      </span>
+      {info.lastError && <span className="text-destructive">Last one failed: {info.lastError}</span>}
+      <div className="flex items-center gap-1">
+        <span className="text-muted-foreground">Last 14 days:</span>
+        <Button asChild size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]"><a href={url} download><Download className="size-3" /> JSON</a></Button>
+        <Button asChild size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]"><a href={`${url}?format=csv`} download><Download className="size-3" /> CSV</a></Button>
+      </div>
+    </div>
   );
 }

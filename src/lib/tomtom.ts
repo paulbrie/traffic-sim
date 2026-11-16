@@ -21,7 +21,7 @@ export interface FlowLine {
   oneSide: boolean;
   closed?: true;
 }
-/** what TomTom said for an area at one moment (kept in the page only, never saved: TomTom's terms limit storing it) */
+/** what TomTom said for an area at one moment (kept in the page only, never saved with the plan; the traffic recorder keeps its own, ticket #261: traffic-history.ts) */
 export interface TrafficSnapshot {
   /** when it was fetched (ISO) */
   at: string;
