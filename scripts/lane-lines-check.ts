@@ -2,8 +2,9 @@
  * Lanes' side lines set by hand (ticket #263): solid, dashed, or mixed (a solid line with a dashed one on the lane's side)
  * on each side of a lane. Checks what `roadMarkings` draws for each (between two lanes the same way, at the road's edge,
  * between ways running opposite), that a sketch with none set draws as before, that what a lane says about its own
- * side wins over the lane beyond, and that the cars keep to it: on a two-lane road whose right lane leads only to a
- * closed way out, its cars change over to the left lane where they may cross, and never where they may not.
+ * side wins over the lane beyond, that lanes in no road (a roundabout's rings and the lanes round them) get their lines
+ * too, with each other and with a road's lanes beside them, and that the cars keep to it: on a two-lane road whose right
+ * lane leads only to a closed way out, its cars change over to the left lane where they may cross, and never where they may not.
  * npm run lines:check
  */
 import { SketchSim, DEFAULT_SIM } from "../src/lib/lane-sketch-sim";
@@ -49,6 +50,30 @@ const eq = (a: string[], b: string[]) => JSON.stringify(a) === JSON.stringify(b)
   // (kept and checked when the sketch is read)
   const read = sanitizeSketch(JSON.parse(JSON.stringify({ ...base, lanes: base.lanes.map((l, i) => (i ? { ...l, lines: { left: "mixed", right: "wavy" } } : l)) })));
   check(read?.lanes[1].lines?.left === "mixed" && read?.lanes[1].lines?.right === undefined, "read back: a known line kept, an unknown one left out");
+}
+
+// --- lanes in no road (a roundabout's): their lines too
+{
+  /** a ring round (0, 0), `r` metres out, 3.5 m wide, running the same way as the others */
+  const ring = (id: string, r: number): SketchLane => ({ id, width: 3.5, shape: { kind: "arc", c: { x: 0, y: 0 }, r, a0: 0, sweep: -2 * Math.PI } });
+  /** a lane round a quarter of it, outside the ring of radius 10 (in no road) */
+  const quarter: SketchLane = { id: "q", width: 3.5, shape: { kind: "arc", c: { x: 0, y: 0 }, r: 13.5, a0: 0, sweep: -Math.PI / 2 } };
+  const sk = (lanes: SketchLane[], roads: Sketch["roads"] = []): Sketch => ({ lanes, connectors: [], roads, junctions: [] });
+  /** each line as `kind dashed/solid @ r` (its distance from the middle, half way along) and how long it is */
+  const rmarks = (x: Sketch) => roadMarkings(x).map(m => {
+    const p = m.pts[m.pts.length >> 1];
+    let len = 0;
+    for (let i = 1; i < m.pts.length; i++) len += Math.hypot(m.pts[i].x - m.pts[i - 1].x, m.pts[i].y - m.pts[i - 1].y);
+    return `${m.kind} ${m.dashed ? "dashed" : "solid"} @ ${Math.hypot(p.x, p.y).toFixed(2)} ${len > 60 ? "round" : len > 15 ? "quarter" : "short"}`;
+  }).sort();
+  const two = sk([ring("in", 10), ring("out", 13.5)]);
+  check(eq(rmarks(two), ["lane dashed @ 11.75 round"]), `two rings in no road: a dashed line between them all round (${rmarks(two)})`);
+  const roadRing = sk([ring("in", 10), ring("out", 13.5)], [{ id: "r", name: "Ring", lanes: ["out"] }]);
+  check(eq(rmarks(roadRing), ["lane dashed @ 11.75 round"]), `a ring in no road, one in a road outside it: the line between them once (${rmarks(roadRing)})`);
+  check(eq(rmarks(sk([ring("in", 10), quarter])), ["lane dashed @ 11.75 quarter"]), `a lane round a quarter of a ring: a dashed line where it is beside it (${rmarks(sk([ring("in", 10), quarter]))})`);
+  const qSolid = setLaneLine(sk([ring("in", 10), quarter]), "q", "left", "solid");
+  check(eq(rmarks(qSolid), ["lane solid @ 11.75 quarter"]), `…its left, towards the ring (it runs the same way round), set solid: a solid line (${rmarks(qSolid)})`);
+  check(eq(rmarks(sk([ring("in", 10)])), []), "a ring alone: no line");
 }
 
 // --- the cars

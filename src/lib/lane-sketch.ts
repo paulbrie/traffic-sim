@@ -2318,69 +2318,104 @@ export function roadMarkings(sk: Sketch): Marking[] {
     const lanes = road.lanes.map(id => laneById(sk, id)).filter((l): l is SketchLane => !!l);
     const kept = roadMarks.get(road);
     if (kept && kept.lanes.length === lanes.length && kept.lanes.every((l, i) => l === lanes[i])) { all.push(...kept.out); continue; }
-    const out: Marking[] = [];
+    const out = laneLines(lanes, () => lanes, lanes.filter(l => !l.bike).length);
     roadMarks.set(road, { lanes, out });
-    const cars = lanes.filter(l => !l.bike).length;
-    // (lines set by hand, ticket #263: the right sides looked along too, for a line at the road's edge or between lanes
-    // running opposite ways there; none set in the road: the left sides alone, as before)
-    const sides: LaneSide[] = lanes.some(l => l.lines) ? ["left", "right"] : ["left"];
-    /** the line along `a`'s `side`, `run` (with `b` beyond it, the same way or not; none: the road's edge) */
-    const line = (a: SketchLane, side: LaneSide, b: SketchLane | null, same: boolean, run: Pt[], at: number[]) => {
-      const lv = a.level ? { level: a.level, lane: a.id, at } : {};
-      const sa = a.lines?.[side], sb = b?.lines?.[same === (side === "left") ? "right" : "left"];
-      if (!sa && !sb) {
-        if (!b || side === "right") return;
-        // (a bike lane beside the cars' lanes: kept apart by a solid line, whichever way either runs)
-        if (!!a.bike !== !!b.bike) out.push({ pts: run, kind: "lane", dashed: false, ...lv });
-        else if (same) out.push({ pts: run, kind: "lane", dashed: true, ...lv });
-        else if (a.bike || cars <= 2) out.push({ pts: run, kind: "center", dashed: true, ...lv });
-        else for (const o of [-0.15, 0.15]) out.push({ pts: offsetPolyline(run, o), kind: "center", dashed: false, ...lv });
-        return;
-      }
-      // (set by hand: dashed where the cars on both sides may cross, solid where neither may; a mixed line, its dashed
-      // half on the side of those who may, where one side may; the centre line's colour between ways running opposite)
-      const kind = b && !same && !a.bike && !b.bike ? "center" : "lane", pa = mayCross(sa, sb), pb = mayCross(sb, sa);
-      if (pa === pb) { out.push({ pts: run, kind, dashed: pa, ...lv }); return; }
-      // (towards `a`: to the run's right on its left side, to its left on its right side)
-      const toA = side === "left" ? -0.15 : 0.15;
-      out.push({ pts: offsetPolyline(run, pa ? toA : -toA), kind, dashed: true, ...lv }, { pts: offsetPolyline(run, pa ? -toA : toA), kind, dashed: false, ...lv });
-    };
-    for (const a of lanes) {
-      const L = laneLength(a.shape), n = Math.max(2, Math.ceil(L / 0.5));
-      for (const side of sides) {
-        const sg = side === "left" ? 1 : -1;
-        let run: Pt[] = [], at: number[] = [], runWith: { b: SketchLane | null; same: boolean } | null = null;
-        const flush = () => {
-          if (runWith && run.length >= 2) line(a, side, runWith.b, runWith.same, run, at);
-          run = []; at = []; runWith = null;
-        };
-        for (let i = 0; i <= n; i++) {
-          const { p, d } = pointAt(a.shape, (L * i) / n), nv = { x: d.y * sg, y: -d.x * sg };
-          let hit: { b: SketchLane | null; same: boolean } | null = null, found = false;
-          for (const b of lanes) {
-            if (b === a) continue;
-            const off = (a.width + b.width) / 2, q = { x: p.x + nv.x * off, y: p.y + nv.y * off }, near = nearestOn(b.shape, q);
-            if (near.d > 0.5) continue;
-            found = true;
-            const db = pointAt(b.shape, near.s).d, same = db.x * d.x + db.y * d.y > 0;
-            // (a line found from both lanes it is between: kept from one; between lanes the same way, from the right one's left side)
-            if (same ? side === "right" : a.id > b.id) continue;
-            hit = { b, same };
-            break;
-          }
-          // (nothing beside it: the road's edge, a line there only if one is set)
-          if (!hit && !found && a.lines?.[side]) hit = { b: null, same: true };
-          if (!hit || (runWith && (runWith.b !== hit.b || runWith.same !== hit.same))) flush();
-          if (hit) { runWith = hit; run.push({ x: p.x + nv.x * (a.width / 2), y: p.y + nv.y * (a.width / 2) }); at.push((L * i) / n); }
-        }
-        flush();
-      }
-    }
     all.push(...out);
   }
+  // (ticket #263) the lanes in no road (a roundabout's rings and the lanes round them, drawn on a junction): the lines
+  // between them and the lanes side by side with them, in a road or not, as between a road's (on both their sides: a lane
+  // of a road beside one doesn't look for it; cars cross them only by their connectors)
+  const inRoad = new Set(sk.roads.flatMap(r => r.lanes)), loose = sk.lanes.filter(l => !inRoad.has(l.id));
+  if (!(looseMarks && looseMarks.lanes.length === sk.lanes.length && looseMarks.lanes.every((l, i) => l === sk.lanes[i]))) {
+    // (each one's box, a lane's width and a half out: those whose boxes meet are the ones that may be beside it)
+    const boxOf = (l: SketchLane) => {
+      const ps = samples(l.shape, 2), m = l.width + 0.5;
+      return { x0: Math.min(...ps.map(p => p.x)) - m, y0: Math.min(...ps.map(p => p.y)) - m, x1: Math.max(...ps.map(p => p.x)) + m, y1: Math.max(...ps.map(p => p.y)) + m };
+    };
+    const boxes = loose.map(boxOf), meets = (A: ReturnType<typeof boxOf>, B: ReturnType<typeof boxOf>) => B.x0 <= A.x1 && B.x1 >= A.x0 && B.y0 <= A.y1 && B.y1 >= A.y0;
+    const x0 = Math.min(...boxes.map(b => b.x0)), y0 = Math.min(...boxes.map(b => b.y0)), x1 = Math.max(...boxes.map(b => b.x1)), y1 = Math.max(...boxes.map(b => b.y1));
+    const near = new Map(loose.map(l => [l, [] as SketchLane[]]));
+    if (loose.length) for (const b of sk.lanes) {
+      const B = boxOf(b);
+      if (!meets({ x0, y0, x1, y1 }, B)) continue;
+      loose.forEach((a, i) => { if (a !== b && meets(boxes[i], B)) near.get(a)!.push(b); });
+    }
+    looseMarks = { lanes: sk.lanes, out: laneLines(loose, a => near.get(a) ?? [], 2, b => !inRoad.has(b.id)) };
+  }
+  all.push(...looseMarks.out);
   for (const k of sk.links ?? []) all.push(...(linkGeometry(sk, k)?.lines ?? []));
   markings.set(sk, all);
   return all;
+}
+/** the lines of the lanes in no road, kept while the sketch's lanes are the same */
+let looseMarks: { lanes: SketchLane[]; out: Marking[] } | null = null;
+
+/**
+ * The lines along `lanes` (a road's): between each and those of `beside(it)` side by side with it (within half a metre,
+ * edge to edge), and where set by hand at their edges. `cars`: how many lanes for cars there are (more than two, ways
+ * running opposite kept apart by a double solid line). `mutual`: is a lane beside one of `lanes` one of them too (each
+ * line between two of them drawn from one; with a lane that isn't, all its lines drawn from this one, both sides looked along)
+ */
+function laneLines(lanes: SketchLane[], beside: (a: SketchLane) => SketchLane[], cars: number, mutual?: (b: SketchLane) => boolean): Marking[] {
+  const out: Marking[] = [];
+  // (lines set by hand, ticket #263: the right sides looked along too, for a line at the road's edge or between lanes
+  // running opposite ways there; none set in the road: the left sides alone, as before)
+  const both = !!mutual, anySet = both || lanes.some(l => l.lines);
+  /** the line along `a`'s `side`, `run` (with `b` beyond it, the same way or not; none: the road's edge) */
+  const line = (a: SketchLane, side: LaneSide, b: SketchLane | null, same: boolean, run: Pt[], at: number[]) => {
+    const lv = a.level ? { level: a.level, lane: a.id, at } : {};
+    const sa = a.lines?.[side], sb = b?.lines?.[same === (side === "left") ? "right" : "left"];
+    if (!sa && !sb) {
+      if (!b || (side === "right" && !(both && !mutual!(b)))) return;
+      // (a bike lane beside the cars' lanes: kept apart by a solid line, whichever way either runs)
+      if (!!a.bike !== !!b.bike) out.push({ pts: run, kind: "lane", dashed: false, ...lv });
+      else if (same) out.push({ pts: run, kind: "lane", dashed: true, ...lv });
+      else if (a.bike || cars <= 2) out.push({ pts: run, kind: "center", dashed: true, ...lv });
+      else for (const o of [-0.15, 0.15]) out.push({ pts: offsetPolyline(run, o), kind: "center", dashed: false, ...lv });
+      return;
+    }
+    // (set by hand: dashed where the cars on both sides may cross, solid where neither may; a mixed line, its dashed
+    // half on the side of those who may, where one side may; the centre line's colour between ways running opposite)
+    const kind = b && !same && !a.bike && !b.bike ? "center" : "lane", pa = mayCross(sa, sb), pb = mayCross(sb, sa);
+    if (pa === pb) { out.push({ pts: run, kind, dashed: pa, ...lv }); return; }
+    // (towards `a`: to the run's right on its left side, to its left on its right side)
+    const toA = side === "left" ? -0.15 : 0.15;
+    out.push({ pts: offsetPolyline(run, pa ? toA : -toA), kind, dashed: true, ...lv }, { pts: offsetPolyline(run, pa ? -toA : toA), kind, dashed: false, ...lv });
+  };
+  for (const a of lanes) {
+    const others = beside(a).filter(b => b !== a);
+    if (!others.length && !a.lines) continue;
+    const L = laneLength(a.shape), n = Math.max(2, Math.ceil(L / 0.5));
+    for (const side of anySet ? (["left", "right"] as const) : (["left"] as const)) {
+      const sg = side === "left" ? 1 : -1;
+      let run: Pt[] = [], at: number[] = [], runWith: { b: SketchLane | null; same: boolean } | null = null;
+      const flush = () => {
+        // (round lanes in no road: not where another only touches it, under 2 m)
+        if (runWith && run.length >= 2 && !(both && at[at.length - 1] - at[0] < 2)) line(a, side, runWith.b, runWith.same, run, at);
+        run = []; at = []; runWith = null;
+      };
+      for (let i = 0; i <= n; i++) {
+        const { p, d } = pointAt(a.shape, (L * i) / n), nv = { x: d.y * sg, y: -d.x * sg };
+        let hit: { b: SketchLane | null; same: boolean } | null = null, found = false;
+        for (const b of others) {
+          const off = (a.width + b.width) / 2, q = { x: p.x + nv.x * off, y: p.y + nv.y * off }, near = nearestOn(b.shape, q);
+          if (near.d > 0.5) continue;
+          found = true;
+          const db = pointAt(b.shape, near.s).d, same = db.x * d.x + db.y * d.y > 0;
+          // (a line found from both lanes it is between: kept from one; between lanes the same way, from the right one's left side)
+          if ((!mutual || mutual(b)) && (same ? side === "right" : a.id > b.id)) continue;
+          hit = { b, same };
+          break;
+        }
+        // (nothing beside it: the road's edge, a line there only if one is set)
+        if (!hit && !found && a.lines?.[side]) hit = { b: null, same: true };
+        if (!hit || (runWith && (runWith.b !== hit.b || runWith.same !== hit.same))) flush();
+        if (hit) { runWith = hit; run.push({ x: p.x + nv.x * (a.width / 2), y: p.y + nv.y * (a.width / 2) }); at.push((L * i) / n); }
+      }
+      flush();
+    }
+  }
+  return out;
 }
 
 export function convexHull(pts: Pt[]): Pt[] {
