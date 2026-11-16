@@ -30,7 +30,7 @@ const SWITCHES: TuneSwitch[] = [
   { key: "ringDriving", section: "Roundabouts", label: "Roundabout driving", off: "Off", on: "On",
     hint: "At roundabouts, cars pull away and follow more briskly, approach the give-way line faster and take the ring's bends quicker, as drivers do there." },
   { key: "visionCone", section: "Junctions", label: "Vision cone", off: "Off", on: "On",
-    hint: "A car with right of way only reacts to crossing cars it could see ahead (±100° at ring crossings, ±60° elsewhere); cars that give way still look everywhere." },
+    hint: "Cars only react to crossing cars they could see: within ±100° at ring crossings and in the last 15 m before a crossing, ±60° further off." },
 ];
 const SWITCH_KEYS = new Set<string>(SWITCHES.map(x => x.key));
 /** sliders shown in another group of the dialog than their tuning group (the roundabout-only ones with the roundabout switches; keys and values as they are) */

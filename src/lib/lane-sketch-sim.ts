@@ -507,6 +507,8 @@ function applyTuning(t: Tuning) {
 }
 /** drivers' field of view (`visionCone`, T179): crossing foes outside it aren't considered */
 let VISION = false;
+/** within this many metres of where its path crosses another's, a driver looks both ways: its field of view ±100° there */
+const LOOK_BOTH = 15;
 /** seconds a car takes to move over to the lane it changes to */
 const SHIFT_T = 2;
 /** how far past the place where two connectors meet on a lane the zone between them goes (m): a car's length and a metre */
@@ -2837,10 +2839,12 @@ export class SketchSim {
             const wIn = ws > 0 && ((w.edge === k.other && k.other.kind === "conn" && this.inRun(k.other, w.pos, k.otherAt - k.otherBefore))
               || (rules && commitWas.get(w)! > this.t && w.v > 1 && ws < 12 && (!(v.commitUntil > this.t) || w.id < v.id) && zs > (v.v * v.v) / (2 * B_COMF)));
             // (drivers' field of view (`visionCone`): one on its way to the crossing, not in it, outside the driver's field (±100° at a
-            // ring crossing, ±60° elsewhere) or beyond its sight distance, isn't considered — a car giving way too: held up past its
-            // patience by one it couldn't itself have seen coming made it look everywhere regardless, but with nothing in view at all
-            // it had reason enough to go, not wait on a crossing it can't place anyone in)
-            if (VISION && ws > 0 && !wIn && !(r.edge.innerOff && k.other.ring) && !this.inView(v, w, r.edge.ring || k.other.ring)) continue;
+            // ring crossing or within LOOK_BOTH of this one, ±60° further off) or beyond its sight distance, isn't considered — a car
+            // giving way too: held up past its patience by one it couldn't itself have seen coming made it look everywhere regardless,
+            // but with nothing in view at all it had reason enough to go, not wait on a crossing it can't place anyone in. Up to the
+            // crossing it looks both ways: turning in at ±60°, the car coming at it from the side, 5–15 m off, was out of view, and it
+            // pulled out in front of it (ticket #259: 20 of Bistrița's 38 collisions in 40 min))
+            if (VISION && ws > 0 && !wIn && !(r.edge.innerOff && k.other.ring) && !this.inView(v, w, r.edge.ring || k.other.ring || zs < LOOK_BOTH, zs < LOOK_BOTH)) continue;
             // (this one set off through them: it doesn't stop again for one not there yet that can still stop for it)
             if (rules && v.commitUntil > this.t && ws > 0 && !wIn && ws > (w.v * w.v) / (2 * B_COMF) + 1) continue;
             // (stopped short of the zone, waiting for this one as this one would for it: the one standing in another's way goes, that
@@ -3875,10 +3879,15 @@ export class SketchSim {
    * round tight corners). Sliding over to a lane it changed to: what is left of the way over, the cab turned
    * a little towards it.
    */
-  /** does car `v`'s driver see car `w`: within ±100° of straight ahead (`wide`; else ±60°) and its sight distance (25 m and 4 s at its speed) */
-  private inView(v: SimVehicle, w: SimVehicle, wide: boolean) {
+  /**
+   * does car `v`'s driver see car `w`: within ±100° of straight ahead (`wide`; else ±60°) and its sight distance (25 m and 4 s at its
+   * speed; looking both ways at a crossing (`both`), 4 s at the faster one's: one coming fast is seen from further off. At its own speed
+   * only, one standing at a line saw a main road's car 25 m off, 2 s away, and set off between each one and the next, stopping again
+   * (ticket #259))
+   */
+  private inView(v: SimVehicle, w: SimVehicle, wide: boolean, both = false) {
     const a = v.edge.locate(v.pos), b = w.edge.locate(w.pos).p, x = b.x - a.p.x, y = b.y - a.p.y, d = Math.hypot(x, y);
-    if (d > 25 + 4 * v.v) return false;
+    if (d > 25 + 4 * (both ? Math.max(v.v, w.v) : v.v)) return false;
     if (d < 0.1) return true;
     return (a.d.x * x + a.d.y * y) / d >= Math.cos(((wide ? 100 : 60) * Math.PI) / 180);
   }
