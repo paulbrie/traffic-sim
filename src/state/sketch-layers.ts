@@ -4,7 +4,7 @@
  */
 import { Subject } from "subjecto";
 
-export type SketchLayer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names" | "demand" | "satellite" | "image" | "zones" | "traffic";
+export type SketchLayer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names" | "demand" | "satellite" | "image" | "zones" | "traffic" | "buildings";
 export type SketchLayers = Record<SketchLayer, boolean>;
 /** (`page`: only on a V2 plan's full-page editor) */
 export const SKETCH_LAYERS: { id: SketchLayer; label: string; hint: string; page?: boolean }[] = [
@@ -22,6 +22,7 @@ export const SKETCH_LAYERS: { id: SketchLayer; label: string; hint: string; page
   { id: "traffic", label: "Live traffic", hint: "Real current traffic (TomTom): incidents while Live traffic sync is on in Display options, and the roads' speeds once fetched in the Live traffic panel", page: true },
   // (last: the digit keys go to the layers above, in this order)
   { id: "zones", label: "Zones", hint: "The areas drawn and labelled on the plan (neighbourhoods, zones)" },
+  { id: "buildings", label: "Buildings", hint: "OpenStreetMap's buildings round the plan, once fetched (Background): in 3D, and their footprints on the plan", page: true },
 ];
 export const ALL_SKETCH_LAYERS = Object.fromEntries(SKETCH_LAYERS.map(l => [l.id, true])) as SketchLayers;
 /** the layers shown at first: all but the grid */

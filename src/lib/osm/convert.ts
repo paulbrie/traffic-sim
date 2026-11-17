@@ -74,7 +74,8 @@ interface Seg {
   level: number;
 }
 
-export function convertOsm(data: OsmData, opts: ConvertOptions): { network: Network; stats: ImportStats } {
+/** an Overpass answer's nodes, ways and relations, and its nodes in plan metres round `origin` */
+function parse(data: OsmData, origin: GeoRef) {
   const nodes = new Map<number, OsmNode>(), ways: OsmWay[] = [], rels: OsmRelation[] = [];
   // a way can be listed twice (as a road or building, and again as a member of a relation)
   const seenWays = new Set<number>();
@@ -86,16 +87,25 @@ export function convertOsm(data: OsmData, opts: ConvertOptions): { network: Netw
   const proj = new Map<number, Vec>();
   const P = (id: number): Vec => {
     let p = proj.get(id);
-    if (!p) { const n = nodes.get(id)!; p = project(opts.origin, n.lat, n.lon); proj.set(id, p); }
+    if (!p) { const n = nodes.get(id)!; p = project(origin, n.lat, n.lon); proj.set(id, p); }
     return p;
   };
+  return { nodes, ways, rels, P };
+}
+
+export function convertOsm(data: OsmData, opts: ConvertOptions): { network: Network; stats: ImportStats } {
+  const { nodes, ways, rels, P } = parse(data, opts.origin);
   const sw = project(opts.origin, opts.bbox.south, opts.bbox.west), ne = project(opts.origin, opts.bbox.north, opts.bbox.east);
   const rect = { x0: sw.x, x1: ne.x, y0: ne.y, y1: sw.y };
   const inside = (p: Vec, m = 0) => p.x >= rect.x0 - m && p.x <= rect.x1 + m && p.y >= rect.y0 - m && p.y <= rect.y1 + m;
 
   const { segs, vx } = buildRoads(ways, nodes, P, rect, inside, opts.roads);
   const net = toNetwork(segs, vx);
-  const buildings = opts.buildings ? buildBuildings(ways, rels, nodes, P, inside) : [];
+  const buildings = opts.buildings ? buildBuildings(ways, rels, nodes, P, inside, (id, pts, tags) => {
+    const use = buildingUse(tags), b: BuildingDef = { id, pts: pts.map(rv), height: buildingHeight(tags, use), use };
+    if (tags.name) b.name = tags.name.slice(0, 120);
+    return b;
+  }) : [];
   const network: Network = { ...net.network, ...(buildings.length ? { buildings } : {}), geo: { ...opts.origin, areas: [{ ...opts.bbox }] } };
   return { network, stats: { ...net.stats, buildings: buildings.length } };
 }
@@ -708,8 +718,9 @@ function fit(pts: Vec[]): { end: number; c1: Vec | null; c2: Vec | null }[] {
 
 // ---------------------------------------------------------------- buildings
 
-function buildBuildings(ways: OsmWay[], rels: OsmRelation[], nodes: Map<number, OsmNode>, P: (id: number) => Vec, inside: (p: Vec) => boolean): BuildingDef[] {
-  const out: BuildingDef[] = [];
+/** the building footprints (simplified, at least 10 m²) whose middle is `inside`, each as `make` has it */
+function buildBuildings<T>(ways: OsmWay[], rels: OsmRelation[], nodes: Map<number, OsmNode>, P: (id: number) => Vec, inside: (p: Vec) => boolean, make: (id: string, pts: Vec[], tags: Tags, area: number) => T): T[] {
+  const out: T[] = [];
   const wayById = new Map(ways.map(w => [w.id, w]));
   const add = (id: string, ring: number[], tags: Tags) => {
     if (ring.length < 4 || ring[0] !== ring[ring.length - 1] || !ring.every(n => nodes.has(n))) return;
@@ -718,10 +729,7 @@ function buildBuildings(ways: OsmWay[], rels: OsmRelation[], nodes: Map<number, 
     if (pts.length < 3) return;
     const area = polyArea(pts);
     if (area < 10 || !inside(polyCentroid(pts))) return;
-    const use = buildingUse(tags);
-    const b: BuildingDef = { id, pts: pts.map(rv), height: buildingHeight(tags, use), use };
-    if (tags.name) b.name = tags.name.slice(0, 120);
-    out.push(b);
+    out.push(make(id, pts, tags, area));
   };
   for (const w of ways) {
     const t = w.tags;
@@ -773,11 +781,18 @@ export function buildingUse(t: Tags): BuildingUse {
   return "other";
 }
 
-function buildingHeight(t: Tags, use: BuildingUse): number {
+/** a building's height from its tags (height, else building:levels), or null when they don't say */
+function taggedHeight(t: Tags): number | null {
   const h = /^(\d+(?:\.\d+)?)\s*(m|ft|')?/.exec(t.height ?? "");
   if (h) return clampH(parseFloat(h[1]) * (h[2] === "ft" || h[2] === "'" ? 0.3048 : 1));
   const lv = parseFloat(t["building:levels"] ?? "");
   if (Number.isFinite(lv) && lv > 0) return clampH(lv * FLOOR_HEIGHT + (parseFloat(t["roof:levels"] ?? "") > 0 ? 1.5 : 0.8));
+  return null;
+}
+
+function buildingHeight(t: Tags, use: BuildingUse): number {
+  const tagged = taggedHeight(t);
+  if (tagged !== null) return tagged;
   const b = t.building;
   if (use === "minor") return 3;
   if (["house", "detached", "semidetached_house", "bungalow", "terrace", "villa", "farm"].includes(b)) return 7;
@@ -787,6 +802,22 @@ function buildingHeight(t: Tags, use: BuildingUse): number {
   if (use === "shop" || use === "office") return 12;
   return 9;
 }
+/**
+ * (ticket #267) A V2 sketch's buildings: the footprints whose middle is in `rect` (plan metres round `origin`), each with
+ * its height from its tags (`tagged`), else guessed from its kind as V1's are, and a plain `building=yes` (most of them,
+ * in many towns) from its size: a shed or garage under 40 m², a house under 300 m², else a block or a hall.
+ */
+export interface Footprint { id: string; pts: Vec[]; h: number; use: BuildingUse; name?: string; tagged?: true }
+export function osmFootprints(data: OsmData, origin: GeoRef, rect: { minX: number; minY: number; maxX: number; maxY: number }): Footprint[] {
+  const { nodes, ways, rels, P } = parse(data, origin);
+  const inside = (p: Vec) => p.x >= rect.minX && p.x <= rect.maxX && p.y >= rect.minY && p.y <= rect.maxY;
+  return buildBuildings(ways, rels, nodes, P, inside, (id, pts, tags, area) => {
+    const use = buildingUse(tags), tagged = taggedHeight(tags);
+    const h = tagged ?? (tags.building === "yes" && use === "other" ? (area < 40 ? 3 : area < 300 ? 6.5 : 10) : buildingHeight(tags, use));
+    return { id, pts: pts.map(rv), h, use, ...(tags.name ? { name: tags.name.slice(0, 120) } : {}), ...(tagged !== null ? { tagged: true as const } : {}) };
+  });
+}
+
 const clampH = (h: number) => Math.round(Math.min(400, Math.max(2.5, h)) * 10) / 10;
 
 // ---------------------------------------------------------------- geometry helpers

@@ -16,12 +16,14 @@ import * as THREE from "three";
 import { toast } from "sonner";
 import { Crosshair, Eye, Gauge, Keyboard, Orbit, Plane, Plus, Settings, Swords, Volume2, VolumeX } from "lucide-react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { baseLaneId, isTwinId, wayFrom, connectorPts, junctionLevel, shownCarZ, shownZ, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, edgeGround, groundAt, groundBase, groundUnder, hasHeights, terrainOf, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
+import { baseLaneId, isTwinId, wayFrom, connectorPts, junctionLevel, shownCarZ, shownZ, laneById, laneLength, outlinePath, pointAt, signalAt, signalPlans, smoothJunction, zAt, edgeGround, groundAt, groundBase, groundUnder, hasHeights, terrainOf, buildingsOf, polygonArea, type JunctionContents, type Piece, type Pt, type SignalController, type Sketch } from "@/lib/lane-sketch";
 import { LEVEL_H } from "@/engine/compile";
 import { speedColor } from "@/render/palette";
 import { buildSketch3D, streetNameRuns, type Sketch3D } from "@/render/sketch3d";
 import { buildStreetNames3D, type StreetNames3D } from "@/render/street-names3d";
 import { buildZones3D, type Zones3D } from "@/render/zones3d";
+import { buildBuildings3D, type Buildings3D } from "@/render/buildings3d";
+import { buildingUseLabel, footprintPts, type SketchBuilding } from "@/lib/sketch-buildings";
 import type { SketchLayers } from "@/state/sketch-layers";
 import type { Underlay } from "@/lib/underlay";
 import { isDark, onThemeChange, readPalette } from "@/render/palette";
@@ -288,6 +290,27 @@ export function View3DV2(props: View3DProps) {
       if (!p.layers.zones || !p.sketch.zones?.length) return;
       zonesBuilt = buildZones3D(p.sketch.zones);
       scene.add(zonesBuilt.group);
+    };
+    // the buildings (ticket #267), OpenStreetMap's, fetched for where the sketch is: made again when they (their layer, the
+    // terrain they stand on) change
+    let bldBuilt: Buildings3D | null = null, bldFor: unknown[] = [];
+    const syncBuildings = () => {
+      const p = live.current, bs = buildingsOf(p.sketch), t = terrainOf(p.sketch);
+      heights();
+      const key = [bs, p.layers.buildings, pal, t, hBase];
+      if (key.every((x, i) => x === bldFor[i])) return;
+      bldFor = key;
+      if (bldBuilt) { scene.remove(bldBuilt.mesh); bldBuilt.dispose(); bldBuilt = null; }
+      if (!p.layers.buildings || !bs?.list.length) return;
+      bldBuilt = buildBuildings3D(bs, pal, t ? (x, z) => terrainAt(t, x, z) - hBase : undefined);
+      scene.add(bldBuilt.mesh);
+    };
+    /** the building under the pointer, if one is nearer than `before` (m along the ray) */
+    const buildingHit = (before: number): SketchBuilding | null => {
+      const bs = buildingsOf(live.current.sketch);
+      if (!bldBuilt || !bs) return null;
+      const hit = ray.intersectObject(bldBuilt.mesh, false)[0];
+      return hit && hit.faceIndex != null && hit.distance < before ? bs.list[bldBuilt.owner[hit.faceIndex]] ?? null : null;
     };
 
     // the satellite imagery under the sketch (where it has a place on Earth), and the reference image
@@ -644,7 +667,16 @@ export function View3DV2(props: View3DProps) {
       hoverWas = { clientX: e.clientX, clientY: e.clientY };
       const r = renderer.domElement.getBoundingClientRect();
       let info: HoverInfo | null = null;
-      for (const { p, lv, dist } of levelsAt(e)) if ((info = live.current.hoverAt(p, lv, Math.max(1.5, dist * (heli.flying ? 0.025 : 0.012))))) break;
+      const levels = levelsAt(e);
+      // (a building in front of the ground there: what it is)
+      const b = buildingHit(levels.length ? levels[levels.length - 1].dist - 0.5 : Infinity);
+      if (b) {
+        const tall = `${b.h.toFixed(b.h < 10 ? 1 : 0)} m`;
+        info = { title: b.name ?? buildingUseLabel(b), sub: b.name ? buildingUseLabel(b) : "OpenStreetMap building", rows: [
+          ["Height", b.tagged ? tall : `about ${tall} (guessed from its kind and size)`],
+          ["Footprint", `${Math.round(polygonArea(footprintPts(b)))} m²`],
+        ] };
+      } else for (const { p, lv, dist } of levels) if ((info = live.current.hoverAt(p, lv, Math.max(1.5, dist * (heli.flying ? 0.025 : 0.012))))) break;
       setHover(h => (!info ? (h ? null : h) : { info, x: e.clientX - r.left, y: e.clientY - r.top }));
     };
     const onHover = (e: PointerEvent) => {
@@ -680,7 +712,7 @@ export function View3DV2(props: View3DProps) {
       heli.step(dt, now);
       if (heli.flying && now - movedAt > 250) { movedAt = now; live.current.onMove(); }
       if (hoverWas && now - hoverAt > 300) { hoverAt = now; hoverNow(hoverWas); }
-      syncRoads(); syncNames(); syncZones(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now); syncWhy(now);
+      syncRoads(); syncNames(); syncZones(); syncBuildings(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now); syncWhy(now);
       stepHome(now);
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
@@ -715,6 +747,7 @@ export function View3DV2(props: View3DProps) {
       live.current.canvasRef.current = null; live.current.apiRef.current = null;
       if (built) { scene.remove(built.group); built.dispose(); }
       if (zonesBuilt) { scene.remove(zonesBuilt.group); zonesBuilt.dispose(); }
+      if (bldBuilt) { scene.remove(bldBuilt.mesh); bldBuilt.dispose(); }
       if (namesBuilt) { scene.remove(namesBuilt.group); namesBuilt.dispose(); }
       controls.dispose();
       scene.traverse(o => {

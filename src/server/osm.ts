@@ -1,5 +1,6 @@
 import "server-only";
-import { overpassQuery, type ImportOptions } from "@/lib/osm/area";
+import { overpassQuery, type BBox, type ImportOptions } from "@/lib/osm/area";
+import { buildingsQuery } from "@/lib/sketch-buildings";
 import type { OsmData } from "@/lib/osm/convert";
 import { nearestStreets, nominatimReverseUrl, streetFromNominatim, streetsQuery, type NominatimReverse, type StreetNear, type StreetsData } from "@/lib/osm/streets";
 
@@ -63,13 +64,23 @@ export async function fetchNominatimStreet(lat: number, lon: number): Promise<St
 
 /** Downloads the roads and buildings of an area from OpenStreetMap (via the Overpass API). */
 export async function fetchOsm(opts: ImportOptions): Promise<OsmData> {
-  const body = new URLSearchParams({ data: overpassQuery(opts) });
+  return overpass(overpassQuery(opts), "OpenStreetMap import", "OpenStreetMap's data service is busy or unreachable right now. Try again in a minute, or choose a smaller area.");
+}
+
+/** (ticket #267) Downloads the buildings in an area from OpenStreetMap, for a V2 sketch. */
+export async function fetchOsmBuildings(bbox: BBox): Promise<OsmData> {
+  return overpass(buildingsQuery(bbox), "buildings", "OpenStreetMap's data service is busy or unreachable right now. Try again in a minute.");
+}
+
+/** an Overpass query's answer, from the first instance that gives a whole one */
+async function overpass(query: string, what: string, busy: string): Promise<OsmData> {
+  const body = new URLSearchParams({ data: query });
   let last = "";
   for (const url of ENDPOINTS) {
     try {
       const res = await fetch(url, {
         method: "POST", body, cache: "no-store",
-        headers: { "User-Agent": "Gridlock traffic simulator (OpenStreetMap import)", Accept: "application/json" },
+        headers: { "User-Agent": `Gridlock traffic simulator (${what})`, Accept: "application/json" },
         signal: AbortSignal.timeout(180_000),
       });
       if (!res.ok) { last = `${new URL(url).host} answered ${res.status}`; continue; }
@@ -82,6 +93,6 @@ export async function fetchOsm(opts: ImportOptions): Promise<OsmData> {
       last = e instanceof Error ? e.message : String(e);
     }
   }
-  console.error("OpenStreetMap import failed:", last);
-  throw new OsmError("OpenStreetMap's data service is busy or unreachable right now. Try again in a minute, or choose a smaller area.");
+  console.error(`${what} failed:`, last);
+  throw new OsmError(busy);
 }

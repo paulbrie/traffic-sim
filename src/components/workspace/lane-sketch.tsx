@@ -16,7 +16,7 @@ import { project, unproject } from "@/lib/osm/area";
 import {
   LANE_WIDTH, BIKE_LANE_WIDTH, addLane, geoShift, setInRate, setOutWeight, contentsOf, setLaneSpeed, setRoadSpeed, setLaneUse, laneUse, type LaneUse, turnArrows, circleLanes, sketchIndex, boxesMeet, straightenLanes, curveLanes, straightenConnectors, addCrossing, updateCrossing, deleteCrossing, crossingFrame, onCrossing, crossingStripes, stripeDir, CROSSING_WIDTH, type CrossingPatch, type SketchCrossing, demandWays, laneInRate, laneOutWeight, DEFAULT_LIGHTS, MAX_PHASES, signalAt, signalPlan, signalPlans, junctionApproaches, setSigns, linkGeometry, linkRoads, unlink, arcToPoints, at, boundsOfPts, connectorPts, copyPart, curveThrough, dist, emptySketch, groupRoad, insertCorner, bandPolygon, junctionBands, roadMarkings, sliceLane, sliceRoad, onBands, insideLoops, smoothJunction, SMOOTH_R, insidePolygon, outlinePath, removeCorner, toggleCorner, curveAllCorners, isFullCircle,
   addStop, updateStop, deleteStop, type SketchStop, speedLimitOf, setTwoWay, setLaneLine, type SideLine, twoWayOk, twinOf, twinId, baseLaneId, connectorEnd, wayFrom, wayTo, type TwoWay,
-  junctionContents, laneById, laneLength, nearestOn, nextId, groundAt, setGround, terrainEnds, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
+  junctionContents, laneById, laneLength, nearestOn, nextId, groundAt, setGround, terrainEnds, buildingsOf, pastePart, piecePoints, pointAt, polygonArea, remove, reshape, reverseLane,
   roadOf, rotation, samples, setControl, splitExits, setSplit, approachKey, LEVELS, laneLevel, setLevel, hasLevels, junctionLevel, connectorLevel, edgeLevel, zAt, shownZ, densePoints, stretchLanes, setLaneEnds, surfaceAround, transformPiece, translation,
   alignmentOf, entryLanes, insertPoint, laneLocked, leadOf, setLocked, type LockIds, removePoint, settle, toggleCurve, roadMiddle,
   type Band, type SketchLink, type SketchJunction, type SketchRoad, type JunctionContents, type JunctionLights, type SignalController, type LightsPhase, type LaneAt, type LaneControl, type LaneShape, type Piece, type Pt, type Sketch,
@@ -25,6 +25,7 @@ import { addBump, bumpFrame, bumpHeavySpeed, bumpNotes, bumpShapes, bumpSpeed, d
 import { DEFAULT_SIM, type PedView, type ReplayCar, type SimParams, type SimStats, type SketchSim } from "@/lib/lane-sketch-sim";
 import { SketchSimClient } from "@/state/sketch-sim-client";
 import { ui, underlay$ } from "@/state/store";
+import { buildingBoxes } from "@/lib/sketch-buildings";
 import { ALL_SKETCH_LAYERS, SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from "@/state/sketch-layers";
 import { EditorKindContext, editorBack, NO_SEL, offerSketchUiToBridge, resetEditor, sketchUi, useEditorState, useUiPath, type TestOptions, type EditorKind, type Sel, type Tool } from "@/state/sketch-ui";
 import { changeSketches, clipText, lockRefused, onScratchFocus, putInSketchPage, readClipText, requestScratchFocus, scratchSketch, setSketchClip, sketchClip, takeScratchFocus, useSketchStore } from "@/state/lane-sketch";
@@ -3882,6 +3883,23 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     for (let x = Math.floor(x0 / step) * step; x <= x1; x += step) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
     for (let y = Math.floor(y0 / step) * step; y <= y1; y += step) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
     ctx.strokeStyle = color; ctx.lineWidth = px; ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // buildings (ticket #267), OpenStreetMap's once fetched: their footprints under everything else, in the plan map's colours
+  const bld = S && st.layers.buildings ? buildingsOf(sk) : null;
+  if (bld?.list.length) {
+    const bx = buildingBoxes(bld);
+    ctx.beginPath();
+    bld.list.forEach((b, i) => {
+      if (bx[i * 4 + 2] < x0 || bx[i * 4] > x1 || bx[i * 4 + 3] < y0 || bx[i * 4 + 1] > y1 || (bx[i * 4 + 2] - bx[i * 4]) * v.scale < 0.6) return;
+      ctx.moveTo(b.xy[0], b.xy[1]);
+      for (let k = 2; k + 1 < b.xy.length; k += 2) ctx.lineTo(b.xy[k], b.xy[k + 1]);
+      ctx.closePath();
+    });
+    ctx.globalAlpha = st.bg?.satellite && st.bg.geo ? 0.55 : 1;
+    ctx.fillStyle = pal.building; ctx.fill();
+    if (!far) { ctx.strokeStyle = pal.buildingEdge; ctx.lineWidth = px; ctx.stroke(); }
     ctx.globalAlpha = 1;
   }
 

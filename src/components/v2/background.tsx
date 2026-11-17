@@ -4,7 +4,7 @@
  * A V2 plan's background: the satellite imagery where the plan is on Earth (its sketch's `geo`), and
  * the reference image (the plan's underlay, as on V1 plans), with the panel to place both: a place
  * search, the imagery's brightness and source, and the image's position, scale (set by hand, or by
- * two points a known distance apart) and rotation; and the terrain under it (terrain-section.tsx).
+ * two points a known distance apart) and rotation; and the terrain under it (terrain-section.tsx), the buildings round it (buildings-section.tsx).
  */
 import { useRef, useState } from "react";
 import { useSubject } from "subjecto/react";
@@ -24,6 +24,7 @@ import { useSketchStore } from "@/state/lane-sketch";
 import { removeUnderlay, underlayImg$, uploadUnderlay } from "@/state/underlay-image";
 import { InspectorPanel } from "./inspector-panel";
 import { TerrainSection } from "./terrain-section";
+import { BuildingsSection } from "./buildings-section";
 
 // (how the imagery is shown: src/state/sat-options.ts, kept in the V2 UI store)
 export { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
@@ -158,6 +159,7 @@ export function BackgroundPanel({ sketch, sat, setSat, viewNow, calib, setCalib,
         )}
       </div>
       <TerrainSection sketch={sketch} planId={planId} readOnly={readOnly} />
+      <BuildingsSection sketch={sketch} planId={planId} readOnly={readOnly} />
       {/* the reference image */}
       <div className="grid gap-1.5 border-t pt-2">
         <span className="text-xs text-muted-foreground">Reference image{u ? `: ${u.name}` : ""}</span>

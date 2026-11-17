@@ -12,6 +12,7 @@ import { sanitizeTuning, type Tuning } from "./sketch-tuning";
 import { copyZones, pasteZones, sanitizeZones, type SketchZone } from "./sketch-zones";
 import { sanitizeBumps, type SketchBump } from "./sketch-bumps";
 import { sanitizeTerrain, terrainAt, terrainFits, type SketchTerrain } from "./terrain";
+import { buildingsFit, sanitizeBuildings, type SketchBuildings } from "./sketch-buildings";
 
 export interface Pt { x: number; y: number }
 /**
@@ -169,6 +170,8 @@ export interface Sketch {
   geo?: { lat: number; lon: number };
   /** (ticket #130) the ground's heights under it, fetched for `geo` (see terrain.ts): used while it is still for where the sketch is */
   terrain?: SketchTerrain;
+  /** (ticket #267) OpenStreetMap's buildings round it, fetched for `geo` (see sketch-buildings.ts): shown while it is still for where the sketch is */
+  buildings?: SketchBuildings;
   /** zebra crossings drawn by hand (see `SketchCrossing`) */
   crossings?: SketchCrossing[];
   /** speed bumps, humps, tables and cushions (see sketch-bumps.ts) */
@@ -2838,6 +2841,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const g = o.geo as Sketch["geo"];
   const geo = g && num(g.lat) && num(g.lon) && Math.abs(g.lat) <= 85 && Math.abs(g.lon) <= 180 ? { lat: g.lat, lon: g.lon } : undefined;
   const terrain = sanitizeTerrain(o.terrain);
+  const buildings = sanitizeBuildings(o.buildings);
   const t = o.traffic as Sketch["traffic"];
   const tune = t ? sanitizeTuning(t.tune) : null, seed = t && num(t.seed) ? Math.round(Math.min(1e9, Math.max(1, t.seed))) : undefined;
   const clock = t && num(t.clock) ? Math.round(Math.min(1439, Math.max(0, t.clock))) : 0, warmup = t && num(t.warmup) ? Math.round(Math.min(240, Math.max(0, t.warmup))) : 0;
@@ -2922,7 +2926,7 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const zones = sanitizeZones(o.zones);
   const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.bumps?.length || sc.zones?.length) ? sc : null;
   if (!lanes.length && !junctions.length && !geo && !crossings.length && !bumps.length && !zones.length && !scratch && !sketches.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(terrain ? { terrain } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(matrices.length ? { matrices } : {}), ...(matrixOn ? { matrixOn } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(terrain ? { terrain } : {}), ...(buildings ? { buildings } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(matrices.length ? { matrices } : {}), ...(matrixOn ? { matrixOn } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
 }
 
 // ---------------------------------------------------------------- locks (ticket #93)
@@ -3221,6 +3225,8 @@ function sanitizeGround(g: unknown): SketchLane["ground"] | null {
 
 /** the sketch's terrain, while it is still for where the sketch is on Earth */
 export const terrainOf = (sk: Sketch): SketchTerrain | null => (sk.terrain && terrainFits(sk.terrain, sk.geo) ? sk.terrain : null);
+/** (ticket #267) the sketch's buildings, while they are still for where the sketch is on Earth */
+export const buildingsOf = (sk: Sketch): SketchBuildings | null => (sk.buildings && buildingsFit(sk.buildings, sk.geo) ? sk.buildings : null);
 /** the sketch has heights: terrain, or a lane's set by hand (none: flat ground, as before ticket #130) */
 export const hasHeights = (sk: Sketch): boolean => !!terrainOf(sk) || sk.lanes.some(l => l.ground);
 /** metres between the heights kept along a lane */
