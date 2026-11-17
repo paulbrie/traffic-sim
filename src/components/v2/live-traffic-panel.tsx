@@ -12,7 +12,8 @@ import { freeFlowLimits, sketchArea, LIMIT_MIN_COVER, TRAFFIC_BANDS, TRAFFIC_CLO
 import type { Incident } from "@/lib/tomtom-api";
 import { cn } from "@/lib/utils";
 import { basePath } from "@/lib/base-path";
-import type { TrafficHistoryInfo, TrafficSampleInfo } from "@/server/data/traffic-history";
+import type { TrafficHistoryInfo } from "@/server/data/traffic-history";
+import type { TrafficSampleInfo } from "@/server/data/traffic-samples";
 import { fetchLiveTraffic, getTrafficHistoryInfo, getTrafficSamples } from "@/server/traffic";
 import { useSketchStore } from "@/state/lane-sketch";
 import { clearLiveTraffic, logTrafficPull, setLiveTraffic, type LiveTraffic } from "@/state/live-traffic";

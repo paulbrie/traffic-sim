@@ -7,7 +7,8 @@ import { bboxProblem } from "@/lib/osm/area";
 import { MAX_TILES, tilesFor, type FlowLine, type TrafficSnapshot } from "@/lib/tomtom";
 import { fetchFlow, fetchFlowTile, TomTomError } from "@/lib/tomtom-api";
 import { assertUser } from "./auth";
-import { listTrafficSamples, trafficHistoryInfo, type TrafficHistoryInfo, type TrafficSampleInfo } from "./data/traffic-history";
+import { trafficHistoryInfo, type TrafficHistoryInfo } from "./data/traffic-history";
+import { listTrafficSamples, type TrafficSampleInfo } from "./data/traffic-samples";
 import { planAccess } from "./proofs/plan-access";
 
 // Live traffic from TomTom (ticket #33): the key (TOMTOM_API) stays on the server; the editor gets the decoded lines.

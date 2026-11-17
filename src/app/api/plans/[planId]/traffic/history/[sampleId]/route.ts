@@ -2,7 +2,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { name } from "@gdp-ts/core";
 import { PlanId } from "@/lib/ids";
 import { getCurrentUser } from "@/server/auth";
-import { trafficSample } from "@/server/data/traffic-history";
+import { trafficSample } from "@/server/data/traffic-samples";
 import { planAccess } from "@/server/proofs/plan-access";
 
 // (ticket #261) one sample of TomTom's traffic recorded for a plan, for the Live traffic panel's replay: gzipped JSON
