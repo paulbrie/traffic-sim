@@ -1,15 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Download, Gauge, RefreshCw, TrafficCone, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Download, Gauge, History, Pause, Play, Radio, RefreshCw, StepBack, StepForward, TrafficCone, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+import type { GeoArea } from "@/engine/types";
 import type { Sketch } from "@/lib/lane-sketch";
-import { freeFlowLimits, sketchArea, LIMIT_MIN_COVER, TRAFFIC_BANDS, TRAFFIC_CLOSED, TRAFFIC_NO_DATA, type TrafficMatch } from "@/lib/tomtom";
+import { freeFlowLimits, sketchArea, LIMIT_MIN_COVER, TRAFFIC_BANDS, TRAFFIC_CLOSED, TRAFFIC_NO_DATA, type FlowLine, type TrafficMatch } from "@/lib/tomtom";
+import type { Incident } from "@/lib/tomtom-api";
 import { cn } from "@/lib/utils";
 import { basePath } from "@/lib/base-path";
-import type { TrafficHistoryInfo } from "@/server/data/traffic-history";
-import { fetchLiveTraffic, getTrafficHistoryInfo } from "@/server/traffic";
+import type { TrafficHistoryInfo, TrafficSampleInfo } from "@/server/data/traffic-history";
+import { fetchLiveTraffic, getTrafficHistoryInfo, getTrafficSamples } from "@/server/traffic";
 import { useSketchStore } from "@/state/lane-sketch";
 import { clearLiveTraffic, logTrafficPull, setLiveTraffic, type LiveTraffic } from "@/state/live-traffic";
 import { InspectorPanel } from "./inspector-panel";
@@ -63,7 +67,9 @@ export function LiveTrafficPanel({ planId, sketch, live, match, readOnly }: {
       ) : (
         <>
           <div className="flex items-center justify-between gap-2 text-xs">
-            <span title={new Date(snap.at).toLocaleString()}>TomTom at {hhmm(snap.at)} <span className="text-muted-foreground">({ago(snap.at)})</span></span>
+            {live?.recorded
+              ? <span title={`Recorded by the server; ${new Date(snap.at).toLocaleString()} here`}>Recorded at {utc(snap.at)} UTC</span>
+              : <span title={new Date(snap.at).toLocaleString()}>TomTom at {hhmm(snap.at)} <span className="text-muted-foreground">({ago(snap.at)})</span></span>}
             <Button size="icon-sm" variant="ghost" aria-label="Fetch it again" title="Fetch it again" disabled={busy} onClick={fetchNow}><RefreshCw className={cn("size-3.5", busy && "animate-spin")} /></Button>
           </div>
           {match && (
@@ -85,7 +91,7 @@ export function LiveTrafficPanel({ planId, sketch, live, match, readOnly }: {
           </Button>
         </>
       )}
-      <RecordedTraffic planId={planId} />
+      <RecordedTraffic planId={planId} live={live} onLive={fetchNow} />
       <p className="text-[10px] text-muted-foreground">Traffic data © TomTom. Kept in this page only, never saved with the plan.</p>
     </InspectorPanel>
   );
@@ -93,12 +99,40 @@ export function LiveTrafficPanel({ planId, sketch, live, match, readOnly }: {
 
 const utc = (iso: string) => `${new Date(iso).toLocaleDateString([], { day: "numeric", month: "short", timeZone: "UTC" })} ${iso.slice(11, 16)}`;
 
+/** the replay: one sample shown every this long (ms) while playing */
+const PLAY_MS = 800;
+/** samples kept in the page, loaded (each ~0.3 MB once unzipped) */
+const KEEP = 48;
+/** a sample asked for once the slider has stopped this long (ms): dragging it doesn't load each one passed */
+const SETTLE = 90;
+
+/** a recorded sample, unzipped */
+interface Loaded { at: string; area: GeoArea; incidents: Incident[]; speeds: FlowLine[]; ratios: FlowLine[] }
+const loaded = new Map<string, Promise<Loaded>>();
+function loadSample(planId: string, id: string): Promise<Loaded> {
+  let p = loaded.get(id);
+  if (!p) {
+    p = fetch(`${basePath}/api/plans/${planId}/traffic/history/${id}`).then(async r => {
+      if (!r.ok || !r.body) throw new Error(await r.json().then((d: { error?: string }) => d.error ?? `${r.status}`, () => `${r.status}`));
+      return (await new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).json()) as Loaded;
+    });
+    // (a failed one asked again next time)
+    p.catch(() => loaded.delete(id));
+    loaded.set(id, p);
+    while (loaded.size > KEEP) loaded.delete(loaded.keys().next().value!);
+  }
+  return p;
+}
+
+const dayLabel = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+
 /**
  * (ticket #261) TomTom's traffic the server records for the plan (every 5 minutes in the hours set: scripts/traffic-collect.ts),
- * if it records any: how much, and the last 14 days' as a file to analyse. Nothing shown for a plan not recorded.
+ * if it records any: how much, the last 14 days' as a file to analyse, and a replay. Nothing shown for a plan not recorded.
  */
-function RecordedTraffic({ planId }: { planId: string }) {
+function RecordedTraffic({ planId, live, onLive }: { planId: string; live: LiveTraffic | null; onLive: () => void }) {
   const [info, setInfo] = useState<TrafficHistoryInfo | null>(null);
+  const [replay, setReplay] = useState(false);
   useEffect(() => {
     let on = true;
     getTrafficHistoryInfo(planId).then(x => { if (on) setInfo(x); }, () => {});
@@ -107,16 +141,119 @@ function RecordedTraffic({ planId }: { planId: string }) {
   if (!info?.samples || !info.first || !info.last) return null;
   const url = `${basePath}/api/plans/${planId}/traffic/history`;
   return (
-    <div className="grid gap-1 border-t pt-2 text-[11px]">
+    <div className="grid gap-1.5 border-t pt-2 text-[11px]">
       <span title="The server fetches TomTom's traffic for this plan every 5 minutes in the hours set, and keeps it: speeds and incidents, to analyse later.">
         Recorded: {info.samples} snapshot{info.samples === 1 ? "" : "s"}{info.ok < info.samples ? ` (${info.samples - info.ok} failed)` : ""}, {utc(info.first)} – {utc(info.last)} UTC
       </span>
       {info.lastError && <span className="text-destructive">Last one failed: {info.lastError}</span>}
+      {replay
+        ? <TrafficReplay planId={planId} live={live} onLive={() => { setReplay(false); onLive(); }} onClose={() => setReplay(false)} />
+        : <Button size="sm" variant="outline" onClick={() => setReplay(true)} title="Show the traffic recorded on the map, one snapshot after another, as the simulation's replay"><History /> Replay recorded traffic</Button>}
       <div className="flex items-center gap-1">
         <span className="text-muted-foreground">Last 14 days:</span>
         <Button asChild size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]"><a href={url} download><Download className="size-3" /> JSON</a></Button>
         <Button asChild size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]"><a href={`${url}?format=csv`} download><Download className="size-3" /> CSV</a></Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The recorded traffic replayed (ticket #261), as the simulation's replay: a day picked, a slider over its samples, step back
+ * and forward, play (one sample every PLAY_MS); each shown on the map as live traffic is (the lanes' colours, the hover
+ * cards, the incidents then). Live fetches TomTom's traffic now.
+ */
+function TrafficReplay({ planId, live, onLive, onClose }: { planId: string; live: LiveTraffic | null; onLive: () => void; onClose: () => void }) {
+  const [samples, setSamples] = useState<TrafficSampleInfo[] | null>(null);
+  const [day, setDay] = useState<string | null>(null);
+  const [idx, setIdx] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  /** a sample that couldn't be loaded, and why */
+  const [failed, setFailed] = useState<{ id: string; why: string } | null>(null);
+  /** the sample last asked for (an older one coming back later isn't shown) */
+  const asked = useRef<string | null>(null);
+  useEffect(() => {
+    let on = true;
+    getTrafficSamples(planId).then(xs => {
+      if (!on) return;
+      setSamples(xs);
+      // (the day of the sample shown, else the newest; at that sample, else its first)
+      const shown = xs.find(x => x.id === live?.recorded?.id), d = (shown ?? xs.at(-1))?.at.slice(0, 10) ?? null;
+      setDay(d);
+      setIdx(shown ? xs.filter(x => x.at.startsWith(d!)).indexOf(shown) : 0);
+    }, e => { if (on) setProblem(e instanceof Error ? e.message : String(e)); });
+    return () => { on = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planId]);
+  const days = useMemo(() => {
+    const m = new Map<string, TrafficSampleInfo[]>();
+    for (const x of samples ?? []) { const d = x.at.slice(0, 10), l = m.get(d); if (l) l.push(x); else m.set(d, [x]); }
+    return m;
+  }, [samples]);
+  const list = (day && days.get(day)) || [];
+  const cur = list[Math.min(idx, list.length - 1)];
+  const shownId = live?.recorded?.id ?? null;
+  // (the sample at the slider shown, once it has stopped there; the next ones loaded ahead)
+  useEffect(() => {
+    if (!cur) return;
+    asked.current = cur.id;
+    if (cur.error || cur.id === shownId) return;
+    const t = setTimeout(() => {
+      setBusy(true);
+      loadSample(planId, cur.id).then(s => {
+        if (asked.current !== cur.id) return;
+        setLiveTraffic(planId, { at: s.at, area: s.area, speeds: s.speeds, ratios: s.ratios }, { id: cur.id, incidents: s.incidents });
+      }, e => { if (asked.current === cur.id) { setFailed({ id: cur.id, why: e instanceof Error ? e.message : String(e) }); setPlaying(false); } })
+        .finally(() => { if (asked.current === cur.id) setBusy(false); });
+      for (const x of list.slice(idx + 1, idx + 3)) if (!x.error) void loadSample(planId, x.id).catch(() => {});
+    }, playing ? 0 : SETTLE);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cur?.id, planId]);
+  // (playing: the next sample once this one is on the map, or has none)
+  useEffect(() => {
+    if (!playing || !cur || (!cur.error && cur.id !== shownId)) return;
+    const t = setTimeout(() => { if (idx >= list.length - 1) setPlaying(false); else setIdx(i => i + 1); }, PLAY_MS);
+    return () => clearTimeout(t);
+  }, [playing, cur, shownId, idx, list.length]);
+
+  if (!samples) return <p className="text-muted-foreground">{problem ?? "Loading the snapshots…"}</p>;
+  if (!list.length || !cur) return <p className="text-muted-foreground">No snapshots recorded.</p>;
+  const why = cur.error ? `No data at ${cur.at.slice(11, 16)} UTC: ${cur.error}` : failed?.id === cur.id ? `Couldn't load it: ${failed.why}` : null;
+  const go = (i: number) => { setPlaying(false); setIdx(Math.max(0, Math.min(list.length - 1, i))); };
+  return (
+    <div role="group" aria-label="Replay of the recorded traffic" className="grid gap-1.5 rounded-md border p-1.5">
+      <div className="flex items-center gap-1">
+        <Select value={day ?? ""} onValueChange={d => { setPlaying(false); setDay(d); setIdx(0); }}>
+          <SelectTrigger size="sm" className="h-7 min-w-0 flex-1 text-xs" aria-label="Day recorded"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {[...days].reverse().map(([d, xs]) => <SelectItem key={d} value={d} className="text-xs">{dayLabel(d)} · {xs.length} snapshots</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Button size="icon-sm" variant="ghost" aria-label="Close the replay" title="Close the replay (what is on the map stays)" onClick={() => { setPlaying(false); onClose(); }}><X className="size-3.5" /></Button>
+      </div>
+      <div className="flex items-center gap-1">
+        <Button size="icon-sm" variant="ghost" aria-label="Step back" title="The snapshot before (5 min)" disabled={idx <= 0} onClick={() => go(idx - 1)}><StepBack /></Button>
+        <Button size="icon-sm" variant="ghost" aria-label={playing ? "Pause the replay" : "Play the replay"} title={playing ? "Pause" : `Play the day (a snapshot every ${PLAY_MS / 1000} s)`}
+          onClick={() => { if (playing) { setPlaying(false); return; } if (idx >= list.length - 1) setIdx(0); setPlaying(true); }}>
+          {playing ? <Pause /> : <Play />}
+        </Button>
+        <Button size="icon-sm" variant="ghost" aria-label="Step forward" title="The snapshot after (5 min)" disabled={idx >= list.length - 1} onClick={() => go(idx + 1)}><StepForward /></Button>
+        <Slider className="mx-1 flex-1" min={0} max={Math.max(1, list.length - 1)} step={1} value={[Math.min(idx, list.length - 1)]} disabled={list.length < 2}
+          onValueChange={([v]) => go(v)} aria-label="Snapshot recorded" />
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono tabular" title={`${new Date(cur.at).toLocaleString()} here · snapshot ${idx + 1} of ${list.length} that day`}>
+          <span className="font-semibold text-foreground">{cur.at.slice(11, 16)}</span> UTC <span className="text-muted-foreground">· {idx + 1}/{list.length}</span>
+          {busy && <RefreshCw className="ml-1 inline size-3 animate-spin text-muted-foreground" />}
+        </span>
+        <Button size="sm" variant={live?.recorded ? "default" : "secondary"} className="h-6 px-2 text-[11px]" onClick={() => { setPlaying(false); onLive(); }} title="Back to TomTom's traffic now (fetched again)">
+          <Radio className="size-3" /> Live
+        </Button>
+      </div>
+      {why && <span className="text-destructive">{why}</span>}
     </div>
   );
 }

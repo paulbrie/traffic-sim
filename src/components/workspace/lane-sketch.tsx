@@ -317,6 +317,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const [liveAll] = useSubject(liveTraffic$);
   const liveTr = page && liveAll?.plan === planId ? liveAll : null;
   const flow = useMemo(() => (liveTr && sketch.geo ? liveTr.match(sketch) : null), [liveTr, sketch]);
+  // (a recorded sample replayed: its incidents then, in place of those polled; ticket #261)
+  const incidents = liveTr?.recorded ? liveTr.recorded.incidents : traffic;
   // (the plan's editor takes the keys: on opening the page, and when the sketch window over it closes)
   const [sketchOpen] = useDeepSubject(ui, "sketch");
   useEffect(() => { if (page && !sketchOpen) panel.current?.focus({ preventScroll: true }); }, [page, sketchOpen, panel]);
@@ -382,7 +384,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     } else if ((stats.t < T.t0 && testSeen.current === T.car) || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
   }, [stats, sketch, route.result, route.test, setRoute]);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic, flow, in3d, route: routeShown });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic: incidents, flow, in3d, route: routeShown });
   // live traffic (TomTom): polled over the plan's area every couple of minutes while the switch is on; cleared when it's
   // off or the plan isn't placed on Earth (no sketch.geo, so no area to ask TomTom about)
   useEffect(() => {
@@ -660,7 +662,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const shownBy = useRef<unknown[]>([]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/immutability -- `live` is a deliberate escape hatch (see its declaration): handlers and drawing read it kept current outside React's render cycle
-    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic, flow, in3d, route: routeShown };
+    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic: incidents, flow, in3d, route: routeShown };
     const now = [sketch, sel, tool, contents, selPt, selCorner, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown, flow];
     const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
     shownBy.current = now;

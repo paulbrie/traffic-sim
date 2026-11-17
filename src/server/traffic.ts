@@ -7,7 +7,7 @@ import { bboxProblem } from "@/lib/osm/area";
 import { MAX_TILES, tilesFor, type FlowLine, type TrafficSnapshot } from "@/lib/tomtom";
 import { fetchFlow, fetchFlowTile, TomTomError } from "@/lib/tomtom-api";
 import { assertUser } from "./auth";
-import { trafficHistoryInfo, type TrafficHistoryInfo } from "./data/traffic-history";
+import { listTrafficSamples, trafficHistoryInfo, type TrafficHistoryInfo, type TrafficSampleInfo } from "./data/traffic-history";
 import { planAccess } from "./proofs/plan-access";
 
 // Live traffic from TomTom (ticket #33): the key (TOMTOM_API) stays on the server; the editor gets the decoded lines.
@@ -59,5 +59,15 @@ export async function getTrafficHistoryInfo(planId: string): Promise<TrafficHist
   return name(me.id, PlanId(planId), async (user, plan) => {
     const view = await planAccess(user, plan);
     return view ? trafficHistoryInfo(plan, view) : null;
+  });
+}
+
+/** (ticket #261) the samples recorded for a plan the user can open, oldest first, for the replay (none: they can't) */
+export async function getTrafficSamples(planId: string): Promise<TrafficSampleInfo[]> {
+  const me = await assertUser();
+  if (typeof planId !== "string" || !UUID.test(planId)) throw new Error("Invalid id");
+  return name(me.id, PlanId(planId), async (user, plan) => {
+    const view = await planAccess(user, plan);
+    return view ? listTrafficSamples(plan, view) : [];
   });
 }

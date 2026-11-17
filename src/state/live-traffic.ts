@@ -1,6 +1,6 @@
 /**
  * The live traffic fetched from TomTom for the plan open (ticket #33; see src/lib/tomtom.ts): kept in the page only,
- * never saved with the plan (TomTom's terms limit storing it), gone on leaving the plan. The editor matches it onto the
+ * never saved with the plan, gone on leaving the plan; or a sample the server recorded (ticket #261), replayed. The editor matches it onto the
  * sketch (`trafficMatcher`); the map's "Live traffic" layer, the Live traffic panel and the Roads results read the match.
  * Each pull from TomTom (the incidents polled while Live traffic sync is on, the roads' speeds fetched) goes in `trafficLog$`,
  * which the console lists.
@@ -8,18 +8,21 @@
 import { Subject } from "subjecto";
 import { trafficMatcher, type TrafficMatch, type TrafficSnapshot } from "@/lib/tomtom";
 import type { Sketch } from "@/lib/lane-sketch";
+import type { Incident } from "@/lib/tomtom-api";
 
 export interface LiveTraffic {
   /** the plan it was fetched for */
   plan: string;
   snapshot: TrafficSnapshot;
   match: (sk: Sketch) => TrafficMatch | null;
+  /** (ticket #261) a sample the server recorded, replayed (its id, and the incidents then, shown in place of those polled) */
+  recorded?: { id: string; incidents: Incident[] };
 }
 
 export const liveTraffic$ = new Subject<LiveTraffic | null>(null, { name: "liveTraffic" });
 
-export function setLiveTraffic(plan: string, snapshot: TrafficSnapshot) {
-  liveTraffic$.next({ plan, snapshot, match: trafficMatcher(snapshot) });
+export function setLiveTraffic(plan: string, snapshot: TrafficSnapshot, recorded?: LiveTraffic["recorded"]) {
+  liveTraffic$.next({ plan, snapshot, match: trafficMatcher(snapshot), ...(recorded ? { recorded } : {}) });
 }
 export const clearLiveTraffic = () => liveTraffic$.next(null);
 

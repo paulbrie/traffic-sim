@@ -31,6 +31,10 @@ anything else.) To record more plans, add their ids to the same command.
   `--rematch` matches the kept lines on the plan's sketch now. Use it once the plan's lanes have changed since recording.
 - In the editor, the Live traffic panel shows how many snapshots there are, with the last 14 days as JSON or CSV
   (`/api/plans/<id>/traffic/history?days=14&format=csv`).
+- The panel's "Replay recorded traffic" works like the simulation's replay. Pick a day, then drag the slider over its
+  snapshots, step back and forward, or play it (one snapshot every 0.8 s). Each snapshot shows on the map as live traffic
+  does: lane colours, hover cards, and that moment's incidents. Live goes back to TomTom's traffic now. Each snapshot is
+  about 37 KB, gzipped, from `/api/plans/<id>/traffic/history/<sampleId>`, and the browser caches it.
 
 The JSON explains itself (`about`). For each road one way (a "way": road id + `a`/`b`, name, heading, length, speed limit)
 and each sample, it gives `[kmh, rel, free, cover, closed]`. It also has the incidents, with when each was first and last
