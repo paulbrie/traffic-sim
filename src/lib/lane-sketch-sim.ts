@@ -2875,8 +2875,11 @@ export class SketchSim {
             // can't stop any more holds it; neither, first come, first served, with patience)
             const first = ws <= 0
               || (!forced && !rules && (here === wMinor ? this.yieldsTo(v, zs, r.edge.vmax, w, ws, k.other.vmax) : here ? timeTo(ws, w.v, k.other.vmax, accOf(w)) < timeTo(dMe + k.after + reach(v), v.v, r.edge.vmax, accOf(v)) + GAP
-                // (a way off an inner ring kept waiting long for a gap in the outer ring: it goes once the one coming can still stop in comfort)
-                && !(r.edge.innerOff && (this.offWait.get(v.id) ?? 0) > GIVE_PATIENCE && ws > (w.v * w.v) / (2 * B_COMF) + 1) : committed))
+                // (a way off an inner ring kept waiting long for a gap in the outer ring: it goes once the one coming can still stop in comfort;
+                // so too a way onto the inner ring across the outer one, as joining the outer ring eases the longer one waits: else, the outer
+                // ring fed without a break from one way on, those on the next ways in never got to the inner ring at all, a car a minute or
+                // none (ticket #266))
+                && !((r.edge.innerOff || (r.edge.kind === "conn" && r.edge.to!.lane.ring && k.other.ring)) && (this.offWait.get(v.id) ?? 0) > GIVE_PATIENCE && ws > (w.v * w.v) / (2 * B_COMF) + 1) : committed))
               || (!forced && rules && (k.prio < 0
                 ? !(v.still > GIVE_PATIENCE && ws > (w.v * w.v) / (2 * B_COMF) + 1) && timeTo(ws, w.v, k.other.vmax, accOf(w)) < timeTo(dMe + k.after + reach(v), v.v, r.edge.vmax, accOf(v)) + GAP
                 : k.prio > 0 ? committed : this.yieldsTo(v, zs, r.edge.vmax, w, ws, k.other.vmax)));

@@ -7,9 +7,11 @@
  * ring, missed exits (going more than half a lap past the way off), collisions and deadlocks. As things are, and with each setting
  * given (key=value, as `sketch.traffic.tune`). RING_DEBUG=1 lists every way on; RING_GEOM=1 only prints the ways on and off's lengths
  * and speeds (RING_NEAR, RING_D try other arms).
- * Last, a check (ticket #89): the team's Roundabout 3 as at rev 485 (a two-lane ring 14 and 21 m across, every way in queued, a zebra on
+ * Then a check (ticket #89): the team's Roundabout 3 as at rev 485 (a two-lane ring 14 and 21 m across, every way in queued, a zebra on
  * one arm, its own settings: lane by exit, roundabout driving), 20 minutes on seeds 1 and 2: cars through an hour, deadlocks broken,
  * collisions (1024 veh/h and some 50 deadlocks before; the spatial experiment's ~1800 on average, without the zebra or lanes).
+ * Last (ticket #266): Bistrița Auto Search's Junction 5, one way on fed without a break, the next one's inside lane getting onto the inner
+ * ring across the outer one (scripts/fixtures/junction-5-t266.json).
  *   npm run ring:check [-- key=value …]
  */
 import { readFileSync } from "fs";
@@ -136,4 +138,29 @@ for (const variant of ["S", "A", "B"] as const) for (const tune of tunes) {
   const ok = through >= 1550 && deadlocks <= 4 && collisions <= 6;
   if (!ok) process.exitCode = 1;
   console.log(`\n${ok ? "ok  " : "FAIL"} Roundabout 3 (rev 485), 20 min, seeds 1-2: ${Math.round(through)} veh/h through (at least 1550), deadlocks broken ${deadlocks} (at most 4), collisions ${collisions} (at most 6)`);
+}
+
+
+// Bistrița Auto Search's Junction 5 (ticket #266), cut out of the plan: a two-lane ring, every way off from the outer one but one, the
+// south-west fed without a break (750 vehicles/h a lane), the north-east at 400, lane by exit and roundabout driving. The north-east's
+// inside lane, onto the inner ring across the outer one, gave way to ring car after ring car, never easing however long it waited:
+// 15 /h. Joining the outer ring eases the longer one waits, and now crossing it does too (about 50 /h here: what holds it then is the
+// inner ring's cars queued, where it joins, for their own way off across the same stream)
+{
+  const sk = sanitizeSketch(JSON.parse(readFileSync(new URL("./fixtures/junction-5-t266.json", import.meta.url), "utf8")))!, T = 900, WARM = 180;
+  const rs = [1, 2].map(seed => {
+    const sim = new SketchSim(sk, { ...sk.traffic!, seed }, seed) as unknown as { step: (dt: number) => void; t: number; collisions: number; deadlocks: number; vehicles: { id: number; edge: { kind: string; id: string } }[] };
+    const seen = new Set<number>(), n: Record<string, number> = {};
+    while (sim.t < T - 1e-9) {
+      sim.step(0.1);
+      if (sim.t > WARM) for (const v of sim.vehicles) if (v.edge.kind === "conn" && !seen.has(v.id)) { seen.add(v.id); n[v.edge.id] = (n[v.edge.id] ?? 0) + 1; }
+    }
+    return { n, collisions: sim.collisions, deadlocks: sim.deadlocks };
+  });
+  const H = ((T - WARM) / 3600) * rs.length, per = (id: string) => Math.round(rs.reduce((a, r) => a + (r.n[id] ?? 0), 0) / H);
+  const inner = per("c5495"), outer = per("c5494"), feed = per("c5486") + per("c5487"), collisions = rs.reduce((a, r) => a + r.collisions, 0);
+  if (process.env.RING_DEBUG) console.log(Object.fromEntries(Object.keys(rs[0].n).sort().map(id => [id, per(id)])));
+  const ok = inner >= 35 && collisions <= 2;
+  if (!ok) process.exitCode = 1;
+  console.log(`${ok ? "ok  " : "FAIL"} Junction 5 (ticket #266), the south-west's ${feed} /h onto the ring, seeds 1-2: the north-east's inside lane ${inner} /h onto the inner ring (at least 35; 15 before), its outside lane ${outer} /h; collisions ${collisions} (at most 2)`);
 }
