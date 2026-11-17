@@ -6,10 +6,11 @@ import { Kbd } from "@/components/ui/kbd";
 import { useEditorKind, useUiPath } from "@/state/sketch-ui";
 import { isFullCircle, laneLength, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
 import { formatArea, zoneArea } from "@/lib/sketch-zones";
+import { shapeArea } from "@/lib/sketch-shapes";
 import { BUMP_KINDS, bumpSpeed } from "@/lib/sketch-bumps";
 
 /** what a search entry leads to: something on the sketch, or a car running now */
-export type SearchTarget = { kind: "road" | "lane" | "connector" | "junction" | "link" | "crossing" | "bump" | "zone" | "stop"; id: string } | { kind: "car"; id: number };
+export type SearchTarget = { kind: "road" | "lane" | "connector" | "junction" | "link" | "crossing" | "bump" | "zone" | "shape" | "stop"; id: string } | { kind: "car"; id: number };
 /** something to do, found by the search too */
 export interface SearchCommand { title: string; sub: string; run: () => void }
 /** one thing on the sketch the search can find (or a command) */
@@ -76,6 +77,7 @@ export function catalogue(sk: Sketch, contents: Map<string, JunctionContents>, c
   for (const x of sk.bumps ?? []) add(BUMP_KINDS[x.kind].label, x.id, `${bumpSpeed(x)} km/h · ${x.height} cm`, x.id, { kind: "bump", id: x.id });
   // (zones by their name, and their note: a word from it finds them too)
   for (const z of sk.zones ?? []) add("Zone", z.name, [formatArea(zoneArea(z.outline)), z.note ?? ""].filter(Boolean).join(" · "), z.id, { kind: "zone", id: z.id });
+  for (const x of sk.shapes ?? []) add("Shape", x.name, formatArea(shapeArea(x)), x.id, { kind: "shape", id: x.id });
   for (const x of sk.stops ?? []) add("Bus stop", x.name, (sk.busLines ?? []).filter(l => l.stops.includes(x.id)).map(l => l.name).join(", ") || "no line yet", x.id, { kind: "stop", id: x.id });
   for (const v of cars) add("Car", `#${v.id}`, [v.edge ?? "", v.kmh !== undefined ? `${Math.round(v.kmh)} km/h` : ""].filter(Boolean).join(" · "), String(v.id), { kind: "car", id: v.id });
   return out;

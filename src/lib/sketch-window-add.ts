@@ -7,7 +7,7 @@
 import { piecePoints, sanitizeSketch, type Piece, type Pt, type Sketch } from "./lane-sketch";
 import { addAsNewSketch, contentOf, sketchList } from "./sketch-list";
 
-export type WindowCounts = { lanes: number; connectors: number; roads: number; junctions: number; crossings: number; zones: number };
+export type WindowCounts = { lanes: number; connectors: number; roads: number; junctions: number; crossings: number; zones: number; shapes: number };
 export type WindowAdd = {
   /** the plan's sketch with the piece in a new saved sketch (the main plan and the user's sketches as they were) */
   sketch: Sketch;
@@ -20,7 +20,7 @@ export type WindowAdd = {
   preview: { added: Pt[][] };
 };
 
-const all = (sk: Sketch): Piece => ({ lanes: sk.lanes.map(l => l.id), connectors: sk.connectors.map(c => c.id), junctions: sk.junctions.map(j => j.id), ...(sk.zones?.length ? { zones: sk.zones.map(z => z.id) } : {}) });
+const all = (sk: Sketch): Piece => ({ lanes: sk.lanes.map(l => l.id), connectors: sk.connectors.map(c => c.id), junctions: sk.junctions.map(j => j.id), ...(sk.zones?.length ? { zones: sk.zones.map(z => z.id) } : {}), ...(sk.shapes?.length ? { shapes: sk.shapes.map(x => x.id) } : {}) });
 const lines = (sk: Sketch, max = 400) =>
   sk.lanes.slice(0, max).map(l => piecePoints({ ...sk, lanes: [l] }, { lanes: [l.id], connectors: [], junctions: [] }).filter((_, i, a) => i % Math.max(1, Math.floor(a.length / 12)) === 0 || i === a.length - 1));
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -48,6 +48,6 @@ export function addToSketchWindow(plan: Sketch, raw: unknown, name = "Agent patc
   const added = { ...all(piece), crossings: (piece.crossings ?? []).map(x => x.id) };
   if (!w || !has(w.lanes, added.lanes) || !has(w.connectors, added.connectors) || !has(w.junctions, added.junctions) || !has(w.crossings, added.crossings))
     return { ok: false, error: "Some of the piece's items wouldn't survive in the new sketch (they don't fit together on their own)." };
-  const counts: WindowCounts = { lanes: added.lanes.length, connectors: added.connectors.length, roads: w.roads.length, junctions: added.junctions.length, crossings: added.crossings.length, zones: added.zones?.length ?? 0 };
+  const counts: WindowCounts = { lanes: added.lanes.length, connectors: added.connectors.length, roads: w.roads.length, junctions: added.junctions.length, crossings: added.crossings.length, zones: added.zones?.length ?? 0, shapes: added.shapes?.length ?? 0 };
   return { ok: true, sketch, sketchId: r.id, sketchName: r.name, added, counts, preview: { added: lines(w) } };
 }

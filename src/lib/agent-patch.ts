@@ -4,7 +4,7 @@ import { leftOutCount, pickPatch, readSketchFile, SKETCH_KINDS, type FileSummary
 /**
  * Agent patches (T132): changes an agent proposes to a plan instead of editing it, applied or rejected by the
  * plan's editors on its page. A patch is what "Apply changes from file" takes (lanes, connectors, roads,
- * junctions, links, crossings, zones, each with an id; an item's own fields over the current one's), and may also
+ * junctions, links, crossings, zones, shapes, each with an id; an item's own fields over the current one's), and may also
  * remove items: `remove: { lanes: ["l5"], connectors: ["c7"], … }`, ids only, checked so nothing goes unlisted;
  * and add a piece as a new sketch of the plan's (its Sketch window's): `sketchWindowAdd: { lanes, connectors, roads, junctions,
  * crossings, zones, geo?, … }` (a sketch fragment; T152), named after the patch's title, never into the user's own

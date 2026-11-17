@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Bike, BusFront, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, Gauge, LandPlot, MapPin, Maximize, Milestone, MousePointer2, PanelLeftClose, PanelLeftOpen, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Bike, BusFront, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Shapes, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, Gauge, LandPlot, MapPin, Maximize, Milestone, MousePointer2, PanelLeftClose, PanelLeftOpen, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,11 +51,14 @@ import { OptimizeLightsButton } from "@/components/v2/optimize-dialog-v2";
 import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { ResultsPanel } from "@/components/v2/results-panel";
 import { ZonePanel } from "@/components/v2/zone-panel";
+import { ShapePanel } from "@/components/v2/shape-panel";
+import { paintShapeDraft, paintShapes } from "@/components/v2/shape-tools";
 import { ALIGN_BUTTONS, AlignLanes } from "@/components/v2/align-lanes";
 import { alignLanes, canAlign } from "@/lib/lane-align";
 import { FILL_GAP, fillAllJunctions, junctionSurfaceHoles, unfilledJunctions } from "@/lib/junction-fill";
 import { paintZoneDraft, paintZones, zoneAt, zoneEditAt } from "@/components/v2/zone-tools";
 import { addZone, deleteZone, formatArea, insertZoneCorner, moveZoneCorner, nextZoneColor, removeZoneCorner, zoneArea, zoneLabelPoint } from "@/lib/sketch-zones";
+import { addShape as addSketchShape, circleOutline, deleteShape, insertShapePoint, moveShapePoint, rectOutline, removeShapePoint, SHAPE_COLOR, shapeArea, shapeAt } from "@/lib/sketch-shapes";
 import { SimSettingsButton } from "@/components/v2/sim-settings-v2";
 import { roadNames } from "@/components/v2/compass-names";
 import { streetLabel, streetLabelSize } from "@/render/street-label";
@@ -104,6 +107,7 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
   { id: "bump", key: "H", label: "Speed bump", icon: <Gauge />, hint: "Click one kerb, then the other: a speed hump across the road between them (the kind of the last one put down; bump, hump, table or cushions in its panel). Cars slow to its speed · Esc cancels" },
   { id: "junction", key: "J", label: "Junction", icon: <Pentagon />, hint: "Click the junction's corners; click the first again (or Enter, or double-click) to close it. The lanes in no road and the connectors on it are its own" },
   { id: "zone", key: "Z", label: "Zone", icon: <LandPlot />, hint: "Click the zone's corners; click the first again (or Enter, or double-click) to close it · Backspace takes the last corner back · Esc cancels. A labelled area (a neighbourhood, a zone) for reading the plan: the cars don't see it" },
+  { id: "shape", key: "S", label: "Shape", icon: <Shapes />, hint: "Click the shape's points; click the first again (or Enter, or double-click) to close it · or drag out a rectangle (Shift: a square; Alt: a circle round where you pressed) · Backspace takes the last point back · Esc cancels. Its colour, opacity and border in its panel. Only drawn, under the roads: the cars don't see it" },
   { id: "stop", key: "B", label: "Bus stop", icon: <BusFront />, hint: "Click a lane to put a bus stop there. Add it to a bus line in the Bus lines panel so buses serve it" },
 ];
 const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
@@ -111,7 +115,7 @@ const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
 interface View { cx: number; cy: number; /** px per metre */ scale: number }
 /** a live traffic incident (TomTom), as the `/api/plans/[planId]/traffic` route reports it */
 interface TrafficIncident { id: string; iconCategory: number; magnitudeOfDelay: number; delay: number | null; from: string | null; to: string | null; description: string | null; coordinates: { lat: number; lon: number }[] }
-type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { bump: string } | { zone: string } | { stop: string };
+type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { bump: string } | { zone: string } | { shape: string } | { stop: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[]; /** found from a panel (the live graph, ticket #109): lit up strongly, over the cars, with this label */ focus?: string };
 /** a road's or a junction's name as drawn on the map: what it names, and its pill (px on the canvas) */
@@ -119,7 +123,7 @@ type NameLabel = { kind: "road" | "junction" | "in" | "out" | "zone"; id: string
 /** a way in's traffic, or a way out's share of the trips, being edited on its label: its lanes, where (px), the value it had */
 type WayEdit = { kind: "in" | "out"; lanes: string[]; x: number; y: number; value: number };
 /** a point to drag: a lane's, a connector's bend or end (moved along its lane or onto another), a junction's corner */
-type Handle = { kind: "lane" | "bend" | "corner" | "zcorner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" }
+type Handle = { kind: "lane" | "bend" | "corner" | "zcorner" | "scorner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" }
   /** the middle of a selected junction's edge after corner `i`: a corner put in there */
   | { kind: "jmid"; id: string; i: number; p: Pt };
 
@@ -131,6 +135,7 @@ type Draft =
   | { kind: "connector"; from: LaneAt; via: Pt[] }
   | { kind: "junction"; pts: Pt[] }
   | { kind: "zone"; pts: Pt[] }
+  | { kind: "shape"; pts: Pt[] }
   | { kind: "crossing"; a: Pt }
   | { kind: "bump"; a: Pt };
 type Drag =
@@ -142,14 +147,25 @@ type Drag =
   /** a zebra crossing: moved whole, one kerb end, one corner (0..3), or its bars turned (ticket #57) */
   | { kind: "crossing"; base: Sketch; id: string; part: "move" | "a" | "b" | 0 | 1 | 2 | 3 | "stripes"; from: Pt }
   /** a speed bump: moved whole, or one kerb end */
-  | { kind: "bump"; base: Sketch; id: string; part: "move" | "a" | "b"; from: Pt };
+  | { kind: "bump"; base: Sketch; id: string; part: "move" | "a" | "b"; from: Pt }
+  /** the Shape tool's press (ticket #268): dragged, a rectangle (a square) or a circle; let go where it was, a shape's first point */
+  | { kind: "shapeBox"; a: Pt; b: Pt; moved: boolean; square: boolean; circle: boolean };
 
 const isEmpty = (p: Piece) => !p.lanes.length && !p.connectors.length && !p.junctions.length;
 /**
  * What turns of a selection: its lanes and junctions. Connectors don't turn by themselves (their ends are on
  * their lanes); the bends of those between two lanes that turn go with them.
  */
-const turning = (p: Piece): Piece => ({ lanes: p.lanes, connectors: [], junctions: p.junctions, ...(p.zones?.length ? { zones: p.zones } : {}) });
+const turning = (p: Piece): Piece => ({ lanes: p.lanes, connectors: [], junctions: p.junctions, ...(p.zones?.length ? { zones: p.zones } : {}), ...(p.shapes?.length ? { shapes: p.shapes } : {}) });
+/** the Shape tool's drag as points (ticket #268): a rectangle from `a` to `b` (`square`: its sides the longer one), or a circle round `a` through `b`; null if too small */
+function shapeBoxOutline(g: { a: Pt; b: Pt; square: boolean; circle: boolean }): Pt[] | null {
+  if (g.circle) return dist(g.a, g.b) >= 0.5 ? circleOutline(g.a, g.b) : null;
+  let b = g.b;
+  if (g.square) { const k = Math.max(Math.abs(b.x - g.a.x), Math.abs(b.y - g.a.y)); b = { x: g.a.x + Math.sign(b.x - g.a.x || 1) * k, y: g.a.y + Math.sign(b.y - g.a.y || 1) * k }; }
+  return Math.abs(b.x - g.a.x) >= 0.5 && Math.abs(b.y - g.a.y) >= 0.5 ? rectOutline(g.a, b) : null;
+}
+/** the colours a new shape takes: the last one's (the first, the default's) */
+const shapeLook = (sk: Sketch) => { const x = sk.shapes?.[sk.shapes.length - 1]; return x ? { color: x.color, opacity: x.opacity, border: x.border } : { color: SHAPE_COLOR }; };
 /** the box round what turns of the selection, its centre and the handle to turn it by (over the box, 28 px up) */
 function rotateHandle(sk: Sketch, piece: Piece, scale: number) {
   const b = boundsOfPts(piecePoints(sk, turning(piece)));
@@ -189,6 +205,7 @@ function prune(sel: Sel, sk: Sketch): Sel {
   if (!stopOk) return { ...sel, stop: null };
   // (a zone deleted, or undone away: let go)
   if (sel.zones?.some(id => !sk.zones?.some(z => z.id === id))) return { ...sel, zones: sel.zones.filter(id => sk.zones?.some(z => z.id === id)) };
+  if (sel.shapes?.some(id => !sk.shapes?.some(x => x.id === id))) return { ...sel, shapes: sel.shapes.filter(id => sk.shapes?.some(x => x.id === id)) };
   if (linkOk && sel.lanes.every(l => ids.has(l)) && sel.connectors.every(c => cids.has(c)) && sel.junctions.every(j => jids.has(j)) && (!sel.road || sk.roads.some(r => r.id === sel.road))) return sel;
   return { lanes: sel.lanes.filter(l => ids.has(l)), connectors: sel.connectors.filter(c => cids.has(c)), junctions: sel.junctions.filter(j => jids.has(j)), road: sk.roads.some(r => r.id === sel.road) ? sel.road : null, link: linkOk ? sel.link : null };
 }
@@ -205,6 +222,7 @@ function exportSketch(sk: Sketch, contents: Map<string, JunctionContents>) {
     junctions: sk.junctions.map(j => ({ ...j, ...contents.get(j.id) })),
     // (the zones, with their area: a file to restore from keeps them)
     ...(sk.zones?.length ? { zones: sk.zones.map(z => ({ ...z, area: Math.round(zoneArea(z.outline)) })) } : {}),
+    ...(sk.shapes?.length ? { shapes: sk.shapes } : {}),
   };
 }
 
@@ -492,12 +510,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const jn = sketchIndex(sk).near(p, 1).junctions;
     const js = sk.junctions.filter(j => jn.has(j.id) && inJ(j)).sort((a, b) => polygonArea(a.outline) - polygonArea(b.outline));
     if (js.length) return { junction: js[0].id };
-    // (a zone: under everything, the smallest holding the pointer; not while hidden. A selected one's border
-    // counts a little outside too (6 px), so a double-click just off it still adds a corner there)
-    if (!live.current.layers.zones) return null;
-    const mine = live.current.sel.zones ?? [];
-    const z = zoneAt(sk.zones, p) ?? (sk.zones ?? []).find(x => mine.includes(x.id) && nearestOn({ kind: "line", pts: [...x.outline, x.outline[0]] }, p).d <= 6 * px) ?? null;
-    return z ? { zone: z.id } : null;
+    // (a zone or a shape (ticket #268): under everything, the smallest holding the pointer; not while hidden. A selected one's
+    // border counts a little outside too (6 px), so a double-click just off it still adds a corner there)
+    const nearBorder = (o: Pt[]) => nearestOn({ kind: "line", pts: [...o, o[0]] }, p).d <= 6 * px;
+    const mine = live.current.sel.zones ?? [], mineS = live.current.sel.shapes ?? [];
+    const z = !live.current.layers.zones ? null : zoneAt(sk.zones, p) ?? (sk.zones ?? []).find(x => mine.includes(x.id) && nearBorder(x.outline)) ?? null;
+    const f = !live.current.layers.shapes ? null : shapeAt(sk.shapes, p) ?? (sk.shapes ?? []).find(x => mineS.includes(x.id) && nearBorder(x.outline)) ?? null;
+    if (z && f) return zoneArea(z.outline) <= shapeArea(f) ? { zone: z.id } : { shape: f.id };
+    return z ? { zone: z.id } : f ? { shape: f.id } : null;
   };
   /** a place on the lane under `p` (connectors over it don't hide it), snapped to the lane's ends within 12 px */
   const placeOn = (p: Pt): LaneAt | null => {
@@ -513,7 +533,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the selection's point under `p` */
   const handleAt = (p: Pt): Handle | null => {
     const sk = live.current.sketch, s = live.current.sel, tol = 7 / view.current.scale;
-    const find = (kind: "lane" | "bend" | "corner" | "zcorner", id: string, pts: Pt[] | undefined) => { const i = pts?.findIndex(q => dist(p, q) <= tol) ?? -1; return i >= 0 ? { kind, id, i } : null; };
+    const find = (kind: "lane" | "bend" | "corner" | "zcorner" | "scorner", id: string, pts: Pt[] | undefined) => { const i = pts?.findIndex(q => dist(p, q) <= tol) ?? -1; return i >= 0 ? { kind, id, i } : null; };
     // (a junction selected: its corners before what is on it, then the "+" in each edge's middle)
     for (const id of s.junctions) { const h = find("corner", id, sk.junctions.find(j => j.id === id)?.outline); if (h) return h; }
     if (s.junctions.length === 1) {
@@ -530,6 +550,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     // (a lane following a lead in a side-by-side road is shaped by its lead)
     for (const id of s.lanes) { const l = laneById(sk, id); const h = l?.shape.kind === "line" && !leadOf(sk, id) ? find("lane", id, l.shape.pts) : null; if (h) return h; }
     for (const id of s.zones ?? []) { const h = find("zcorner", id, sk.zones?.find(z => z.id === id)?.outline); if (h) return h; }
+    for (const id of s.shapes ?? []) { const h = find("scorner", id, sk.shapes?.find(x => x.id === id)?.outline); if (h) return h; }
     return null;
   };
 
@@ -961,6 +982,20 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     redraw();
   };
+  const finishShape = () => {
+    const d = draft.current;
+    if (d?.kind !== "shape") return;
+    const pts = d.pts.filter((q, i) => i === 0 || dist(q, d.pts[i - 1]) > 0.05);
+    draft.current = null;
+    if (pts.length >= 3) makeShape(pts);
+    redraw();
+  };
+  /** a shape (ticket #268) with these points, in the last one's colours, selected (and back to Select) */
+  const makeShape = (pts: Pt[]) => {
+    let made = "";
+    editSketch(k => { const [next, x] = addSketchShape(k, pts, shapeLook(k)); made = x.id; return next; });
+    if (made) { setSel({ ...NO_SEL, shapes: [made] }); changeTool("select"); }
+  };
   const addShape = (shape: LaneShape, bike?: true) => {
     const id = nextId("l", live.current.sketch.lanes.map(l => l.id));
     editSketch(s => addLane(s, bike ? { id, shape, width: BIKE_LANE_WIDTH, bike } : { id, shape, width: LANE_WIDTH }));
@@ -972,10 +1007,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (s.crossing) { const id = s.crossing; editSketch(sk => deleteCrossing(sk, id)); setSel(NO_SEL); return; }
     if (s.bump) { const id = s.bump; editSketch(sk => deleteBump(sk, id)); setSel(NO_SEL); return; }
     if (s.stop) { const id = s.stop; editSketch(sk => deleteStop(sk, id)); setSel(NO_SEL); return; }
-    // (zones with it or on their own: one undo step for it all)
-    const zones = s.zones ?? [];
-    if (isEmpty(s) && !zones.length) return;
-    const dropZones = (sk: Sketch) => zones.reduce((k, id) => deleteZone(k, id), sk);
+    // (zones and shapes with it or on their own: one undo step for it all)
+    const zones = s.zones ?? [], shapes = s.shapes ?? [];
+    if (isEmpty(s) && !zones.length && !shapes.length) return;
+    const dropZones = (sk: Sketch) => shapes.reduce((k, id) => deleteShape(k, id), zones.reduce((k, id) => deleteZone(k, id), sk));
     // (what named what goes let go too: journeys, turning shares; a road's last lane: the road goes, said)
     const sk0 = live.current.sketch, gone = new Set(s.lanes), roadsGone = s.road ? [] : sk0.roads.filter(r => r.lanes.every(l => gone.has(l))).map(r => r.name);
     editSketch(sk => (isEmpty(s) ? dropZones(sk) : dropDangling(remove(dropZones(sk), s))));
@@ -1014,7 +1049,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
   const copySel = () => {
     const sk = live.current.sketch, s0 = live.current.sel;
-    if (!s0.lanes.length && !s0.junctions.length && !s0.zones?.length) return false;
+    if (!s0.lanes.length && !s0.junctions.length && !s0.zones?.length && !s0.shapes?.length) return false;
     // (a junction comes with what is on it and the whole lanes its connectors join, so it pastes working)
     const lanes = new Set(s0.lanes);
     for (const id of s0.junctions) {
@@ -1052,11 +1087,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the selection copied a little off (leaves what was copied alone) */
   const duplicate = () => {
     const sk = live.current.sketch, s = live.current.sel;
-    if (s.lanes.length || s.junctions.length || s.zones?.length) place(copyPart(sk, s), 4, 4);
+    if (s.lanes.length || s.junctions.length || s.zones?.length || s.shapes?.length) place(copyPart(sk, s), 4, 4);
   };
-  const fit = () => { const sk = live.current.sketch; zoomTo({ lanes: sk.lanes.map(l => l.id), connectors: [], junctions: sk.junctions.map(j => j.id), zones: sk.zones?.map(z => z.id) ?? [] }); };
+  const fit = () => { const sk = live.current.sketch; zoomTo({ lanes: sk.lanes.map(l => l.id), connectors: [], junctions: sk.junctions.map(j => j.id), zones: sk.zones?.map(z => z.id) ?? [], shapes: sk.shapes?.map(x => x.id) ?? [] }); };
   /** fitted if there is something to fit (an empty sketch: the view left as it is) */
-  const fitContent = () => { const sk = live.current.sketch; if (sk.lanes.length || sk.junctions.length || sk.zones?.length) fit(); };
+  const fitContent = () => { const sk = live.current.sketch; if (sk.lanes.length || sk.junctions.length || sk.zones?.length || sk.shapes?.length) fit(); };
   /** zoomed in (f > 1) or out about the middle of the view, within the wheel's limits */
   const zoomBy = (f: number) => { const v = view.current; view.current = { ...v, scale: Math.min(80, Math.max(0.3, v.scale * f)) }; redraw(); };
   /** the view fitted round a piece of the sketch */
@@ -1120,6 +1155,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       case "crossing": { const x = sk.crossings?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, crossing: x.id }); centerOnPts([x.a, x.b]); } break; }
       case "bump": { const x = sk.bumps?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, bump: x.id }); centerOnPts([x.a, x.b]); } break; }
       case "zone": { const z = sk.zones?.find(y => y.id === to.id); if (z) { setSel({ ...NO_SEL, zones: [z.id] }); centerOnPts(z.outline); } break; }
+      case "shape": { const x = sk.shapes?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, shapes: [x.id] }); centerOnPts(x.outline); } break; }
       case "stop": { const x = sk.stops?.find(y => y.id === to.id); const l = x && laneById(sk, x.lane); if (x && l) { setSel({ ...NO_SEL, stop: x.id }); centerOnPts([pointAt(l.shape, x.s).p]); } break; }
     }
     redraw();
@@ -1178,6 +1214,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       editSketch(k => ({ ...k, zones: (k.zones ?? []).map(z => (z.id === h.id ? removeZoneCorner(z, h.i) : z)) }));
       return true;
     }
+    if (h?.kind === "scorner") {
+      editSketch(k => ({ ...k, shapes: (k.shapes ?? []).map(x => (x.id === h.id ? removeShapePoint(x, h.i) : x)) }));
+      return true;
+    }
     const hit = pick(p), q = snap(p).p;
     // (on a selected line lane: a point added there)
     if (hit && "lane" in hit && s.lanes.includes(hit.lane) && !leadOf(sk, hit.lane)) {
@@ -1202,6 +1242,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       editSketch(k => ({ ...k, zones: (k.zones ?? []).map(x => (x.id === id ? insertZoneCorner(x, act.i, q) : x)) }));
       return true;
     }
+    // (on a selected shape's border: a point put in there, as on a zone's)
+    for (const id of s.shapes ?? []) {
+      const x = sk.shapes?.find(y => y.id === id), act = x ? zoneEditAt(x, p, 6 / view.current.scale) : null;
+      if (act?.kind !== "insert") continue;
+      editSketch(k => ({ ...k, shapes: (k.shapes ?? []).map(y => (y.id === id ? insertShapePoint(y, act.i, q) : y)) }));
+      return true;
+    }
     return false;
   };
 
@@ -1217,7 +1264,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
 
   /** an agent's select/goTo: { kind, id }, checked (a car's id a number, the others' a string) */
   const target = (a: Record<string, unknown>): SearchTarget => {
-    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "bump", "zone", "car"];
+    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "bump", "zone", "shape", "car"];
     if (!kinds.includes(kind)) throw new Error(`kind: one of ${kinds.join(", ")}`);
     const sk = live.current.sketch;
     if (kind === "car") {
@@ -1229,7 +1276,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const id = argOf(a, "id", "string", true)!;
     const there = kind === "road" ? sk.roads.some(x => x.id === id) : kind === "lane" ? sk.lanes.some(x => x.id === id) : kind === "connector" ? sk.connectors.some(x => x.id === id)
       : kind === "junction" ? sk.junctions.some(x => x.id === id) : kind === "link" ? (sk.links ?? []).some(x => x.id === id)
-      : kind === "zone" ? (sk.zones ?? []).some(x => x.id === id) : kind === "bump" ? (sk.bumps ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
+      : kind === "zone" ? (sk.zones ?? []).some(x => x.id === id) : kind === "shape" ? (sk.shapes ?? []).some(x => x.id === id) : kind === "bump" ? (sk.bumps ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
     if (!there) throw new Error(`no ${kind} ${id}`);
     return { kind: kind as Exclude<SearchTarget["kind"], "car">, id };
   };
@@ -1465,6 +1512,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           drag.current = { kind: "move", base: sk, from: snap(raw).p, piece: zs };
           return;
         }
+        // (a shape: selected on its own, dragged whole)
+        if ("shape" in hit) {
+          const fs = s.shapes?.includes(hit.shape) ? s : { ...NO_SEL, shapes: [hit.shape] };
+          if (fs !== s) setSel(fs);
+          drag.current = { kind: "move", base: sk, from: snap(raw).p, piece: fs };
+          return;
+        }
         const has = "lane" in hit ? s.lanes.includes(hit.lane) : "connector" in hit ? s.connectors.includes(hit.connector) : s.junctions.includes(hit.junction);
         if (e.shiftKey) {
           setSel("lane" in hit ? { ...s, road: null, lanes: toggle(s.lanes, hit.lane) } : "connector" in hit ? { ...s, road: null, connectors: toggle(s.connectors, hit.connector) }
@@ -1545,6 +1599,19 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         if (d.pts.length >= 3 && dist(raw, d.pts[0]) <= 10 / view.current.scale) { finishZone(); return; }
         d.pts.push(p);
         break;
+      }
+      case "shape": {
+        const p = snap(raw).p;
+        // (a shape being drawn point by point: the next point, or the first again to close it)
+        if (d?.kind === "shape") {
+          if (d.pts.length >= 3 && dist(raw, d.pts[0]) <= 10 / view.current.scale) { finishShape(); return; }
+          d.pts.push(p);
+          break;
+        }
+        // (else a press: dragged, a rectangle or a circle; let go where it was, the first point)
+        drag.current = { kind: "shapeBox", a: p, b: p, moved: false, square: e.shiftKey, circle: e.altKey };
+        store.beginEdit();
+        return;
       }
       case "circle": {
         const p = snap(raw).p;
@@ -1629,6 +1696,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     else if ("crossing" in hit) setSel({ ...NO_SEL, crossing: hit.crossing });
     else if ("bump" in hit) setSel({ ...NO_SEL, bump: hit.bump });
     else if ("stop" in hit) setSel({ ...NO_SEL, stop: hit.stop });
+    else if ("shape" in hit) setSel({ ...NO_SEL, shapes: [hit.shape] });
     else setSel({ ...NO_SEL, zones: [hit.zone] });
     setSelCar(null);
     return true;
@@ -1692,6 +1760,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         dragShow({ ...b, connectors: b.connectors.map(c => (c.id === id ? { ...c, via: c.via!.map((x, k) => (k === i ? q : x)) } : c)) });
       } else if (kind === "zcorner") {
         dragShow({ ...b, zones: (b.zones ?? []).map(z => (z.id === id ? moveZoneCorner(z, i, snap(raw).p) : z)) });
+      } else if (kind === "scorner") {
+        dragShow({ ...b, shapes: (b.shapes ?? []).map(x => (x.id === id ? moveShapePoint(x, i, snap(raw).p) : x)) });
       } else {
         dragShow({ ...b, junctions: b.junctions.map(j => (j.id === id ? asDrawn({ ...j, outline: j.outline.map((x, k) => (k === i ? snap(raw).p : x)) }) : j)) });
       }
@@ -1725,6 +1795,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         const next = updateBump(g.base, g.id, patch), x1 = next.bumps!.find(x => x.id === g.id)!;
         if (dist(x1.a, x1.b) >= 1) dragShow(next);
       }
+    } else if (g?.kind === "shapeBox") {
+      g.b = snap(raw).p; g.square = e.shiftKey; g.circle = e.altKey;
+      if (dist(g.a, g.b) * v.scale > 4) g.moved = true;
     } else if (g?.kind === "box") {
       g.b = raw;
     } else if (g?.kind === "rotate") {
@@ -1759,6 +1832,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (hand !== "") setHand(space.current ? "grab" : "");
     // (the drag's result made the plan's sketch: undo records it just below)
     if (dragSk.current) { const sk = dragSk.current; dragSk.current = null; store.show(sk); }
+    // (the Shape tool's press: dragged, a rectangle or a circle (none if too small); let go where it was, a shape's first point)
+    if (g?.kind === "shapeBox") {
+      if (!g.moved) draft.current = { kind: "shape", pts: [g.a] };
+      else { const pts = shapeBoxOutline(g); if (pts) makeShape(pts); }
+      redraw();
+      return;
+    }
     // a right click (not a right drag): the menu for the lane under it, or the lanes selected
     if (g?.kind === "pan" && g.right && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) { openMenu(e); return; }
     if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || ((g?.kind === "crossing" || g?.kind === "bump") && store.sketch$.getValue() !== g.base)) recordSketch(g.base);
@@ -1782,6 +1862,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (tool === "lane" || tool === "bike") { finishLane(); return; }
     if (tool === "junction") { finishJunction(); return; }
     if (tool === "zone") { finishZone(); return; }
+    if (tool === "shape") { finishShape(); return; }
     if (tool !== "select") return;
     const p = toWorld(e);
     if (editPoints(p)) return;
@@ -1872,7 +1953,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "escape") {
       // (a menu or dialog took it already)
       if (e.defaultPrevented) return;
-      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.bump && !live.current.sel.stop && !live.current.sel.zones?.length && live.current.selCar === null;
+      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.bump && !live.current.sel.stop && !live.current.sel.zones?.length && !live.current.sel.shapes?.length && live.current.selCar === null;
       if (d) draft.current = null;
       // (the Sketch window, a modal (T184), one thing a press: the selection, then a drawing tool (back to Select), then
       // the window closed)
@@ -1884,8 +1965,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       redraw();
       return;
     }
-    if (k === "enter") { finishLane(); finishJunction(); finishZone(); return; }
-    if (k === "backspace" && d && (d.kind === "lane" || d.kind === "junction" || d.kind === "zone" || d.kind === "connector")) {
+    if (k === "enter") { finishLane(); finishJunction(); finishZone(); finishShape(); return; }
+    if (k === "backspace" && d && (d.kind === "lane" || d.kind === "junction" || d.kind === "zone" || d.kind === "shape" || d.kind === "connector")) {
       e.preventDefault();
       if (d.kind === "connector") { if (!d.via.pop()) draft.current = null; } else { d.pts.pop(); if (!d.pts.length) draft.current = null; }
       redraw();
@@ -1930,6 +2011,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const toolInfo = TOOLS.find(t => t.id === tool)!;
   // (a zone selected on its own: its panel)
   const zoneSel = sel.zones?.length === 1 && isEmpty(sel) ? sketch.zones?.find(z => z.id === sel.zones![0]) ?? null : null;
+  // (a shape selected on its own: its panel, ticket #268)
+  const shapeSel = sel.shapes?.length === 1 && isEmpty(sel) && !sel.zones?.length ? sketch.shapes?.find(x => x.id === sel.shapes![0]) ?? null : null;
   /** the sketch tidied (see sketch-tidy.ts), and what was done told */
   const tidy = () => {
     let rep: TidyReport | null = null;
@@ -2200,6 +2283,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           )}
           {zoneSel ? (
             <ZonePanel sketch={sketch} zone={zoneSel} readOnly={readOnly} onDelete={deleteSel} />
+          ) : shapeSel ? (
+            <ShapePanel sketch={sketch} shape={shapeSel} readOnly={readOnly} onDelete={deleteSel} />
           ) : sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
             <CrossingPanel x={sketch.crossings.find(x => x.id === sel.crossing)!} readOnly={readOnly} onDelete={deleteSel}
               live={stats ? peds.find(q => q.id === sel.crossing) ?? null : null} />
@@ -3671,6 +3756,16 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
           note: formatArea(zoneArea(z.outline)), title: z.note,
         }))}
       </>}
+      {/* shapes (ticket #268): all of them, whatever is selected */}
+      {!!sketch.shapes?.length && <>
+        <div className="mt-2 border-t pt-1" />
+        {heading("h:shapes", "Shapes", sketch.shapes.length)}
+        {open("h:shapes") && sketch.shapes.map(x => row({
+          key: `shape:${x.id}`, depth: 0, on: !!sel.shapes?.includes(x.id), hit: { shape: x.id }, sel: { ...NO_SEL, shapes: [x.id] }, zoom: { ...piece({}), shapes: [x.id] },
+          label: <><span className="mr-1 inline-block size-2 rounded-sm border align-middle" style={{ background: x.color }} />{x.name}</>,
+          note: formatArea(shapeArea(x)),
+        }))}
+      </>}
     </div>
   );
 }
@@ -3903,6 +3998,9 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     ctx.globalAlpha = 1;
   }
 
+  // shapes (ticket #268): under the zones and the roads, each filled in its colour (see-through as set) with its border, in
+  // their order; the selected ones outlined
+  if (S && st.layers.shapes && sk.shapes?.length) paintShapes(ctx, sk.shapes, px, s.shapes ?? [], st.hover && "shape" in st.hover ? st.hover.shape : null, col.sel);
   // zones (T129): under everything else, a light fill and a dashed border in each one's colour (the selected one stronger)
   if (S && st.layers.zones && sk.zones?.length) paintZones(ctx, sk.zones, px, s.zones?.length === 1 ? s.zones[0] : null, st.hover && "zone" in st.hover ? st.hover.zone : null);
 
@@ -4533,6 +4631,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   }
   // a selected zone's corners
   for (const id of s.zones ?? []) sk.zones?.find(z => z.id === id)?.outline.forEach(p => square(p));
+  // a selected shape's points
+  for (const id of s.shapes ?? []) sk.shapes?.find(x => x.id === id)?.outline.forEach(p => square(p));
   for (const id of s.connectors) {
     const cn = sk.connectors.find(c => c.id === id);
     for (const p of cn?.via ?? []) {
@@ -4574,6 +4674,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     if (cur && d.pts.length >= 3 && dist(cur.p, d.pts[0]) <= 10 * px) { ctx.beginPath(); ctx.arc(d.pts[0].x, d.pts[0].y, 7 * px, 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.stroke(); }
   } else if (d?.kind === "zone") {
     paintZoneDraft(ctx, d.pts, cur?.p ?? null, nextZoneColor(sk), px);
+  } else if (d?.kind === "shape") {
+    paintShapeDraft(ctx, d.pts, cur?.p ?? null, shapeLook(sk).color, px);
     d.pts.forEach(square);
     if (cur && d.pts.length >= 3 && dist(cur.p, d.pts[0]) <= 10 * px) { ctx.beginPath(); ctx.arc(d.pts[0].x, d.pts[0].y, 7 * px, 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.setLineDash([]); ctx.stroke(); }
   } else if (d?.kind === "crossing") {
@@ -4619,9 +4721,12 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       ctx.restore();
     }
   }
+  // (the Shape tool's drag, ticket #268: the rectangle or circle it makes)
+  const box = st.drag?.kind === "shapeBox" && st.drag.moved ? shapeBoxOutline(st.drag) : null;
+  if (box) paintShapeDraft(ctx, box, null, shapeLook(sk).color, px, true);
   ctx.setLineDash([]);
   if (d && "c" in d) dot(d.c, 3 * px, col.sel);
-  if (cur && (tool === "lane" || tool === "bike" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "zone" || tool === "crossing" || tool === "bump")) {
+  if (cur && (tool === "lane" || tool === "bike" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "zone" || tool === "shape" || tool === "crossing" || tool === "bump")) {
     ctx.beginPath(); ctx.arc(cur.p.x, cur.p.y, (cur.snapped ? 5 : 3) * px, 0, Math.PI * 2);
     ctx.strokeStyle = col.sel; ctx.fillStyle = col.sel; ctx.lineWidth = 1.5 * px; if (cur.snapped) ctx.stroke(); else ctx.fill();
   }

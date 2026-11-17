@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Subject } from "subjecto";
 import { emptySketch, lockedChange, settle, type Piece, type Pt, type Sketch } from "@/lib/lane-sketch";
 import { sanitizeZones } from "@/lib/sketch-zones";
+import { sanitizeShapes } from "@/lib/sketch-shapes";
 import { sketchList, touchOpen } from "@/lib/sketch-list";
 import { mapChanged, stepBack } from "@/lib/sketch-edit";
 import type { SketchSimClient } from "./sketch-sim-client";
@@ -149,7 +150,7 @@ const scratchView$ = new Subject<Sketch>(laneSketch$.getValue().scratch ?? empty
 onDispose(laneSketch$.subscribe(k => {
   if (!samePlan(k, planView$.getValue())) planView$.next(planPart(k));
   const sc = k.scratch ?? null, cur = scratchView$.getValue();
-  if (sc ? sc !== cur : cur.lanes.length || cur.junctions.length || cur.connectors.length || cur.crossings?.length || cur.bumps?.length || cur.zones?.length) scratchView$.next(sc ?? emptySketch());
+  if (sc ? sc !== cur : cur.lanes.length || cur.junctions.length || cur.connectors.length || cur.crossings?.length || cur.bumps?.length || cur.zones?.length || cur.shapes?.length) scratchView$.next(sc ?? emptySketch());
 }).unsubscribe);
 export const planSketch = makeStore("plan", planView$, sk => {
   planView$.next(sk);
@@ -158,7 +159,7 @@ export const planSketch = makeStore("plan", planView$, sk => {
 });
 export const scratchSketch = makeStore("scratch", scratchView$, sk => {
   scratchView$.next(sk);
-  const cur = laneSketch$.getValue(), plan = planPart(cur), empty = !sk.lanes.length && !sk.junctions.length && !sk.connectors.length && !sk.crossings?.length && !sk.bumps?.length && !sk.zones?.length && !sk.traffic;
+  const cur = laneSketch$.getValue(), plan = planPart(cur), empty = !sk.lanes.length && !sk.junctions.length && !sk.connectors.length && !sk.crossings?.length && !sk.bumps?.length && !sk.zones?.length && !sk.shapes?.length && !sk.traffic;
   // (the sketch open changed now)
   const list = listPart(touchOpen(cur, Date.now()));
   laneSketch$.next(empty ? { ...plan, ...list } : { ...plan, scratch: planPart(sk), ...list });
@@ -205,10 +206,10 @@ export function readClipText(text: string): SketchClip | null {
     const o = JSON.parse(text) as { stamp?: string; centre?: Pt; part?: Sketch };
     const p = o.part;
     if (!p || !Array.isArray(p.lanes) || !Array.isArray(p.connectors) || !Array.isArray(p.junctions) || !o.centre) return null;
-    // (zones checked as a saved sketch's are: the text may come from anywhere)
-    const zones = sanitizeZones(p.zones);
-    const { zones: _, ...rest } = p;
-    return { part: { ...rest, roads: p.roads ?? [], ...(zones.length ? { zones } : {}) }, centre: o.centre, pastes: 0, stamp: o.stamp };
+    // (zones and shapes checked as a saved sketch's are: the text may come from anywhere)
+    const zones = sanitizeZones(p.zones), shapes = sanitizeShapes(p.shapes);
+    const { zones: _, shapes: __, ...rest } = p;
+    return { part: { ...rest, roads: p.roads ?? [], ...(zones.length ? { zones } : {}), ...(shapes.length ? { shapes } : {}) }, centre: o.centre, pastes: 0, stamp: o.stamp };
   } catch { return null; }
 }
 

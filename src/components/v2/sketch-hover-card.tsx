@@ -10,10 +10,11 @@
 import { connectorPts, groundAt, hasHeights, isFullCircle, laneById, laneLength, speedLimitOf, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
 import type { SimStats, SketchSim } from "@/lib/lane-sketch-sim";
 import { formatArea, zoneArea } from "@/lib/sketch-zones";
+import { shapeArea, shapeOpacity } from "@/lib/sketch-shapes";
 import { BUMP_KINDS, bumpHeavySpeed, bumpSpeed } from "@/lib/sketch-bumps";
 import type { LaneTraffic, TrafficMatch } from "@/lib/tomtom";
 
-export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { bump: string } | { link: string } | { zone: string } | { car: number };
+export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { bump: string } | { link: string } | { zone: string } | { shape: string } | { car: number };
 export interface HoverInfo { title: string; sub?: string; rows: [string, string][] }
 
 const m = (x: number) => (x >= 1000 ? `${(x / 1000).toFixed(2)} km` : `${x.toFixed(x < 10 ? 1 : 0)} m`);
@@ -108,6 +109,10 @@ export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, J
   if ("zone" in hit) {
     const z = sk.zones?.find(x => x.id === hit.zone);
     return z ? { title: z.name, sub: z.note ? (z.note.length > 80 ? `${z.note.slice(0, 80)}…` : z.note) : undefined, rows: [["Area", formatArea(zoneArea(z.outline))]] } : null;
+  }
+  if ("shape" in hit) {
+    const x = sk.shapes?.find(y => y.id === hit.shape);
+    return x ? { title: x.name, sub: "Only drawn: the cars don't see it", rows: [["Area", formatArea(shapeArea(x))], ["Colour", `${x.color}${shapeOpacity(x) < 1 ? `, ${Math.round(shapeOpacity(x) * 100)}%` : ""}`]] } : null;
   }
   if ("link" in hit) {
     const k = sk.links?.find(x => x.id === hit.link);
