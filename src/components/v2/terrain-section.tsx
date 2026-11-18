@@ -45,7 +45,7 @@ export function TerrainSection({ sketch, planId, readOnly }: { sketch: Sketch; p
           {fits.at && <span className="text-muted-foreground"> · fetched {new Date(fits.at).toLocaleDateString()}</span>}
         </span>
       ) : t ? (
-        <span className="text-[11px] text-amber-700 dark:text-amber-400">Fetched for another place: the plan has moved since. Fetch it again.</span>
+        <span className="text-[11px] text-amber-700 dark:text-amber-400">Fetched for another place: the plan has moved since. Put it back where it was (above), or fetch it again.</span>
       ) : (
         <span className="text-[11px] text-muted-foreground">None: the ground is flat. Fetched, cars slow down uphill (trucks most) and burn more fuel.</span>
       )}

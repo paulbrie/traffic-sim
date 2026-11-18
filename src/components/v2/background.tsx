@@ -8,14 +8,14 @@
  */
 import { useRef, useState } from "react";
 import { useSubject } from "subjecto/react";
-import { Crosshair, Loader2, MapPin, Ruler, Search, Trash2, Upload, X } from "lucide-react";
+import { Crosshair, Loader2, MapPin, Ruler, Search, Trash2, Undo2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { NumberField } from "@/components/workspace/fields";
-import type { Pt, Sketch } from "@/lib/lane-sketch";
+import { formerGeo, type Pt, type Sketch } from "@/lib/lane-sketch";
 import type { Underlay } from "@/lib/underlay";
 import { unproject } from "@/lib/osm/area";
 import { drawSatellite, googleImagery, SAT_ATTRIBUTION } from "@/render/satellite";
@@ -96,6 +96,18 @@ export function BackgroundPanel({ sketch, sat, setSat, viewNow, calib, setCalib,
       setPlaces(rows.map(r => ({ name: r.display_name, lat: Number(r.lat), lon: Number(r.lon) })));
     } catch { toast.error("Couldn't search for places"); } finally { setSearching(false); }
   }
+  // (ticket #271) where it was when its terrain or buildings were fetched, if not there now
+  const was = formerGeo(sketch);
+  const putBack = (g: { lat: number; lon: number }) => {
+    editSketch(s => ({ ...s, geo: { lat: g.lat, lon: g.lon } }));
+    toast.success("Put back where it was", { description: `${g.lat.toFixed(5)}, ${g.lon.toFixed(5)}` });
+  };
+  /** off the map (an Undo with it: one click on the ✕ takes the imagery, terrain and buildings away) */
+  const offMap = () => {
+    const g = sketch.geo;
+    editSketch(s => { const n = { ...s }; delete n.geo; return n; });
+    if (g) toast("Taken off the map", { description: "No satellite imagery; terrain and buildings hidden until it is put back.", action: { label: "Undo", onClick: () => editSketch(s => ({ ...s, geo: g })) } });
+  };
   /** the place put under the middle of the view (the sketch stays where it is; the Earth moves under it) */
   const place = (p: Place) => {
     const v = viewNow(), geo = unproject({ lat: p.lat, lon: p.lon }, { x: -v.cx, y: -v.cy });
@@ -126,8 +138,16 @@ export function BackgroundPanel({ sketch, sat, setSat, viewNow, calib, setCalib,
       <div className="grid gap-1.5">
         <span className="flex items-center gap-1.5 text-xs"><MapPin className="size-3.5 text-muted-foreground" />
           {sketch.geo ? <span className="font-mono tabular text-muted-foreground">{sketch.geo.lat.toFixed(5)}, {sketch.geo.lon.toFixed(5)}</span> : <span className="text-muted-foreground">Not placed on the map yet</span>}
-          {sketch.geo && !readOnly && <Button size="icon-sm" variant="ghost" className="ml-auto" aria-label="Take the plan off the map" title="Take the plan off the map (no satellite imagery)" onClick={() => editSketch(s => { const n = { ...s }; delete n.geo; return n; })}><X /></Button>}
+          {sketch.geo && !readOnly && <Button size="icon-sm" variant="ghost" className="ml-auto" aria-label="Take the plan off the map" title="Take the plan off the map (no satellite imagery)" onClick={offMap}><X /></Button>}
         </span>
+        {was && !readOnly && (
+          <div className="grid gap-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-1.5">
+            <span className="text-[11px] text-amber-700 dark:text-amber-400">
+              {sketch.geo ? "Placed somewhere else than" : "Taken off the map from"} where its {[sketch.terrain && "terrain", sketch.buildings && "buildings"].filter(Boolean).join(" and ")} {sketch.buildings ? "were" : "was"} fetched (<span className="font-mono tabular">{was.lat.toFixed(5)}, {was.lon.toFixed(5)}</span>): back there, the imagery lines up with the lanes as it did, and they show again.
+            </span>
+            <Button size="sm" variant="outline" onClick={() => putBack(was)}><Undo2 /> Put it back where it was</Button>
+          </div>
+        )}
         {!readOnly && (
           <div role="search" className="flex gap-1.5">
             <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Find a place, to put under the view" aria-label="Find a place" className="h-8 text-xs"

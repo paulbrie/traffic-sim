@@ -45,7 +45,7 @@ export function BuildingsSection({ sketch, planId, readOnly }: { sketch: Sketch;
           {fits.at && <span className="text-muted-foreground"> · fetched {new Date(fits.at).toLocaleDateString()}</span>}
         </span>
       ) : b ? (
-        <span className="text-[11px] text-amber-700 dark:text-amber-400">Fetched for another place: the plan has moved since. Fetch them again.</span>
+        <span className="text-[11px] text-amber-700 dark:text-amber-400">Fetched for another place: the plan has moved since. Put it back where it was (above), or fetch them again.</span>
       ) : (
         <span className="text-[11px] text-muted-foreground">None. Fetched, OpenStreetMap&apos;s buildings round the lanes stand in the 3D view.</span>
       )}

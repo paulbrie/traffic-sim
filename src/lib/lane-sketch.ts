@@ -3233,6 +3233,14 @@ function sanitizeGround(g: unknown): SketchLane["ground"] | null {
 export const terrainOf = (sk: Sketch): SketchTerrain | null => (sk.terrain && terrainFits(sk.terrain, sk.geo) ? sk.terrain : null);
 /** (ticket #267) the sketch's buildings, while they are still for where the sketch is on Earth */
 export const buildingsOf = (sk: Sketch): SketchBuildings | null => (sk.buildings && buildingsFit(sk.buildings, sk.geo) ? sk.buildings : null);
+/**
+ * (ticket #271) Where the sketch was on Earth when its terrain or buildings were fetched, if it isn't there now (taken off
+ * the map, or placed again elsewhere): put back there, the imagery lines up with the lanes again and they show again
+ */
+export function formerGeo(sk: Sketch): { lat: number; lon: number } | null {
+  for (const g of [sk.terrain?.geo, sk.buildings?.geo]) if (g && !(sk.geo && Math.abs(g.lat - sk.geo.lat) < 1e-5 && Math.abs(g.lon - sk.geo.lon) < 1e-5)) return { lat: g.lat, lon: g.lon };
+  return null;
+}
 /** the sketch has heights: terrain, or a lane's set by hand (none: flat ground, as before ticket #130) */
 export const hasHeights = (sk: Sketch): boolean => !!terrainOf(sk) || sk.lanes.some(l => l.ground);
 /** metres between the heights kept along a lane */
