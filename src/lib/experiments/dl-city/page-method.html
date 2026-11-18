@@ -1,0 +1,68 @@
+<section aria-labelledby="h-method">
+  <h2 id="h-method">How the experiment was run</h2>
+  <h3>The city</h3>
+  <p>The generator is <code>src/lib/experiments/dl-city/city.ts</code>, seeded. It lays a lattice turned 45°, so one axis runs along the main road from the south-west to the north-east. The spacing starts at 100 m in the centre and grows to 210 m outside, and the lattice is warped and jittered so streets bend. It is cut to an ellipse with a ragged edge along the main road, the way towns grow.</p>
+  <p>On top of the lattice:</p>
+  <ul>
+    <li>a ring boulevard round the centre, with its corners cut;</li>
+    <li>the cross boulevard (Bulevardul Gării);</li>
+    <li>a south-east and a north-west bypass, 320 m and 430 m longer than the main road between their ends (round the ring instead of through the centre: about 520 m longer);</li>
+    <li>some missing links, a few diagonal streets, roads leaving the town all round, and car parks half-way along blocks.</li>
+  </ul>
+  <p>The result is a V1 network. The app's own <code>networkToSketch</code> converts it to a V2 sketch, the way an OSM import is converted (Bistrița Auto Search was made that way). Seed 1 is 2.05 × 2.14 km, with 205 junctions, 427 roads and 72 ways in and out. Bistrița Auto Search is 2.35 × 2.03 km, with 266 junctions, 429 roads and 67 ways in.</p>
+  <h3>Demand: an evening peak</h3>
+  <ul>
+    <li>Each end of the main road takes 375 veh/h of its own traffic, to anywhere.</li>
+    <li>Corridor journeys add 700 veh/h each way, from south-west to north-east and back.</li>
+    <li>Each road leaving town takes 60 veh/h, each car park outside the centre 30, and each in the centre 45.</li>
+    <li>The main road's ends and the centre's car parks attract three times their share of the trips that end in town.</li>
+  </ul>
+  <p>The total is about 5,100 veh/h. Each run warms up for 5 minutes and counts the next 20, as the Results panel does. At this load the status quo is congested, with corridor trips about 40% slower than free-flowing and cars stuck at a few junctions, but it does not gridlock.</p>
+  <h3>The design space (the genome)</h3>
+  <ul>
+    <li><strong>Four lanes</strong> (2 + 2) on exactly two of seven named streets: the main road's three sections (west, centre, east), the ring, the two bypasses, and the cross boulevard. Every other street has one lane each way. This is the ticket's rule.</li>
+    <li><strong>The centre</strong>: each of the 74 links inside the ring is two-way, one-way either way, or closed to cars. A design that cuts a place off is repaired by reopening links at random until every place reaches every other.</li>
+    <li><strong>Nine key junctions</strong>: priority (the main road has right of way, the others give way), traffic lights (actuated) or a single-lane roundabout.</li>
+  </ul>
+  <p>That is 21 × 4<sup>74</sup> × 3<sup>9</sup>, about 10<sup>50</sup> designs. The networks see each design as 256 one-hot inputs plus six sums over them: the share of centre links closed and one-way, and the closures and one-ways on Strada Mare and on Bulevardul Gării.</p>
+  <h3>The score</h3>
+  <p>The score is <code>0.5 × corridor + 0.5 × centre</code>, each relative to the status quo:</p>
+  <ul>
+    <li><strong>corridor</strong>: the mean trip time between the main road's ends, both ways, with a car still waiting to get in at the end counted as a 600 s trip;</li>
+    <li><strong>centre</strong>: vehicle-km on the roads inside the ring.</li>
+  </ul>
+  <p>Penalties are added where the rest of the town pays: twice the share of trips lost, and twice any rise in the mean trip time over 10%. Lower is better, and the status quo scores 1. The score is in <code>evaluate.ts</code>. Cars stuck at the end are reported but not scored. That count is taken at one moment, and in the 40 random designs it varied almost as much between two seeds of the same design as between designs.</p>
+  <h3>The two searches, on equal terms</h3>
+  <p>Both start from the same 40 random designs plus the status quo. Each then gets 10 rounds of 10 designs, every design run on seeds 1 and 2.</p>
+  <ul>
+    <li><strong>Genetic algorithm.</strong> Tournaments among the 16 best so far, uniform crossover, then 1 to 3 mutations: another four-lane street, a centre link's state, or a junction's control.</li>
+    <li><strong>Neural-network surrogate.</strong> Before each round, five MLPs (262 inputs → 64 → 32 → 4, ReLU, Adam, L2 0.01, each on its own bootstrap sample) learn every design run so far. They predict the score's parts: corridor, centre, trips and mean trip time. Each network's parts give a score, by the same formula, and the five scores' spread is the uncertainty. A genetic algorithm then searches those networks rather than the simulator: about 8,000 designs a round, in seconds. The ten designs with the lowest predicted score minus κ standard deviations go to the simulator, kept at least 2 genes apart from one another. κ goes from 1.5 down to 0.2, from exploring to exploiting.</li>
+  </ul>
+  <p>Each search's six best are then run on seeds 3, 4 and 5 too, and ranked on all five seeds.</p>
+  <h3>The first attempt, stopped after one round</h3>
+  <p>The first attempt's runs are kept in <code>runs-v1.jsonl</code> and are not part of the charts. It went wrong in two ways:</p>
+  <ul>
+    <li>The score charged 0.005 for each car stuck at the end. Across the 40 shared designs, that term's seed-to-seed spread (0.40 of score) was nearly as large as its spread across designs (0.49), so the score mostly measured luck.</li>
+    <li>The networks learnt the score directly, as a third output. That output was the least certain, and picking by its lower bound chased the uncertainty. The first round's picks were predicted at 0.5–0.6 and ran at 0.96–1.39, against what the networks' own corridor and centre outputs said.</li>
+  </ul>
+  <p>Both were changed before the searches proper began. Only the shared starting runs, whose metrics don't depend on the score, were kept.</p>
+  <h3>What the simulator does and does not model (read before trusting a result)</h3>
+  <ul>
+    <li><strong>Drivers take the shortest way in metres</strong> (<code>RouteTable</code>). They only reroute after being held up. A four-lane street adds capacity, but it does not draw traffic towards it. Only the network itself (closures, one-ways, which streets exist) moves through-traffic out of the centre. Real drivers do pick quicker roads, so a real four-lane bypass would carry more than it does here.</li>
+    <li>Demand is fixed: nobody changes their trip, their mode or their time because of a closure. Pedestrians, buses and parking search are not in these runs.</li>
+    <li>The town is random. A design that wins here says what <em>kind</em> of change helps a town shaped like this. It does not say what Bistrița should do.</li>
+  </ul>
+  <h3>Hypotheses, as stated before the run</h3>
+  <ol>
+    <li>The two goals pull against each other. The fastest corridor drives straight through the centre, and taking traffic out of the centre lengthens trips. The best designs will be a compromise along a trade-off front, not one design that wins on both.</li>
+    <li>Closing or one-waying the centre's minor streets removes through-traffic (rat-running) from the centre at little cost to the corridor. The main road through the centre should stay open.</li>
+    <li>The four lanes belong where the corridor's queues are: the main road's sections. Giving them to a bypass does nothing here, because drivers don't choose it for its capacity.</li>
+    <li>With a few hundred simulator runs, a surrogate finds a better design than a plain genetic algorithm, because it can screen thousands of designs for each one it simulates. Run-to-run noise (about ±11% on the corridor) limits how much better.</li>
+  </ol>
+  <h3>Which engine</h3>
+  <p>The runs were made with trafficsim's V2 engine at commit 870a5ed, and this page bundles that engine, so a run here gives the recorded results to the last digit. Later engine changes, such as #274's on two-lane roundabouts, change the order in which the simulation draws its random numbers. Individual runs then move by a few per cent (the status quo's seed-1 corridor trip goes from 340 s to 346 s), about as much as one seed differs from another. To redo the experiment on a newer engine, run it again; the runs file then starts afresh.</p>
+  <h3>Run it again</h3>
+  <pre>npx tsx scripts/dl-city-run.ts --workers 10   # every run, appended to docs/experiments/dl-city-277/runs.jsonl (resumes)
+npx tsx scripts/dl-city-html.ts               # this page, from those runs
+npm run dl-city:check                          # the pieces still do what the experiment counts on</pre>
+</section>

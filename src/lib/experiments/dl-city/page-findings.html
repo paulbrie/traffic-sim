@@ -1,0 +1,38 @@
+<section aria-labelledby="h-answer" class="card answer">
+  <h2 id="h-answer" style="margin-top:0">What the experiment found</h2>
+  <p>Results are the mean of five seeds. Today's layout (the status quo) scores 1; lower is better.</p>
+  <ol>
+    <li><strong>The best design calms the centre and keeps the corridor as fast.</strong> The neural-network surrogate's best design scores 0.691:
+      <ul>
+        <li>traffic in the centre <strong>−59%</strong> (631 veh-km/h against 1,529);</li>
+        <li>corridor trips 3% quicker (320 s against 330 s);</li>
+        <li>trips through the town +1.5%; the mean trip is 6% longer.</li>
+      </ul>
+      It turns the centre into cells, as Ghent's 2017 circulation plan did. Of the 74 centre links, 34 become one-way and 9 close. Strada Mare and Bulevardul Gării become one-way in alternating directions, so neither can be driven straight through any more. The main road's traffic goes round the ring, which is about 520 m longer, yet takes no longer, because it no longer queues at the centre's junctions. The four lanes stay on the main road outside the ring, as today. Where the main road meets the ring on the west, there is now a roundabout instead of lights. The lights come out of the centre and the eastern ring junction, and go in at both ends of the north-west bypass.</li>
+    <li><strong>The genetic algorithm found the other end of the trade-off.</strong> Its best design (0.852) gives the four lanes to Strada Mare (through the centre) and Calea Răsăritului, and barely touches the centre: 6 closures and 7 one-ways. The corridor is <strong>25% quicker</strong> (247 s), but centre traffic falls only 5%. Neither design is better on both counts. The trade-off chart shows the front between them.</li>
+    <li><strong>Combining them (tried afterwards, outside the comparison).</strong> The surrogate's centre with the GA's four-lane streets scores 0.709: corridor −1%, centre −57%, trips +4%. It also leaves 2 cars stuck at the end where the surrogate's own design leaves 100. Adding the GA's junction controls as well made it worse (0.753). These runs are in <code>runs-probe.jsonl</code>.</li>
+    <li><strong>Read the best design with care.</strong> The score doesn't count stuck cars or collisions, and both rose under the surrogate's design: <strong>100 cars stuck at the end</strong> (42 today) and <strong>17 simulator collisions a run</strong> (6 today). The one-way grid creates many more give-way conflicts, and trafficsim's collision count at such junctions is a known weak spot. The hybrid design above fixes the stuck cars; its collisions (12) are still twice today's. Look at its junctions in the editor (it is saved as a plan) before taking it further.</li>
+  </ol>
+  <h3>The bonus question: can deep learning find the best option?</h3>
+  <p><strong>As a guide for the simulator, yes, and it clearly beat the plain search here.</strong> Both searches had the same budget: 282 simulator runs from the same start.</p>
+  <ul>
+    <li><strong>Better designs.</strong> All six of the surrogate's finalists (0.69–0.73 on five seeds) beat all six of the genetic algorithm's (0.85–0.93).</li>
+    <li><strong>Sooner.</strong> The surrogate passed 0.8 with its second simulated design. The genetic algorithm never got below 0.83 in the search.</li>
+    <li><strong>More reliable.</strong> The GA's best looked like 0.834 on two seeds and turned out 0.904 on five: it had partly selected lucky runs. The surrogate's scores held up.</li>
+  </ul>
+  <p>It is no oracle, though:</p>
+  <ul>
+    <li><strong>It needs data first.</strong> With the 41 shared designs, the networks' cross-validated predictions were worse than guessing the average. For its first four rounds their predictions were off by 0.3–1.1. From round 5, with about 80 designs to learn from, the error fell to 0.03–0.12, close to the simulator's own seed-to-seed spread (±0.05). Its early lead was found while it was still mostly exploring.</li>
+    <li><strong>It must learn the right thing.</strong> The first attempt learnt the score itself, which was dominated by a noisy penalty, and its first round was wasted (see "How the experiment was run").</li>
+    <li><strong>Over every design run (241)</strong>, it now explains about 60–80% of the variation: R² 0.61 for the corridor, 0.82 for the centre and 0.63 for the score, ranking designs at ρ ≈ 0.84. That's enough to screen thousands of designs a second, not to replace the simulator. Every claim on this page comes from simulator runs.</li>
+    <li><strong>"The best option" is out of reach for any method.</strong> There are about 10<sup>50</sup> designs, and this is one search per method on one random city. Repeating both searches with other random starts, and on other seeds of the city, would show how much of the lead is the method and how much is luck.</li>
+  </ul>
+  <p>The next step would be a network that reads the road graph itself: a graph neural network over junctions and links, trained on several random cities. It could then be used on Bistrița Auto Search without starting from zero there.</p>
+  <h3>The hypotheses, checked</h3>
+  <ol>
+    <li><em>A trade-off, no design best on both:</em> <strong>partly wrong.</strong> The best designs beat today's layout on both counts. Among the good designs, though, there is a clear front from "fast corridor" to "calm centre".</li>
+    <li><em>Closing or one-waying the centre's minor streets takes through-traffic out cheaply, and the main road through the centre stays open:</em> <strong>the first half holds, the second doesn't.</strong> The best designs also cut Strada Mare as a through route and sent the corridor round the ring, at no cost in time.</li>
+    <li><em>The four lanes belong on the main road, not on a bypass:</em> <strong>held.</strong> No good design gave them to the ring, a bypass or the cross boulevard. In this simulator drivers don't choose a road for its capacity.</li>
+    <li><em>With a few hundred runs, a surrogate beats a plain genetic algorithm:</em> <strong>held</strong>, on this city and this one run of each, with the caveats above.</li>
+  </ol>
+</section>

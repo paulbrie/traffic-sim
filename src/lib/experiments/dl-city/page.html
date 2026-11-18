@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Ticket #277 · Can deep learning design a better town? A Bistrița-like random city</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11, 11, 11, 0.10);
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --critical: #d03b3b; --good: #006300;
+  --road: #6b6a66; --road-conn: #a3a29c; --four-halo: rgba(42, 120, 214, 0.38); --centre-fill: rgba(237, 161, 0, 0.13); --car: #184f95;
+  accent-color: var(--series-1);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --critical: #e66767; --good: #0ca30c;
+    --road: #9a9890; --road-conn: #5d5c57; --four-halo: rgba(57, 135, 229, 0.35); --centre-fill: rgba(201, 133, 0, 0.16); --car: #86b6ef;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text-primary); line-height: 1.5; }
+main { max-width: 1180px; margin: 0 auto; padding: 24px 20px 64px; }
+h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 6px; text-wrap: balance; }
+h2 { font-size: 1.25rem; margin: 40px 0 8px; }
+h3 { font-size: 1rem; margin: 20px 0 6px; }
+p, li { max-width: 80ch; }
+.lede { color: var(--text-secondary); font-size: 1.05rem; }
+.meta { color: var(--text-muted); font-size: 0.85rem; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.answer { border-left: 4px solid var(--series-2); }
+.heroes { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.tile-label { color: var(--text-secondary); font-size: 0.85rem; }
+.tile-value { font-size: 1.6rem; font-weight: 600; margin: 2px 0; }
+.tile-sub { color: var(--text-muted); font-size: 0.85rem; }
+.map-wrap { position: relative; }
+#map { position: relative; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); touch-action: none; }
+#map canvas { display: block; cursor: grab; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 10px 0; }
+.controls label { display: inline-flex; gap: 6px; align-items: center; color: var(--text-secondary); font-size: 0.9rem; }
+select, input[type="number"] { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--axis); background: var(--surface-1); color: var(--text-primary); }
+input[type="number"] { width: 5.5em; }
+button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--axis); background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
+button:hover { border-color: var(--text-muted); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+button[disabled] { opacity: 0.55; cursor: default; }
+button.small { padding: 2px 8px; font-size: 0.85rem; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.chart { position: relative; }
+.chart > svg { display: block; width: 100%; height: auto; overflow: visible; }
+.legend svg { flex: none; }
+.axes .grid { stroke: var(--grid); stroke-width: 1; }
+.axes .baseline { stroke: var(--axis); stroke-width: 1; }
+.tick { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.axis-label { fill: var(--text-secondary); font-size: 12px; }
+.direct { fill: var(--text-secondary); font-size: 12px; font-weight: 600; paint-order: stroke; stroke: var(--surface-1); stroke-width: 4px; stroke-linejoin: round; }
+.marker-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.front { fill: none; stroke: var(--text-secondary); stroke-width: 1.5; }
+.dot { stroke: var(--surface-1); stroke-width: 2; }
+.baseline-mark { fill: var(--text-primary); stroke: var(--surface-1); stroke-width: 2; }
+.hover-ring { fill: none; stroke: var(--text-primary); stroke-width: 1.5; }
+.crosshair { stroke: var(--text-muted); stroke-width: 1; }
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; margin: 0 0 6px; font-size: 0.85rem; color: var(--text-secondary); }
+.legend li { display: inline-flex; gap: 6px; align-items: center; }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14); border-radius: 8px; padding: 6px 10px; font-size: 0.85rem; z-index: 5; max-width: 300px; }
+.tip[hidden] { display: none; }
+.tip-head { color: var(--text-secondary); margin-bottom: 2px; }
+.tip-row { display: flex; gap: 6px; align-items: center; }
+.tip .key { display: inline-block; width: 12px; height: 2px; border-radius: 1px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--text-secondary); font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.key-cell { font-family: ui-monospace, monospace; font-size: 0.75rem; color: var(--text-muted); word-break: break-all; }
+.scroll { overflow-x: auto; }
+details > summary { cursor: pointer; color: var(--text-secondary); margin: 8px 0; }
+pre { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 0.82rem; white-space: pre-wrap; max-height: 260px; overflow: auto; }
+.map-legend { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 0.85rem; color: var(--text-secondary); margin: 6px 0; padding: 0; list-style: none; }
+.map-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.sw { display: inline-block; width: 22px; height: 10px; border-radius: 2px; }
+code { font-family: ui-monospace, monospace; font-size: 0.88em; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <p class="meta">trafficsim · ticket #277 · built <span data-v="built"></span> on commit <span data-v="commit"></span> · <span data-v="n-runs"></span> simulator runs, <span data-v="n-designs"></span> designs</p>
+  <h1>Can deep learning design a better town? A random city with Bistrița's traits</h1>
+  <p class="lede">The goal: make the main road from the south-west to the north-east faster while taking traffic out of the centre. Only two main streets may have four lanes; every other street gets two lanes at most. Every design here was run in trafficsim's own V2 simulator, the same engine as the editor's, and it is bundled in this file.</p>
+</header>
+
+<!--FINDINGS-->
+
+<section aria-labelledby="h-best">
+  <h2 id="h-best">The best design found, against today's layout</h2>
+  <div class="heroes" id="heroes"></div>
+</section>
+
+<section aria-labelledby="h-map">
+  <h2 id="h-map">The city</h2>
+  <p>This is a random city (seed 1) with the traits of <em>Bistrița Auto Search</em>:
+  <ul>
+    <li>a dense old centre with blocks of about 100 m, inside a ring boulevard (shaded);</li>
+    <li>sparser blocks outside it, streets missing here and there, and dead ends (car parks and courtyards, where trips start and end);</li>
+    <li>a main road crossing it from the south-west to the north-east straight through the centre, a cross boulevard, and two longer bypasses round the centre.</li>
+  </ul>
+  Drag the map to pan and use the wheel to zoom; hover a street to see its name.</p>
+  <div class="controls">
+    <label>Design shown <select id="pick"></select></label>
+    <button type="button" id="play" aria-pressed="false">Play the simulation</button>
+    <label>Speed <input type="range" id="speed" min="1" max="30" value="10" aria-describedby="speed-out"> <output id="speed-out">10×</output></label>
+    <span class="meta" id="sim-info" role="status"></span>
+  </div>
+  <div class="map-wrap"><div id="map"></div></div>
+  <ul class="map-legend">
+    <li><span class="sw" style="background:var(--four-halo)"></span>4-lane street (2 + 2)</li>
+    <li><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="var(--critical)" stroke-width="3" stroke-dasharray="5 4"/></svg>closed to cars</li>
+    <li><svg width="14" height="12" aria-hidden="true"><path d="M2 2 L12 6 L2 10 Z" fill="var(--text-primary)"/></svg>one-way</li>
+    <li><svg width="14" height="14" aria-hidden="true"><rect x="1" y="1" width="12" height="12" fill="var(--text-primary)"/><circle cx="7" cy="7" r="2.6" fill="var(--surface-1)"/></svg>traffic lights</li>
+    <li><svg width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="var(--text-primary)" stroke-width="2"/></svg>roundabout (key junctions)</li>
+    <li><span class="sw" style="background:var(--centre-fill);border:1px solid var(--border)"></span>centre (inside the ring)</li>
+    <li><span class="sw" style="background:var(--car);width:12px"></span>car moving · <span class="sw" style="background:var(--critical);width:12px"></span>below 20% of its speed</li>
+  </ul>
+  <div class="two">
+    <div><h3>What this design changes</h3><ul id="describe"></ul></div>
+    <div><h3>Its results</h3><div id="design-metrics"></div>
+      <div class="controls"><button type="button" id="simulate">Simulate it here</button><label>seed <input type="number" id="sim-seed" value="1" min="1" max="99"></label></div>
+      <p class="meta" id="simulate-out" role="status">This runs 25 minutes of traffic in your browser (5 to warm up, 20 counted). It takes a minute or two, and the result should match the recorded run exactly.</p>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="h-charts" id="charts">
+  <h2 id="h-charts">How the searches went</h2>
+  <p>Both searches started from the same 40 random designs and got the same number of simulator runs: 10 rounds of 10 designs, each design run on two seeds and scored on their mean. The score is half the corridor's trip time plus half the centre's traffic, each relative to today's layout. It adds penalties where the rest of the town pays: trips lost, and trips more than 10% longer. Lower is better, and today's layout scores 1.</p>
+  <div class="two">
+    <div class="card"><h3>Best score so far</h3><div class="chart" id="conv"></div></div>
+    <div class="card"><h3>The trade-off: corridor against centre</h3><div class="chart" id="trade"></div><p class="meta">Every design simulated. Down and to the left is better on both; click a dot to show it on the map.</p></div>
+  </div>
+  <h3>The six best of each search, checked on five seeds</h3>
+  <p class="meta">A single seed can flatter a design, so each search's six best designs were run on three more seeds. The finalists below are ranked on the mean of all five. The status quo's own score moves by ±<span data-v="noise"></span> from seed to seed.</p>
+  <div class="scroll"><table id="finalists"><thead><tr><th>Found by</th><th class="num">Score (5 seeds)</th><th class="num">In the search (2)</th><th class="num">Corridor trip</th><th class="num">Centre veh-km/h</th><th class="num">Trips/h</th><th class="num">Stuck</th><th></th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section aria-labelledby="h-dl">
+  <h2 id="h-dl">How well did the neural networks predict?</h2>
+  <p>Before each round, an ensemble of five networks was trained on every run so far: 262 inputs (the genes one-hot, plus six sums over them), 64 and 32 ReLU units, and four outputs (corridor, centre, trips, trip time). Each network's outputs give a score, and the spread of those five scores is the uncertainty. They then rated about 8,000 candidate designs in a few seconds and picked the ten most promising: the lowest predicted score minus its uncertainty. The chart shows those predictions for the <span data-v="pro-n"></span> designs they proposed, made <em>before</em> each design was simulated. Mean error: <span data-v="pro-mae"></span>. Rank correlation: <span data-v="pro-rho"></span>.</p>
+  <div class="two">
+    <div class="card"><h3>Predicted against simulated (the surrogate's own picks)</h3><div class="chart" id="pro"></div><p class="meta">The cloud far above the line is rounds 1–4, while the networks had little to learn from and their designs did much worse than predicted. From round 5 the points lie along the line. Hover a dot for its round.</p></div>
+    <div class="card"><h3>Cross-validation, here</h3>
+      <p>Train networks on four-fifths of every design simulated, predict the other fifth, five times over. This runs in a worker in your browser, about a minute.</p>
+      <button type="button" id="cv">Cross-validate the networks</button>
+      <div id="cv-out" role="status" class="meta"></div>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="h-run">
+  <h2 id="h-run">Run the experiment here</h2>
+  <p>This is the same loop as <code>scripts/dl-city-run.ts</code>, with the same city, simulator, networks and search, using your browser's cores. Each run simulates 5 minutes of warm-up plus the minutes counted. Keep the budget small: with 7 workers, one round of 4 + 4 designs on a 20-minute count takes about 3 minutes.</p>
+  <div class="controls">
+    <label>random designs <input type="number" id="r-init" value="8" min="1"></label>
+    <label>rounds <input type="number" id="r-rounds" value="3" min="1"></label>
+    <label>designs a round, per search <input type="number" id="r-batch" value="4" min="1"></label>
+    <label>minutes counted <input type="number" id="r-measure" value="20" min="1"></label>
+    <label>workers <input type="number" id="r-workers" value="4" min="1" max="16"></label>
+    <button type="button" id="run">Run the experiment here</button>
+  </div>
+  <div class="two"><pre id="run-log" role="log" aria-live="polite">Not started.</pre><div class="chart" id="run-chart"></div></div>
+</section>
+
+<!--METHOD-->
+
+<section aria-labelledby="h-data">
+  <h2 id="h-data">Every design simulated</h2>
+  <details><summary>The table behind the charts</summary>
+  <div class="scroll"><table id="all"><thead><tr><th>Method</th><th class="num">Round</th><th class="num">Score</th><th class="num">Corridor</th><th class="num">Centre</th><th class="num">Trips/h</th><th class="num">Predicted</th><th>Design (genome)</th></tr></thead><tbody></tbody></table></div>
+  <p class="meta">Genome: the two four-lane streets (indices into Calea Apusului, Strada Mare, Calea Răsăritului, Bulevardul Inelar, Centura Sud-Est, Centura Nord-Vest and Bulevardul Gării). Then one digit for each of the 74 links in the centre: 0 two-way, 1 or 2 one-way, 3 closed. Then one digit for each of the 9 key junctions: 0 priority, 1 lights, 2 roundabout.</p>
+  </details>
+</section>
+</main>
+<script type="application/json" id="data"><!--DATA--></script>
+<script type="text/plain" id="app"><!--APP--></script>
+<script>
+  // the app is the text above, run as a script (and as its own Web Workers, from the same Blob)
+  const s = document.createElement("script");
+  s.src = URL.createObjectURL(new Blob([document.getElementById("app").textContent], { type: "text/javascript" }));
+  document.body.append(s);
+</script>
+</body>
+</html>
