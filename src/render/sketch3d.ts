@@ -27,6 +27,8 @@ const Y = { kerb: 0.04, asphalt: 0.06, paint: 0.09 };
 const KERB = 0.6, PAINT_W = 0.16, DECK = 0.8, PARAPET = 0.9;
 /** how far (m) a simplified line may stray: lanes and paint; junction outlines */
 const TOL = 0.05, TOL_J = 0.1;
+/** how far over or under the ground a road drawn may be, where points are let go (m) */
+const HTOL = 0.03;
 
 /** triangles put together, one material's worth */
 class Mesh {
@@ -99,12 +101,17 @@ class Mesh {
 
 /**
  * A polyline with only the points it needs: none further than `tol` metres from where it ran (Douglas–Peucker; the
- * ends kept). A city's lanes and junction outlines come sampled every metre: most of it straight.
+ * ends kept). A city's lanes and junction outlines come sampled every metre: most of it straight. With heights `hs` (one
+ * a point), none either more than `htol` metres over or under the line drawn between the points kept: on a hill a straight
+ * lane is kept curved over it.
  */
-export function simplify(pts: Pt[], tol: number, keep?: (i: number) => boolean): Pt[] {
+export function simplify(pts: Pt[], tol: number, hs?: ArrayLike<number>, htol = HTOL): Pt[] {
   const n = pts.length;
   if (n <= 2) return pts;
   const on = new Uint8Array(n); on[0] = on[n - 1] = 1;
+  // (how far along each point is, for the height the line drawn has there)
+  let cum: Float64Array | null = null;
+  if (hs) { cum = new Float64Array(n); for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y); }
   const stack: [number, number][] = [[0, n - 1]];
   while (stack.length) {
     const [a, b] = stack.pop()!, A = pts[a], B = pts[b], dx = B.x - A.x, dy = B.y - A.y, L = Math.hypot(dx, dy);
@@ -112,12 +119,23 @@ export function simplify(pts: Pt[], tol: number, keep?: (i: number) => boolean):
     for (let i = a + 1; i < b; i++) {
       // (its ends one point, a closed loop's (a ring's: ticket #262, Junction 5): how far from that point; else from the line
       // through them. From the line, every point of a ring was 0 off it, and the ring was left out of the 3D view altogether)
-      const d = keep?.(i) ? Infinity : L < 1e-9 ? Math.hypot(pts[i].x - A.x, pts[i].y - A.y) : Math.abs((pts[i].x - A.x) * dy - (pts[i].y - A.y) * dx) / L;
+      let d = L < 1e-9 ? Math.hypot(pts[i].x - A.x, pts[i].y - A.y) : Math.abs((pts[i].x - A.x) * dy - (pts[i].y - A.y) * dx) / L;
+      // (and how far over or under it, scaled to the same tolerance: ticket #273, a straight road over a rise was drawn as
+      // the chord under it, in the terrain, when only the points where its grade changed sharply were kept)
+      if (hs && cum) {
+        const run = cum[b] - cum[a], f = run > 1e-9 ? (cum[i] - cum[a]) / run : 0;
+        d = Math.max(d, (Math.abs(hs[i] - (hs[a] + (hs[b] - hs[a]) * f)) * tol) / htol);
+      }
       if (d > fd) { fd = d; far = i; }
     }
     if (far >= 0) { on[far] = 1; stack.push([a, far], [far, b]); }
   }
   return pts.filter((_, i) => on[i]);
+}
+/** with `simplify`'s points, their heights */
+function simplifyH(pts: Pt[], hs: number[], tol: number): { pts: Pt[]; hs: number[] } {
+  const kept = simplify(pts.map((p, i) => ({ ...p, i })), tol, hs) as (Pt & { i: number })[];
+  return { pts: kept.map(p => ({ x: p.x, y: p.y })), hs: kept.map(p => hs[p.i]) };
 }
 /**
  * A lane's points (every `step` metres, those it needs), with their heights (`hs`: the ground's, from `base`, and its level's
@@ -127,9 +145,8 @@ function laneLine(sk: Sketch, id: string, shape: Parameters<typeof samples>[0], 
   // (with levels or heights, a straight run cut up too, so a ramp or a hill on it is one; else its points as they are, all at 0)
   const heights = hasHeights(sk), dense = hasLevels(sk) || heights ? densePoints(shape, heights ? Math.max(step, 2) : step) : samples(shape, step).map(p => ({ p, s: 0 }));
   const all = dense.map(x => x.p), up = dense.map(x => shownZ(sk, id, x.s) * LEVEL_H), ha = dense.map((x, i) => up[i] + (heights ? groundAt(sk, id, x.s) - base : 0));
-  // (where its height changes, every point kept: a ramp stays a ramp; a hill to within 2 cm)
-  const keep = (i: number) => i > 0 && i < all.length - 1 && Math.abs(ha[i + 1] - 2 * ha[i] + ha[i - 1]) > (heights ? 0.02 : 1e-4);
-  const kept = simplify(all.map((p, i) => ({ ...p, i })), TOL, keep) as (Pt & { i: number })[];
+  // (a ramp stays a ramp, a hill a hill: to within HTOL of their heights)
+  const kept = simplify(all.map((p, i) => ({ ...p, i })), TOL, ha) as (Pt & { i: number })[];
   return { pts: kept.map(p => ({ x: p.x, y: p.y })), hs: kept.map(p => ha[p.i]), up: kept.map(p => up[p.i]) };
 }
 /** dashes along a polyline: `on` metres drawn, `off` left (its points' heights `h`, if they have them, carried along) */
@@ -220,7 +237,7 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       else for (const b of junctionBands(sk, c)) {
         if (b.w1 !== undefined) asphalt.polygon(loop(bandPolygon(b)), [], on(h + Y.asphalt));
         // (stroked as the plan view strokes them, round at their bends)
-        else { const ps = b.closed ? b.pts : simplify(b.pts, TOL); asphalt.stroke(ps, ps.map(p => h + G(p)), b.width, Y.asphalt, b.closed); }
+        else { const l = b.closed ? { pts: b.pts, hs: b.pts.map(p => h + G(p)) } : simplifyH(b.pts, b.pts.map(p => h + G(p)), TOL); asphalt.stroke(l.pts, l.hs, b.width, Y.asphalt, b.closed); }
       }
       // (the ground it shuts in, and with "Fill holes" its whole inside)
       // (painted as the plan view does, all at once by the nonzero rule: the ground shut in inside the whole inside filled, paved too)
@@ -232,7 +249,7 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
       const h = x.level * LEVEL_H;
       for (const b of x.bands) {
         if (b.w1 !== undefined) asphalt.polygon(simplify(bandPolygon(b), TOL_J), [], on(h + Y.asphalt));
-        else { const ps = simplify(b.pts, TOL); asphalt.stroke(ps, ps.map(p => h + G(p)), b.width, Y.asphalt, false); }
+        else { const l = simplifyH(b.pts, b.pts.map(p => h + G(p)), TOL); asphalt.stroke(l.pts, l.hs, b.width, Y.asphalt, false); }
       }
       for (const p of nonzeroAreas(x.fill)) asphalt.polygon(simplify(p.outer, TOL_J), p.holes.map(q => simplify(q, TOL_J)), on(h + Y.asphalt));
     }
@@ -253,8 +270,8 @@ export function buildSketch3D(sk: Sketch, contents: Map<string, JunctionContents
         for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(p => p.h), PAINT_W, Y.paint);
         continue;
       }
-      const h = (m.level ?? 0) * LEVEL_H, line = simplify(m.pts, TOL);
-      for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(p => h + G(p)), PAINT_W, Y.paint);
+      const h = (m.level ?? 0) * LEVEL_H, l = simplifyH(m.pts, m.pts.map(p => h + G(p)), TOL), line = l.pts.map((p, i) => ({ ...p, h: l.hs[i] }));
+      for (const part of m.dashed ? dashes(line, 3, 4) : [line]) to.ribbon(part, part.map(p => p.h), PAINT_W, Y.paint);
     }
     for (const a of turnArrows(sk)) { const g = G(a.p); for (const line of arrowLines(a.p, a.d, a.turns)) paint.ribbon(line, line.map(() => a.level * LEVEL_H + g), 0.18, Y.paint); }
     // speed bumps: their bodies raised by their height (red), their markings on top (white, or a short bump's yellow), on the ground

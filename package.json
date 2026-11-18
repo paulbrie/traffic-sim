@@ -57,6 +57,7 @@
     "route-legs:check": "tsx scripts/route-legs-check.ts",
     "search:check": "tsx scripts/search-check.ts",
     "drawn-over:check": "tsx scripts/drawn-over-check.ts",
+    "sketch3d:check": "tsx scripts/sketch3d-check.ts",
     "convert:check": "tsx scripts/convert-check.ts",
     "collisions:check": "tsx scripts/collisions-check.ts",
     "lights:check": "tsx scripts/lights-check.ts",
