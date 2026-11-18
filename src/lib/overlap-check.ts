@@ -20,12 +20,14 @@ const SLACK = 0.5;
 /** samples along each lane (m), and the grid the lanes' pieces are filed in (m) */
 const STEP = 2, CELL = 10;
 
-const kept = new LastFew<Sketch["lanes"], DrawnOver[]>();
+// (by the lanes, as long as the roads, connectors and junctions are the same too: putting lanes in one road or drawing a junction
+// round them leaves the lanes as they were, and changes what is drawn over)
+const kept = new LastFew<Sketch["lanes"], { roads: Sketch["roads"]; connectors: Sketch["connectors"]; junctions: Sketch["junctions"]; out: DrawnOver[] }>();
 
 /** the pairs of roads drawn over each other, each once (its longest stretch), the longest first */
 export function roadsDrawnOver(sk: Sketch): DrawnOver[] {
   const was = kept.get(sk.lanes);
-  if (was) return was;
+  if (was && was.roads === sk.roads && was.connectors === sk.connectors && was.junctions === sk.junctions) return was.out;
   const roadOf = new Map<string, string>();
   for (const r of sk.roads) for (const id of r.lanes) roadOf.set(id, r.id);
   const road = (id: string) => roadOf.get(id) ?? id;
@@ -83,7 +85,7 @@ export function roadsDrawnOver(sk: Sketch): DrawnOver[] {
     for (const k of [...runs.keys()]) close(k);
   });
   const out = [...best.values()].sort((a, b) => b.length - a.length);
-  kept.set(sk.lanes, out);
+  kept.set(sk.lanes, { roads: sk.roads, connectors: sk.connectors, junctions: sk.junctions, out });
   return out;
 }
 

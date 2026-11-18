@@ -7,6 +7,8 @@
  * ring, missed exits (going more than half a lap past the way off), collisions and deadlocks. As things are, and with each setting
  * given (key=value, as `sketch.traffic.tune`). RING_DEBUG=1 lists every way on; RING_GEOM=1 only prints the ways on and off's lengths
  * and speeds (RING_NEAR, RING_D try other arms).
+ * Each, as things are, fails the check if anybody drives through anybody, a deadlock is broken, over 3% of exits are missed, or too
+ * few get onto the ring (see the end of the loop).
  * Then a check (ticket #89): the team's Roundabout 3 as at rev 485 (a two-lane ring 14 and 21 m across, every way in queued, a zebra on
  * one arm, its own settings: lane by exit, roundabout driving), 20 minutes on seeds 1 and 2: cars through an hour, deadlocks broken,
  * collisions (1024 veh/h and some 50 deadlocks before; the spatial experiment's ~1800 on average, without the zebra or lanes).
@@ -124,6 +126,16 @@ for (const variant of ["S", "A", "B"] as const) for (const tune of tunes) {
   }
   if (process.env.RING_DEBUG) for (const e of rs[0].entries) console.log("   ", e.id, e.ring, Math.round(e.perHour), "vc", Math.round(e.circulating), "hcm", Math.round(e.hcm));
   console.log(`  all: ${Math.round(avg(r => r.total))} /h onto the ring (HCM ${Math.round(avg(r => r.hcmTotal))} /h); onto the inner ring ${Math.round(avg(r => r.inner))} /h; missed exits ${avg(r => r.missed).toFixed(1)} of ${Math.round(avg(r => r.onRing))} (${((100 * avg(r => r.missed)) / Math.max(1, avg(r => r.onRing))).toFixed(1)}%); out ${Math.round(avg(r => r.out))}; collisions ${avg(r => r.collisions)}; deadlocks ${avg(r => r.deadlocks)}`);
+  // (as things are only: a setting tried may well do worse. Nobody through anybody, no deadlock, few exits missed, the ring taking
+  // at least 1350 /h (1250 with ways off the inner ring, crossing the outer one), and that inner ring used when it has ways off of its
+  // own. A's inside lanes in carry nobody: every way off leaves the outer ring, so a car due in there is handed to the lane beside
+  // before it comes in, as drivers pick their lane before the junction (ticket #89))
+  if (!Object.keys(tune).length) {
+    const missedShare = avg(r => r.missed) / Math.max(1, avg(r => r.onRing));
+    const ok = rs.every(r => r.collisions === 0 && r.deadlocks === 0) && missedShare <= 0.03 && avg(r => r.total) >= (variant === "B" ? 1250 : 1350) && (variant !== "B" || avg(r => r.inner) >= 200);
+    if (!ok) process.exitCode = 1;
+    console.log(`  ${ok ? "ok  " : "FAIL"} no collisions or deadlocks, at most 3% of exits missed, at least ${variant === "B" ? 1250 : 1350} /h onto the ring${variant === "B" ? ", 200 /h onto the inner ring" : ""}`);
+  }
 }
 
 // Roundabout 3 as at rev 485 (ticket #89): through, no deadlocks, few collisions

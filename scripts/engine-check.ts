@@ -41,6 +41,8 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   for (const v of sim.vehicles) if (!v.dead) { st[v.state] = (st[v.state] || 0) + 1; const p = sim.pose(v); if (!isFinite(p.fx) || !isFinite(v.s)) bad++; }
   const S = sim.stats;
   console.log(cars, trucks, "n", S.count, "bus", S.buses, "v", S.avgSpeed.toFixed(1), "stop%", (S.stopped * 100).toFixed(0), "tpm", S.tripsPerMin, "towed", S.towed, "lc", S.laneChanges, "boarded", S.boarded, "bad", bad, "ms", Date.now() - t0, JSON.stringify(st));
+  // (every vehicle somewhere real, traffic moving and getting where it goes, buses running and boarding)
+  if (bad || !S.trips || S.avgSpeed < 5 || !S.buses || !S.boarded) { console.log(`sample town at ${cars} cars: FAIL`); process.exit(1); }
 }
 
 // custom (per-lane) traffic light phases: a protected left turn for the boulevard's leftmost lane
@@ -59,6 +61,7 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   const A = nodeById(n2, wide.link.from)!, B = nodeById(n2, wide.link.to)!;
   const [split] = splitLink(n2, wide.link.id, 0.5, linkPoint(wide.link, A, B, 0.5));
   console.log("custom phases survive reverse / split:", lanesOf(reversed) === before, lanesOf(split) === before);
+  if (lanesOf(reversed) !== before || lanesOf(split) !== before) process.exit(1);
   const c = compile(n2), cj = c.nodeById.get(j.def.id)!, arm = cj.arms.findIndex(a => a.inEdge?.link.id === wide.link.id && a.inEdge.dir === wide.dir);
   const sim = new Sim(c, { cars: 140, trucks: 14, seed: 7 });
   let wrong = 0, leftGreen = 0;
@@ -70,19 +73,21 @@ for (const [cars, trucks] of [[40, 4], [80, 8], [140, 14], [200, 20]]) {
   }
   const S = sim.stats;
   console.log("protected left: green", leftGreen, "ticks, wrong aspects", wrong, "| n", S.count, "v", S.avgSpeed.toFixed(1), "towed", S.towed, "warnings", c.warnings.length);
-  if (wrong) process.exit(1);
+  // (and the left's own phase did come round: no green at all would pass the above)
+  if (wrong || leftGreen < 100) process.exit(1);
 }
 
 // general traffic never drives in a bus lane
 {
   const sim = new Sim(net, { cars: 140, trucks: 14, seed: 7 });
-  let onBus = 0;
+  let onBus = 0, busesOnIt = 0;
   for (let t = 0; t < 4000; t++) {
     sim.step();
-    for (const v of sim.vehicles) if (!v.dead && v.kind !== "bus" && v.piece.kind === "lane" && v.piece.edge.bus && v.piece.lane === v.piece.edge.n - 1) onBus++;
+    for (const v of sim.vehicles) if (!v.dead && v.piece.kind === "lane" && v.piece.edge.bus && v.piece.lane === v.piece.edge.n - 1) { if (v.kind === "bus") busesOnIt++; else onBus++; }
   }
-  console.log("cars in bus lanes (vehicle-ticks):", onBus);
-  if (onBus) process.exit(1);
+  // (the town has bus lanes and its buses use them: else nobody in one would prove nothing)
+  console.log("cars in bus lanes (vehicle-ticks):", onBus, "| buses in them:", busesOnIt);
+  if (onBus || !busesOnIt) process.exit(1);
 }
 
 // signal optimiser: a short search on the sample town runs end to end and reports a fresh-seed check

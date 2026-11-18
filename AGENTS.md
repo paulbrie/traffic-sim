@@ -11,6 +11,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 ## Project notes
 
 - Engine code in `src/engine` must stay framework-free (runs in Node for `npm run engine:check`).
+- Tests are the `npm run *:check` scripts in `scripts/` (plus `engine:baseline` and `audit`); `npm test` runs them all, 4 at a time, and fails if any does (about 3 min at `-j 6`). A new check is a `*:check` script in package.json, picked up by `npm test` on its own; it must exit 1 when what it checks is wrong, not only print it. After an intended V1 behaviour change, `npm run engine:baseline -- --update`.
 - Client state lives in subjecto stores in `src/state/store.ts`; mutate `ui` through its proxy (`ui.getValue().x = …`), replace the network through `commit()` so undo and autosave work.
 - Pages that read the database call `connection()` (see `src/server/queries.ts`) so they render per request.
 - shadcn components in `src/components/ui` were written by hand in the new-york style; `npx shadcn add <name>` works for more.

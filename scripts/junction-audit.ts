@@ -5,6 +5,7 @@
  *   npm run audit -- <planId>          -> a plan from the database (DATABASE_URL)
  *   npm run audit -- plan.json         -> a network exported as JSON
  * Options: --seeds=3 --minutes=15 --cars=120
+ * Fails (exit 1) if a vehicle went into a junction without being let in, from a lane its turn isn't from, or got stuck inside one.
  */
 import "./env";
 import { readFileSync, existsSync } from "node:fs";
@@ -120,6 +121,9 @@ function audit(name: string, c: Compiled, settings: PlanSettings, seed: number, 
 
 (async () => {
   const targets = await loadTarget();
+  // (what must never happen, and fails the audit: into a junction without being let in, from a lane its turn isn't from, stuck inside
+  // it; on red and two inside on crossing paths are counted, not failed: a few of each on the built-in networks, ticket #269)
+  let hard = 0;
   for (const { name, net, settings } of targets) {
     const c = compile(net);
     const tallies = new Map<string, Tally>();
@@ -132,7 +136,10 @@ function audit(name: string, c: Compiled, settings: PlanSettings, seed: number, 
     for (const t of rows) {
       const d = Object.entries(t.denies).map(([k, n]) => `${k}:${n}`).join(" ");
       const viol = [t.enterOnRed, t.enterWithoutGrant, t.enterBadLane, t.stuckInside, t.unsafeOverlap];
+      hard += t.enterWithoutGrant + t.enterBadLane + t.stuckInside;
       console.log(`  ${t.ref.padEnd(4)} ${t.control.padEnd(10)} ${String(t.degree).padStart(3)} ${String(t.enters).padStart(7)}  ${(t.waitN ? t.waitSum / t.waitN : 0).toFixed(1).padStart(5)}/${t.waitMax.toFixed(0).padStart(4)}s   ${d.padEnd(40).slice(0, 40)} ${String(t.revokes).padStart(6)} ${String(t.wrongLane).padStart(7)} ${String(t.turnChanged).padStart(7)} ${String(t.reroutes).padStart(7)} ${String(t.towed).padStart(5)} | ${viol.map(x => String(x).padStart(3)).join("     ")}${t.sneaks ? `   cleared-on-change ${t.sneaks}` : ""}${t.perGreen.length ? `   cars/green ${t.perGreen.map(x => x.toFixed(1)).join(",")}` : ""}`);
     }
   }
+  console.log(hard ? `\nFAIL: ${hard} vehicle(s) in a junction without being let in, from the wrong lane, or stuck inside it` : "\naudit: no junction let anyone in unasked, from the wrong lane, or kept them stuck");
+  if (hard) process.exit(1);
 })().catch(e => { console.error(e); process.exit(1); });

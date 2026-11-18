@@ -3297,13 +3297,20 @@ export class SketchSim {
     const crossings = (f?.peds ?? []).map(q => ({ ...q, progress: r2(q.progress), ...(() => { const s = this.crossingStats(q.id); return s ? { crossedSoFar: s.crossed, avgWaitSoFar: r2(s.avgWait), lights: s.lights } : {}; })() }));
     return { time: r2(at), now: r2(this.t), kept: this.replayRange(), params: this.params, stats: this.stats(), cars, lights, crossings, events };
   }
+  /** the index of the replay frame kept at time `t`, else of the last one before it, -1 for none (frames are stamped to the
+   * hundredth of a second and the clock adds up tenths: 4.8999… asks for the frame stamped 4.9) */
+  private frameAt(t: number): number {
+    const fr = this.replay;
+    if (!fr.length) return -1;
+    let lo = 0, hi = fr.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (fr[mid].t <= t + 0.005) lo = mid; else hi = mid - 1; }
+    return lo;
+  }
   /** the cars as they were at time `t` (the frame kept just before it) */
   replayAt(t: number): { t: number; cars: ReplayCar[]; peds: PedView[]; explain?: CarExplain } | null {
-    const fr = this.replay;
-    if (!fr.length) return null;
-    let lo = 0, hi = fr.length - 1;
-    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (fr[mid].t <= t) lo = mid; else hi = mid - 1; }
-    const f = fr[lo], n = f.tags.length / 4, cars: ReplayCar[] = [];
+    const at = this.frameAt(t);
+    if (at < 0) return null;
+    const f = this.replay[at], n = f.tags.length / 4, cars: ReplayCar[] = [];
     for (let i = 0; i < n; i++) {
       const a = f.nums.subarray(i * 9, i * 9 + 9), g = f.tags.subarray(i * 4, i * 4 + 4);
       // (the share slot also holds the turn signal: +10 left, +20 right; a bus: +100 more; -1 broken down)
@@ -3758,10 +3765,8 @@ export class SketchSim {
   }
   /** car `id` at a moment past, from the recording: its why, gap, time standing, the others' whys then, its whys before */
   private explainReplayed(id: number, at: number): CarExplain | null {
-    const fr = this.replay;
-    if (!fr.length) return null;
-    let lo = 0, hi = fr.length - 1;
-    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (fr[mid].t <= at) lo = mid; else hi = mid - 1; }
+    const fr = this.replay, lo = this.frameAt(at);
+    if (lo < 0) return null;
     const f = fr[lo];
     if (f.explain?.car === id) return f.explain;
     const n = f.tags.length / 4, whyOf = new Map<number, string | null>();
