@@ -4,8 +4,9 @@
  *   npm test                      all of them, 4 at a time
  *   npm test -- -j 8              8 at a time (each one a Node process of up to ~1 GB)
  *   npm test -- ring explain      only those whose name contains one of the words
- * The checks need no database and no network (osm:check reads its Overpass answer from scripts/fixtures). The shell's
- * DATABASE_URL (the admin's) is left out of their environment so nothing can reach it by mistake.
+ * The checks need no network (osm:check reads its Overpass answer from scripts/fixtures) and no database of the app's: db:check
+ * starts a throwaway Postgres of its own in Docker. The shell's DATABASE_URL (the admin's) is left out of their environment so
+ * nothing can reach it by mistake.
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";

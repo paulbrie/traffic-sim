@@ -32,6 +32,7 @@
     "agent:check": "tsx scripts/agent-login-check.ts",
     "zones:check": "tsx scripts/zones-check.ts",
     "shapes:check": "tsx scripts/shapes-check.ts",
+    "web:check": "tsx scripts/web-check.ts",
     "edit:check": "tsx scripts/sketch-edit-check.ts",
     "fill:check": "tsx scripts/junction-fill-check.ts",
     "loose:check": "tsx scripts/loose-surface-check.ts",
@@ -60,6 +61,8 @@
     "collisions:check": "tsx scripts/collisions-check.ts",
     "lights:check": "tsx scripts/lights-check.ts",
     "signs:check": "tsx scripts/signs-check.ts",
+    "db:check": "tsx --conditions=react-server scripts/db-check.ts",
+    "ui:check": "vitest run",
     "tomtom:check": "tsx scripts/tomtom-check.ts",
     "traffic:collect": "tsx scripts/traffic-collect.ts",
     "traffic:export": "tsx scripts/traffic-export.ts",
@@ -91,6 +94,9 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.12",
     "@types/leaflet": "^1.9.22",
     "@types/node": "20.19.43",
     "@types/react": "^19",
@@ -100,9 +106,11 @@
     "drizzle-kit": "^0.31.11",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
+    "jsdom": "^27.4.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "tw-animate-css": "^1.4.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "^4.1.12"
   }
 }
