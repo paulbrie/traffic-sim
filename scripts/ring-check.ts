@@ -129,11 +129,11 @@ for (const variant of ["S", "A", "B"] as const) for (const tune of tunes) {
   // (as things are only: a setting tried may well do worse. Nobody through anybody, no deadlock, few exits missed, the ring taking
   // at least 1350 /h (1250 with ways off the inner ring, crossing the outer one), and the inner ring used: in B by its own ways off,
   // in A by the inside lanes in, whose cars move out to the outer ring for their way off (none at all before ticket #269: a lane
-  // change was costed 20 m short, so every arrival there was handed to the outside lane). A's cars moving out still miss their way
-  // off one time in five and go round again, the outer ring's cars never letting them in: at most 25% until that is seen to
-  // (ticket #274), 3% elsewhere)
+  // change was costed 20 m short, so every arrival there was handed to the outside lane). A's cars moving out missed their way off one
+  // time in five and went round again, running beside the outer ring's cars, never let in (ticket #274): now they pick a gap, the outer
+  // ring's cars let them in, and a way off too near for the inner ring is taken from the outer one. At most 3% everywhere)
   if (!Object.keys(tune).length) {
-    const missedShare = avg(r => r.missed) / Math.max(1, avg(r => r.onRing)), maxMissed = variant === "A" ? 0.25 : 0.03, minInner = variant === "A" ? 400 : variant === "B" ? 200 : 0;
+    const missedShare = avg(r => r.missed) / Math.max(1, avg(r => r.onRing)), maxMissed = 0.03, minInner = variant === "A" ? 400 : variant === "B" ? 200 : 0;
     const ok = rs.every(r => r.collisions === 0 && r.deadlocks === 0) && missedShare <= maxMissed && avg(r => r.total) >= (variant === "B" ? 1250 : 1350) && avg(r => r.inner) >= minInner;
     if (!ok) process.exitCode = 1;
     console.log(`  ${ok ? "ok  " : "FAIL"} no collisions or deadlocks, at most ${maxMissed * 100}% of exits missed, at least ${variant === "B" ? 1250 : 1350} /h onto the ring${minInner ? `, ${minInner} /h onto the inner ring` : ""}`);

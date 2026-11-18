@@ -2514,6 +2514,12 @@ export const CHANGE_COST = 25;
  * short of where its way off leaves the inner one, the route said to change there, did the whole lap round instead)
  */
 export const CHANGE_ROOM = 20;
+/**
+ * metres moving over to the ring beside takes, round a two-lane roundabout: as the simulation plans it (20 m on, and its way off
+ * 15 m past that, its `plan`). At 20, a route took the inner ring for a way off 33 m round from where it came on, the car had no
+ * room to move out in, and one such in five went round again (ticket #274)
+ */
+export const RING_CHANGE_ROOM = 35;
 
 /**
  * How far it is to each exit (metres, by the shortest way): from the start of every connector, and
@@ -2596,9 +2602,10 @@ export class RouteTable {
       // (a bus lane: no ordinary car's route drives on it, not even in passing; a bus's route may)
       if (L.lane.bus && !this.bus) return;
       for (const i of L.ins) { const a = this.reach(L, i.s, s); if (a !== null) push(this.connLen.get(i.id)! + a + onward, i.id); }
-      // (from a lane beside it: coming onto that one, then changing over, `CHANGE_ROOM` on)
+      // (from a lane beside it: coming onto that one, then changing over, `CHANGE_ROOM` on; round a ring, `RING_CHANGE_ROOM`)
       for (const b of this.besideOf.get(laneId) ?? []) {
-        for (const i of this.lanes.get(b.from)!.ins) { const a = this.reach(L, b.map(i.s) + CHANGE_ROOM, s); if (a !== null) push(this.connLen.get(i.id)! + CHANGE_COST + CHANGE_ROOM + a + onward, i.id); }
+        const room = L.ring ? RING_CHANGE_ROOM : CHANGE_ROOM;
+        for (const i of this.lanes.get(b.from)!.ins) { const a = this.reach(L, b.map(i.s) + room, s); if (a !== null) push(this.connLen.get(i.id)! + CHANGE_COST + room + a + onward, i.id); }
       }
     };
     // (driving off the exit's end)
@@ -2624,7 +2631,8 @@ export class RouteTable {
       const a = this.reach(L, s, o.s), c = cost.get(o.id);
       if (a !== null && c !== undefined) best = Math.min(best, a + c);
     }
-    if (change) for (const b of L.beside) best = Math.min(best, CHANGE_COST + CHANGE_ROOM + this.fromLane(b.id, b.map(s) + CHANGE_ROOM, exit, cost, false));
+    const room = L.ring ? RING_CHANGE_ROOM : CHANGE_ROOM;
+    if (change) for (const b of L.beside) best = Math.min(best, CHANGE_COST + room + this.fromLane(b.id, b.map(s) + room, exit, cost, false));
     return best;
   }
 
