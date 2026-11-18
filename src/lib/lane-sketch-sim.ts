@@ -1536,21 +1536,23 @@ export class SketchSim {
     }
     // (a test car with its own random numbers: the others' run as without it)
     const rnd = v.id < 0 ? this.testRnd : this.rnd;
-    // (each with how far it is: along the lane, a lane change counting `CHANGE_COST`)
+    // (each with how far it is: along the lane, a lane change counting `CHANGE_COST`, and the way along its own lane up to where it
+    // changes: not counted, a change looked 20 m shorter than keeping its lane, and the inside lane into a two-lane roundabout whose
+    // ways off all leave the outer ring carried nobody (each arrival moved over to the outside lane, ticket #269))
     const goals: { lane: Edge; conn: Edge | null; d: number }[] = [];
-    const add = (lane: Edge, from: number) => {
+    const add = (lane: Edge, from: number, before: number) => {
       // (on another lane, a way off at least 15 m past where it has changed by then: it has to have changed 15 m before it (`hopOf`),
       // and with less it missed it and went round again, ticket #104)
-      const extra = lane === v.edge ? 0 : CHANGE_COST, min = lane === v.edge ? 0.5 : 15;
+      const extra = lane === v.edge ? 0 : CHANGE_COST + before, min = lane === v.edge ? 0.5 : 15;
       for (const o of lane.outs) if (this.along(lane, from, o.s) > min || (!lane.ring && o.s >= lane.len - 0.01 && from < lane.len - 0.01)) goals.push({ lane, conn: o.conn, d: extra + Math.max(0, this.along(lane, from, o.s)) });
       // (something leaves near its end: it leads on there, cars don't drive off it)
       if (!lane.ring && from < lane.len - 0.01 && !lane.outs.some(o => o.s >= lane.len - EXIT_CLEAR)) goals.push({ lane, conn: null, d: extra + lane.len - from });
     };
-    const seen = new Set([v.edge]), todo = [{ lane: v.edge, at: v.pos }];
+    const seen = new Set([v.edge]), todo = [{ lane: v.edge, at: v.pos, before: 0 }];
     let skippedIn = false;
     while (todo.length) {
-      const { lane, at } = todo.shift()!;
-      add(lane, at);
+      const { lane, at, before } = todo.shift()!;
+      add(lane, at, before);
       if (ownLane) break;
       for (const n of lane.neighbors) {
         const there = Math.max(at, n.a0) + 20;
@@ -1561,7 +1563,7 @@ export class SketchSim {
         // (keeping its ring (`ringKeepLane`): not over from the outer ring to the inner, unless no other way leads there)
         if (n.round && n.lane.len < lane.len && this.tuning.ringKeepLane >= 0.5 && !ringIn) { skippedIn = true; continue; }
         seen.add(n.lane);
-        todo.push({ lane: n.lane, at: this.across(n, there)! });
+        todo.push({ lane: n.lane, at: this.across(n, there)!, before: before + (lane === v.edge ? there - at : 0) });
       }
     }
     // going to an exit: the way there that is shortest (from those within 5 m of it, one at random)

@@ -270,8 +270,9 @@ const RULES: Partial<Sketch> = { traffic: { rate: 0, speed: 50, seed: 1, tune: {
 // T170: how a lane change ended, for a car not watched, asked about a moment later: it gave up (the lane it wanted blocked by one
 // broken down beside where it had to change; its own lane leads there too, by Y), and its recent decisions say so, and what it took instead
 {
-  const sim = make(sketch([line("A", [[0, 0], [60, 0]]), line("B", [[0, 3.5], [60, 3.5]]), line("X", [[70, 3.5], [160, 3.5]]), line("Y", [[70, 0], [100, -20], [130, -20]])],
-    [conn("cAY", "A", 60, "Y", 0), conn("cBX", "B", 60, "X", 0), conn("cYX", "Y", 66.06, "X", 70)], { roads: [{ id: "r1", name: "Two lanes", lanes: ["A", "B"] }] }));
+  // (Y the way round, 30 m longer than changing to B: the change is the way to go, with the way along A to where it changes counted)
+  const sim = make(sketch([line("A", [[0, 0], [60, 0]]), line("B", [[0, 3.5], [60, 3.5]]), line("X", [[70, 3.5], [160, 3.5]]), line("Y", [[70, 0], [100, -40], [130, -40]])],
+    [conn("cAY", "A", 60, "Y", 0), conn("cBX", "B", 60, "X", 0), conn("cYX", "Y", 80, "X", 70)], { roads: [{ id: "r1", name: "Two lanes", lanes: ["A", "B"] }] }));
   // (broken down on B where it stops, beside the last of A: no change onto B ahead of it, nor beside it)
   const b = sim.sendTest("B", "X")!, posB = () => (sim.vehicles.find(v => v.id === b) as unknown as { pos: number; v: number } | undefined);
   for (let i = 0; i < 300 && (posB()?.pos ?? 0) < 30; i++) sim.step(0.1);
