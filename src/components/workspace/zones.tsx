@@ -13,6 +13,7 @@ import { simController } from "@/state/sim-controller";
 import { viewport } from "@/state/commands";
 import * as ops from "@/state/ops";
 import { IdChip, Section } from "./fields";
+import { isEnter } from "@/lib/enter-key";
 
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 const NEW = "__new__", NONE = "__none__";
@@ -66,7 +67,7 @@ export function ZonesSection() {
           <div key={z.id} className="grid gap-1.5 rounded-lg border p-2">
             <div className="flex items-center gap-2">
               <input type="color" value={z.color} aria-label={`Colour of ${z.name}`} className="size-6 shrink-0 cursor-pointer rounded border-none bg-transparent p-0" onChange={e => commit(ops.updateZone(net, z.id, { color: e.target.value }), `zc:${z.id}`)} />
-              <Input key={`${z.id}:${z.name}`} defaultValue={z.name} aria-label="Zone name" className="h-7 text-sm" onBlur={e => e.target.value.trim() && e.target.value !== z.name && commit(ops.updateZone(net, z.id, { name: e.target.value.trim().slice(0, 60) }))} onKeyDown={e => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+              <Input key={`${z.id}:${z.name}`} defaultValue={z.name} aria-label="Zone name" className="h-7 text-sm" onBlur={e => e.target.value.trim() && e.target.value !== z.name && commit(ops.updateZone(net, z.id, { name: e.target.value.trim().slice(0, 60) }))} onKeyDown={e => isEnter(e) && (e.target as HTMLInputElement).blur()} />
               <Button variant="ghost" size="icon-sm" className="size-7 shrink-0" aria-label={`Delete ${z.name}`} onClick={() => commit(ops.deleteZone(net, z.id))}><Trash2 /></Button>
             </div>
             <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -98,7 +99,7 @@ export function ZonesSection() {
                           key={`${a.id}:${b.id}:${rate(a.id, b.id)}`} defaultValue={rate(a.id, b.id) || ""} placeholder="0" inputMode="numeric" aria-label={`Vehicles per hour from ${a.name} to ${b.name}`}
                           className="h-7 w-16 px-1.5 text-right font-mono text-xs tabular"
                           onBlur={e => { const v = Math.max(0, Math.round(Number(e.target.value) || 0)); if (v !== rate(a.id, b.id)) commit(ops.setZoneFlow(net, a.id, b.id, v)); }}
-                          onKeyDown={e => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                          onKeyDown={e => isEnter(e) && (e.target as HTMLInputElement).blur()}
                         />
                       </td>
                     ))}

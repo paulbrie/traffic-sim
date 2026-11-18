@@ -18,6 +18,7 @@ import { reportText } from "@/lib/bridge-report";
 import { bridgeCanvas, bridgeState, bridgeUi } from "@/state/bridge-registry";
 import { bridgeConsole, bridgeStore } from "@/state/bridge-client";
 import { snapshot } from "./a11y";
+import { isEnter } from "@/lib/enter-key";
 
 /** the admin the tickets go to, and its project (the box's admin, same host: its session cookie goes with the request) */
 const ADMIN = (process.env.NEXT_PUBLIC_ADMIN_URL ?? "/admin").replace(/\/$/, "");
@@ -124,7 +125,7 @@ function NewTicket({ onClose }: { onClose: () => void }) {
           <DialogDescription>For {PROJECT}, in the admin&apos;s tickets. The page&apos;s data is as it was when this opened.</DialogDescription>
         </DialogHeader>
         <div className="grid min-h-0 gap-3 overflow-y-auto pr-1">
-          <Input autoFocus value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === "Enter") void send(); }} placeholder="Title" aria-label="Title" maxLength={500} />
+          <Input autoFocus value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (isEnter(e)) void send(); }} placeholder="Title" aria-label="Title" maxLength={500} />
           <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="What's wrong, or wanted" aria-label="Description" className="max-h-60 min-h-24 text-sm" />
           <fieldset className="grid gap-1">
             <legend className="mb-1 text-xs text-muted-foreground">Attach</legend>

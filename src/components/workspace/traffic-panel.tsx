@@ -22,6 +22,7 @@ import { SimSettingsButton } from "./sim-settings";
 import { PlanFuelSection, fmtFuel } from "./fuel";
 import { ZonesSection } from "./zones";
 import { NumberField, Section, compass } from "./fields";
+import { isEnter } from "@/lib/enter-key";
 
 /** share of trips crossing the plan boundary (automatic, or set by hand) */
 function ThroughField() {
@@ -62,7 +63,7 @@ export function TrafficPanel() {
           key={`${id}:${value}`} defaultValue={String(value)} inputMode="numeric" aria-label={`${label} (number)`}
           className="h-7 w-20 text-right font-mono text-xs tabular"
           onBlur={e => { const n = Math.round(Math.max(0, Math.min(hardMax, Number(e.target.value) || 0))); if (n !== value) on(n); }}
-          onKeyDown={e => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+          onKeyDown={e => isEnter(e) && (e.target as HTMLInputElement).blur()}
         />
       </div>
       <Slider id={id} min={0} max={Math.max(max, value)} step={step} value={[value]} onValueChange={([v]) => on(v)} />

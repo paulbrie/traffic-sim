@@ -53,6 +53,7 @@ import { ringOfNode } from "@/state/rings";
 import { RingInspector } from "./ring-inspector";
 import { deleteSelected } from "@/state/bulk";
 import { resetApproach } from "@/state/connections";
+import { isEnter } from "@/lib/enter-key";
 
 const CONTROL_LABEL: Record<Control, string> = { priority: "Priority (first come)", free: "Free (go when clear)", stop: "All-way stop", lights: "Traffic lights", roundabout: "Roundabout" };
 const SPEEDS = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 130];
@@ -630,7 +631,7 @@ function LinkInspector({ net, link }: { net: Network; link: LinkDef }) {
       <Section>
         <div className="grid gap-1.5">
           <Label htmlFor="lname" className="text-xs text-muted-foreground">Name</Label>
-          <Input id="lname" key={`${link.id}:${link.name}`} className="h-8" defaultValue={link.name} placeholder="Strada …" onBlur={e => e.target.value !== link.name && set({ name: e.target.value })} onKeyDown={e => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+          <Input id="lname" key={`${link.id}:${link.name}`} className="h-8" defaultValue={link.name} placeholder="Strada …" onBlur={e => e.target.value !== link.name && set({ name: e.target.value })} onKeyDown={e => isEnter(e) && (e.target as HTMLInputElement).blur()} />
         </div>
       </Section>
       <Section title="Lanes">
@@ -818,7 +819,7 @@ function StopInspector({ net, id }: { net: Network; id: string }) {
       <Section>
         <div className="grid gap-1.5">
           <Label htmlFor="sname" className="text-xs text-muted-foreground">Name</Label>
-          <Input id="sname" key={`${stop.id}:${stop.name}`} className="h-8" defaultValue={stop.name} onBlur={e => e.target.value !== stop.name && commit(ops.updateStop(net, stop.id, { name: e.target.value }))} onKeyDown={e => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+          <Input id="sname" key={`${stop.id}:${stop.name}`} className="h-8" defaultValue={stop.name} onBlur={e => e.target.value !== stop.name && commit(ops.updateStop(net, stop.id, { name: e.target.value }))} onKeyDown={e => isEnter(e) && (e.target as HTMLInputElement).blur()} />
         </div>
         <div className="flex items-center justify-between text-sm">
           <span>Serves buses heading {heading.name}</span>

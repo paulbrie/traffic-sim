@@ -10,6 +10,7 @@ import {
   type SignalPlan, type Sketch, type SketchJunction, type SketchSignalGroup,
 } from "@/lib/lane-sketch";
 import { useSketchStore } from "@/state/lane-sketch";
+import { isEnter } from "@/lib/enter-key";
 
 const NEW = "__new__", NONE = "__none__";
 
@@ -60,7 +61,7 @@ function GroupEditor({ sketch, junction, plan, group, now, onPick }: {
           Group name
           <Input className="h-7 text-xs text-foreground" defaultValue={group.name} key={group.id + group.name}
             onBlur={e => { const v = e.currentTarget.value.trim(); if (v && v !== group.name) editSketch(sk => updateGroup(sk, group.id, { name: v.slice(0, 80) })); }}
-            onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+            onKeyDown={e => { if (isEnter(e)) e.currentTarget.blur(); }} />
         </label>
         <Button variant="ghost" size="icon-sm" aria-label="Delete the group" title="Delete the group (its lights go back to running on their own)" onClick={() => editSketch(sk => deleteGroup(sk, group.id))}><Trash2 /></Button>
       </div>

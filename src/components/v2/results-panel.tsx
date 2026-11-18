@@ -23,6 +23,7 @@ import { useSketchStore } from "@/state/lane-sketch";
 import { laneSketch$, ui } from "@/state/store";
 import { CompareResultsDialog } from "./compare-results-dialog";
 import { InspectorPanel } from "./inspector-panel";
+import { isEnter } from "@/lib/enter-key";
 
 const span = (s: number) => { const m = Math.round(s / 60); return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}` : `${m} min`; };
 
@@ -85,7 +86,7 @@ export function ResultsPanel({ sketch, stats, readOnly }: { sketch: Sketch; stat
       {!readOnly && (saving ? (
         <div className="grid gap-1.5 rounded-md border p-2">
           <Input value={saving.name} onChange={e => setSaving({ ...saving, name: e.target.value })} maxLength={80} className="h-7 text-xs" aria-label="Results' name" autoFocus
-            onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") void save(); if (e.key === "Escape") setSaving(null); }} />
+            onKeyDown={e => { e.stopPropagation(); if (isEnter(e)) void save(); if (e.key === "Escape") setSaving(null); }} />
           <label className="flex items-center gap-1.5 text-xs" title="Each junction's flows every 5 s (sketches of 24 junctions at most): to see how they changed over the run; about ten times the size">
             <input type="checkbox" className="accent-primary" checked={saving.series} onChange={e => setSaving({ ...saving, series: e.target.checked })} /> With the flows every 5 s
           </label>
@@ -103,7 +104,7 @@ export function ResultsPanel({ sketch, stats, readOnly }: { sketch: Sketch; stat
         {list === null ? <p className="text-[11px] text-muted-foreground">…</p> : !list.length ? <p className="text-[11px] text-muted-foreground">None saved yet.</p> : list.map(x => renaming?.id === x.id ? (
           <Input key={x.id} value={renaming.name} onChange={e => setRenaming({ id: x.id, name: e.target.value })} maxLength={80} className="h-7 text-xs" aria-label="Results' name" autoFocus
             onFocus={e => e.currentTarget.select()} onBlur={rename}
-            onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") rename(); if (e.key === "Escape") setRenaming(null); }} />
+            onKeyDown={e => { e.stopPropagation(); if (isEnter(e)) rename(); if (e.key === "Escape") setRenaming(null); }} />
         ) : (
           <label key={x.id} className={cn("flex items-center gap-1.5 rounded px-1 text-xs hover:bg-muted", ticked.includes(x.id) && "bg-primary/10")}
             title={`${x.name}\n${x.sketch} · ${span(x.seconds)} counted${x.series ? " · flows every 5 s" : ""}\n${x.by ? `${x.by}, ` : ""}${new Date(x.createdAt).toLocaleString()}`}>

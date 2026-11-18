@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { Kbd } from "@/components/ui/kbd";
 import { useEditorKind, useUiPath } from "@/state/sketch-ui";
@@ -8,6 +8,7 @@ import { isFullCircle, laneLength, type JunctionContents, type Sketch } from "@/
 import { formatArea, zoneArea } from "@/lib/sketch-zones";
 import { shapeArea } from "@/lib/sketch-shapes";
 import { BUMP_KINDS, bumpSpeed } from "@/lib/sketch-bumps";
+import { isEnter } from "@/lib/enter-key";
 
 /** what a search entry leads to: something on the sketch, or a car running now */
 export type SearchTarget = { kind: "road" | "lane" | "connector" | "junction" | "link" | "crossing" | "bump" | "zone" | "shape" | "stop"; id: string } | { kind: "car"; id: number };
@@ -132,6 +133,9 @@ export function SketchSearch({ sketch, contents, cars, commands = [], onGo, onCl
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const items = useMemo(() => [...commands.map((c, i) => ({ kind: "Command", title: c.title, sub: c.sub, id: `cmd${i}`, to: { kind: "command" as const, run: c.run }, hay: fold(`command ${c.title} ${c.sub}`) })), ...catalogue(sketch, contents, cars)], []);
   const hits = useMemo(() => search(items, q), [items, q]);
+  // (a combobox: the box keeps the focus, the row picked is named to screen readers by aria-activedescendant)
+  const listId = useId();
+  useEffect(() => { document.getElementById(`${listId}-${at}`)?.scrollIntoView({ block: "nearest" }); }, [listId, at]);
   const go = (it: Item) => { onClose(); if (it.to.kind === "command") it.to.run(); else onGo(it.to); };
   const onKey = (e: React.KeyboardEvent) => {
     // (keys typed here are the box's, not the editor's: no tool picked, nothing deleted)
@@ -139,22 +143,22 @@ export function SketchSearch({ sketch, contents, cars, commands = [], onGo, onCl
     if (e.key === "Escape") { e.preventDefault(); onClose(); }
     else if (e.key === "ArrowDown") { e.preventDefault(); setAt(i => Math.min(hits.length - 1, i + 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setAt(i => Math.max(0, i - 1)); }
-    else if (e.key === "Enter" && hits[at]) { e.preventDefault(); go(hits[at]); }
+    else if (isEnter(e) && hits[at]) { e.preventDefault(); go(hits[at]); }
   };
   return (
     <div className="absolute inset-0 z-30 flex justify-center bg-background/30 pt-6" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="flex h-fit max-h-[70%] w-[min(680px,calc(100%-2rem))] flex-col overflow-hidden rounded-lg border bg-background shadow-lg" role="dialog" aria-label="Search the sketch">
         <div className="flex items-center gap-2 border-b px-3">
           <Search className="size-4 text-muted-foreground" />
-          <input ref={box} autoFocus value={q} onChange={e => { setQ(e.target.value); setAt(0); }} onKeyDown={onKey}
+          <input ref={box} autoFocus value={q} role="combobox" aria-expanded={hits.length > 0} aria-controls={listId} aria-autocomplete="list" aria-activedescendant={hits[at] ? `${listId}-${at}` : undefined} onChange={e => { setQ(e.target.value); setAt(0); }} onKeyDown={onKey}
             placeholder={commands.length ? "Search roads, junctions, lanes, cars (#123)… or a command (test)" : "Search roads, junctions, lanes (l12), connectors, crossings, cars (#123)…"} aria-label="Search the sketch"
             className="h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" />
           <Kbd>Esc</Kbd>
         </div>
-        <div className="min-h-0 overflow-y-auto" role="listbox">
+        <div className="min-h-0 overflow-y-auto" role="listbox" id={listId}>
           {/* (a row is picked by a pointer moving over it: one resting where the list appears doesn't take Enter's pick) */}
           {hits.map((it, i) => (
-            <button key={`${it.kind}:${it.id}`} type="button" role="option" aria-selected={i === at}
+            <button key={`${it.kind}:${it.id}`} id={`${listId}-${i}`} type="button" role="option" aria-selected={i === at} tabIndex={-1}
               className={`flex w-full items-center gap-3 px-3 py-1.5 text-left text-sm ${i === at ? "bg-muted" : "hover:bg-muted/60"}`}
               onMouseMove={() => { if (at !== i) setAt(i); }} onClick={() => go(it)}>
               <span className="w-28 shrink-0 text-[11px] font-medium text-muted-foreground uppercase">{it.kind}</span>

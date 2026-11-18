@@ -20,6 +20,7 @@ import { bridgeCanvas, bridgeEditScope, bridgeState, bridgeToWorld } from "@/sta
 import { type BridgeView, bridgeAddAgent, bridgeAllowEdits, bridgeAllowTabs, bridgeCloseTab, bridgeDenyRequest, bridgeDisconnect, bridgeFocusTab, bridgeHello, bridgeOpenRequest, bridgePair, bridgePauseTab, bridgeResume, bridgeRevoke, bridgeSend, bridgeStore, bridgeTakeOver, setBridgeNavigate } from "@/state/bridge-client";
 import { under } from "./a11y";
 import { NewTicketButton } from "./new-ticket";
+import { isEnter } from "@/lib/enter-key";
 
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const hm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -140,7 +141,7 @@ function BridgePanel({ onAnnotate }: { onAnnotate: () => void }) {
               <Button size="sm" variant="outline" onClick={() => void bridgeDisconnect()} title="End the pairing: the agent can't act here any more"><Unplug /> Disconnect</Button>
             </div>
             <div className="flex gap-1.5">
-              <Input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") void send(); }} placeholder="A message to the agent" aria-label="Message to the agent" className="h-8 text-xs" />
+              <Input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (isEnter(e)) void send(); }} placeholder="A message to the agent" aria-label="Message to the agent" className="h-8 text-xs" />
               <Button size="icon-sm" className="size-8" aria-label="Send the message" disabled={!text.trim()} onClick={() => void send()}><Send /></Button>
             </div>
             {view.reports.length > 0 && (
@@ -352,7 +353,7 @@ function Annotator({ onDone }: { onDone: () => void }) {
       {rect && (
         <div className="absolute flex w-80 gap-1.5 rounded-md border bg-background p-2 shadow-lg" style={{ left: Math.min(rect.x, window.innerWidth - 330), top: Math.min(rect.y + rect.h + 8, window.innerHeight - 60) }}
           onPointerDown={e => e.stopPropagation()}>
-          <Input autoFocus value={note} onChange={e => setNote(e.target.value)} onKeyDown={e => { if (e.key === "Enter") void send(); }} placeholder="A note for the agent" aria-label="Note for the agent" className="h-8 text-xs" />
+          <Input autoFocus value={note} onChange={e => setNote(e.target.value)} onKeyDown={e => { if (isEnter(e)) void send(); }} placeholder="A note for the agent" aria-label="Note for the agent" className="h-8 text-xs" />
           <Button size="sm" className="h-8" onClick={() => void send()}>Send</Button>
         </div>
       )}

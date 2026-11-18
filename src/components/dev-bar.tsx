@@ -6,10 +6,10 @@ export function DevBar() {
   if (!devBarOn()) return null;
   const branch = gitBranch(), commit = gitCommit();
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 flex h-6 items-center justify-center gap-1.5 border-t bg-foreground px-2 font-mono text-[11px] text-background select-none">
+    <footer aria-label="Dev server" className="fixed inset-x-0 bottom-0 z-40 flex h-6 items-center justify-center gap-1.5 border-t bg-foreground px-2 font-mono text-[11px] text-background select-none">
       <span className="font-semibold tracking-wide">DEV</span>
       {branch && <><span className="opacity-50">·</span><GitBranch className="size-3" /><span>{branch}</span></>}
       {commit && <><span className="opacity-50">·</span><GitCommitHorizontal className="size-3" /><span title={commit.subject}>{commit.hash}</span></>}
-    </div>
+    </footer>
   );
 }

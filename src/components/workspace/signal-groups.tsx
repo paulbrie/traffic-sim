@@ -13,6 +13,7 @@ import { simController } from "@/state/sim-controller";
 import { commit, select, stats$ } from "@/state/store";
 import * as ops from "@/state/ops";
 import { NumberField, Section, compass } from "./fields";
+import { isEnter } from "@/lib/enter-key";
 
 const NEW = "__new__", NONE = "__none__";
 
@@ -73,7 +74,7 @@ function GroupEditor({ net, node, cn, group, compiled }: { net: Network; node: N
           Group name
           <Input className="h-8 text-sm text-foreground" defaultValue={group.name} key={group.id + group.name}
             onBlur={e => { const v = e.currentTarget.value.trim(); if (v && v !== group.name) commit(ops.updateGroup(net, group.id, { name: v.slice(0, 80) })); }}
-            onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+            onKeyDown={e => { if (isEnter(e)) e.currentTarget.blur(); }} />
         </label>
         <Button variant="ghost" size="icon-sm" aria-label="Delete group" title="Delete the group (its lights go back to running on their own)" onClick={() => commit(ops.deleteGroup(net, group.id))}><Trash2 /></Button>
       </div>

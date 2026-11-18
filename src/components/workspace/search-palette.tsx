@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useDeepSubject, useSubject } from "subjecto/react";
 import { Search } from "lucide-react";
 import { connectorId } from "@/engine/compile";
@@ -11,6 +11,7 @@ import { network$, select, ui, type Selection } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { sendView } from "@/state/commands";
 import { Kbd } from "@/components/ui/kbd";
+import { isEnter } from "@/lib/enter-key";
 
 /** one thing on the plan the search can find */
 interface Item { kind: string; title: string; sub: string; id: string; sel: Selection | null; at: Vec | null; hay: string }
@@ -99,6 +100,9 @@ function SearchBox() {
   const [q, setQ] = useState(""), [at, setAt] = useState(0);
   const items = useMemo(() => catalogue(), []);
   const hits = useMemo(() => search(items, q), [items, q]);
+  // (a combobox: the box keeps the focus, the row picked is named to screen readers by aria-activedescendant)
+  const listId = useId();
+  useEffect(() => { document.getElementById(`${listId}-${at}`)?.scrollIntoView({ block: "nearest" }); }, [listId, at]);
   const close = () => { ui.getValue().search = false; };
   const go = (it: Item) => {
     if (it.sel) select(it.sel);
@@ -109,21 +113,21 @@ function SearchBox() {
     if (e.key === "Escape") { e.preventDefault(); close(); }
     else if (e.key === "ArrowDown") { e.preventDefault(); setAt(i => Math.min(hits.length - 1, i + 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setAt(i => Math.max(0, i - 1)); }
-    else if (e.key === "Enter" && hits[at]) { e.preventDefault(); go(hits[at]); }
+    else if (isEnter(e) && hits[at]) { e.preventDefault(); go(hits[at]); }
   };
   return (
     <div className="absolute inset-0 z-30 flex justify-center bg-background/30 pt-6" onMouseDown={e => { if (e.target === e.currentTarget) close(); }}>
       <div className="flex h-fit max-h-[70%] w-[min(680px,calc(100%-2rem))] flex-col overflow-hidden rounded-lg border bg-background shadow-lg" role="dialog" aria-label="Search the plan">
         <div className="flex items-center gap-2 border-b px-3">
           <Search className="size-4 text-muted-foreground" />
-          <input autoFocus value={q} onChange={e => { setQ(e.target.value); setAt(0); }} onKeyDown={onKey}
+          <input autoFocus value={q} role="combobox" aria-expanded={hits.length > 0} aria-controls={listId} aria-autocomplete="list" aria-activedescendant={hits[at] ? `${listId}-${at}` : undefined} onChange={e => { setQ(e.target.value); setAt(0); }} onKeyDown={onKey}
             placeholder="Search roads, junctions (J12), lanes, connectors, stops, vehicles (#123)…" aria-label="Search the plan"
             className="h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" />
           <Kbd>Esc</Kbd>
         </div>
-        <div className="min-h-0 overflow-y-auto" role="listbox">
+        <div className="min-h-0 overflow-y-auto" role="listbox" id={listId}>
           {hits.map((it, i) => (
-            <button key={`${it.kind}:${it.id}`} type="button" role="option" aria-selected={i === at}
+            <button key={`${it.kind}:${it.id}`} id={`${listId}-${i}`} type="button" role="option" aria-selected={i === at} tabIndex={-1}
               className={`flex w-full items-center gap-3 px-3 py-1.5 text-left text-sm ${i === at ? "bg-muted" : "hover:bg-muted/60"}`}
               onMouseEnter={() => setAt(i)} onClick={() => go(it)}>
               <span className="w-28 shrink-0 text-[11px] font-medium text-muted-foreground uppercase">{it.kind}</span>

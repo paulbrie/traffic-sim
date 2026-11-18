@@ -11,6 +11,7 @@ import { commit, select } from "@/state/store";
 import * as ops from "@/state/ops";
 import { cn } from "@/lib/utils";
 import { IdChip, NumberField, Section } from "./fields";
+import { isEnter } from "@/lib/enter-key";
 
 const COLORS = ["#e11d48", "#ea580c", "#ca8a04", "#16a34a", "#0891b2", "#2563eb", "#7c3aed", "#475569"];
 
@@ -31,7 +32,7 @@ export function MarkerInspector({ net, m }: { net: Network; m: MarkerDef }) {
         <div className="grid gap-1.5">
           <Label htmlFor="mlabel" className="text-xs text-muted-foreground">Label</Label>
           <Input id="mlabel" key={`${m.id}:${m.label}`} className="h-8" defaultValue={m.label} placeholder="What is here…" maxLength={120}
-            onBlur={e => e.target.value !== m.label && set({ label: e.target.value })} onKeyDown={e => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+            onBlur={e => e.target.value !== m.label && set({ label: e.target.value })} onKeyDown={e => isEnter(e) && (e.target as HTMLInputElement).blur()} />
         </div>
         <div className="grid gap-1.5">
           <span className="text-xs text-muted-foreground">Colour</span>

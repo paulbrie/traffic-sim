@@ -15,6 +15,7 @@ import { readSteps, type WalkStep } from "@/lib/walkthrough";
 import { ChatMarkdown } from "./chat-markdown";
 import { Walkthrough } from "./walkthrough";
 import { ResizeEdges, useFloatingBox } from "./floating-box";
+import { isEnter } from "@/lib/enter-key";
 
 /** one step the assistant took (a file read, a command run…) */
 interface ToolStep { name: string; detail: string }
@@ -192,7 +193,7 @@ export function AssistantChat({ planName }: { planName: string }) {
       <form className="flex items-end gap-2 border-t p-2" onSubmit={e => { e.preventDefault(); void send(); }}>
         <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={2} autoFocus aria-label="Message to the assistant"
           placeholder="Ask about the plan or the simulation…  (Enter sends, Shift+Enter a new line)"
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } else if (e.key === "Escape") setOpen(false); }}
+          onKeyDown={e => { if (isEnter(e) && !e.shiftKey) { e.preventDefault(); void send(); } else if (e.key === "Escape") setOpen(false); }}
           className="max-h-40 min-h-10 flex-1 resize-none rounded-md border bg-transparent px-2.5 py-2 text-sm outline-none field-sizing-content placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/50" />
         {busy
           ? <Button type="button" size="icon" variant="outline" aria-label="Stop" title="Stop" onClick={() => abort.current?.abort()}><Square /></Button>

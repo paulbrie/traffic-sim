@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isEnter } from "@/lib/enter-key";
 
 export type CellValue = string | number | boolean | null;
 
@@ -118,7 +119,7 @@ export function DataTable<R>({ rows, cols, rowKey, selected, onRow, filter }: {
                         onClick={ev => ev.stopPropagation()}
                         onChange={ev => setEditing({ ...editing!, draft: ev.target.value })}
                         onBlur={() => { save(r, c, editing!.draft); setEditing(null); }}
-                        onKeyDown={ev => { if (ev.key === "Enter") (ev.target as HTMLInputElement).blur(); if (ev.key === "Escape") setEditing(null); }}
+                        onKeyDown={ev => { if (isEnter(ev)) (ev.target as HTMLInputElement).blur(); if (ev.key === "Escape") setEditing(null); }}
                       />
                     );
                   } else content = c.render ? c.render(r) : String(c.value(r) ?? "–");

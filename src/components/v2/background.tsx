@@ -29,6 +29,7 @@ import { BuildingsSection } from "./buildings-section";
 // (how the imagery is shown: src/state/sat-options.ts, kept in the V2 UI store)
 export { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
 import type { SatOptions } from "@/state/sat-options";
+import { isEnter } from "@/lib/enter-key";
 
 /** two points clicked on the sketch to set the image's scale by a distance known between them */
 export interface Calibration { a: Pt | null; b: Pt | null }
@@ -151,7 +152,7 @@ export function BackgroundPanel({ sketch, sat, setSat, viewNow, calib, setCalib,
         {!readOnly && (
           <div role="search" className="flex gap-1.5">
             <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Find a place, to put under the view" aria-label="Find a place" className="h-8 text-xs"
-              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void search(); } }} />
+              onKeyDown={e => { if (isEnter(e)) { e.preventDefault(); void search(); } }} />
             <Button size="icon-sm" variant="secondary" className="size-8" disabled={searching} onClick={() => void search()} aria-label="Search">{searching ? <Loader2 className="animate-spin" /> : <Search />}</Button>
           </div>
         )}
@@ -214,7 +215,7 @@ export function BackgroundPanel({ sketch, sat, setSat, viewNow, calib, setCalib,
                       <>
                         <span>Measured {measured!.toFixed(1)} m. How far apart are they really?</span>
                         <div className="flex gap-1.5">
-                          <Input autoFocus value={dist} onChange={e => setDist(e.target.value)} placeholder="metres" className="h-7 text-xs" onKeyDown={e => { if (e.key === "Enter") applyCalib(); }} aria-label="Real distance in metres" />
+                          <Input autoFocus value={dist} onChange={e => setDist(e.target.value)} placeholder="metres" className="h-7 text-xs" onKeyDown={e => { if (isEnter(e)) applyCalib(); }} aria-label="Real distance in metres" />
                           <Button size="sm" className="h-7" onClick={applyCalib}>Apply</Button>
                         </div>
                       </>

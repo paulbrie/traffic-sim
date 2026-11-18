@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { isEnter } from "@/lib/enter-key";
 
 /** an object's ID, click to copy (to refer to it precisely, e.g. when reporting a problem) */
 export function IdChip({ id, className }: { id: string; className?: string }) {
@@ -50,7 +51,7 @@ export function NumberField({ label, value, onCommit, unit, step = 1, min, max, 
           onChange={e => { committed.current = false; setDraft(e.target.value); }}
           onBlur={commit}
           onKeyDown={e => {
-            if (e.key === "Enter") { commit(); (e.target as HTMLInputElement).blur(); }
+            if (isEnter(e)) { commit(); (e.target as HTMLInputElement).blur(); }
             if (e.key === "Escape") { setDraft(null); (e.target as HTMLInputElement).blur(); }
             if (e.key === "ArrowUp" || e.key === "ArrowDown") {
               e.preventDefault();

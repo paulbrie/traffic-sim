@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { GeoRef } from "@/engine/types";
 import type { BBox } from "@/lib/osm/area";
+import { isEnter } from "@/lib/enter-key";
 
 const VIEW_KEY = "gridlock:osm-view";
 /** the import frame leaves this much of the map around it (px) */
@@ -99,7 +100,7 @@ export function AreaMap({ center, existing, onChange, onPlace }: {
       <div role="search" className="absolute top-2 left-1/2 z-[600] flex w-[min(26rem,calc(100%-5rem))] -translate-x-1/2 gap-1.5">
         <Input
           value={q} onChange={e => { setQ(e.target.value); setResults(null); }} placeholder="Find a place, street or address" aria-label="Find a place" className="h-8 bg-background shadow-sm"
-          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); search(); } }}
+          onKeyDown={e => { if (isEnter(e)) { e.preventDefault(); search(); } }}
         />
         <Button type="button" size="sm" variant="secondary" className="h-8 shadow-sm" disabled={searching} onClick={search} aria-label="Search">{searching ? <Loader2 className="animate-spin" /> : <Search />}</Button>
       </div>

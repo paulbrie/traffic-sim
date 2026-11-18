@@ -4,6 +4,9 @@
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
 :root {
+  /* (native UI — scrollbars, form controls, colour pickers, autofill — in the page's light or dark colours, as the
+     colours below switch on prefers-color-scheme; the viewport's color-scheme meta says so before the CSS loads) */
+  color-scheme: light dark;
   --radius: 0.5rem;
   --background: oklch(0.985 0.004 150);
   --foreground: oklch(0.2 0.012 160);
@@ -123,5 +126,12 @@
   }
   .tabular {
     font-variant-numeric: tabular-nums;
+  }
+}
+
+/* (spinners say something is still going: with reduced motion asked for, they turn slowly rather than stop) */
+.animate-spin {
+  @media (prefers-reduced-motion: reduce) {
+    animation-duration: 6s;
   }
 }

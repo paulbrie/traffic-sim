@@ -14,6 +14,7 @@ import { deleteGroup, groupNodes, groupPorts, renameGroup, rotateGroup, takeOut,
 import { copyPiece } from "@/state/placing";
 import { saveToJunctionLibrary } from "@/server/actions";
 import { Section } from "./fields";
+import { isEnter } from "@/lib/enter-key";
 
 /** a junction group: its name, its entry and exit points, and what can be done with it as one */
 export function GroupInspector({ net, g }: { net: Network; g: GroupDef }) {
@@ -47,7 +48,7 @@ export function GroupInspector({ net, g }: { net: Network; g: GroupDef }) {
           <span className="text-muted-foreground">Name</span>
           <Input value={name ?? g.name} disabled={readOnly} onChange={e => setName(e.target.value)}
             onBlur={() => { if (name !== null && name.trim() && name.trim() !== g.name) commit(renameGroup(net, g.id, name.trim())); setName(null); }}
-            onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+            onKeyDown={e => { if (isEnter(e)) (e.target as HTMLInputElement).blur(); }} />
         </label>
         <p className="text-xs text-muted-foreground">{g.links.length} roads · {junctions} junction{junctions === 1 ? "" : "s"} · {ports.length} entry / exit point{ports.length === 1 ? "" : "s"}</p>
         <div className="flex flex-wrap gap-2">

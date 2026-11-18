@@ -14,6 +14,7 @@ import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { resolveTuning, sanitizeTuning, TUNE_GROUPS, TUNING, type TuneInfo, type Tuning } from "@/lib/sketch-tuning";
 import type { SimParams } from "@/lib/lane-sketch-sim";
+import { isEnter } from "@/lib/enter-key";
 
 /**
  * The simulation's behaviours chosen with a switch, not a slider (0 off, the default and as before; 1 on): Bob's tuning keys
@@ -96,7 +97,7 @@ function SimSettings({ params, setParams, readOnly, kind }: { params: SimParams;
           <Label htmlFor="sim-seed" className="text-sm">Random seed</Label>
           <Input id="sim-seed" inputMode="numeric" className="h-8 font-mono" disabled={readOnly} value={seedText}
             onChange={e => setSeedText(e.target.value)} onBlur={() => { const n = Number(seedText); if (Number.isFinite(n) && n >= 1) setSeed(n); else setSeedText(String(params.seed ?? 1)); }}
-            onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+            onKeyDown={e => { if (isEnter(e)) (e.target as HTMLInputElement).blur(); }} />
         </div>
         <Button variant="outline" size="sm" className="h-8" disabled={readOnly} title="Another seed, at random" onClick={() => setSeed(1 + Math.floor(Math.random() * 99999))}><Dices /> New seed</Button>
         <Button variant="ghost" size="sm" className="h-8" disabled={readOnly || !changed} onClick={() => { const { tune: _, ...rest } = params; setParams(rest); }}>

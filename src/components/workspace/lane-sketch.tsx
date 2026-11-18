@@ -78,6 +78,7 @@ import { mergeLanes, mergeRoads, type MergeResult } from "@/lib/sketch-merge";
 import { translucentArea } from "@/render/area-fill";
 import { MemoryGauge } from "@/components/v2/top-bar-tools";
 import { SketchPicker } from "@/components/v2/sketch-picker";
+import { isEnter } from "@/lib/enter-key";
 import { newSketch } from "@/lib/sketch-list";
 import { deleteLanes, dropDangling, takeOutOfRoad } from "@/lib/road-lanes";
 import { carWay, type CarWay } from "@/lib/car-way";
@@ -1118,6 +1119,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const from = { ...view.current }, fit = Math.min(c.clientWidth / (b.maxX - b.minX + 30), c.clientHeight / (b.maxY - b.minY + 30));
     const to = { cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, scale: Math.max(0.5, close ? fit : Math.min(from.scale, fit)) };
     cancelAnimationFrame(glide.current);
+    // (with reduced motion asked for, the view is put there at once: no sweep across the map)
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { view.current = to; redraw(); return; }
     const t0 = performance.now(), T = 350;
     const step = (now: number) => {
       const t = Math.min(1, (now - t0) / T), e = 1 - (1 - t) ** 3;
@@ -2869,7 +2872,7 @@ function WayEditor({ edit, onSave, onCancel }: { edit: WayEdit; onSave: (v: numb
         onBlur={() => leave(true)}
         onKeyDown={e => {
           e.stopPropagation();
-          if (e.key === "Enter") { e.preventDefault(); if (ok) leave(true); }
+          if (isEnter(e)) { e.preventDefault(); if (ok) leave(true); }
           else if (e.key === "Escape") { e.preventDefault(); leave(false); }
           else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
             e.preventDefault();

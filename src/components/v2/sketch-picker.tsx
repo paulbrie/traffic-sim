@@ -16,6 +16,7 @@ import { contentOf, deleteSketch, duplicateSketch, emptyContent, newSketch, open
 import type { Sketch } from "@/lib/lane-sketch";
 import { changeSketches } from "@/state/lane-sketch";
 import { laneSketch$ } from "@/state/store";
+import { isEnter } from "@/lib/enter-key";
 
 type View = { cx: number; cy: number; scale: number };
 /** what is in a sketch, in a few words */
@@ -46,7 +47,7 @@ export function SketchPicker({ view, readOnly }: { /** where the window's view i
   if (renaming !== null) return (
     <Input autoFocus value={renaming} maxLength={SKETCH_NAME_MAX} aria-label="The sketch's name" className="h-7 w-48 text-sm" onFocus={e => e.currentTarget.select()}
       onChange={e => setRenaming(e.target.value)} onBlur={() => rename(renaming)}
-      onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") rename(renaming); if (e.key === "Escape") setRenaming(null); }} />
+      onKeyDown={e => { e.stopPropagation(); if (isEnter(e)) rename(renaming); if (e.key === "Escape") setRenaming(null); }} />
   );
   return (
     <>

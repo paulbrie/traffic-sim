@@ -20,6 +20,7 @@ import { hhmm, sameStreet, matrixGrid, matrixText, moveLostCell, parseCells, par
 import { laneById, roadOf, type DemandWay, type Sketch } from "@/lib/lane-sketch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSketchStore } from "@/state/lane-sketch";
+import { isEnter } from "@/lib/enter-key";
 
 const ROW_H = 26, COL_W = 78, HEAD_W = 190, HEAD_H = 64, OVER = 4;
 interface At { r: number; c: number }
@@ -162,7 +163,7 @@ export function MatrixDialog({ sketch, id, entries, exits, readOnly, onClose }: 
             <span className="text-muted-foreground">Name</span>
             <Input key={`n-${m.id}`} defaultValue={m.name} disabled={readOnly} className="h-8 w-48 text-xs" maxLength={60}
               onBlur={e => { const v = e.target.value.trim(); if (v && v !== m.name) editSketch(s => updateMatrix(s, id, { name: v })); }}
-              onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+              onKeyDown={e => { e.stopPropagation(); if (isEnter(e)) (e.target as HTMLInputElement).blur(); }} />
           </label>
           <div className="grid gap-1">
             <span className="text-muted-foreground" title="Used by the time of day in this period; it may run past midnight (22:00 to 06:00)">Period of the day</span>
@@ -260,7 +261,7 @@ export function TimeField({ label, value, onCommit, disabled, className }: { lab
   };
   return (
     <Input aria-label={label} value={draft ?? hhmm(value)} disabled={disabled} className={cn("h-8 w-[4.5rem] px-1.5 text-center font-mono text-xs tabular md:text-xs", className)} placeholder="07:30"
-      onChange={e => setDraft(e.target.value)} onBlur={done} onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setDraft(null); }} />
+      onChange={e => setDraft(e.target.value)} onBlur={done} onKeyDown={e => { e.stopPropagation(); if (isEnter(e)) (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setDraft(null); }} />
   );
 }
 

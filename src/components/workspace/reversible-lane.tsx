@@ -12,6 +12,7 @@ import * as ops from "@/state/ops";
 import type { LinkDef, Network, ReversibleDef, ReversibleMode } from "@/engine/types";
 import { cn } from "@/lib/utils";
 import { NumberField, Section, compass } from "./fields";
+import { isEnter } from "@/lib/enter-key";
 
 const MODES: { id: ReversibleMode; label: string; help: string }[] = [
   { id: "timer", label: "Timer", help: "Opens one way, then the other, for set times." },
@@ -66,7 +67,7 @@ function CorridorPanel({ net, link, def }: { net: Network; link: LinkDef; def: R
   return (
     <>
       <Input key={`${def.id}:${def.name}`} className="h-8" defaultValue={def.name} aria-label="Name of the reversible lane"
-        onBlur={e => e.target.value.trim() && e.target.value !== def.name && set({ name: e.target.value.trim().slice(0, 80) })} onKeyDown={e => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+        onBlur={e => e.target.value.trim() && e.target.value !== def.name && set({ name: e.target.value.trim().slice(0, 80) })} onKeyDown={e => isEnter(e) && (e.target as HTMLInputElement).blur()} />
       {c ? (
         <p className="text-xs text-muted-foreground">{roads.length} road{roads.length === 1 ? "" : "s"}, {(c.length / 1000).toFixed(2)} km. Direction 1 runs {name("1")}, direction 2 {name("2")}.</p>
       ) : (

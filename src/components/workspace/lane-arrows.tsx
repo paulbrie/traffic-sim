@@ -12,6 +12,7 @@ import { useSubject } from "subjecto/react";
 import { stats$ } from "@/state/store";
 import { simController } from "@/state/sim-controller";
 import { cn } from "@/lib/utils";
+import { isEnter } from "@/lib/enter-key";
 
 const LABEL: Record<LaneTurn, string> = {
   L: "Left", LS: "Left + ahead", S: "Ahead", SR: "Ahead + right", R: "Right", LR: "Left + right", LSR: "All directions",
@@ -142,7 +143,7 @@ function SplitEditor({ moves, split, onSplit, roadName }: {
                     const n = Math.max(0, Math.min(1000, Number(ev.target.value.replace(",", ".")) || 0));
                     if (n !== w(m)) onSplit({ ...(split ?? {}), [m.out.link.id]: n });
                   }}
-                  onKeyDown={ev => ev.key === "Enter" && (ev.target as HTMLInputElement).blur()}
+                  onKeyDown={ev => isEnter(ev) && (ev.target as HTMLInputElement).blur()}
                 />
                 <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-[10px] text-muted-foreground">%</span>
               </div>
