@@ -2610,9 +2610,16 @@ export class SketchSim {
             if (w.pos <= o.conn.len - o.conn.mergeBefore) {
               // (zipper: one kept waiting to join a queue is let in by the next car along, which stops short of where it joins; not on a ring, where those on it go first)
               // (and, ring or not, one waiting with its body across another path: it can't back out, and blocks that path)
-              if (!w.why?.startsWith(`merge ${r.edge.key}`) || !(w.blocking || (!r.edge.ring && w.still > PATIENCE))) continue;
-              const x = ahead(at(this.beside(o.conn.onTo, o.conn.len - o.conn.mergeBefore))) - 1;
-              if (x > 0 && x <= 30 && canStopBefore(x)) behind(r.off + x + S0, 0, `letting car ${w.id} in`);
+              // (off a ring, once letting it in, it goes on doing so while that one waits to join: its wait starts again each time it edges
+              // forward, ticket #270)
+              const plain = !r.edge.ring, letting = plain && v.why === `letting car ${w.id} in`;
+              if (!w.why?.startsWith(`merge ${r.edge.key}`) || !(w.blocking || (plain && w.still > PATIENCE) || letting)) continue;
+              // (off a ring, short of the joining stretch by the room the one joining wants there, its length and a metre, and a bit: just
+              // short of the stretch, it stood where that one still waited for it, both waiting on each other; there only where it can stop
+              // in comfort (braking hard it overran the place by metres, no longer stopping for it), and once there, holding there (a hair
+              // past it the next step, it drove on), ticket #270)
+              const x = ahead(at(this.beside(o.conn.onTo, o.conn.len - o.conn.mergeBefore))) - (plain ? w.len + 3 : 1);
+              if (plain ? x > -2 && x <= 30 && (x < 0.5 ? v.v < 1 : x >= (v.v * v.v) / (2 * B_COMF)) : x > 0 && x <= 30 && canStopBefore(x)) behind(r.off + Math.max(0, x) + S0, 0, `letting car ${w.id} in`);
               continue;
             }
             const x = ahead(at(this.beside(o.conn.onTo, w.pos)));
@@ -2732,9 +2739,11 @@ export class SketchSim {
                 const full = t.lane.neighbors.find(n => n.round && (byEdge.get(n.lane) ?? NO_VEHICLES).reduce((a, w) => a + w.len + S0, 0) > fullFrac * n.lane.len)?.lane, r0 = r.edge.runs[0], at = hold(r0 ? Math.min(z, r.off + r0.s - r.a) : z);
                 if (full && at > 0.1 && canStopBefore(at)) yields.push({ at, why: `merge ${full.key}: ring nearly full`, ...(W ? { info: { kind: "ring-full", edge: full.key } } : {}) });
               }
+              // (one holding back to let it in; off a ring, also those behind it, held up by it: none of them will get there first, ticket #270)
+              const letting = (w: SimVehicle) => w.v < (t.lane.ring ? 0.3 : 1) && !!w.why?.includes(`letting car ${v.id} in`);
+              const held = t.lane.ring ? Infinity : Math.min(Infinity, ...onLane.filter(letting).map(w => this.along(t.lane, w.pos, t.s)));
               for (const w of onLane) {
-                // (one holding back to let it in)
-                if (w === v || (w.v < 0.3 && w.why?.includes(`letting car ${v.id} in`))) continue;
+                if (w === v || letting(w) || this.along(t.lane, w.pos, t.s) > held) continue;
                 // (no room just past where it joins)
                 const past = this.along(t.lane, t.s, w.pos);
                 if (past < w.len + S0 + 2 && w.v < 3 && (t.lane.ring || w.pos > t.s)) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
@@ -2745,13 +2754,39 @@ export class SketchSim {
                 if (t.lane.ring && xs.length && w.v < 3 && u < laneZone) { yields.push({ at: mh, why: `merge ${t.lane.key}: no room for car ${w.id}`, ...(W ? { info: { kind: "merge", detail: "no room", car: w.id, edge: t.lane.key } } : {}) }); break; }
                 // (drivers' field of view (`visionCone`): one further along than can actually be seen yet from the join isn't
                 // a reason to wait, the same as at a crossing below — on a ring, a queue on a far-off arm of the roundabout
-                // shouldn't hold up an entry that's otherwise clear; a plain lane joined part-way keeps the narrower cone)
-                if (u > 70 || (VISION && !this.inView(v, w, t.lane.ring))) continue;
+                // shouldn't hold up an entry that's otherwise clear. Not a plain lane joined part-way: there the driver looks back
+                // along it, wherever the car points, and its connector has often turned it most of the way along the lane by its
+                // line, the cars coming up behind outside any cone from its heading: it pulled out in front of them (ticket #270))
+                if (u > 70 || (VISION && t.lane.ring && !this.inView(v, w, true))) continue;
                 // (it leaves before getting here)
                 if (w.exit && this.along(t.lane, w.pos, this.exitS(w.exit)) < u) continue;
                 // (told to go: only one right there stops it)
                 if (forced && u >= laneZone + v.len + 1) continue;
                 if (u < laneZone + v.len + 1 || u - laneZone - w.v * arrive < Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v) * joinPatience) { yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, gap: r2(Math.max(0, u - laneZone - w.v * arrive)), need: r2(Math.max(8, (t.lane.ring ? RING_GAP : 2) * w.v, v.len + 1) * joinPatience) } } : {}) }); break; }
+              }
+              // (a plain lane joined near its start: those still on their way onto it, on a way into its start or on the lane before
+              // that, count as on it already, as far back as those on it do. Joined 10-14 m along, they came on behind it unseen
+              // (Bistrița Auto Search's c623 and c860, ticket #270))
+              if (!t.lane.ring && !yields.length) {
+                const coming = (w: SimVehicle, u: number) => {
+                  if (w === v || u < 0 || u > 70 || u > held || (forced && u >= laneZone + v.len + 1)) return false;
+                  if (u >= laneZone + v.len + 1 && u - laneZone - w.v * arrive >= Math.max(8, 2 * w.v) * joinPatience) return false;
+                  yields.push({ at: mh, why: `merge ${t.lane.key} for car ${w.id}`, ...(W ? { info: { kind: "merge", car: w.id, edge: t.lane.key, detail: "coming onto it" } } : {}) });
+                  return true;
+                };
+                // (each lane back, with how far its start is from where this joins, along the way)
+                const back: { L: Edge; d: number }[] = [{ L: t.lane, d: t.s }];
+                for (let i = 0; i < back.length && i < 6 && !yields.length; i++) {
+                  const { L, d } = back[i];
+                  for (const o of L.ins) {
+                    if (o.s > 1 || o.conn === r.edge) continue;
+                    const C = o.conn, F = C.from!.lane, dc = d - o.s + C.len, all = F.outs.length === 1;
+                    if ((byEdge.get(C) ?? NO_VEHICLES).some(w => coming(w, dc - w.pos))) break;
+                    if (dc < 70 && (byEdge.get(F) ?? NO_VEHICLES).some(w => (all || w.exit === C) && coming(w, dc + C.from!.s - w.pos))) break;
+                    // (on back along the lane before, where all it carries comes this way)
+                    if (all && !F.ring && !back.some(b => b.L === F) && C.from!.s >= F.len - 1 && dc + C.from!.s < 70) back.push({ L: F, d: dc + C.from!.s });
+                  }
+                }
               }
               // (roundabout driving: one on another way onto this ring, joining it upstream, counts as on it already: coming up to the line
               // faster, this one would otherwise be past stopping once that one is on)
