@@ -209,9 +209,12 @@ export function View3DV2(props: View3DProps) {
       camera.position.set(cx, g + d * Math.sin(TILT), cy + d * Math.cos(TILT));
       controls.update();
     };
+    // (the view's width as last laid out: on leaving, React has already taken the element off the page, 0 wide)
+    let shownW = el.clientWidth || 1;
     const size = () => {
       const w = el.clientWidth || 1, h = el.clientHeight || 1;
-      renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+      // (hidden for a moment, it keeps the size it had)
+      if (el.clientWidth && el.clientHeight) { shownW = w; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
     };
     size();
     { const v = live.current.planView(), w = el.clientWidth || 1; place(v.cx, v.cy, w / v.scale); }
@@ -808,11 +811,12 @@ export function View3DV2(props: View3DProps) {
       renderer.domElement.removeEventListener("pointerdown", onDown); renderer.domElement.removeEventListener("pointerup", onUp);
       renderer.domElement.removeEventListener("pointermove", onHover); renderer.domElement.removeEventListener("pointerleave", onHoverOut); renderer.domElement.removeEventListener("pointerdown", onHoverOut);
       controls.removeEventListener("start", onStart); controls.removeEventListener("change", onChange);
-      // (the plan view to where the 3D view looks: its middle, and a zoom showing as much across; flying, the ground the
-      // helicopter looks at)
+      // (the plan view to where the 3D view looks: its middle, and a zoom showing as much across, by the width it had
+      // (ticket #288: read off the element, gone by now, it was 0 and the plan came back zoomed all the way out); flying,
+      // the ground the helicopter looks at)
       const g = heli.flying ? heli.groundAhead() : { x: controls.target.x, z: controls.target.z, dist: camera.position.distanceTo(controls.target) };
       const across = 2 * g.dist * Math.tan(((FOV * Math.PI) / 180) / 2) * camera.aspect;
-      live.current.onLeave({ cx: g.x, cy: g.z, scale: Math.min(80, Math.max(0.3, (el.clientWidth || 1) / Math.max(1, across))) });
+      live.current.onLeave({ cx: g.x, cy: g.z, scale: Math.min(80, Math.max(0.3, shownW / Math.max(1, across))) });
       heli.dispose(); rig.current = null;
       live.current.canvasRef.current = null; live.current.apiRef.current = null;
       if (built) { scene.remove(built.group); built.dispose(); }

@@ -346,7 +346,7 @@ export function View3D() {
         else { gx = camera.position.x; gz = camera.position.z; dist = Math.max(100, camera.position.y); }
       }
       const half = Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
-      const wm = Math.max(20, 2 * dist * Math.tan(half)), w = Math.max(1, wrap.getBoundingClientRect().width);
+      const wm = Math.max(20, 2 * dist * Math.tan(half)), w = Math.max(1, wrap.getBoundingClientRect().width || shownW);
       try { localStorage.setItem(planViewKey(planId), JSON.stringify({ cx: Math.round(gx * 100) / 100, cy: Math.round(gz * 100) / 100, scale: Math.round((w / wm) * 10000) / 10000 })); } catch { /* not kept */ }
       // what the plan view will show (its width is this view's)
       viewport.cx = Math.round(gx * 100) / 100; viewport.cy = Math.round(gz * 100) / 100; viewport.wm = wm; viewport.planId = planId;
@@ -356,8 +356,11 @@ export function View3D() {
       });
     }
 
+    // (the view's width as last laid out: leave() runs as the view goes, its element already off the page, 0 wide; ticket #288)
+    let shownW = 0;
     const resize = () => {
       const r = wrap.getBoundingClientRect();
+      if (r.width > 0) shownW = r.width;
       renderer.setSize(Math.max(1, r.width), Math.max(1, r.height));
       camera.aspect = Math.max(1, r.width) / Math.max(1, r.height); camera.updateProjectionMatrix();
       names?.setViewport(Math.max(1, r.height));
