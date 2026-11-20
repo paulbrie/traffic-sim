@@ -1,4 +1,5 @@
-import { Earth, Plus } from "lucide-react";
+import Link from "next/link";
+import { Earth, FlaskConical, Plus } from "lucide-react";
 import { AppHeader } from "@/components/app-header";
 import { CityCard } from "@/components/cities/city-card";
 import { CityDialog } from "@/components/cities/city-dialog";
@@ -47,6 +48,16 @@ export default async function Home() {
             </div>
           </section>
         )}
+        <section className="mt-10">
+          <h2 className="mb-1 text-lg font-semibold tracking-tight">Experiments</h2>
+          <p className="mb-4 text-sm text-muted-foreground">Studies run on the simulator, with what they found.</p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <Link href="/experiments/dl-city-277" className="rounded-xl border bg-card p-4 transition-colors hover:bg-accent/50">
+              <p className="mb-1 flex items-center gap-2 font-medium"><FlaskConical className="size-4" /> Deep-learning city <span className="text-xs text-muted-foreground">#277</span></p>
+              <p className="text-sm text-muted-foreground">Can neural networks find a better street layout than a genetic algorithm? A video and the full report.</p>
+            </Link>
+          </div>
+        </section>
       </main>
     </>
   );
