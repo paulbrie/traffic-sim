@@ -115,7 +115,7 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
   { id: "junction", key: "J", label: "Junction", icon: <Pentagon />, hint: "Click the junction's corners; click the first again (or Enter, or double-click) to close it. The lanes in no road and the connectors on it are its own" },
   { id: "zone", key: "Z", label: "Zone", icon: <LandPlot />, hint: "Click the zone's corners; click the first again (or Enter, or double-click) to close it · Backspace takes the last corner back · Esc cancels. A labelled area (a neighbourhood, a zone) for reading the plan: the cars don't see it" },
   { id: "shape", key: "S", label: "Shape", icon: <Shapes />, hint: "Click the shape's points; click the first again (or Enter, or double-click) to close it · or drag out a rectangle (Shift: a square; Alt: a circle round where you pressed) · Backspace takes the last point back · Esc cancels. Its colour, opacity and border in its panel. Only drawn, under the roads: the cars don't see it" },
-  { id: "utility", key: "W", label: "Utility network", icon: <Cable />, hint: "Pick the network (clean water, waste water, gas, electricity) and buried or above ground in the bar, then click the line's points · on a node of that network it joins it there, on one of its lines it makes a tee · double-click or Enter to finish · Backspace takes the last point back · Esc cancels. Only drawn: the cars don't see it" },
+  { id: "utility", key: "W", label: "Utility network", icon: <Cable />, hint: "Pick the network (clean water, waste water, gas, electricity) and buried or above ground in the bar, then click the line's points · on a node of that network it joins it there, on one of its lines it makes a tee · Alt-click: a building connector there · double-click or Enter to finish · Backspace takes the last point back · Esc cancels. Only drawn: the cars don't see it" },
   { id: "stop", key: "B", label: "Bus stop", icon: <BusFront />, hint: "Click a lane to put a bus stop there. Add it to a bus line in the Bus lines panel so buses serve it" },
 ];
 const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
@@ -1635,7 +1635,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       }
       case "utility": {
         // (on a node of the network: joined there; on one of its lines: a tee; else a new point, snapped as points are)
-        const q = utilityPointAt(sk, raw, 1 / view.current.scale, util.net), pt = q.node || q.on ? q : { p: snap(raw).p };
+        // (Alt: a building connector there, ticket #280)
+        const q = utilityPointAt(sk, raw, 1 / view.current.scale, util.net), pt: UtilityDraftPt = { ...(q.node || q.on ? q : { p: snap(raw).p }), ...(e.altKey ? { kind: "building" as const } : {}) };
         if (d?.kind === "utility") d.pts.push(pt); else draft.current = { kind: "utility", pts: [pt] };
         break;
       }
@@ -2365,7 +2366,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <View3DV2 sketch={sketch} contents={contents} layers={layers} apiRef={api3d} onMove={mirror} bySpeed={bySpeed} blinkers={blinkers}
               hoverAt={hoverAt3d} carInfo={selCar !== null ? carInfo : null} carAbout={selCar !== null && carInfo ? describeHover({ car: selCar }, sketch, contents, stats, carInfo) : null}
               breakDown={ids => { for (const id of ids) sim.current?.breakDown(id); }} raiseCockpit={(replayRange && replayRange.frames >= 2 ? 52 : 0) + (consoleOpen ? CONSOLE_HEIGHT : 0)}
-              selection={sel} car={selCar} carWay={() => { const c = carsShown().car; return c ? carWay(live.current.sketch, c)?.pts ?? null : null; }} carWhy={() => carsShown().why} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
+              selection={sel} car={selCar}
+              pickUtility={(line, node) => { setSelCar(null); setSel({ ...NO_SEL, utilities: [line], unode: node }); }}
+              utilityAbout={(line, node) => describeHover({ utility: line, node }, sketch, contents, stats, null)} carWay={() => { const c = carsShown().car; return c ? carWay(live.current.sketch, c)?.pts ?? null : null; }} carWhy={() => carsShown().why} route={routeShown} pickAt={pickAt3d} pickNone={() => { setSel(NO_SEL); setSelCar(null); }}
               cars={() => (layers.cars ? carsShown().cars : null)} simT={() => (sim.current ? live.current.replayT ?? sim.current.t : null)} signals={() => sim.current?.signals ?? null} planView={() => view.current} onLeave={v => { view.current = v; redraw(); }}
               satellite={layers.satellite} sat={sat} underlay={underlay} underlayImg={ulImg} image={layers.image} canvasRef={canvas3d} />
           )}

@@ -11,6 +11,10 @@ import {
   insertNode,
   lineLength,
   linesThrough,
+  autoBend,
+  bendable,
+  kindsFor,
+  linePath,
   mergeUtilityNodes,
   moveUtilityNode,
   NET_INFO,
@@ -18,6 +22,10 @@ import {
   offsetPolyline,
   removeNodeFromLine,
   sanitizeUtilities,
+  setLineHeight,
+  setUtilityNodeKind,
+  strandSpacing,
+  strandWidth,
   strandOffsets,
   updateUtilityLine,
   utilityLineAt,
@@ -148,6 +156,48 @@ check("a patch raises a node, adds a gas line joined to the gas network, removes
   !!patched && nodeMap(patched).get(mid)!.z === -3 && patched.utilityLines!.some(l => l.id === "u90") && !patched.utilityLines!.some(l => l.net === "power") && !patched.utilityNodes!.some(n => n.net === "power"));
 const refused = applyPatch(sk, { remove: { utilityNodes: [mid] } });
 check("a patch removing a node lines still run through is refused (they'd go unlisted)", refused === null);
+
+// The user's asks (ticket #280, second round): a conduit's width, each node's height, building connectors.
+const wide = updateUtilityLine(sk, main!.id, { width: 0.8, count: 2 }), wl = wide.utilityLines!.find(l => l.id === main!.id)!;
+check("a water conduit 0.8 m wide: drawn so, its two side by side 1.2 m apart", wl.width === 0.8 && strandWidth(wl) === 0.8 && near(strandSpacing(wl), 1.2));
+check("its width back to its diameter's (null), and kept within bounds", updateUtilityLine(wide, main!.id, { width: null }).utilityLines!.find(l => l.id === main!.id)!.width === undefined
+  && updateUtilityLine(sk, main!.id, { width: 50 }).utilityLines!.find(l => l.id === main!.id)!.width === 10);
+check("a cable takes no conduit width; made electricity, a pipe's is let go", updateUtilityLine(sk, power!.id, { width: 1 }).utilityLines!.find(l => l.id === power!.id)!.width === undefined
+  && updateUtilityLine(wide, main!.id, { net: "power" }).utilityLines!.find(l => l.id === main!.id)!.width === undefined);
+const high = setLineHeight(sk, gas!.id, -2.4);
+check("every node of the gas line at 2.4 m deep, the others as they were", gas!.nodes.every(n => nodeMap(high).get(n)!.z === -2.4) && nodeMap(high).get(mid)!.z === nodeMap(sk).get(mid)!.z);
+const bc = setUtilityNodeKind(sk, branch!.nodes[1], "building");
+check("a node made a building connector, and back to a joint (not stored)", nodeMap(bc).get(branch!.nodes[1])!.kind === "building" && nodeMap(setUtilityNodeKind(bc, branch!.nodes[1], "joint")).get(branch!.nodes[1])!.kind === undefined);
+check("building connectors offered on every network, hydrants on clean water only", (["water", "sewer", "gas", "power"] as const).every(n => kindsFor(n).includes("building")) && kindsFor("water").includes("hydrant") && !kindsFor("gas").includes("hydrant"));
+const kept = sanitizeSketch(JSON.parse(JSON.stringify({ ...wide, utilityNodes: [...nodeMap(bc).values()] })));
+check("width and kind saved and read back; an unknown kind dropped",
+  kept?.utilityLines?.find(l => l.id === main!.id)?.width === 0.8 && kept?.utilityNodes?.find(n => n.id === branch!.nodes[1])?.kind === "building"
+  && sanitizeUtilities([{ id: "n1", net: "gas", x: 0, y: 0, kind: "teapot" }], []).nodes[0].kind === undefined);
+
+// Pipes have no corners (ticket #280): they bend round their waypoints.
+{
+  const [k0, el] = addUtilityLine(emptySketch(), "gas", [P(0, 0), P(40, 0), P(40, 40)], { buried: true });
+  const l = el!, path = linePath(k0, l), R = autoBend(l), corner = { x: 40, y: 0 };
+  const turnAt = (i: number) => { const a = path[i - 1], b = path[i], c = path[i + 1]; const u = Math.atan2(b.y - a.y, b.x - a.x), v = Math.atan2(c.y - b.y, c.x - b.x); return Math.abs(Math.atan2(Math.sin(v - u), Math.cos(v - u))); };
+  const sharpest = Math.max(...path.slice(1, -1).map((_, i) => turnAt(i + 1)));
+  check("an L of gas pipe: its corner rounded (no turn of more than 15° between its path's points)", sharpest < (15 * Math.PI) / 180, `${((sharpest * 180) / Math.PI).toFixed(1)}°`);
+  const nearest = Math.min(...path.map(q => Math.hypot(q.x - corner.x, q.y - corner.y)));
+  // (a right angle: the curve from R before the corner to R after, its middle a quarter of the way in on each axis, √2/4 R from it)
+  check("its bend's radius the auto one (25× its width, 1 m at least): its middle √2/4 R inside the corner", R === 2.8 && near(nearest, (Math.SQRT2 / 4) * R, 0.01), `${nearest.toFixed(3)} vs R ${R}`);
+  check("its ends where its end nodes are", path[0].x === 0 && path[path.length - 1].y === 40);
+  const bigR = updateUtilityLine(k0, l.id, { bend: 100 }), bp = linePath(bigR, bigR.utilityLines![0]);
+  check("a bend radius too big for its segments: the bend starts 45% of the way along them", near(bp[1].x, 22, 0.01) && near(bp[bp.length - 2].y, 18, 0.01));
+  const lenStraight = 80, len = lineLength(k0, l).plan;
+  check("its length along the bend: a little shorter than round the corner (about 0.38 R)", len < lenStraight && near(lenStraight - len, 0.38 * R, 0.05), `${(lenStraight - len).toFixed(3)}`);
+  const tee = addUtilityLine(k0, "gas", [{ p: corner, node: l.nodes[1] }, P(80, 0)])[0];
+  check("a branch joined at the corner: no bend there (the pipes meet at the node)", !bendable(tee, tee.utilityLines![0]).size && linePath(tee, tee.utilityLines![0]).length === 3);
+  const valve = setUtilityNodeKind(k0, l.nodes[1], "valve");
+  check("a valve at the corner: no bend there either", linePath(valve, valve.utilityLines![0]).length === 3);
+  const [k1, pl] = addUtilityLine(emptySketch(), "power", [P(0, 0), P(40, 0), P(40, 40)]);
+  check("an overhead power line keeps its angle at the pole; buried, it bends", linePath(k1, pl!).length === 3 && linePath(updateUtilityLine(k1, pl!.id, { buried: true }), updateUtilityLine(k1, pl!.id, { buried: true }).utilityLines![0]).length > 3);
+  const raised = moveUtilityNode(k0, l.nodes[2], { z: -3 }), rp = linePath(raised, raised.utilityLines![0]);
+  check("its height eased through the bend too (never past its nodes')", rp.every(q => q.z <= -1 + 1e-9 && q.z >= -3 - 1e-9));
+}
 
 console.log(ok ? "utilities check: all ok" : "utilities check: FAILED");
 process.exit(ok ? 0 : 1);

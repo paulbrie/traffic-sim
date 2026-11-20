@@ -22,9 +22,29 @@ export interface UtilityNode {
   x: number; y: number;
   /** metres over the ground under it (negative: below it, buried) */
   z: number;
-  /** what it is (a valve, a manhole, a pole, a substation…), as the user names it */
+  /** what it is called, as the user names it */
   name?: string;
+  /** (ticket #280) what kind of node it is (default "joint": where the line bends or branches; see NODE_KINDS) */
+  kind?: NodeKind;
 }
+/**
+ * A node's kind: a plain joint (a bend, a tee), a building connector (the service connection into a building: where the
+ * network meets one), a valve, a manhole or inspection chamber, a hydrant, a transformer or substation
+ */
+export type NodeKind = "joint" | "building" | "valve" | "manhole" | "hydrant" | "transformer";
+/** each kind: its name, and the networks it is offered for (none: all) */
+export const NODE_KINDS: Record<NodeKind, { label: string; nets?: UtilityNet[] }> = {
+  joint: { label: "Joint" },
+  building: { label: "Building connector" },
+  valve: { label: "Valve", nets: ["water", "sewer", "gas"] },
+  manhole: { label: "Manhole", nets: ["water", "sewer", "power"] },
+  hydrant: { label: "Hydrant", nets: ["water"] },
+  transformer: { label: "Transformer", nets: ["power"] },
+};
+export const nodeKind = (n: UtilityNode): NodeKind => n.kind ?? "joint";
+const isKind = (v: unknown): v is NodeKind => typeof v === "string" && Object.hasOwn(NODE_KINDS, v);
+/** the kinds offered for a network's nodes */
+export const kindsFor = (net: UtilityNet) => (Object.keys(NODE_KINDS) as NodeKind[]).filter(k => !NODE_KINDS[k].nets || NODE_KINDS[k].nets!.includes(net));
 export interface UtilityLine {
   id: string;
   net: UtilityNet;
@@ -37,7 +57,21 @@ export interface UtilityLine {
   size?: number;
   /** pipes or cables side by side (1, the default, to MAX_COUNT) */
   count?: number;
+  /**
+   * (ticket #280) water and gas: the conduit's width (m), each pipe's outside as drawn and laid side by side (MIN_WIDTH to
+   * MAX_WIDTH); default its diameter's
+   */
+  width?: number;
+  /**
+   * (ticket #280) the radius its bends are rounded to (m; default `autoBend`): a pipe has no corners, it bends round its
+   * waypoints (see `bendable`, `linePath`)
+   */
+  bend?: number;
 }
+/** a bend radius set by hand: within these (m) */
+export const MIN_BEND = 0.2, MAX_BEND = 200;
+/** a conduit's width set by hand: within these (m) */
+export const MIN_WIDTH = 0.02, MAX_WIDTH = 10;
 
 export interface NetInfo {
   label: string; short: string; layer: UtilityLayer; color: string;
@@ -67,6 +101,7 @@ export const Z_MIN = -100, Z_MAX = 300;
 
 const round = (v: number) => Math.round(v * 100) / 100;
 const clampZ = (z: number) => round(Math.min(Z_MAX, Math.max(Z_MIN, z)));
+const clampWidth = (w: number) => Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w)) * 1000) / 1000;
 const isNet = (v: unknown): v is UtilityNet => typeof v === "string" && (UTILITY_NETS as readonly string[]).includes(v);
 
 export const nodesOf = (sk: Sketch) => sk.utilityNodes ?? [];
@@ -105,7 +140,8 @@ export const linePts = (sk: Sketch, l: UtilityLine, map = nodeMap(sk)): Pt[] => 
  * ground's height at a point, none flat)
  */
 export function lineLength(sk: Sketch, l: UtilityLine, ground?: (p: Pt) => number, map = nodeMap(sk)): { plan: number; real: number } {
-  const ns = lineNodes(sk, l, map), g = ground ?? (() => 0);
+  // (along its path, its bends rounded: as laid)
+  const ns = linePath(sk, l, map), g = ground ?? (() => 0);
   let plan = 0, real = 0;
   for (let i = 1; i < ns.length; i++) {
     const a = ns[i - 1], b = ns[i], d = Math.hypot(b.x - a.x, b.y - a.y);
@@ -115,11 +151,61 @@ export function lineLength(sk: Sketch, l: UtilityLine, ground?: (p: Pt) => numbe
   return { plan, real };
 }
 
+/** a line's bend radius by default (m): 25 times its pipe's width (as polyethylene pipe is laid), 1 m at least */
+export const autoBend = (l: UtilityLine) => Math.max(1, Math.round(strandWidth(l) * 25 * 10) / 10);
+export const bendOf = (l: UtilityLine) => l.bend ?? autoBend(l);
+/** overhead power lines keep their angles at the poles; pipes and buried cables bend */
+export const bends = (l: UtilityLine) => !(l.net === "power" && !l.buried);
+/**
+ * The line's nodes it bends round (ticket #280): the waypoints, its nodes between its ends that are plain joints no other
+ * line runs through (a tee, a valve, a building connector… stay where the pipes meet, square)
+ */
+export function bendable(sk: Sketch, l: UtilityLine, map = nodeMap(sk)): Set<string> {
+  const out = new Set<string>();
+  if (!bends(l)) return out;
+  const count = new Map<string, number>();
+  for (const x of linesOf(sk)) for (const n of new Set(x.nodes)) count.set(n, (count.get(n) ?? 0) + 1);
+  l.nodes.forEach((id, i) => {
+    const n = map.get(id);
+    if (i > 0 && i < l.nodes.length - 1 && n && nodeKind(n) === "joint" && count.get(id) === 1 && l.nodes.indexOf(id) === l.nodes.lastIndexOf(id)) out.add(id);
+  });
+  return out;
+}
+export interface PathPt { x: number; y: number; z: number }
+/**
+ * The line as laid (ticket #280): through its nodes, each waypoint (`bendable`) rounded off: from a little before it to a
+ * little after (its bend radius's tangent length, at most 45% of each segment beside it) along a curve with the node as
+ * its corner (a quadratic Bézier, near enough a circle's arc), its height eased the same way. z over the ground.
+ */
+export function linePath(sk: Sketch, l: UtilityLine, map = nodeMap(sk)): PathPt[] {
+  const ns = lineNodes(sk, l, map);
+  if (ns.length < 3) return ns.map(n => ({ x: n.x, y: n.y, z: n.z }));
+  const round = bendable(sk, l, map), R = bendOf(l), out: PathPt[] = [{ x: ns[0].x, y: ns[0].y, z: ns[0].z }];
+  for (let i = 1; i < ns.length - 1; i++) {
+    const a = ns[i - 1], n = ns[i], b = ns[i + 1];
+    const l1 = Math.hypot(n.x - a.x, n.y - a.y), l2 = Math.hypot(b.x - n.x, b.y - n.y);
+    const u1 = l1 ? { x: (n.x - a.x) / l1, y: (n.y - a.y) / l1 } : { x: 0, y: 0 }, u2 = l2 ? { x: (b.x - n.x) / l2, y: (b.y - n.y) / l2 } : { x: 0, y: 0 };
+    const turn = Math.acos(Math.max(-1, Math.min(1, u1.x * u2.x + u1.y * u2.y)));
+    if (!round.has(n.id) || !l1 || !l2 || turn < 0.01) { out.push({ x: n.x, y: n.y, z: n.z }); continue; }
+    // (the tangent length for radius R at this turn; what is left of a segment shared by two bends, half each)
+    const d = Math.min(R * Math.tan(Math.min(turn, 3.1) / 2), 0.45 * l1, 0.45 * l2);
+    const p0 = { x: n.x - u1.x * d, y: n.y - u1.y * d, z: n.z + (a.z - n.z) * (d / l1) }, p2 = { x: n.x + u2.x * d, y: n.y + u2.y * d, z: n.z + (b.z - n.z) * (d / l2) };
+    const steps = Math.max(4, Math.ceil(turn / 0.12));
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps, w0 = (1 - t) ** 2, w1 = 2 * (1 - t) * t, w2 = t * t;
+      out.push({ x: w0 * p0.x + w1 * n.x + w2 * p2.x, y: w0 * p0.y + w1 * n.y + w2 * p2.y, z: w0 * p0.z + w1 * n.z + w2 * p2.z });
+    }
+  }
+  const e = ns[ns.length - 1];
+  out.push({ x: e.x, y: e.y, z: e.z });
+  return out;
+}
+
 /** the lines through a node */
 export const linesThrough = (sk: Sketch, node: string) => linesOf(sk).filter(l => l.nodes.includes(node));
 
 /** a point of a line being drawn: an existing node of its network, a place on one of its lines (a tee there), or a new point */
-export type UtilityDraftPt = { p: Pt; node?: string; on?: { line: string; seg: number } };
+export type UtilityDraftPt = { p: Pt; node?: string; on?: { line: string; seg: number }; /** the node made (or joined) there of this kind (a building connector: Alt-click) */ kind?: NodeKind };
 
 /** z of a point `t` (0…1) of the way along a line's segment `seg` (between its nodes seg and seg + 1) */
 function zAlong(sk: Sketch, l: UtilityLine, seg: number, p: Pt, map: Map<string, UtilityNode>): number {
@@ -163,6 +249,7 @@ export function addUtilityLine(sk: Sketch, net: UtilityNet, pts: UtilityDraftPt[
       id = nextNodeId(nodesOf(k));
       k = withUtilities(k, [...nodesOf(k), { id, net, x: round(q.p.x), y: round(q.p.y), z: opts.buried ? info.depth : info.height }], linesOf(k));
     }
+    if (q.kind && q.kind !== "joint") k = setUtilityNodeKind(k, id, q.kind);
     if (ids[ids.length - 1] !== id) ids.push(id);
   }
   if (ids.length < 2) return [sk, null];
@@ -230,12 +317,22 @@ export function moveUtilityNode(sk: Sketch, id: string, to: { x?: number; y?: nu
     ...(to.z !== undefined && Number.isFinite(to.z) ? { z: clampZ(to.z) } : {}),
   })), linesOf(sk));
 }
+/** a node's kind set ("joint": back to none) */
+export function setUtilityNodeKind(sk: Sketch, id: string, kind: NodeKind): Sketch {
+  return withUtilities(sk, nodesOf(sk).map(n => { if (n.id !== id) return n; const { kind: _, ...rest } = n; return kind === "joint" || !isKind(kind) ? rest : { ...rest, kind }; }), linesOf(sk));
+}
+/** every node of line `id` at `z` metres over the ground (shared ones too) */
+export function setLineHeight(sk: Sketch, id: string, z: number): Sketch {
+  const mine = new Set(linesOf(sk).find(l => l.id === id)?.nodes ?? []);
+  if (!mine.size || !Number.isFinite(z)) return sk;
+  return withUtilities(sk, nodesOf(sk).map(n => (mine.has(n.id) ? { ...n, z: clampZ(z) } : n)), linesOf(sk));
+}
 /** a node renamed (empty: no name) */
 export function renameUtilityNode(sk: Sketch, id: string, name: string): Sketch {
   return withUtilities(sk, nodesOf(sk).map(n => { if (n.id !== id) return n; const { name: _, ...rest } = n; const t = name.trim().slice(0, 120); return t ? { ...rest, name: t } : rest; }), linesOf(sk));
 }
 
-export type LinePatch = { name?: string; net?: UtilityNet; buried?: boolean; size?: number | null; count?: number };
+export type LinePatch = { name?: string; net?: UtilityNet; buried?: boolean; size?: number | null; count?: number; /** water and gas (m); null: its diameter's */ width?: number | null; /** m; null: `autoBend` */ bend?: number | null };
 /**
  * A line changed. Its network changed: its nodes shared with other lines copied into its own first (the other lines
  * keep theirs), so a network's lines only ever join its own. Buried or not changed: its nodes on the wrong side of the
@@ -256,6 +353,8 @@ export function updateUtilityLine(sk: Sketch, id: string, patch: LinePatch): Ske
     }
     line = { ...line, net: patch.net, nodes: line.nodes.map(n => swap.get(n) ?? n) };
     if (line.size !== undefined && NET_INFO[patch.net].sizeUnit !== NET_INFO[l.net].sizeUnit) delete line.size;
+    // (a cable has no conduit width of its own)
+    if (NET_INFO[patch.net].sizeUnit !== "mm") delete line.width;
   }
   if (patch.buried !== undefined && patch.buried !== !!l.buried) {
     if (patch.buried) line.buried = true; else delete line.buried;
@@ -269,6 +368,14 @@ export function updateUtilityLine(sk: Sketch, id: string, patch: LinePatch): Ske
   if (patch.count !== undefined) {
     const c = Math.round(Math.min(MAX_COUNT, Math.max(1, patch.count || 1)));
     if (c > 1) line.count = c; else delete line.count;
+  }
+  if (patch.bend !== undefined) {
+    if (patch.bend === null || !Number.isFinite(patch.bend)) delete line.bend;
+    else line.bend = Math.round(Math.min(MAX_BEND, Math.max(MIN_BEND, patch.bend)) * 100) / 100;
+  }
+  if (patch.width !== undefined) {
+    if (patch.width === null || !Number.isFinite(patch.width) || NET_INFO[line.net].sizeUnit !== "mm") delete line.width;
+    else line.width = clampWidth(patch.width);
   }
   return dropLoose(withUtilities(sk, nodes, linesOf(sk).map(x => (x.id === id ? line : x))));
 }
@@ -361,19 +468,20 @@ export function offsetPolyline(pts: Pt[], off: number): Pt[] {
   });
 }
 const unit = (x: number, y: number) => { const l = Math.hypot(x, y) || 1; return { x: x / l, y: y / l }; };
-/** how far apart a line's pipes or cables are (m, centre to centre): a pipe's diameter and a half; overhead conductors 0.8 m */
+/** how far apart a line's pipes or cables are (m, centre to centre): a pipe's width and a half (at least 0.25 m); overhead conductors 0.8 m */
 export function strandSpacing(l: UtilityLine): number {
   if (NET_INFO[l.net].sizeUnit === "kV") return l.buried ? 0.3 : 0.8;
-  return Math.max(0.25, (lineSize(l) / 1000) * 1.5);
+  return Math.max(0.25, strandWidth(l) * 1.5);
 }
 /** a line's strands' offsets from its middle (m), left to right */
 export function strandOffsets(l: UtilityLine): number[] {
   const c = lineCount(l), s = strandSpacing(l);
   return Array.from({ length: c }, (_, i) => (i - (c - 1) / 2) * s);
 }
-/** how thick a strand is drawn (m): a pipe its diameter, a cable 0.1 m (thicker the higher its voltage) */
+/** how thick a strand is drawn (m): a pipe its width (set, else its diameter), a cable 0.06 to 0.3 m (thicker the higher its voltage) */
 export function strandWidth(l: UtilityLine): number {
-  return NET_INFO[l.net].sizeUnit === "mm" ? Math.max(0.05, lineSize(l) / 1000) : Math.min(0.3, 0.06 + lineSize(l) / 1000);
+  if (NET_INFO[l.net].sizeUnit !== "mm") return Math.min(0.3, 0.06 + lineSize(l) / 1000);
+  return l.width ?? Math.max(0.05, lineSize(l) / 1000);
 }
 
 /** each network's lines, nodes and length (m, on the plan) */
@@ -392,7 +500,8 @@ export function sanitizeUtilityNode(raw: unknown): UtilityNode | null {
   const o = raw as Record<string, unknown>;
   if (typeof o.id !== "string" || !o.id || !isNet(o.net) || !Number.isFinite(o.x) || !Number.isFinite(o.y)) return null;
   const name = typeof o.name === "string" && o.name.trim() ? o.name.trim().slice(0, 120) : undefined;
-  return { id: o.id, net: o.net, x: round(o.x as number), y: round(o.y as number), z: Number.isFinite(o.z) ? clampZ(o.z as number) : 0, ...(name ? { name } : {}) };
+  const kind = isKind(o.kind) && o.kind !== "joint" ? o.kind : undefined;
+  return { id: o.id, net: o.net, x: round(o.x as number), y: round(o.y as number), z: Number.isFinite(o.z) ? clampZ(o.z as number) : 0, ...(name ? { name } : {}), ...(kind ? { kind } : {}) };
 }
 /**
  * A sketch's utility nodes and lines as stored, checked: ids unique (a repeated one dropped), a line's nodes those of
@@ -417,7 +526,9 @@ export function sanitizeUtilities(rawNodes: unknown, rawLines: unknown): { nodes
     const name = typeof o.name === "string" && o.name.trim() ? o.name.trim().slice(0, 120) : `${NET_INFO[net].noun} ${o.id.replace(/^u/, "")}`;
     const size = typeof o.size === "number" && Number.isFinite(o.size) && o.size > 0 && o.size !== NET_INFO[net].size ? round(Math.min(100000, o.size)) : undefined;
     const count = typeof o.count === "number" && Number.isFinite(o.count) ? Math.round(Math.min(MAX_COUNT, Math.max(1, o.count))) : 1;
-    lines.push({ id: o.id, net, name, nodes: ns, ...(o.buried === true ? { buried: true as const } : {}), ...(size !== undefined ? { size } : {}), ...(count > 1 ? { count } : {}) });
+    const width = NET_INFO[net].sizeUnit === "mm" && typeof o.width === "number" && Number.isFinite(o.width) && o.width > 0 ? clampWidth(o.width) : undefined;
+    const bend = typeof o.bend === "number" && Number.isFinite(o.bend) && o.bend > 0 ? Math.round(Math.min(MAX_BEND, Math.max(MIN_BEND, o.bend)) * 100) / 100 : undefined;
+    lines.push({ id: o.id, net, name, nodes: ns, ...(o.buried === true ? { buried: true as const } : {}), ...(size !== undefined ? { size } : {}), ...(count > 1 ? { count } : {}), ...(width !== undefined ? { width } : {}), ...(bend !== undefined ? { bend } : {}) });
   }
   return { nodes, lines };
 }

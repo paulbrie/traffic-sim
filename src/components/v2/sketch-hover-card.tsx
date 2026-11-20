@@ -11,11 +11,11 @@ import { connectorPts, groundAt, hasHeights, isFullCircle, laneById, laneLength,
 import type { SimStats, SketchSim } from "@/lib/lane-sketch-sim";
 import { formatArea, zoneArea } from "@/lib/sketch-zones";
 import { shapeArea, shapeOpacity } from "@/lib/sketch-shapes";
-import { lineCount, lineLength, NET_INFO, sizeLabel } from "@/lib/sketch-utilities";
+import { lineCount, lineLength, NET_INFO, NODE_KINDS, nodeKind, sizeLabel } from "@/lib/sketch-utilities";
 import { BUMP_KINDS, bumpHeavySpeed, bumpSpeed } from "@/lib/sketch-bumps";
 import type { LaneTraffic, TrafficMatch } from "@/lib/tomtom";
 
-export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { bump: string } | { link: string } | { zone: string } | { shape: string } | { utility: string } | { car: number };
+export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { bump: string } | { link: string } | { zone: string } | { shape: string } | { utility: string; /** (3D) the node of it under the pointer */ node?: string | null } | { car: number };
 export interface HoverInfo { title: string; sub?: string; rows: [string, string][] }
 
 const m = (x: number) => (x >= 1000 ? `${(x / 1000).toFixed(2)} km` : `${x.toFixed(x < 10 ? 1 : 0)} m`);
@@ -119,6 +119,11 @@ export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, J
     const x = sk.utilityLines?.find(y => y.id === hit.utility);
     if (!x) return null;
     const len = lineLength(sk, x), kind = NET_INFO[x.net].sizeUnit === "kV" ? "cables" : "pipes";
+    const n = hit.node ? sk.utilityNodes?.find(y => y.id === hit.node) : null;
+    if (n) {
+      const where = n.z < 0 ? `${(-n.z).toFixed(2)} m below the ground` : n.z > 0 ? `${n.z.toFixed(2)} m over the ground` : "on the ground";
+      return { title: n.name ?? `${NODE_KINDS[nodeKind(n)].label} ${n.id}`, sub: `${NET_INFO[n.net].label} · on ${x.name} · click to pick it`, rows: [["Kind", NODE_KINDS[nodeKind(n)].label], ["Height", where], ["Lines through it", String((sk.utilityLines ?? []).filter(l => l.nodes.includes(n.id)).length)]] };
+    }
     return { title: x.name, sub: `${NET_INFO[x.net].label} · ${x.buried ? "buried" : "above ground"} · only drawn: the cars don't see it`, rows: [["Size", `${sizeLabel(x)}${lineCount(x) > 1 ? `, ${lineCount(x)} ${kind}` : ""}`], ["Length", `${m(len.plan)} (3D ${m(len.real)})`], ["Nodes", String(x.nodes.length)]] };
   }
   if ("link" in hit) {

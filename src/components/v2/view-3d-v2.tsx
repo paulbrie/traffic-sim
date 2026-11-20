@@ -24,6 +24,7 @@ import { buildStreetNames3D, type StreetNames3D } from "@/render/street-names3d"
 import { buildZones3D, type Zones3D } from "@/render/zones3d";
 import { buildShapes3D, type Shapes3D } from "@/render/shapes3d";
 import { buildUtilities3D, type Utilities3D } from "@/render/utilities3d";
+import { linesOf as utilityLines, netShown, nodeMap as utilityNodeMap } from "@/lib/sketch-utilities";
 import { buildBuildings3D, type Buildings3D } from "@/render/buildings3d";
 import { buildingUseLabel, footprintPts, type SketchBuilding } from "@/lib/sketch-buildings";
 import type { SketchLayers } from "@/state/sketch-layers";
@@ -76,7 +77,10 @@ export interface View3DProps {
   /** what holds the car picked (T157): where its leader and blocker are, the conflict zone on both paths */
   carWhy?: () => { leader: Pt | null; blocker: Pt | null; zone: { mine: Pt[]; theirs: Pt[] } | null } | null;
   /** what is selected (drawn over the scene at its own height), the car picked (a ring round it) */
-  selection: Piece; car: number | null;
+  selection: Piece & { unode?: string | null }; car: number | null;
+  /** (ticket #280) a utility node or line clicked (its line, and the node if it was one); what one under the pointer is, for its card */
+  pickUtility?: (line: string, node: string | null) => void;
+  utilityAbout?: (line: string, node: string | null) => HoverInfo | null;
   /** the route traced (orange), and a test car's other way (blue) */
   route: { lanes: Set<string>; conns: Set<string>; driven: { lanes: Set<string>; conns: Set<string> } } | null;
   /** a click on the scene at `p`, on level `level` (the highest first): true if it picked something there (flying, only a
@@ -313,12 +317,12 @@ export function View3DV2(props: View3DProps) {
     const syncUtilities = () => {
       const p = live.current;
       heights();
-      const key = [p.sketch.utilityLines, p.sketch.utilityNodes, p.layers.water, p.layers.gas, p.layers.power, p.selection.utilities, hOn, hBase];
+      const key = [p.sketch.utilityLines, p.sketch.utilityNodes, p.layers.water, p.layers.gas, p.layers.power, p.selection.utilities, p.selection.unode, hOn, hBase];
       if (key.every((x, i) => x === utilFor[i])) return;
       utilFor = key;
       if (utilBuilt) { scene.remove(utilBuilt.group); utilBuilt.dispose(); utilBuilt = null; }
       if (!p.sketch.utilityLines?.length || !(p.layers.water || p.layers.gas || p.layers.power)) return;
-      utilBuilt = buildUtilities3D(p.sketch, p.layers, gUnder, p.selection.utilities ?? []);
+      utilBuilt = buildUtilities3D(p.sketch, p.layers, gUnder, p.selection.utilities ?? [], p.selection.unode ?? null);
       scene.add(utilBuilt.group);
     };
     // the buildings (ticket #267), OpenStreetMap's, fetched for where the sketch is: made again when they (their layer, the
@@ -655,8 +659,43 @@ export function View3DV2(props: View3DProps) {
       // armed, a click fires a burst there; flying, only cars are picked (more forgivingly: from high up they are
       // small), and a miss keeps the pick (and what is tracked)
       if (heli.armed) { if (levels.length) { const q = levels[levels.length - 1].p; heli.burstAt(new THREE.Vector3(q.x, gFast(q.x, q.y), q.y)); } return; }
+      // (a utility node or line under the pointer, as drawn (buried ones seen through the ground): before the roads, ticket #280)
+      const u = heli.flying ? null : utilityAt(e);
+      if (u && live.current.pickUtility) { live.current.pickUtility(u.line, u.node); return; }
       for (const { p, lv, dist } of levels) if (live.current.pickAt(p, lv, heli.flying ? { tol: Math.max(3, dist * 0.025) } : undefined)) return;
       if (!heli.flying) live.current.pickNone();
+    };
+    /**
+     * The utility node within 10 px of the pointer on the screen, else the line within 6 px (ticket #280): where they are
+     * drawn, at their heights (a pipe is a few cm thick: a ray would hardly ever hit it), the nearest; null if none. A node
+     * on several lines: the selected one's, else the first's
+     */
+    const utilityAt = (e: { clientX: number; clientY: number }): { line: string; node: string | null } | null => {
+      const p = live.current, sk = p.sketch;
+      if (!sk.utilityLines?.length || !utilBuilt) return null;
+      const r = renderer.domElement.getBoundingClientRect(), cam = heli.viewCam(), v = new THREE.Vector3(), map = utilityNodeMap(sk);
+      const mx = e.clientX - r.left, my = e.clientY - r.top, screen = new Map<string, { x: number; y: number } | null>();
+      const at = (id: string) => {
+        if (screen.has(id)) return screen.get(id)!;
+        const n = map.get(id);
+        v.set(n?.x ?? 0, n ? gUnder(n) + n.z : 0, n?.y ?? 0).project(cam);
+        const q = n && v.z < 1 ? { x: ((v.x + 1) / 2) * r.width, y: ((1 - v.y) / 2) * r.height } : null;
+        screen.set(id, q);
+        return q;
+      };
+      const lines = utilityLines(sk).filter(l => netShown(p.layers, l.net)), mine = p.selection.utilities ?? [];
+      let node: string | null = null, nd = 10;
+      for (const l of lines) for (const id of l.nodes) { const q = at(id); const d = q ? Math.hypot(q.x - mx, q.y - my) : Infinity; if (d <= nd) { nd = d; node = id; } }
+      if (node) { const on = lines.filter(l => l.nodes.includes(node!)); return { line: (on.find(l => mine.includes(l.id)) ?? on[0]).id, node }; }
+      let line: string | null = null, ld = 6;
+      for (const l of lines) for (let i = 1; i < l.nodes.length; i++) {
+        const a = at(l.nodes[i - 1]), b = at(l.nodes[i]);
+        if (!a || !b) continue;
+        const dx = b.x - a.x, dy = b.y - a.y, L = dx * dx + dy * dy, t = L ? Math.min(1, Math.max(0, ((mx - a.x) * dx + (my - a.y) * dy) / L)) : 0;
+        const d = Math.hypot(a.x + dx * t - mx, a.y + dy * t - my);
+        if (d <= ld) { ld = d; line = l.id; }
+      }
+      return line ? { line, node: null } : null;
     };
     /** where the ray under the pointer meets each level the lanes are on, the highest first */
     const levelsAt = (e: { clientX: number; clientY: number }) => {
@@ -698,9 +737,10 @@ export function View3DV2(props: View3DProps) {
       const r = renderer.domElement.getBoundingClientRect();
       let info: HoverInfo | null = null;
       const levels = levelsAt(e);
-      // (a building in front of the ground there: what it is)
-      const b = buildingHit(levels.length ? levels[levels.length - 1].dist - 0.5 : Infinity);
-      if (b) {
+      // (a utility node or line under the pointer, ticket #280; else a building in front of the ground there: what it is)
+      const u = heli.flying ? null : utilityAt(e), b = u ? null : buildingHit(levels.length ? levels[levels.length - 1].dist - 0.5 : Infinity);
+      if (u) info = live.current.utilityAbout?.(u.line, u.node) ?? null;
+      else if (b) {
         const tall = `${b.h.toFixed(b.h < 10 ? 1 : 0)} m`;
         info = { title: b.name ?? buildingUseLabel(b), sub: b.name ? buildingUseLabel(b) : "OpenStreetMap building", rows: [
           ["Height", b.tagged ? tall : `about ${tall} (guessed from its kind and size)`],

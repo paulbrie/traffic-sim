@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import { Cable, Trash2, X } from "lucide-react";
+import { Cable, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -10,8 +10,8 @@ import { NumberField } from "@/components/workspace/fields";
 import { cn } from "@/lib/utils";
 import { groundUnder, hasHeights, type Sketch } from "@/lib/lane-sketch";
 import {
-  deleteUtilityNode, lineCount, lineLength, lineSize, linesThrough, MAX_COUNT, moveUtilityNode, NET_INFO, nodeMap, renameUtilityNode, updateUtilityLine,
-  UTILITY_NETS, Z_MAX, Z_MIN, type LinePatch, type UtilityLine, type UtilityNet,
+  autoBend, bendOf, bends, deleteUtilityNode, kindsFor, MAX_BEND, MIN_BEND, lineCount, lineLength, lineSize, linesThrough, MAX_COUNT, MAX_WIDTH, MIN_WIDTH, moveUtilityNode, NET_INFO, NODE_KINDS, nodeKind, nodeMap,
+  renameUtilityNode, setLineHeight, setUtilityNodeKind, strandWidth, updateUtilityLine, UTILITY_NETS, Z_MAX, Z_MIN, type LinePatch, type NodeKind, type UtilityLine, type UtilityNet,
 } from "@/lib/sketch-utilities";
 import { useSketchStore } from "@/state/lane-sketch";
 import { InspectorPanel } from "./inspector-panel";
@@ -22,8 +22,9 @@ const MAX_ROWS = 60;
 
 /**
  * Utility lines selected (ticket #280). One: its name, network, buried or not, size, pipes or cables side by side, its
- * lengths (on the plan and in 3D), and its nodes, each x / y / z (z over the ground; with heights, its level above
- * sea level too), the one picked (`node`) with its name and lines. Several: how many and how long, to delete together.
+ * lengths (on the plan and in 3D), water and gas its conduit's width, and its nodes, each x / y / z (z: its height over
+ * the ground; with heights, its level above sea level too), all of them at one height at once, the one picked (`node`)
+ * with its kind (a building connector…), height, name and lines. Several: how many and how long, to delete together.
  * Typing shows as it goes and is one undo step when let go; switches, menus and number fields one step each.
  */
 export function UtilityPanel({ sketch, lines, node, readOnly, onDelete, onPickNode }: {
@@ -80,18 +81,32 @@ export function UtilityPanel({ sketch, lines, node, readOnly, onDelete, onPickNo
         <NumberField id={`util-${line.id}-count`} label={`${kind[0].toUpperCase()}${kind.slice(1)} side by side`} digits={0} value={lineCount(line)} min={1} max={MAX_COUNT} step={1}
           onCommit={v => set({ count: v })} />
       </div>
+      {info.sizeUnit === "mm" && (
+        <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+          <NumberField id={`util-${line.id}-width`} label={`Width of the conduit${line.width === undefined ? " (from its diameter)" : ""}`} unit="m" digits={3} value={strandWidth(line)} min={MIN_WIDTH} max={MAX_WIDTH} step={0.05}
+            onCommit={v => set({ width: v })} />
+          {line.width !== undefined && !readOnly && <Button size="icon-sm" variant="ghost" className="mb-0.5" aria-label="Width from the diameter again" title="Back to the diameter's width" onClick={() => set({ width: null })}><RotateCcw /></Button>}
+        </div>
+      )}
+      {bends(line) && (
+        <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+          <NumberField id={`util-${line.id}-bend`} label={`Bend radius${line.bend === undefined ? ` (auto: ${autoBend(line)} m)` : ""}`} unit="m" digits={2} value={bendOf(line)} min={MIN_BEND} max={MAX_BEND} step={0.5}
+            onCommit={v => set({ bend: v })} />
+          {line.bend !== undefined && !readOnly && <Button size="icon-sm" variant="ghost" className="mb-0.5" aria-label="Bend radius back to auto" title="Back to the automatic radius (25 times its width)" onClick={() => set({ bend: null })}><RotateCcw /></Button>}
+        </div>
+      )}
       <div className="grid gap-0.5 text-xs">
         <div className="flex justify-between gap-2"><span className="text-muted-foreground">Length on the plan</span><span className="font-mono tabular">{m(len.plan)}</span></div>
         <div className="flex justify-between gap-2"><span className="text-muted-foreground" title="Along its nodes in 3D: its rises and falls (and the ground's, with heights) counted">Length in 3D</span><span className="font-mono tabular">{m(len.real)}</span></div>
         {lineCount(line) > 1 && <div className="flex justify-between gap-2"><span className="text-muted-foreground">All its {kind}</span><span className="font-mono tabular">{m(len.real * lineCount(line))}</span></div>}
       </div>
       <div className="grid gap-1 text-xs">
-        <span className="text-muted-foreground">Nodes <span className="text-[11px]">(z: metres over the ground, below it negative)</span></span>
+        <span className="text-muted-foreground">Nodes <span className="text-[11px]">(z: height over the ground, m; below it negative)</span></span>
         <div className="grid grid-cols-[1.5rem_1fr_1fr_1fr] items-center gap-x-1.5 gap-y-1" role="table" aria-label="Nodes">
           <span role="columnheader" aria-label="Node" className="text-[11px] text-muted-foreground">#</span>
           <span role="columnheader" className="text-[11px] text-muted-foreground">x (m)</span>
           <span role="columnheader" className="text-[11px] text-muted-foreground">y (m)</span>
-          <span role="columnheader" className="text-[11px] text-muted-foreground">z (m)</span>
+          <span role="columnheader" className="text-[11px] text-muted-foreground" title="Height over the ground (m): below it negative">z over ground</span>
           {rows.map(({ id, i }) => {
             const n = map.get(id);
             if (!n) return null;
@@ -110,15 +125,36 @@ export function UtilityPanel({ sketch, lines, node, readOnly, onDelete, onPickNo
           })}
         </div>
         {line.nodes.length > rows.length && <span className="text-[11px] text-muted-foreground">…and {line.nodes.length - rows.length} more (pick one on the map)</span>}
+        {(() => {
+          // (all its nodes at one height: what they are at if they are all at one, else empty)
+          const zs = [...new Set(line.nodes.map(id => map.get(id)?.z))];
+          return (
+            <NumberField id={`util-${line.id}-allz`} label="All its nodes at (height over the ground)" unit="m" digits={2} step={0.1} min={Z_MIN} max={Z_MAX}
+              value={zs.length === 1 && zs[0] !== undefined ? zs[0] : Number.NaN} onCommit={v => edit(sk => setLineHeight(sk, line.id, v))} className="mt-1" />
+          );
+        })()}
       </div>
       {picked && (
         <div className="grid gap-1.5 rounded-md border p-2 text-xs">
           <div className="flex items-center gap-1">
-            <span className="font-medium">Node {picked.id}</span>
+            <span className="font-medium">{nodeKind(picked) === "joint" ? "Node" : NODE_KINDS[nodeKind(picked)].label} {picked.id}</span>
             <span className="text-muted-foreground">· {picked.z < 0 ? `${(-picked.z).toFixed(2)} m deep` : picked.z > 0 ? `${picked.z.toFixed(2)} m up` : "on the ground"}{ground ? ` · ${(ground(picked) + picked.z).toFixed(1)} m above sea level` : ""}</span>
             <Button size="icon-sm" variant="ghost" className="ml-auto size-6" aria-label="Let the node go" onClick={() => onPickNode(null)}><X /></Button>
           </div>
-          <Input aria-label="Node name" placeholder="Name (a valve, a manhole, a pole…)" value={picked.name ?? ""} className="h-7" disabled={readOnly} {...live}
+          <div className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] items-end gap-2">
+            <div className="grid min-w-0 gap-1.5">
+              <span className="text-xs text-muted-foreground">Kind</span>
+              <Select value={nodeKind(picked)} disabled={readOnly} onValueChange={v => edit(sk => setUtilityNodeKind(sk, picked.id, v as NodeKind))}>
+                <SelectTrigger aria-label="Node kind" className="h-8 w-full min-w-0 [&>span]:truncate"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {[...new Set([...kindsFor(picked.net), nodeKind(picked)])].map(k => <SelectItem key={k} value={k}>{NODE_KINDS[k].label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <NumberField id={`util-node-${picked.id}-z`} label="Height (z)" unit="m" digits={2} step={0.1} min={Z_MIN} max={Z_MAX} value={picked.z}
+              onCommit={v => edit(sk => moveUtilityNode(sk, picked.id, { z: v }))} />
+          </div>
+          <Input aria-label="Node name" placeholder="Name (which building, valve, manhole…)" value={picked.name ?? ""} className="h-7" disabled={readOnly} {...live}
             onChange={e => { start(); show(renameUtilityNode(sketch, picked.id, e.target.value)); }} />
           <div className="flex items-center justify-between gap-2">
             <span className="text-muted-foreground">{linesThrough(sketch, picked.id).map(l => l.name).join(", ")}</span>
@@ -128,7 +164,8 @@ export function UtilityPanel({ sketch, lines, node, readOnly, onDelete, onPickNo
       )}
       <p className="text-[11px] text-muted-foreground">
         Drag it to move it, or a node to move that node (drop it on another of the network&apos;s nodes to join them there). Double-click the line to add a
-        node, or a node to take it out. Utility lines are only drawn: the cars don&apos;t see them.
+        node, or a node to take it out. It bends round its waypoints (its plain nodes between its ends), to its bend radius as far as
+        the segments beside them allow; tees, valves and building connectors keep the pipes meeting there. Utility lines are only drawn: the cars don&apos;t see them.
       </p>
     </InspectorPanel>
   );
