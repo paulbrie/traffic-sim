@@ -4782,6 +4782,10 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       }
     }
   }
+  // marks (ticket #289): pins over everything, the cars too, drawn with what moves (over the image kept, so over its
+  // labels and handles as well). Here, before the dynamic part stops: drawn at the painter's end, they never showed
+  if (D && st.layers.marks && sk.marks?.length)
+    paintMarks(ctx, sk.marks, p => ({ x: (p.x - v.cx) * v.scale + w / 2, y: (p.y - v.cy) * v.scale + h / 2 }), dpr, s.mark ?? null, hv && "mark" in hv ? hv.mark : null, { sel: col.sel, pill: col.pill, fg: col.text });
   // (what moves is drawn: the rest is in the image kept)
   if (D) return;
   // the selection's box and the handle to turn it by
@@ -5025,9 +5029,6 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     const top = j.outline.reduce((a, p) => (p.y < a.y ? p : a), j.outline[0]);
     if (top) st.labels?.push({ kind: "junction", id: j.id, ...label(j.name, { x: top.x, y: top.y - 14 * px }, col.jText) });
   }
-  // marks (ticket #289): pins over everything, the cars too (drawn each frame, so with the dynamic part)
-  if (D && st.layers.marks && sk.marks?.length)
-    paintMarks(ctx, sk.marks, p => ({ x: (p.x - v.cx) * v.scale + w / 2, y: (p.y - v.cy) * v.scale + h / 2 }), dpr, s.mark ?? null, hv && "mark" in hv ? hv.mark : null, { sel: col.sel, pill: col.pill, fg: col.text });
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.font = "10px ui-monospace, monospace"; ctx.fillStyle = dark ? "#a1a1aa" : "#78716c"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
   // (where the pointer is: metres, and on Earth where the sketch has a place there)

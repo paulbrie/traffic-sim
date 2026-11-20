@@ -3,6 +3,8 @@ import { emptySketch, sanitizeSketch, type Sketch } from "../src/lib/lane-sketch
 import { addMark, deleteMark, markAt, MARK_COLOR, parseCoordinates, PIN, sanitizeMarks, updateMark } from "../src/lib/sketch-marks";
 import { project, unproject } from "../src/lib/osm/area";
 import { applyPatch } from "../src/lib/sketch-diff";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 let ok = true;
 const check = (name: string, pass: boolean, detail = "") => {
@@ -77,6 +79,16 @@ check("a saved sketch keeps its marks through sanitizing", JSON.stringify(saniti
 const patched = applyPatch(sk3, { marks: [{ id: "m1", name: "Renamed" }, { id: "m9", name: "New", at: { x: 0, y: 0 }, color: "#16a34a" }], remove: { marks: ["m2"] } });
 const pm = patched?.marks ?? [];
 check("a patch renames one (keeping its place), adds one, removes one", pm.length === 2 && pm.find(x => x.id === "m1")?.name === "Renamed" && pm.find(x => x.id === "m1")?.at.x === mk.at.x && pm.some(x => x.id === "m9") && !pm.some(x => x.id === "m2"));
+
+// Drawn on the plan: the editor's painter draws them with what moves, which stops early (`if (D) return;`): drawn after
+// that, they never showed in 2D (the user, on ticket #289). The painter is inside the editor's component file, so its
+// source is read: the marks drawn before the dynamic part's first return.
+{
+  const src = readFileSync(join(__dirname, "../src/components/workspace/lane-sketch.tsx"), "utf8");
+  const at = src.indexOf("function paint(c: HTMLCanvasElement"), body = src.slice(at, src.indexOf("\n}\n", at));
+  const marks = body.indexOf("paintMarks("), stop = body.search(/\n\s*if \(D\) return;/);
+  check("the 2D painter draws the marks before its dynamic part returns", at >= 0 && marks >= 0 && stop >= 0 && marks < stop, `paintMarks at ${marks}, if (D) return at ${stop}`);
+}
 
 console.log(ok ? "marks check: all ok" : "marks check: FAILED");
 process.exit(ok ? 0 : 1);
