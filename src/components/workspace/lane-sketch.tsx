@@ -501,8 +501,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (Math.round(v * 10) !== Math.round(w.value * 10)) editSketch(s => (w.kind === "in" ? setInRate(s, w.lanes, Math.round(v)) : setOutShare(s, w.lanes, v)));
     panel.current?.focus();
   };
-  /** what is under `p`: zebras, then connectors (on top of the lanes), then lanes, then the smallest junction surface */
-  const pick = (p: Pt): Hit | null => {
+  /**
+   * What is under `p`: zebras, then connectors (on top of the lanes), then lanes, then the smallest junction surface.
+   * Utility lines (ticket #280; `utilities` false: never, as in 3D, where they aren't at the ground's level): a selected
+   * one first (to drag it, or double-click a node into it), the others only where no lane or connector is (a pipe under
+   * a road is picked from the sidebar, the search or a box), before links and junction surfaces
+   */
+  const pick = (p: Pt, { utilities = true }: { utilities?: boolean } = {}): Hit | null => {
     const sk = live.current.sketch, px = 1 / view.current.scale;
     // (a zebra crossing: over the lanes it crosses)
     for (const x of sk.crossings ?? []) if (onCrossing(x, p, 2 * px)) return { crossing: x.id };
@@ -510,9 +515,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     for (const x of sk.bumps ?? []) if (onBump(x, p, 2 * px)) return { bump: x.id };
     // (a bus stop: its marker, beside its lane)
     for (const x of sk.stops ?? []) { const l = laneById(sk, x.lane); if (l && dist(pointAt(l.shape, x.s).p, p) < 6 * px + 1) return { stop: x.id }; }
-    // (a utility line (ticket #280): drawn over the roads, so picked before them, within 5 px; not while its layer is hidden)
-    const ut = sk.utilityLines?.length ? utilityLineAt(sk, p, 5 * px, n => netShown(live.current.layers, n)) : null;
-    if (ut) return { utility: ut.line };
+    // (a utility line within 5 px, its layer shown: a selected one before the lanes, the others after them)
+    const shownNet = (n: UtilityNet) => netShown(live.current.layers, n), mineU = live.current.sel.utilities ?? [];
+    const utilityAt = (only?: string) => (utilities && sk.utilityLines?.length ? utilityLineAt(sk, p, 5 * px, shownNet, only) : null);
+    for (const id of mineU) { const u = utilityAt(id); if (u) return { utility: u.line }; }
     let best: Hit | null = null, bd = Infinity;
     // (only what is near it; connectors hidden: not picked, but for the selected ones)
     const near = sketchIndex(sk).near(p, 6 * px + 0.5), cs = sk.connectors.filter(c => near.conns.has(c.id));
@@ -533,6 +539,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     if (lane && (!best || lLevel > cLevel + 0.25)) return { lane };
     if (best) return best;
+    const ut = utilityAt();
+    if (ut) return { utility: ut.line };
     // (a link's surface, between the road ends it joins)
     for (const k of sk.links ?? []) { const g = linkGeometry(sk, k); if (g && insidePolygon(p, g.outline)) return { link: k.id }; }
     const inJ = (j: SketchJunction) => {
@@ -1763,7 +1771,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (car !== null && Math.abs((sim.current?.poses().find(c => c.id === car)?.z ?? 0) - lv) < 0.5) { setSel(NO_SEL); setSelCar(car); return true; }
     // (from the helicopter (ticket #129), only cars)
     if (flying) return false;
-    const hit = pick(p);
+    const hit = pick(p, { utilities: false });
     if (!hit) return false;
     if ("lane" in hit) {
       const l = laneById(sk, hit.lane);
@@ -1779,7 +1787,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     else if ("bump" in hit) setSel({ ...NO_SEL, bump: hit.bump });
     else if ("stop" in hit) setSel({ ...NO_SEL, stop: hit.stop });
     else if ("shape" in hit) setSel({ ...NO_SEL, shapes: [hit.shape] });
-    else if ("utility" in hit) setSel({ ...NO_SEL, utilities: [hit.utility] });
+    // (utility lines aren't picked in 3D: see pick)
+    else if ("utility" in hit) return false;
     else setSel({ ...NO_SEL, zones: [hit.zone] });
     setSelCar(null);
     return true;
@@ -1793,7 +1802,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       if (car === live.current.selCar && carInfo) return describeHover({ car }, sk, live.current.contents, stats, carInfo);
       return { title: `${pose.trailer ? "Truck" : pose.bus ? "Bus" : "Car"} ${car}`, sub: "click to pick it", rows: [["Speed", `${Math.round(Math.min(1, pose.share) * 100)}% of what it wants`]] };
     }
-    const hit = pick(p) as HoverHit | null;
+    const hit = pick(p, { utilities: false }) as HoverHit | null;
     if (!hit) return null;
     if ("lane" in hit) { const l = laneById(sk, hit.lane); if (!l || Math.abs(zAt(sk, l.id, nearestOn(l.shape, p).s) - lv) > 0.5) return null; }
     else if ("junction" in hit) { const c = live.current.contents.get(hit.junction); if (c && junctionLevel(sk, c) !== lv) return null; }
