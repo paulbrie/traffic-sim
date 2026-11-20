@@ -23,6 +23,7 @@ import { buildSketch3D, streetNameRuns, type Sketch3D } from "@/render/sketch3d"
 import { buildStreetNames3D, type StreetNames3D } from "@/render/street-names3d";
 import { buildZones3D, type Zones3D } from "@/render/zones3d";
 import { buildShapes3D, type Shapes3D } from "@/render/shapes3d";
+import { buildUtilities3D, type Utilities3D } from "@/render/utilities3d";
 import { buildBuildings3D, type Buildings3D } from "@/render/buildings3d";
 import { buildingUseLabel, footprintPts, type SketchBuilding } from "@/lib/sketch-buildings";
 import type { SketchLayers } from "@/state/sketch-layers";
@@ -305,6 +306,20 @@ export function View3DV2(props: View3DProps) {
       if (!p.layers.shapes || !p.sketch.shapes?.length) return;
       shapesBuilt = buildShapes3D(p.sketch.shapes, t ? (x, z) => terrainAt(t, x, z) - hBase : undefined);
       scene.add(shapesBuilt.group);
+    };
+    // the utility networks (ticket #280): their pipes and cables as tubes at their nodes' heights over the ground (buried ones
+    // seen through it), poles under those up in the air; made again when they (their layers, the selection, the ground) change
+    let utilBuilt: Utilities3D | null = null, utilFor: unknown[] = [];
+    const syncUtilities = () => {
+      const p = live.current;
+      heights();
+      const key = [p.sketch.utilityLines, p.sketch.utilityNodes, p.layers.water, p.layers.gas, p.layers.power, p.selection.utilities, hOn, hBase];
+      if (key.every((x, i) => x === utilFor[i])) return;
+      utilFor = key;
+      if (utilBuilt) { scene.remove(utilBuilt.group); utilBuilt.dispose(); utilBuilt = null; }
+      if (!p.sketch.utilityLines?.length || !(p.layers.water || p.layers.gas || p.layers.power)) return;
+      utilBuilt = buildUtilities3D(p.sketch, p.layers, gUnder, p.selection.utilities ?? []);
+      scene.add(utilBuilt.group);
     };
     // the buildings (ticket #267), OpenStreetMap's, fetched for where the sketch is: made again when they (their layer, the
     // terrain they stand on) change
@@ -727,7 +742,7 @@ export function View3DV2(props: View3DProps) {
       heli.step(dt, now);
       if (heli.flying && now - movedAt > 250) { movedAt = now; live.current.onMove(); }
       if (hoverWas && now - hoverAt > 300) { hoverAt = now; hoverNow(hoverWas); }
-      syncRoads(); syncNames(); syncZones(); syncShapes(); syncBuildings(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now); syncWhy(now);
+      syncRoads(); syncNames(); syncZones(); syncShapes(); syncUtilities(); syncBuildings(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now); syncWhy(now);
       stepHome(now);
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
@@ -763,6 +778,7 @@ export function View3DV2(props: View3DProps) {
       if (built) { scene.remove(built.group); built.dispose(); }
       if (zonesBuilt) { scene.remove(zonesBuilt.group); zonesBuilt.dispose(); }
       if (shapesBuilt) { scene.remove(shapesBuilt.group); shapesBuilt.dispose(); }
+      if (utilBuilt) { scene.remove(utilBuilt.group); utilBuilt.dispose(); }
       if (bldBuilt) { scene.remove(bldBuilt.mesh); bldBuilt.dispose(); }
       if (namesBuilt) { scene.remove(namesBuilt.group); namesBuilt.dispose(); }
       controls.dispose();

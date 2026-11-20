@@ -20,9 +20,10 @@ import { SKETCH_LAYERS, setSketchLayers, sketchLayers$, type SketchLayers } from
 import { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-options";
 
 /** the drawing tools */
-export type Tool = "select" | "lane" | "bike" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing" | "bump" | "zone" | "shape" | "stop";
+export type Tool = "select" | "lane" | "bike" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing" | "bump" | "zone" | "shape" | "utility" | "stop";
 /** what is selected: lanes, connectors and junctions (a road: its lanes, with its id), or a link, a zebra crossing, a speed bump, or a bus stop */
-export type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null; /** a speed bump, selected on its own */ bump?: string | null; /** a bus stop, selected on its own */ stop?: string | null };
+export type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null; /** a speed bump, selected on its own */ bump?: string | null; /** a bus stop, selected on its own */ stop?: string | null;
+  /** (ticket #280) a node of the utility lines selected (`utilities`), picked: its row in their panel, Delete deletes it */ unode?: string | null };
 export const NO_SEL: Sel = { lanes: [], connectors: [], junctions: [], road: null };
 
 /** an editor's state: the plan's (`plan`; a V1 plan's sketch window: `whole`) or the Sketch window's (`scratch`) */
@@ -115,7 +116,7 @@ const editor = (tool: Tool): EditorUi => ({
 export const freshEditor = (): EditorUi => editor("select");
 
 /** the inspector's panels (their ids): the only ones that can be folded away */
-export const PANEL_IDS = ["selection", "car", "crossing", "bump", "zone", "shape", "junction-live", "test-in-sketch", "background", "traffic", "display", "fuel", "junction-results", "road-results", "demand", "route", "results"];
+export const PANEL_IDS = ["selection", "car", "crossing", "bump", "zone", "shape", "utility", "junction-live", "test-in-sketch", "background", "traffic", "display", "fuel", "junction-results", "road-results", "demand", "route", "results"];
 // (kept in the browser: the panels folded away, Test in Sketch's options)
 const PANELS_KEY = "trafficsim:v2-closed-panels", TEST_KEY = "laneSketch:testInSketch", DISPLAY_KEY = "v2:display", STRUCTURE_KEY = "v2:structure";
 const stored = <T,>(key: string, fallback: T): T => {

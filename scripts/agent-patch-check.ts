@@ -194,7 +194,7 @@ async function main() {
     assert.deepEqual(sketchList(s.sketch).list.map(x => [x.id, x.name]), [["s1", "Sketch 1"], ["s2", "J696 v1"]]);
     assert.equal(sketchList(s.sketch).open, "s1");
     assert.deepEqual(s.sketch.scratch, withWindow.scratch);
-    assert.deepEqual(w.counts, { lanes: 2, connectors: 1, roads: 1, junctions: 1, crossings: 1, zones: 0, shapes: 0 });
+    assert.deepEqual(w.counts, { lanes: 2, connectors: 1, roads: 1, junctions: 1, crossings: 1, zones: 0, shapes: 0, utilities: 0 });
     // (its own ids, at its own place, with its own traffic and lights)
     assert.deepEqual(w.added, { lanes: ["l1", "l366"], connectors: ["c-t148-1"], junctions: ["j696"], crossings: ["z-t148-1"] });
     const nw = contentOf(s.sketch, "s2")!;

@@ -226,7 +226,7 @@ const mainTouched = (s: FileSummary) =>
 /** what a patch adds as a new sketch (T152, T156): its name, the counts, and a small map of it */
 function SketchWindowView({ w }: { w: WindowAdd }) {
   const c = w.counts, n = (k: number, one: string, many = `${one}s`) => (k ? [`${k} ${k === 1 ? one : many}`] : []);
-  const parts = [...n(c.lanes, "lane"), ...n(c.connectors, "connector"), ...n(c.roads, "road"), ...n(c.junctions, "junction"), ...n(c.crossings, "crossing"), ...n(c.zones, "zone"), ...n(c.shapes, "shape")];
+  const parts = [...n(c.lanes, "lane"), ...n(c.connectors, "connector"), ...n(c.roads, "road"), ...n(c.junctions, "junction"), ...n(c.crossings, "crossing"), ...n(c.zones, "zone"), ...n(c.shapes, "shape"), ...n(c.utilities, "utility line")];
   return (
     <div className="space-y-2 rounded-md border p-3 text-sm">
       <h3 className="font-medium">New sketch</h3>

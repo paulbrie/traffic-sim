@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useDeepSubject, useSubject } from "subjecto/react";
-import { Bike, BusFront, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Shapes, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, Gauge, LandPlot, MapPin, Maximize, Milestone, MousePointer2, PanelLeftClose, PanelLeftOpen, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
+import { Bike, BusFront, Cable, Lock, LockOpen, Car, ChartColumn, CircleDashed, FlaskConical, Minus, ChevronDown, ChevronRight, ChevronUp, Circle, Plus, Scissors, Shapes, Layers as LayersIcon, ClipboardCopy, Copy, Crosshair, Footprints, Earth, Gauge, LandPlot, MapPin, Maximize, Milestone, MousePointer2, PanelLeftClose, PanelLeftOpen, Pause, Pentagon, Play, Redo2, RotateCcw, Spline, Trash2, TriangleAlert, Truck, Undo2, Wand2, Waypoints, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,6 +52,12 @@ import { InspectorPanel } from "@/components/v2/inspector-panel";
 import { ResultsPanel } from "@/components/v2/results-panel";
 import { ZonePanel } from "@/components/v2/zone-panel";
 import { ShapePanel } from "@/components/v2/shape-panel";
+import { Dot as NetDot, UtilityPanel } from "@/components/v2/utility-panel";
+import { paintUtilities, paintUtilityDraft } from "@/components/v2/utility-tools";
+import {
+  addUtilityLine, deleteUtilityLines, deleteUtilityNode, insertNode as insertUtilityNode, layerOfNet, lineLength as utilityLength, mergeUtilityNodes, moveUtilityNode,
+  NET_INFO, netShown, removeNodeFromLine, utilityLineAt, utilityNodeAt, utilityPoints, UTILITY_NETS, type UtilityDraftPt, type UtilityNet,
+} from "@/lib/sketch-utilities";
 import { paintShapeDraft, paintShapes } from "@/components/v2/shape-tools";
 import { ALIGN_BUTTONS, AlignLanes } from "@/components/v2/align-lanes";
 import { alignLanes, canAlign } from "@/lib/lane-align";
@@ -109,6 +115,7 @@ const TOOLS: { id: Tool; key: string; label: string; icon: React.ReactNode; hint
   { id: "junction", key: "J", label: "Junction", icon: <Pentagon />, hint: "Click the junction's corners; click the first again (or Enter, or double-click) to close it. The lanes in no road and the connectors on it are its own" },
   { id: "zone", key: "Z", label: "Zone", icon: <LandPlot />, hint: "Click the zone's corners; click the first again (or Enter, or double-click) to close it · Backspace takes the last corner back · Esc cancels. A labelled area (a neighbourhood, a zone) for reading the plan: the cars don't see it" },
   { id: "shape", key: "S", label: "Shape", icon: <Shapes />, hint: "Click the shape's points; click the first again (or Enter, or double-click) to close it · or drag out a rectangle (Shift: a square; Alt: a circle round where you pressed) · Backspace takes the last point back · Esc cancels. Its colour, opacity and border in its panel. Only drawn, under the roads: the cars don't see it" },
+  { id: "utility", key: "W", label: "Utility network", icon: <Cable />, hint: "Pick the network (clean water, waste water, gas, electricity) and buried or above ground in the bar, then click the line's points · on a node of that network it joins it there, on one of its lines it makes a tee · double-click or Enter to finish · Backspace takes the last point back · Esc cancels. Only drawn: the cars don't see it" },
   { id: "stop", key: "B", label: "Bus stop", icon: <BusFront />, hint: "Click a lane to put a bus stop there. Add it to a bus line in the Bus lines panel so buses serve it" },
 ];
 const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
@@ -116,7 +123,7 @@ const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
 interface View { cx: number; cy: number; /** px per metre */ scale: number }
 /** a live traffic incident (TomTom), as the `/api/plans/[planId]/traffic` route reports it */
 interface TrafficIncident { id: string; iconCategory: number; magnitudeOfDelay: number; delay: number | null; from: string | null; to: string | null; description: string | null; coordinates: { lat: number; lon: number }[] }
-type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { bump: string } | { zone: string } | { shape: string } | { stop: string };
+type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { bump: string } | { zone: string } | { shape: string } | { utility: string } | { stop: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[]; /** found from a panel (the live graph, ticket #109): lit up strongly, over the cars, with this label */ focus?: string };
 /** a road's or a junction's name as drawn on the map: what it names, and its pill (px on the canvas) */
@@ -124,7 +131,7 @@ type NameLabel = { kind: "road" | "junction" | "in" | "out" | "zone"; id: string
 /** a way in's traffic, or a way out's share of the trips, being edited on its label: its lanes, where (px), the value it had */
 type WayEdit = { kind: "in" | "out"; lanes: string[]; x: number; y: number; value: number };
 /** a point to drag: a lane's, a connector's bend or end (moved along its lane or onto another), a junction's corner */
-type Handle = { kind: "lane" | "bend" | "corner" | "zcorner" | "scorner"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" }
+type Handle = { kind: "lane" | "bend" | "corner" | "zcorner" | "scorner" | "unode"; id: string; i: number } | { kind: "end"; id: string; end: "from" | "to" }
   /** the middle of a selected junction's edge after corner `i`: a corner put in there */
   | { kind: "jmid"; id: string; i: number; p: Pt };
 
@@ -137,6 +144,8 @@ type Draft =
   | { kind: "junction"; pts: Pt[] }
   | { kind: "zone"; pts: Pt[] }
   | { kind: "shape"; pts: Pt[] }
+  /** a utility line being drawn (ticket #280): its points, each a new one, a node of its network or a place on one of its lines */
+  | { kind: "utility"; pts: UtilityDraftPt[] }
   | { kind: "crossing"; a: Pt }
   | { kind: "bump"; a: Pt };
 type Drag =
@@ -157,7 +166,17 @@ const isEmpty = (p: Piece) => !p.lanes.length && !p.connectors.length && !p.junc
  * What turns of a selection: its lanes and junctions. Connectors don't turn by themselves (their ends are on
  * their lanes); the bends of those between two lanes that turn go with them.
  */
-const turning = (p: Piece): Piece => ({ lanes: p.lanes, connectors: [], junctions: p.junctions, ...(p.zones?.length ? { zones: p.zones } : {}), ...(p.shapes?.length ? { shapes: p.shapes } : {}) });
+const turning = (p: Piece): Piece => ({ lanes: p.lanes, connectors: [], junctions: p.junctions, ...(p.zones?.length ? { zones: p.zones } : {}), ...(p.shapes?.length ? { shapes: p.shapes } : {}), ...(p.utilities?.length ? { utilities: p.utilities } : {}) });
+/**
+ * Where a click of the Utility tool puts its point (ticket #280): on a node of its network (joining it), else on one of
+ * its lines (a tee there), else where it is (`p`, snapped as points are)
+ */
+function utilityPointAt(sk: Sketch, p: Pt, px: number, net: UtilityNet): UtilityDraftPt {
+  const n = utilityNodeAt(sk, p, 9 * px, x => x === net);
+  if (n) return { p: { x: n.x, y: n.y }, node: n.id };
+  const l = utilityLineAt(sk, p, 6 * px, x => x === net);
+  return l ? { p: { x: Math.round(l.q.x * 100) / 100, y: Math.round(l.q.y * 100) / 100 }, on: { line: l.line, seg: l.seg } } : { p };
+}
 /** the Shape tool's drag as points (ticket #268): a rectangle from `a` to `b` (`square`: its sides the longer one), or a circle round `a` through `b`; null if too small */
 function shapeBoxOutline(g: { a: Pt; b: Pt; square: boolean; circle: boolean }): Pt[] | null {
   if (g.circle) return dist(g.a, g.b) >= 0.5 ? circleOutline(g.a, g.b) : null;
@@ -207,6 +226,8 @@ function prune(sel: Sel, sk: Sketch): Sel {
   // (a zone deleted, or undone away: let go)
   if (sel.zones?.some(id => !sk.zones?.some(z => z.id === id))) return { ...sel, zones: sel.zones.filter(id => sk.zones?.some(z => z.id === id)) };
   if (sel.shapes?.some(id => !sk.shapes?.some(x => x.id === id))) return { ...sel, shapes: sel.shapes.filter(id => sk.shapes?.some(x => x.id === id)) };
+  if (sel.utilities?.some(id => !sk.utilityLines?.some(x => x.id === id))) return { ...sel, utilities: sel.utilities.filter(id => sk.utilityLines?.some(x => x.id === id)) };
+  if (sel.unode && !sel.utilities?.some(id => sk.utilityLines?.find(x => x.id === id)?.nodes.includes(sel.unode!))) return { ...sel, unode: null };
   if (linkOk && sel.lanes.every(l => ids.has(l)) && sel.connectors.every(c => cids.has(c)) && sel.junctions.every(j => jids.has(j)) && (!sel.road || sk.roads.some(r => r.id === sel.road))) return sel;
   return { lanes: sel.lanes.filter(l => ids.has(l)), connectors: sel.connectors.filter(c => cids.has(c)), junctions: sel.junctions.filter(j => jids.has(j)), road: sk.roads.some(r => r.id === sel.road) ? sel.road : null, link: linkOk ? sel.link : null };
 }
@@ -224,6 +245,7 @@ function exportSketch(sk: Sketch, contents: Map<string, JunctionContents>) {
     // (the zones, with their area: a file to restore from keeps them)
     ...(sk.zones?.length ? { zones: sk.zones.map(z => ({ ...z, area: Math.round(zoneArea(z.outline)) })) } : {}),
     ...(sk.shapes?.length ? { shapes: sk.shapes } : {}),
+    ...(sk.utilityLines?.length ? { utilityNodes: sk.utilityNodes ?? [], utilityLines: sk.utilityLines } : {}),
   };
 }
 
@@ -290,6 +312,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   // (shared with the top bar's layers picker on a V2 plan)
   const [layers] = useSubject(sketchLayers$);
   const setLayers = setSketchLayers;
+  /** (ticket #280) the Utility tool's network and whether what it draws is buried; its network's layer shown when picked */
+  const [util, setUtilState] = useState<{ net: UtilityNet; buried: boolean }>({ net: "water", buried: true });
+  const setUtil = (u: { net: UtilityNet; buried: boolean }) => {
+    setUtilState(u);
+    const lay = layerOfNet(u.net), cur = sketchLayers$.getValue();
+    if (!cur[lay]) setLayers({ ...cur, [lay]: true });
+  };
   // (without what is gone, deleted by an undo for instance)
   const sel = useMemo(() => prune(rawSel, sketch), [rawSel, sketch]);
   // (worked out again only round what changed: a drag on a city-sized sketch stays quick)
@@ -404,7 +433,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     } else if ((stats.t < T.t0 && testSeen.current === T.car) || (stats.t > T.t0 && (!t || t.t0 < T.t0))) setRoute(r => ({ ...r, test: null }));
   }, [stats, sketch, route.result, route.test, setRoute]);
   // what the handlers and the drawing read (kept current after every render)
-  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic: incidents, flow, in3d, route: routeShown });
+  const live = useRef({ sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic: incidents, flow, in3d, route: routeShown, util });
   // live traffic (TomTom): polled over the plan's area every couple of minutes while the switch is on; cleared when it's
   // off or the plan isn't placed on Earth (no sketch.geo, so no area to ask TomTom about)
   useEffect(() => {
@@ -481,6 +510,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     for (const x of sk.bumps ?? []) if (onBump(x, p, 2 * px)) return { bump: x.id };
     // (a bus stop: its marker, beside its lane)
     for (const x of sk.stops ?? []) { const l = laneById(sk, x.lane); if (l && dist(pointAt(l.shape, x.s).p, p) < 6 * px + 1) return { stop: x.id }; }
+    // (a utility line (ticket #280): drawn over the roads, so picked before them, within 5 px; not while its layer is hidden)
+    const ut = sk.utilityLines?.length ? utilityLineAt(sk, p, 5 * px, n => netShown(live.current.layers, n)) : null;
+    if (ut) return { utility: ut.line };
     let best: Hit | null = null, bd = Infinity;
     // (only what is near it; connectors hidden: not picked, but for the selected ones)
     const near = sketchIndex(sk).near(p, 6 * px + 0.5), cs = sk.connectors.filter(c => near.conns.has(c.id));
@@ -534,7 +566,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the selection's point under `p` */
   const handleAt = (p: Pt): Handle | null => {
     const sk = live.current.sketch, s = live.current.sel, tol = 7 / view.current.scale;
-    const find = (kind: "lane" | "bend" | "corner" | "zcorner" | "scorner", id: string, pts: Pt[] | undefined) => { const i = pts?.findIndex(q => dist(p, q) <= tol) ?? -1; return i >= 0 ? { kind, id, i } : null; };
+    const find = (kind: "lane" | "bend" | "corner" | "zcorner" | "scorner" | "unode", id: string, pts: Pt[] | undefined) => { const i = pts?.findIndex(q => dist(p, q) <= tol) ?? -1; return i >= 0 ? { kind, id, i } : null; };
     // (a junction selected: its corners before what is on it, then the "+" in each edge's middle)
     for (const id of s.junctions) { const h = find("corner", id, sk.junctions.find(j => j.id === id)?.outline); if (h) return h; }
     if (s.junctions.length === 1) {
@@ -552,6 +584,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     for (const id of s.lanes) { const l = laneById(sk, id); const h = l?.shape.kind === "line" && !leadOf(sk, id) ? find("lane", id, l.shape.pts) : null; if (h) return h; }
     for (const id of s.zones ?? []) { const h = find("zcorner", id, sk.zones?.find(z => z.id === id)?.outline); if (h) return h; }
     for (const id of s.shapes ?? []) { const h = find("scorner", id, sk.shapes?.find(x => x.id === id)?.outline); if (h) return h; }
+    // (a selected utility line's nodes, ticket #280)
+    for (const id of s.utilities ?? []) { const l = sk.utilityLines?.find(x => x.id === id), ns = new Map((sk.utilityNodes ?? []).map(n => [n.id, n])); const h = l ? find("unode", id, l.nodes.map(n => ns.get(n) ?? { x: NaN, y: NaN })) : null; if (h) return h; }
     return null;
   };
 
@@ -685,7 +719,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const shownBy = useRef<unknown[]>([]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/immutability -- `live` is a deliberate escape hatch (see its declaration): handlers and drawing read it kept current outside React's render cycle
-    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic: incidents, flow, in3d, route: routeShown };
+    live.current = { sketch, sel, tool, contents, selPt, selCorner, selCar, follow, layers, replayT, page, sat, underlay, ulImg, calib, bySpeed, blinkers, carNumbers, traffic: incidents, flow, in3d, route: routeShown, util };
     const now = [sketch, sel, tool, contents, selPt, selCorner, layers, page, sat, underlay, ulImg, calib, bySpeed, in3d, routeShown, flow];
     const changed = now.length !== shownBy.current.length || now.some((x, i) => x !== shownBy.current[i]);
     shownBy.current = now;
@@ -997,6 +1031,18 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     editSketch(k => { const [next, x] = addSketchShape(k, pts, shapeLook(k)); made = x.id; return next; });
     if (made) { setSel({ ...NO_SEL, shapes: [made] }); changeTool("select"); }
   };
+  /** the utility line drawn (ticket #280): its points (one on top of the last left out), joined and teed where they were put; selected */
+  const finishUtility = () => {
+    const d = draft.current;
+    if (d?.kind !== "utility") return;
+    const pts = d.pts.filter((q, i) => i === 0 || dist(q.p, d.pts[i - 1].p) > 0.05 || (q.node && q.node !== d.pts[i - 1].node));
+    draft.current = null;
+    const u = live.current.util, last = [...(live.current.sketch.utilityLines ?? [])].reverse().find(l => l.net === u.net);
+    let made = "";
+    if (pts.length >= 2) editSketch(k => { const [next, l] = addUtilityLine(k, u.net, pts, { buried: u.buried, size: last?.size, count: last?.count }); made = l?.id ?? ""; return next; });
+    if (made) setSel({ ...NO_SEL, utilities: [made] });
+    redraw();
+  };
   const addShape = (shape: LaneShape, bike?: true) => {
     const id = nextId("l", live.current.sketch.lanes.map(l => l.id));
     editSketch(s => addLane(s, bike ? { id, shape, width: BIKE_LANE_WIDTH, bike } : { id, shape, width: LANE_WIDTH }));
@@ -1008,10 +1054,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (s.crossing) { const id = s.crossing; editSketch(sk => deleteCrossing(sk, id)); setSel(NO_SEL); return; }
     if (s.bump) { const id = s.bump; editSketch(sk => deleteBump(sk, id)); setSel(NO_SEL); return; }
     if (s.stop) { const id = s.stop; editSketch(sk => deleteStop(sk, id)); setSel(NO_SEL); return; }
-    // (zones and shapes with it or on their own: one undo step for it all)
-    const zones = s.zones ?? [], shapes = s.shapes ?? [];
-    if (isEmpty(s) && !zones.length && !shapes.length) return;
-    const dropZones = (sk: Sketch) => shapes.reduce((k, id) => deleteShape(k, id), zones.reduce((k, id) => deleteZone(k, id), sk));
+    // (a utility line's node picked, ticket #280: that node, out of each line through it)
+    if (s.unode) { const id = s.unode; editSketch(sk => deleteUtilityNode(sk, id)); setSel({ ...s, unode: null }); return; }
+    // (zones, shapes and utility lines with it or on their own: one undo step for it all)
+    const zones = s.zones ?? [], shapes = s.shapes ?? [], utils = s.utilities ?? [];
+    if (isEmpty(s) && !zones.length && !shapes.length && !utils.length) return;
+    const dropZones = (sk: Sketch) => deleteUtilityLines(shapes.reduce((k, id) => deleteShape(k, id), zones.reduce((k, id) => deleteZone(k, id), sk)), utils);
     // (what named what goes let go too: journeys, turning shares; a road's last lane: the road goes, said)
     const sk0 = live.current.sketch, gone = new Set(s.lanes), roadsGone = s.road ? [] : sk0.roads.filter(r => r.lanes.every(l => gone.has(l))).map(r => r.name);
     editSketch(sk => (isEmpty(s) ? dropZones(sk) : dropDangling(remove(dropZones(sk), s))));
@@ -1050,7 +1098,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   };
   const copySel = () => {
     const sk = live.current.sketch, s0 = live.current.sel;
-    if (!s0.lanes.length && !s0.junctions.length && !s0.zones?.length && !s0.shapes?.length) return false;
+    if (!s0.lanes.length && !s0.junctions.length && !s0.zones?.length && !s0.shapes?.length && !s0.utilities?.length) return false;
     // (a junction comes with what is on it and the whole lanes its connectors join, so it pastes working)
     const lanes = new Set(s0.lanes);
     for (const id of s0.junctions) {
@@ -1088,11 +1136,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   /** the selection copied a little off (leaves what was copied alone) */
   const duplicate = () => {
     const sk = live.current.sketch, s = live.current.sel;
-    if (s.lanes.length || s.junctions.length || s.zones?.length || s.shapes?.length) place(copyPart(sk, s), 4, 4);
+    if (s.lanes.length || s.junctions.length || s.zones?.length || s.shapes?.length || s.utilities?.length) place(copyPart(sk, s), 4, 4);
   };
-  const fit = () => { const sk = live.current.sketch; zoomTo({ lanes: sk.lanes.map(l => l.id), connectors: [], junctions: sk.junctions.map(j => j.id), zones: sk.zones?.map(z => z.id) ?? [], shapes: sk.shapes?.map(x => x.id) ?? [] }); };
+  const fit = () => { const sk = live.current.sketch; zoomTo({ lanes: sk.lanes.map(l => l.id), connectors: [], junctions: sk.junctions.map(j => j.id), zones: sk.zones?.map(z => z.id) ?? [], shapes: sk.shapes?.map(x => x.id) ?? [], utilities: sk.utilityLines?.map(x => x.id) ?? [] }); };
   /** fitted if there is something to fit (an empty sketch: the view left as it is) */
-  const fitContent = () => { const sk = live.current.sketch; if (sk.lanes.length || sk.junctions.length || sk.zones?.length || sk.shapes?.length) fit(); };
+  const fitContent = () => { const sk = live.current.sketch; if (sk.lanes.length || sk.junctions.length || sk.zones?.length || sk.shapes?.length || sk.utilityLines?.length) fit(); };
   /** zoomed in (f > 1) or out about the middle of the view, within the wheel's limits */
   const zoomBy = (f: number) => { const v = view.current; view.current = { ...v, scale: Math.min(80, Math.max(0.3, v.scale * f)) }; redraw(); };
   /** the view fitted round a piece of the sketch */
@@ -1159,6 +1207,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       case "bump": { const x = sk.bumps?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, bump: x.id }); centerOnPts([x.a, x.b]); } break; }
       case "zone": { const z = sk.zones?.find(y => y.id === to.id); if (z) { setSel({ ...NO_SEL, zones: [z.id] }); centerOnPts(z.outline); } break; }
       case "shape": { const x = sk.shapes?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, shapes: [x.id] }); centerOnPts(x.outline); } break; }
+      case "utility": { const x = sk.utilityLines?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, utilities: [x.id] }); centerOnPts(utilityPoints(sk, [x.id])); setLayers({ ...sketchLayers$.getValue(), [layerOfNet(x.net)]: true }); } break; }
       case "stop": { const x = sk.stops?.find(y => y.id === to.id); const l = x && laneById(sk, x.lane); if (x && l) { setSel({ ...NO_SEL, stop: x.id }); centerOnPts([pointAt(l.shape, x.s).p]); } break; }
     }
     redraw();
@@ -1221,6 +1270,20 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       editSketch(k => ({ ...k, shapes: (k.shapes ?? []).map(x => (x.id === h.id ? removeShapePoint(x, h.i) : x)) }));
       return true;
     }
+    // (a selected utility line's node: taken out of it (it keeps two); on the line between them, a node put in, ticket #280)
+    if (h?.kind === "unode") {
+      if ((sk.utilityLines?.find(x => x.id === h.id)?.nodes.length ?? 0) <= 2) toast("A utility line keeps two nodes at least", { description: "Delete the line instead (Del)." });
+      else { editSketch(k => removeNodeFromLine(k, h.id, h.i)); setSel({ ...s, unode: null }); }
+      return true;
+    }
+    for (const id of s.utilities ?? []) {
+      const at = utilityLineAt(sk, p, 6 / view.current.scale, undefined, id);
+      if (!at) continue;
+      let made: string | null = null;
+      editSketch(k => { const [next, n] = insertUtilityNode(k, id, at.seg, snap(at.q).p); made = n; return next; });
+      if (made) setSel({ ...s, unode: made });
+      return true;
+    }
     const hit = pick(p), q = snap(p).p;
     // (on a selected line lane: a point added there)
     if (hit && "lane" in hit && s.lanes.includes(hit.lane) && !leadOf(sk, hit.lane)) {
@@ -1267,7 +1330,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
 
   /** an agent's select/goTo: { kind, id }, checked (a car's id a number, the others' a string) */
   const target = (a: Record<string, unknown>): SearchTarget => {
-    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "bump", "zone", "shape", "car"];
+    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "bump", "zone", "shape", "utility", "car"];
     if (!kinds.includes(kind)) throw new Error(`kind: one of ${kinds.join(", ")}`);
     const sk = live.current.sketch;
     if (kind === "car") {
@@ -1279,7 +1342,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const id = argOf(a, "id", "string", true)!;
     const there = kind === "road" ? sk.roads.some(x => x.id === id) : kind === "lane" ? sk.lanes.some(x => x.id === id) : kind === "connector" ? sk.connectors.some(x => x.id === id)
       : kind === "junction" ? sk.junctions.some(x => x.id === id) : kind === "link" ? (sk.links ?? []).some(x => x.id === id)
-      : kind === "zone" ? (sk.zones ?? []).some(x => x.id === id) : kind === "shape" ? (sk.shapes ?? []).some(x => x.id === id) : kind === "bump" ? (sk.bumps ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
+      : kind === "zone" ? (sk.zones ?? []).some(x => x.id === id) : kind === "shape" ? (sk.shapes ?? []).some(x => x.id === id) : kind === "utility" ? (sk.utilityLines ?? []).some(x => x.id === id) : kind === "bump" ? (sk.bumps ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
     if (!there) throw new Error(`no ${kind} ${id}`);
     return { kind: kind as Exclude<SearchTarget["kind"], "car">, id };
   };
@@ -1465,6 +1528,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           setSelCorner({ junction: h.id, i: h.i + 1 });
           return;
         }
+        // (a selected utility line's node: picked (its row in the panel), and dragged)
+        if (h?.kind === "unode") { const nid = sk.utilityLines?.find(x => x.id === h.id)?.nodes[h.i]; if (nid && nid !== s.unode) setSel({ ...s, unode: nid }); }
         if (h) { drag.current = { kind: "handle", base: sk, h }; return; }
         // (a name: what it names, as a click on it would pick it; a road's, the whole road, as a double-click on a lane of it)
         const lab = labelAt(e), road = lab?.kind === "road" ? sk.roads.find(r => r.id === lab.id) : null;
@@ -1515,6 +1580,14 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           drag.current = { kind: "move", base: sk, from: snap(raw).p, piece: zs };
           return;
         }
+        // (a utility line, ticket #280: selected (Shift: added or taken off), dragged whole with its nodes)
+        if ("utility" in hit) {
+          if (e.shiftKey) { setSel({ ...s, unode: null, utilities: toggle(s.utilities ?? [], hit.utility) }); return; }
+          const us = s.utilities?.includes(hit.utility) ? s : { ...NO_SEL, utilities: [hit.utility] };
+          if (us !== s) setSel(us);
+          drag.current = { kind: "move", base: sk, from: snap(raw).p, piece: us };
+          return;
+        }
         // (a shape: selected on its own, dragged whole)
         if ("shape" in hit) {
           const fs = s.shapes?.includes(hit.shape) ? s : { ...NO_SEL, shapes: [hit.shape] };
@@ -1551,6 +1624,12 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           description: linked ? "Linked where it was cut: move a piece and the road carries on between them." : "The pieces aren't joined: Shift-click to cut and keep them linked, or link them later (select both roads' lanes, Link roads).",
         });
         return;
+      }
+      case "utility": {
+        // (on a node of the network: joined there; on one of its lines: a tee; else a new point, snapped as points are)
+        const q = utilityPointAt(sk, raw, 1 / view.current.scale, util.net), pt = q.node || q.on ? q : { p: snap(raw).p };
+        if (d?.kind === "utility") d.pts.push(pt); else draft.current = { kind: "utility", pts: [pt] };
+        break;
       }
       case "lane":
       case "bike": {
@@ -1700,6 +1779,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     else if ("bump" in hit) setSel({ ...NO_SEL, bump: hit.bump });
     else if ("stop" in hit) setSel({ ...NO_SEL, stop: hit.stop });
     else if ("shape" in hit) setSel({ ...NO_SEL, shapes: [hit.shape] });
+    else if ("utility" in hit) setSel({ ...NO_SEL, utilities: [hit.utility] });
     else setSel({ ...NO_SEL, zones: [hit.zone] });
     setSelCar(null);
     return true;
@@ -1765,6 +1845,13 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         dragShow({ ...b, zones: (b.zones ?? []).map(z => (z.id === id ? moveZoneCorner(z, i, snap(raw).p) : z)) });
       } else if (kind === "scorner") {
         dragShow({ ...b, shapes: (b.shapes ?? []).map(x => (x.id === id ? moveShapePoint(x, i, snap(raw).p) : x)) });
+      } else if (kind === "unode") {
+        // (a utility node: to where it is dragged, or onto another node of its network near the pointer, joined there when let go)
+        const nid = b.utilityLines?.find(x => x.id === id)?.nodes[i], me = b.utilityNodes?.find(x => x.id === nid);
+        if (me) {
+          const tol = 9 / v.scale, onto = (b.utilityNodes ?? []).find(n => n.id !== me.id && n.net === me.net && dist(n, raw) <= tol);
+          dragShow(moveUtilityNode(b, me.id, onto ? { x: onto.x, y: onto.y } : snap(raw).p));
+        }
       } else {
         dragShow({ ...b, junctions: b.junctions.map(j => (j.id === id ? asDrawn({ ...j, outline: j.outline.map((x, k) => (k === i ? snap(raw).p : x)) }) : j)) });
       }
@@ -1834,7 +1921,17 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     drag.current = null;
     if (hand !== "") setHand(space.current ? "grab" : "");
     // (the drag's result made the plan's sketch: undo records it just below)
-    if (dragSk.current) { const sk = dragSk.current; dragSk.current = null; store.show(sk); }
+    if (dragSk.current) {
+      let sk = dragSk.current;
+      dragSk.current = null;
+      // (a utility node let go on another of its network: the two made one, ticket #280)
+      if (g?.kind === "handle" && g.h.kind === "unode") {
+        const h = g.h, nid = sk.utilityLines?.find(x => x.id === h.id)?.nodes[h.i], me = sk.utilityNodes?.find(x => x.id === nid);
+        const onto = me && sk.utilityNodes?.find(n => n.id !== me.id && n.net === me.net && dist(n, me) < 0.01);
+        if (me && onto) { sk = mergeUtilityNodes(sk, onto.id, me.id); setSel(x => ({ ...x, unode: onto.id })); }
+      }
+      store.show(sk);
+    }
     // (the Shape tool's press: dragged, a rectangle or a circle (none if too small); let go where it was, a shape's first point)
     if (g?.kind === "shapeBox") {
       if (!g.moved) draft.current = { kind: "shape", pts: [g.a] };
@@ -1854,9 +1951,11 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         lanes: sk.lanes.filter(l => inside(samples(l.shape, 2))).map(l => l.id),
         connectors: sk.connectors.filter(c => inside(connectorPts(sk, c))).map(c => c.id),
         junctions: sk.junctions.filter(j => inside(j.outline)).map(j => j.id),
+        // (utility lines on a layer shown, ticket #280)
+        utilities: (sk.utilityLines ?? []).filter(l => netShown(live.current.layers, l.net) && inside(utilityPoints(sk, [l.id]))).map(l => l.id),
       };
       const merge = (a: string[], b: string[]) => [...new Set([...a, ...b])];
-      setSel(s => (g.add ? { road: null, lanes: merge(s.lanes, got.lanes), connectors: merge(s.connectors, got.connectors), junctions: merge(s.junctions, got.junctions) } : { ...got, road: null }));
+      setSel(s => (g.add ? { road: null, lanes: merge(s.lanes, got.lanes), connectors: merge(s.connectors, got.connectors), junctions: merge(s.junctions, got.junctions), utilities: merge(s.utilities ?? [], got.utilities ?? []) } : { ...got, road: null }));
     }
     redraw();
   };
@@ -1866,6 +1965,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (tool === "junction") { finishJunction(); return; }
     if (tool === "zone") { finishZone(); return; }
     if (tool === "shape") { finishShape(); return; }
+    if (tool === "utility") { finishUtility(); return; }
     if (tool !== "select") return;
     const p = toWorld(e);
     if (editPoints(p)) return;
@@ -1956,7 +2056,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "escape") {
       // (a menu or dialog took it already)
       if (e.defaultPrevented) return;
-      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.bump && !live.current.sel.stop && !live.current.sel.zones?.length && !live.current.sel.shapes?.length && live.current.selCar === null;
+      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.bump && !live.current.sel.stop && !live.current.sel.zones?.length && !live.current.sel.shapes?.length && !live.current.sel.utilities?.length && live.current.selCar === null;
       if (d) draft.current = null;
       // (the Sketch window, a modal (T184), one thing a press: the selection, then a drawing tool (back to Select), then
       // the window closed)
@@ -1968,8 +2068,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       redraw();
       return;
     }
-    if (k === "enter") { finishLane(); finishJunction(); finishZone(); finishShape(); return; }
-    if (k === "backspace" && d && (d.kind === "lane" || d.kind === "junction" || d.kind === "zone" || d.kind === "shape" || d.kind === "connector")) {
+    if (k === "enter") { finishLane(); finishJunction(); finishZone(); finishShape(); finishUtility(); return; }
+    if (k === "backspace" && d && (d.kind === "lane" || d.kind === "junction" || d.kind === "zone" || d.kind === "shape" || d.kind === "utility" || d.kind === "connector")) {
       e.preventDefault();
       if (d.kind === "connector") { if (!d.via.pop()) draft.current = null; } else { d.pts.pop(); if (!d.pts.length) draft.current = null; }
       redraw();
@@ -2016,6 +2116,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
   const zoneSel = sel.zones?.length === 1 && isEmpty(sel) ? sketch.zones?.find(z => z.id === sel.zones![0]) ?? null : null;
   // (a shape selected on its own: its panel, ticket #268)
   const shapeSel = sel.shapes?.length === 1 && isEmpty(sel) && !sel.zones?.length ? sketch.shapes?.find(x => x.id === sel.shapes![0]) ?? null : null;
+  // (utility lines selected on their own: their panel, ticket #280)
+  const utilSel = isEmpty(sel) && !sel.zones?.length && !sel.shapes?.length ? (sel.utilities ?? []).flatMap(id => sketch.utilityLines?.filter(x => x.id === id) ?? []) : [];
   /** the sketch tidied (see sketch-tidy.ts), and what was done told */
   const tidy = () => {
     let rep: TidyReport | null = null;
@@ -2066,6 +2168,18 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         <ToggleGroup type="single" value={tool} onValueChange={v => v && changeTool(v as Tool)} aria-label="Drawing tool" className="ml-2">
           {TOOLS.map(t => <ToggleGroupItem key={t.id} value={t.id} aria-label={tip(t)} title={in3d && t.id !== "select" ? "Not in 3D: back to the plan to draw" : tip(t)} disabled={in3d && t.id !== "select"} className="h-7 px-2">{t.icon}</ToggleGroupItem>)}
         </ToggleGroup>
+        {/* (the Utility tool's options, ticket #280: the network drawn, and buried or above ground) */}
+        {tool === "utility" && !in3d && (
+          <div className="flex items-center gap-0.5 rounded-md border px-1 py-0.5 text-xs" role="toolbar" aria-label="Utility network to draw">
+            {UTILITY_NETS.map(n => (
+              <Button key={n} size="sm" variant={util.net === n ? "secondary" : "ghost"} className="h-6 px-1.5 text-xs" aria-pressed={util.net === n} title={`Draw ${NET_INFO[n].label.toLowerCase()} lines`}
+                onClick={() => { draft.current = null; setUtil({ ...util, net: n }); redraw(); }}><NetDot net={n} />{NET_INFO[n].short}</Button>
+            ))}
+            <label className="ml-1 flex items-center gap-1.5 pr-1" title="Buried: under the ground (at the network's usual depth); off: above it (water and gas on the ground, power lines up on poles)">
+              <Switch className="scale-75" checked={util.buried} onCheckedChange={v => { setUtil({ ...util, buried: v }); redraw(); }} aria-label="Buried" />Buried
+            </label>
+          </div>
+        )}
         <div className="ml-auto flex items-center gap-0.5">
           {/* (the Sketch window over the plan: the page's memory here too, the plan's header being under it) */}
           {!page && <span className="mr-2"><MemoryGauge /></span>}
@@ -2288,6 +2402,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <ZonePanel sketch={sketch} zone={zoneSel} readOnly={readOnly} onDelete={deleteSel} />
           ) : shapeSel ? (
             <ShapePanel sketch={sketch} shape={shapeSel} readOnly={readOnly} onDelete={deleteSel} />
+          ) : utilSel.length ? (
+            <UtilityPanel sketch={sketch} lines={utilSel} node={sel.unode ?? null} readOnly={readOnly} onPickNode={id => { setSel({ ...sel, unode: id }); redraw(); }}
+              onDelete={() => { const ids = utilSel.map(l => l.id); editSketch(k => deleteUtilityLines(k, ids)); setSel(NO_SEL); }} />
           ) : sel.crossing && sketch.crossings?.some(x => x.id === sel.crossing) ? (
             <CrossingPanel x={sketch.crossings.find(x => x.id === sel.crossing)!} readOnly={readOnly} onDelete={deleteSel}
               live={stats ? peds.find(q => q.id === sel.crossing) ?? null : null} />
@@ -3769,6 +3886,22 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
           note: formatArea(shapeArea(x)),
         }))}
       </>}
+      {/* utility networks (ticket #280): each network's lines */}
+      {UTILITY_NETS.map(n => {
+        const ls = (sketch.utilityLines ?? []).filter(l => l.net === n);
+        if (!ls.length) return null;
+        return (
+          <div key={n}>
+            <div className="mt-2 border-t pt-1" />
+            {heading(`h:util:${n}`, NET_INFO[n].label, ls.length)}
+            {open(`h:util:${n}`) && ls.map(x => row({
+              key: `utility:${x.id}`, depth: 0, on: !!sel.utilities?.includes(x.id), hit: { utility: x.id }, sel: { ...NO_SEL, utilities: [x.id] }, zoom: { ...piece({}), utilities: [x.id] },
+              label: <><NetDot net={x.net} />{x.name}</>,
+              note: `${Math.round(utilityLength(sketch, x).plan)} m${x.buried ? " · buried" : ""}`,
+            }))}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -3810,6 +3943,8 @@ interface PaintState {
   peds: PedView[] | null;
   /** the layers shown */
   layers: Layers;
+  /** (ticket #280) the Utility tool's network, and buried or not */
+  util: { net: UtilityNet; buried: boolean };
   /** TomTom's roads' speeds matched onto the lanes (the "Live traffic" layer, with the incidents; null: none fetched) */
   flow: TrafficMatch | null;
   /** what each junction takes in */
@@ -4472,6 +4607,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
       }
     }
   }
+  // utility networks (ticket #280): over the roads (buried ones dashed), under the cars; each on its own layer
+  if (S && sk.utilityLines?.length) paintUtilities(main, sk, st.layers, px, s.utilities ?? [], st.hover && "utility" in st.hover ? st.hover.utility : null, s.unode ?? null, col.sel);
   // the zebras' pedestrians: waiting at the first kerb, crossing to the other, three abreast
   const crossingById = new Map((sk.crossings ?? []).map(x => [x.id, x]));
   for (const q of D && st.layers.cars ? st.peds ?? [] : []) {
@@ -4636,6 +4773,16 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   for (const id of s.zones ?? []) sk.zones?.find(z => z.id === id)?.outline.forEach(p => square(p));
   // a selected shape's points
   for (const id of s.shapes ?? []) sk.shapes?.find(x => x.id === id)?.outline.forEach(p => square(p));
+  // a selected utility line's nodes (ticket #280), the one picked filled
+  if (s.utilities?.length) {
+    const ns = new Map((sk.utilityNodes ?? []).map(n => [n.id, n]));
+    for (const id of s.utilities) for (const nid of sk.utilityLines?.find(x => x.id === id)?.nodes ?? []) {
+      const n = ns.get(nid);
+      if (!n) continue;
+      square(n);
+      if (nid === s.unode) { ctx.fillStyle = col.sel; ctx.fillRect(n.x - 3.5 * px, n.y - 3.5 * px, 7 * px, 7 * px); }
+    }
+  }
   for (const id of s.connectors) {
     const cn = sk.connectors.find(c => c.id === id);
     for (const p of cn?.via ?? []) {
@@ -4681,6 +4828,8 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     paintShapeDraft(ctx, d.pts, cur?.p ?? null, shapeLook(sk).color, px);
     d.pts.forEach(square);
     if (cur && d.pts.length >= 3 && dist(cur.p, d.pts[0]) <= 10 * px) { ctx.beginPath(); ctx.arc(d.pts[0].x, d.pts[0].y, 7 * px, 0, Math.PI * 2); ctx.strokeStyle = col.sel; ctx.lineWidth = 1.5 * px; ctx.setLineDash([]); ctx.stroke(); }
+  } else if (d?.kind === "utility") {
+    paintUtilityDraft(ctx, d.pts, cur ? utilityPointAt(sk, cur.p, px, st.util.net) : null, st.util.net, st.util.buried, px);
   } else if (d?.kind === "crossing") {
     const b = cur?.p ?? d.a;
     if (dist(d.a, b) > 0.1) {
@@ -4729,7 +4878,10 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
   if (box) paintShapeDraft(ctx, box, null, shapeLook(sk).color, px, true);
   ctx.setLineDash([]);
   if (d && "c" in d) dot(d.c, 3 * px, col.sel);
-  if (cur && (tool === "lane" || tool === "bike" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "zone" || tool === "shape" || tool === "crossing" || tool === "bump")) {
+  // (the Utility tool over a node or a line of its network: where it would join, ringed in the network's colour)
+  const uq = cur && tool === "utility" && !d ? utilityPointAt(sk, cur.p, px, st.util.net) : null;
+  if (uq && (uq.node || uq.on)) { ctx.beginPath(); ctx.arc(uq.p.x, uq.p.y, 6 * px, 0, Math.PI * 2); ctx.strokeStyle = NET_INFO[st.util.net].color; ctx.lineWidth = 2 * px; ctx.setLineDash([]); ctx.stroke(); }
+  if (cur && (tool === "lane" || tool === "bike" || tool === "arc" || tool === "circle" || tool === "junction" || tool === "zone" || tool === "shape" || tool === "utility" || tool === "crossing" || tool === "bump")) {
     ctx.beginPath(); ctx.arc(cur.p.x, cur.p.y, (cur.snapped ? 5 : 3) * px, 0, Math.PI * 2);
     ctx.strokeStyle = col.sel; ctx.fillStyle = col.sel; ctx.lineWidth = 1.5 * px; if (cur.snapped) ctx.stroke(); else ctx.fill();
   }

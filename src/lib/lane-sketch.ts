@@ -11,6 +11,7 @@
 import { sanitizeTuning, type Tuning } from "./sketch-tuning";
 import { copyZones, pasteZones, sanitizeZones, type SketchZone } from "./sketch-zones";
 import { copyShapes, pasteShapes, sanitizeShapes, type SketchShape } from "./sketch-shapes";
+import { copyUtilities, pasteUtilities, sanitizeUtilities, transformUtilities, utilityPoints, type UtilityLine, type UtilityNode } from "./sketch-utilities";
 import { sanitizeBumps, type SketchBump } from "./sketch-bumps";
 import { sanitizeTerrain, terrainAt, terrainFits, type SketchTerrain } from "./terrain";
 import { buildingsFit, sanitizeBuildings, type SketchBuildings } from "./sketch-buildings";
@@ -192,6 +193,12 @@ export interface Sketch {
   zones?: SketchZone[];
   /** (ticket #268) shapes drawn and coloured (a park, a building, water; see sketch-shapes.ts): only drawn, under the roads; the cars don't see them */
   shapes?: SketchShape[];
+  /**
+   * (ticket #280) utility networks (clean water, waste water, gas, electricity; see sketch-utilities.ts): their nodes, each a
+   * point in 3D (z over the ground), and their lines (pipes, cables) through them. Only drawn: the cars don't see them
+   */
+  utilityNodes?: UtilityNode[];
+  utilityLines?: UtilityLine[];
   /** a V2 plan's ideas sketched apart (its Sketch window, as V1's): saved with the plan, never part of it; the sketch open */
   scratch?: Sketch;
   /**
@@ -389,8 +396,8 @@ export function deleteCrossing(sk: Sketch, id: string): Sketch {
 }
 /** what a junction's surface takes in, and the roads its connectors join */
 export interface JunctionContents { lanes: string[]; connectors: string[]; roads: string[] }
-/** some of a sketch, by ids (what is selected, copied, moved…); `zones` and `shapes` only when some are in it */
-export interface Piece { lanes: string[]; connectors: string[]; junctions: string[]; zones?: string[]; shapes?: string[] }
+/** some of a sketch, by ids (what is selected, copied, moved…); `zones`, `shapes` and `utilities` (utility lines, ticket #280) only when some are in it */
+export interface Piece { lanes: string[]; connectors: string[]; junctions: string[]; zones?: string[]; shapes?: string[]; utilities?: string[] }
 
 export const emptySketch = (): Sketch => ({ lanes: [], connectors: [], roads: [], junctions: [] });
 export const LANE_WIDTH = 3.5;
@@ -731,8 +738,10 @@ export const rotation = (o: Pt, a: number): Transform => ({ pt: rotatePt(o, a), 
 /** a piece's lanes, junction surfaces and connector bends moved (the bends of connectors between two of its lanes too) */
 export function transformPiece(sk: Sketch, piece: Piece, t: Transform): Sketch {
   const lanes = new Set(piece.lanes), conns = new Set(piece.connectors), js = new Set(piece.junctions);
+  // (its utility lines (ticket #280): their nodes moved, each once, a node shared with a line outside it too)
+  const base = piece.utilities?.length ? transformUtilities(sk, piece.utilities, t.pt) : sk;
   return {
-    ...sk,
+    ...base,
     lanes: sk.lanes.map(l => (lanes.has(l.id) ? { ...l, shape: t.shape(l.shape) } : l)),
     connectors: sk.connectors.map(c => (c.via?.length && (conns.has(c.id) || (lanes.has(c.from.lane) && lanes.has(c.to.lane))) ? { ...c, via: c.via.map(t.pt) } : c)),
     junctions: sk.junctions.map(j => (js.has(j.id) ? { ...j, outline: j.outline.map(t.pt) } : j)),
@@ -750,6 +759,7 @@ export function piecePoints(sk: Sketch, piece: Piece): Pt[] {
   for (const id of piece.junctions) out.push(...(sk.junctions.find(j => j.id === id)?.outline ?? []));
   for (const id of piece.zones ?? []) out.push(...(sk.zones?.find(z => z.id === id)?.outline ?? []));
   for (const id of piece.shapes ?? []) out.push(...(sk.shapes?.find(x => x.id === id)?.outline ?? []));
+  if (piece.utilities?.length) out.push(...utilityPoints(sk, piece.utilities));
   return out;
 }
 export function boundsOfPts(pts: Pt[]) {
@@ -768,7 +778,7 @@ export function nextId(prefix: string, ids: string[]) {
 
 /** a piece to paste: its lanes with every connector between them and their roads (only the lanes copied), its junctions, zones and shapes */
 export function copyPart(sk: Sketch, piece: Piece): Sketch {
-  const set = new Set(piece.lanes), js = new Set(piece.junctions), zones = copyZones(sk, piece.zones ?? []), shapes = copyShapes(sk, piece.shapes ?? []);
+  const set = new Set(piece.lanes), js = new Set(piece.junctions), zones = copyZones(sk, piece.zones ?? []), shapes = copyShapes(sk, piece.shapes ?? []), util = copyUtilities(sk, piece.utilities ?? []);
   return {
     lanes: sk.lanes.filter(l => set.has(l.id)),
     connectors: sk.connectors.filter(c => set.has(c.from.lane) && set.has(c.to.lane)),
@@ -776,6 +786,7 @@ export function copyPart(sk: Sketch, piece: Piece): Sketch {
     junctions: sk.junctions.filter(j => js.has(j.id)),
     ...(zones.length ? { zones } : {}),
     ...(shapes.length ? { shapes } : {}),
+    ...(util.lines.length ? { utilityNodes: util.nodes, utilityLines: util.lines } : {}),
   };
 }
 
@@ -806,10 +817,10 @@ export function pastePart(sk: Sketch, part: Sketch, dx: number, dy: number): { s
   const splits = (ss: JunctionSplit[]) => ss.flatMap(x => { const from = way(x.from); if (!from) return []; const shares = Object.fromEntries(Object.entries(x.shares).flatMap(([k, v]) => { const w = way(k); return w ? [[w, v]] : []; })); return [{ from, shares }]; });
   const junctions = part.junctions.map(j => { const sp = j.splits ? splits(j.splits) : []; return { id: fresh("j"), name: copyName(j.name), outline: j.outline.map(t.pt), ...(j.curved ? { curved: [...j.curved] } : {}), ...(j.shape ? { shape: j.shape } : {}), ...(j.smooth ? { smooth: j.smooth } : {}), ...(j.fill ? { fill: true as const } : {}), ...(j.lights ? { lights: lights(j.lights) } : {}), ...(sp.length ? { splits: sp } : {}) }; });
   const withLanes: Sketch = { ...sk, lanes: [...sk.lanes, ...lanes], connectors: [...sk.connectors, ...connectors], roads: [...sk.roads, ...roads], junctions: [...sk.junctions, ...junctions] };
-  const z = pasteZones(withLanes, part.zones ?? [], dx, dy), f = pasteShapes(z.sketch, part.shapes ?? [], dx, dy);
+  const z = pasteZones(withLanes, part.zones ?? [], dx, dy), f = pasteShapes(z.sketch, part.shapes ?? [], dx, dy), u = pasteUtilities(f.sketch, { nodes: part.utilityNodes, lines: part.utilityLines }, dx, dy);
   return {
-    sketch: f.sketch,
-    piece: { lanes: lanes.map(l => l.id), connectors: connectors.map(c => c.id), junctions: junctions.map(j => j.id), ...(z.ids.length ? { zones: z.ids } : {}), ...(f.ids.length ? { shapes: f.ids } : {}) },
+    sketch: u.sketch,
+    piece: { lanes: lanes.map(l => l.id), connectors: connectors.map(c => c.id), junctions: junctions.map(j => j.id), ...(z.ids.length ? { zones: z.ids } : {}), ...(f.ids.length ? { shapes: f.ids } : {}), ...(u.ids.length ? { utilities: u.ids } : {}) },
   };
 }
 
@@ -2937,10 +2948,10 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const sketchOpen = sketches.length ? (sketches.some(x => x.id === o.sketchOpen) ? (o.sketchOpen as string) : sketches[0].id) : null;
   if (sketchOpen) { const k = sketches.findIndex(x => x.id === sketchOpen); if (sketches[k].sketch) { const { sketch: _, ...rest } = sketches[k]; sketches[k] = rest; } }
   // (the zones drawn: a sketch with only zones is a sketch still)
-  const zones = sanitizeZones(o.zones), shapes = sanitizeShapes(o.shapes);
-  const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.bumps?.length || sc.zones?.length || sc.shapes?.length) ? sc : null;
-  if (!lanes.length && !junctions.length && !geo && !crossings.length && !bumps.length && !zones.length && !shapes.length && !scratch && !sketches.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(terrain ? { terrain } : {}), ...(buildings ? { buildings } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(matrices.length ? { matrices } : {}), ...(matrixOn ? { matrixOn } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(shapes.length ? { shapes } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
+  const zones = sanitizeZones(o.zones), shapes = sanitizeShapes(o.shapes), util = sanitizeUtilities(o.utilityNodes, o.utilityLines);
+  const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.bumps?.length || sc.zones?.length || sc.shapes?.length || sc.utilityLines?.length) ? sc : null;
+  if (!lanes.length && !junctions.length && !geo && !crossings.length && !bumps.length && !zones.length && !shapes.length && !util.lines.length && !scratch && !sketches.length) return null;
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(terrain ? { terrain } : {}), ...(buildings ? { buildings } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(matrices.length ? { matrices } : {}), ...(matrixOn ? { matrixOn } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(shapes.length ? { shapes } : {}), ...(util.nodes.length ? { utilityNodes: util.nodes } : {}), ...(util.lines.length ? { utilityLines: util.lines } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
 }
 
 // ---------------------------------------------------------------- locks (ticket #93)

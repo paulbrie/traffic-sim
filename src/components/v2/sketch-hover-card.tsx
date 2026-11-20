@@ -11,10 +11,11 @@ import { connectorPts, groundAt, hasHeights, isFullCircle, laneById, laneLength,
 import type { SimStats, SketchSim } from "@/lib/lane-sketch-sim";
 import { formatArea, zoneArea } from "@/lib/sketch-zones";
 import { shapeArea, shapeOpacity } from "@/lib/sketch-shapes";
+import { lineCount, lineLength, NET_INFO, sizeLabel } from "@/lib/sketch-utilities";
 import { BUMP_KINDS, bumpHeavySpeed, bumpSpeed } from "@/lib/sketch-bumps";
 import type { LaneTraffic, TrafficMatch } from "@/lib/tomtom";
 
-export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { bump: string } | { link: string } | { zone: string } | { shape: string } | { car: number };
+export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { bump: string } | { link: string } | { zone: string } | { shape: string } | { utility: string } | { car: number };
 export interface HoverInfo { title: string; sub?: string; rows: [string, string][] }
 
 const m = (x: number) => (x >= 1000 ? `${(x / 1000).toFixed(2)} km` : `${x.toFixed(x < 10 ? 1 : 0)} m`);
@@ -113,6 +114,12 @@ export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, J
   if ("shape" in hit) {
     const x = sk.shapes?.find(y => y.id === hit.shape);
     return x ? { title: x.name, sub: "Only drawn: the cars don't see it", rows: [["Area", formatArea(shapeArea(x))], ["Colour", `${x.color}${shapeOpacity(x) < 1 ? `, ${Math.round(shapeOpacity(x) * 100)}%` : ""}`]] } : null;
+  }
+  if ("utility" in hit) {
+    const x = sk.utilityLines?.find(y => y.id === hit.utility);
+    if (!x) return null;
+    const len = lineLength(sk, x), kind = NET_INFO[x.net].sizeUnit === "kV" ? "cables" : "pipes";
+    return { title: x.name, sub: `${NET_INFO[x.net].label} · ${x.buried ? "buried" : "above ground"} · only drawn: the cars don't see it`, rows: [["Size", `${sizeLabel(x)}${lineCount(x) > 1 ? `, ${lineCount(x)} ${kind}` : ""}`], ["Length", `${m(len.plan)} (3D ${m(len.real)})`], ["Nodes", String(x.nodes.length)]] };
   }
   if ("link" in hit) {
     const k = sk.links?.find(x => x.id === hit.link);

@@ -4,7 +4,7 @@
  */
 import { Subject } from "subjecto";
 
-export type SketchLayer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names" | "demand" | "satellite" | "image" | "zones" | "traffic" | "buildings" | "shapes";
+export type SketchLayer = "grid" | "surfaces" | "markings" | "lanes" | "connectors" | "signs" | "cars" | "names" | "demand" | "satellite" | "image" | "zones" | "traffic" | "buildings" | "shapes" | "water" | "gas" | "power";
 export type SketchLayers = Record<SketchLayer, boolean>;
 /** (`page`: only on a V2 plan's full-page editor) */
 export const SKETCH_LAYERS: { id: SketchLayer; label: string; hint: string; page?: boolean }[] = [
@@ -23,6 +23,10 @@ export const SKETCH_LAYERS: { id: SketchLayer; label: string; hint: string; page
   // (last: the digit keys go to the layers above, in this order)
   { id: "zones", label: "Zones", hint: "The areas drawn and labelled on the plan (neighbourhoods, zones)" },
   { id: "shapes", label: "Shapes", hint: "The shapes drawn and coloured on the plan (parks, buildings, water…), under the roads" },
+  // (ticket #280: the utility networks, each its own layer; see sketch-utilities.ts)
+  { id: "water", label: "Water network", hint: "Clean water (blue) and waste water (green) pipes and their nodes; buried ones dashed (in 3D under the ground, seen through it)" },
+  { id: "gas", label: "Gas network", hint: "Gas pipes (yellow) and their nodes; buried ones dashed (in 3D under the ground, seen through it)" },
+  { id: "power", label: "Electricity network", hint: "Power lines and cables (red) and their nodes; buried ones dashed, overhead ones on poles in 3D" },
   { id: "buildings", label: "Buildings", hint: "OpenStreetMap's buildings round the plan, once fetched (Background): in 3D, and their footprints on the plan", page: true },
 ];
 export const ALL_SKETCH_LAYERS = Object.fromEntries(SKETCH_LAYERS.map(l => [l.id, true])) as SketchLayers;
