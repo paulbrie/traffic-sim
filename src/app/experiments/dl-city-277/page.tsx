@@ -58,6 +58,13 @@ export default async function DlCityExperiment() {
               </a>
             </Button>
           )}
+          {report !== null && (
+            <Button asChild variant="outline">
+              <a href={`${base}/report?download`} download="dl-city-277-report.html">
+                <Download /> Download the report ({(report / 1e6).toFixed(1)} MB)
+              </a>
+            </Button>
+          )}
           <Button asChild variant="outline">
             <Link href={`/cities/${CITY_ID}`}>
               <Map /> The city and its four plans
