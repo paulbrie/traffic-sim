@@ -11,6 +11,7 @@
 import { sanitizeTuning, type Tuning } from "./sketch-tuning";
 import { copyZones, pasteZones, sanitizeZones, type SketchZone } from "./sketch-zones";
 import { copyShapes, pasteShapes, sanitizeShapes, type SketchShape } from "./sketch-shapes";
+import { sanitizeMarks, type SketchMark } from "./sketch-marks";
 import { copyUtilities, pasteUtilities, sanitizeUtilities, transformUtilities, utilityPoints, type UtilityLine, type UtilityNode } from "./sketch-utilities";
 import { sanitizeBumps, type SketchBump } from "./sketch-bumps";
 import { sanitizeTerrain, terrainAt, terrainFits, type SketchTerrain } from "./terrain";
@@ -193,6 +194,8 @@ export interface Sketch {
   zones?: SketchZone[];
   /** (ticket #268) shapes drawn and coloured (a park, a building, water; see sketch-shapes.ts): only drawn, under the roads; the cars don't see them */
   shapes?: SketchShape[];
+  /** (ticket #289) marks: pins at places, put there by pasting their coordinates (see sketch-marks.ts); only drawn */
+  marks?: SketchMark[];
   /**
    * (ticket #280) utility networks (clean water, waste water, gas, electricity; see sketch-utilities.ts): their nodes, each a
    * point in 3D (z over the ground), and their lines (pipes, cables) through them. Only drawn: the cars don't see them
@@ -2948,10 +2951,10 @@ export function sanitizeSketch(raw: unknown): Sketch | null {
   const sketchOpen = sketches.length ? (sketches.some(x => x.id === o.sketchOpen) ? (o.sketchOpen as string) : sketches[0].id) : null;
   if (sketchOpen) { const k = sketches.findIndex(x => x.id === sketchOpen); if (sketches[k].sketch) { const { sketch: _, ...rest } = sketches[k]; sketches[k] = rest; } }
   // (the zones drawn: a sketch with only zones is a sketch still)
-  const zones = sanitizeZones(o.zones), shapes = sanitizeShapes(o.shapes), util = sanitizeUtilities(o.utilityNodes, o.utilityLines);
-  const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.bumps?.length || sc.zones?.length || sc.shapes?.length || sc.utilityLines?.length) ? sc : null;
-  if (!lanes.length && !junctions.length && !geo && !crossings.length && !bumps.length && !zones.length && !shapes.length && !util.lines.length && !scratch && !sketches.length) return null;
-  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(terrain ? { terrain } : {}), ...(buildings ? { buildings } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(matrices.length ? { matrices } : {}), ...(matrixOn ? { matrixOn } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(shapes.length ? { shapes } : {}), ...(util.nodes.length ? { utilityNodes: util.nodes } : {}), ...(util.lines.length ? { utilityLines: util.lines } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
+  const zones = sanitizeZones(o.zones), shapes = sanitizeShapes(o.shapes), marks = sanitizeMarks(o.marks), util = sanitizeUtilities(o.utilityNodes, o.utilityLines);
+  const scratch = sc && (sc.lanes.length || sc.junctions.length || sc.connectors.length || sc.crossings?.length || sc.bumps?.length || sc.zones?.length || sc.shapes?.length || sc.marks?.length || sc.utilityLines?.length) ? sc : null;
+  if (!lanes.length && !junctions.length && !geo && !crossings.length && !bumps.length && !zones.length && !shapes.length && !marks.length && !util.lines.length && !scratch && !sketches.length) return null;
+  return { lanes, connectors, roads, junctions, ...(links.length ? { links } : {}), ...(traffic ? { traffic } : {}), ...(geo ? { geo } : {}), ...(terrain ? { terrain } : {}), ...(buildings ? { buildings } : {}), ...(crossings.length ? { crossings } : {}), ...(bumps.length ? { bumps } : {}), ...(journeys.length ? { journeys } : {}), ...(matrices.length ? { matrices } : {}), ...(matrixOn ? { matrixOn } : {}), ...(stops.length ? { stops } : {}), ...(busLines.length ? { busLines } : {}), ...(signalGroups.length ? { signalGroups } : {}), ...(zones.length ? { zones } : {}), ...(shapes.length ? { shapes } : {}), ...(marks.length ? { marks } : {}), ...(util.nodes.length ? { utilityNodes: util.nodes } : {}), ...(util.lines.length ? { utilityLines: util.lines } : {}), ...(scratch ? { scratch } : {}), ...(sketches.length ? { sketches, sketchOpen: sketchOpen! } : {}) };
 }
 
 // ---------------------------------------------------------------- locks (ticket #93)

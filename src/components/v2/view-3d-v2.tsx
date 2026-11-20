@@ -23,6 +23,7 @@ import { buildSketch3D, streetNameRuns, type Sketch3D } from "@/render/sketch3d"
 import { buildStreetNames3D, type StreetNames3D } from "@/render/street-names3d";
 import { buildZones3D, type Zones3D } from "@/render/zones3d";
 import { buildShapes3D, type Shapes3D } from "@/render/shapes3d";
+import { buildMarks3D, type Marks3D } from "@/render/marks3d";
 import { buildUtilities3D, type Utilities3D } from "@/render/utilities3d";
 import { linesOf as utilityLines, netShown, nodeMap as utilityNodeMap } from "@/lib/sketch-utilities";
 import { buildBuildings3D, type Buildings3D } from "@/render/buildings3d";
@@ -77,7 +78,7 @@ export interface View3DProps {
   /** what holds the car picked (T157): where its leader and blocker are, the conflict zone on both paths */
   carWhy?: () => { leader: Pt | null; blocker: Pt | null; zone: { mine: Pt[]; theirs: Pt[] } | null } | null;
   /** what is selected (drawn over the scene at its own height), the car picked (a ring round it) */
-  selection: Piece & { unode?: string | null }; car: number | null;
+  selection: Piece & { unode?: string | null; mark?: string | null }; car: number | null;
   /** (ticket #280) a utility node or line clicked (its line, and the node if it was one); what one under the pointer is, for its card */
   pickUtility?: (line: string, node: string | null) => void;
   utilityAbout?: (line: string, node: string | null) => HoverInfo | null;
@@ -313,6 +314,20 @@ export function View3DV2(props: View3DProps) {
       if (!p.layers.shapes || !p.sketch.shapes?.length) return;
       shapesBuilt = buildShapes3D(p.sketch.shapes, t ? (x, z) => terrainAt(t, x, z) - hBase : undefined);
       scene.add(shapesBuilt.group);
+    };
+    // the marks (ticket #289): pins standing on the ground (the terrain if any); made again when they (their layer, the
+    // selection, the terrain) change
+    let marksBuilt: Marks3D | null = null, marksFor: unknown[] = [];
+    const syncMarks = () => {
+      const p = live.current, t = terrainOf(p.sketch);
+      heights();
+      const key = [p.sketch.marks, p.layers.marks, p.selection.mark ?? null, t, hBase];
+      if (key.every((x, i) => x === marksFor[i])) return;
+      marksFor = key;
+      if (marksBuilt) { scene.remove(marksBuilt.group); marksBuilt.dispose(); marksBuilt = null; }
+      if (!p.layers.marks || !p.sketch.marks?.length) return;
+      marksBuilt = buildMarks3D(p.sketch.marks, p.selection.mark ?? null, t ? (x, z) => terrainAt(t, x, z) - hBase : undefined);
+      scene.add(marksBuilt.group);
     };
     // the utility networks (ticket #280): their pipes and cables as tubes at their nodes' heights over the ground (buried ones
     // seen through it), poles under those up in the air; made again when they (their layers, the selection, the ground) change
@@ -785,7 +800,7 @@ export function View3DV2(props: View3DProps) {
       heli.step(dt, now);
       if (heli.flying && now - movedAt > 250) { movedAt = now; live.current.onMove(); }
       if (hoverWas && now - hoverAt > 300) { hoverAt = now; hoverNow(hoverWas); }
-      syncRoads(); syncNames(); syncZones(); syncShapes(); syncUtilities(); syncBuildings(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now); syncWhy(now);
+      syncRoads(); syncNames(); syncZones(); syncShapes(); syncMarks(); syncUtilities(); syncBuildings(); syncCars(now); syncLights(); syncSelection(); syncRoute(); syncRing(); syncWay(now); syncWhy(now);
       stepHome(now);
       draw();
       if (!document.hidden) frame = requestAnimationFrame(tick);
@@ -822,6 +837,7 @@ export function View3DV2(props: View3DProps) {
       if (built) { scene.remove(built.group); built.dispose(); }
       if (zonesBuilt) { scene.remove(zonesBuilt.group); zonesBuilt.dispose(); }
       if (shapesBuilt) { scene.remove(shapesBuilt.group); shapesBuilt.dispose(); }
+      if (marksBuilt) { scene.remove(marksBuilt.group); marksBuilt.dispose(); }
       if (utilBuilt) { scene.remove(utilBuilt.group); utilBuilt.dispose(); }
       if (bldBuilt) { scene.remove(bldBuilt.mesh); bldBuilt.dispose(); }
       if (namesBuilt) { scene.remove(namesBuilt.group); namesBuilt.dispose(); }

@@ -7,12 +7,13 @@ import { useEditorKind, useUiPath } from "@/state/sketch-ui";
 import { isFullCircle, laneLength, type JunctionContents, type Sketch } from "@/lib/lane-sketch";
 import { formatArea, zoneArea } from "@/lib/sketch-zones";
 import { shapeArea } from "@/lib/sketch-shapes";
+import { formatLatLon, parseCoordinates, type LatLon } from "@/lib/sketch-marks";
 import { NET_INFO, sizeLabel } from "@/lib/sketch-utilities";
 import { BUMP_KINDS, bumpSpeed } from "@/lib/sketch-bumps";
 import { isEnter } from "@/lib/enter-key";
 
 /** what a search entry leads to: something on the sketch, or a car running now */
-export type SearchTarget = { kind: "road" | "lane" | "connector" | "junction" | "link" | "crossing" | "bump" | "zone" | "shape" | "utility" | "stop"; id: string } | { kind: "car"; id: number };
+export type SearchTarget = { kind: "road" | "lane" | "connector" | "junction" | "link" | "crossing" | "bump" | "zone" | "shape" | "utility" | "stop" | "mark"; id: string } | { kind: "car"; id: number };
 /** something to do, found by the search too */
 export interface SearchCommand { title: string; sub: string; run: () => void }
 /** one thing on the sketch the search can find (or a command) */
@@ -80,6 +81,7 @@ export function catalogue(sk: Sketch, contents: Map<string, JunctionContents>, c
   // (zones by their name, and their note: a word from it finds them too)
   for (const z of sk.zones ?? []) add("Zone", z.name, [formatArea(zoneArea(z.outline)), z.note ?? ""].filter(Boolean).join(" · "), z.id, { kind: "zone", id: z.id });
   for (const x of sk.shapes ?? []) add("Shape", x.name, formatArea(shapeArea(x)), x.id, { kind: "shape", id: x.id });
+  for (const x of sk.marks ?? []) add("Mark", x.name, "", x.id, { kind: "mark", id: x.id });
   // (ticket #280: utility lines, by name, network and size)
   for (const x of sk.utilityLines ?? []) add(NET_INFO[x.net].label, x.name, [sizeLabel(x), x.buried ? "buried" : "above ground", `${x.nodes.length} nodes`].join(" · "), x.id, { kind: "utility", id: x.id });
   for (const x of sk.stops ?? []) add("Bus stop", x.name, (sk.busLines ?? []).filter(l => l.stops.includes(x.id)).map(l => l.name).join(", ") || "no line yet", x.id, { kind: "stop", id: x.id });
@@ -114,10 +116,12 @@ export function search(items: Item[], q: string): Item[] {
  * junctions, lanes, connectors, links, zebra crossings, and the cars running now. Enter (or a click) selects
  * it and brings it into view. Mounted only while open: a fresh box each time, with the sketch as it is then.
  */
-export function SketchSearch({ sketch, contents, cars, commands = [], onGo, onClose }: {
+export function SketchSearch({ sketch, contents, cars, commands = [], onCoords, onGo, onClose }: {
   sketch: Sketch; contents: Map<string, JunctionContents>; cars: { id: number; edge?: string; kmh?: number }[];
   /** things to do (on what is selected), found as the rest are and listed first */
   commands?: SearchCommand[];
+  /** (ticket #289) coordinates typed or pasted in: a mark put there (none: coordinates aren't offered) */
+  onCoords?: (g: LatLon) => void;
   onGo: (to: SearchTarget) => void; onClose: () => void;
 }) {
   // (what is typed: the editor's, in the V2 UI store)
@@ -135,7 +139,11 @@ export function SketchSearch({ sketch, contents, cars, commands = [], onGo, onCl
   }, [setQ]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const items = useMemo(() => [...commands.map((c, i) => ({ kind: "Command", title: c.title, sub: c.sub, id: `cmd${i}`, to: { kind: "command" as const, run: c.run }, hay: fold(`command ${c.title} ${c.sub}`) })), ...catalogue(sketch, contents, cars)], []);
-  const hits = useMemo(() => search(items, q), [items, q]);
+  // (coordinates typed or pasted: a mark put there, first)
+  const hits = useMemo(() => {
+    const g = onCoords ? parseCoordinates(q) : null, found = search(items, q);
+    return g ? [{ kind: "Command", title: `Place a mark at ${formatLatLon(g)}`, sub: "where these coordinates are", id: "coords", to: { kind: "command" as const, run: () => onCoords!(g) }, hay: "" }, ...found] : found;
+  }, [items, q, onCoords]);
   // (a combobox: the box keeps the focus, the row picked is named to screen readers by aria-activedescendant)
   const listId = useId();
   useEffect(() => { document.getElementById(`${listId}-${at}`)?.scrollIntoView({ block: "nearest" }); }, [listId, at]);
@@ -170,7 +178,7 @@ export function SketchSearch({ sketch, contents, cars, commands = [], onGo, onCl
             </button>
           ))}
           {q.trim() && !hits.length && <p className="px-3 py-3 text-sm text-muted-foreground">Nothing on the sketch matches “{q}”.</p>}
-          {!q.trim() && <p className="px-3 py-3 text-xs text-muted-foreground">Type a name or an id: every word must match. ↑ ↓ to choose, Enter to select it and go there.</p>}
+          {!q.trim() && <p className="px-3 py-3 text-xs text-muted-foreground">Type a name or an id: every word must match. ↑ ↓ to choose, Enter to select it and go there.{onCoords ? " Coordinates (46.1347, 24.5012, or a Google Maps link) put a mark there." : ""}</p>}
         </div>
       </div>
     </div>

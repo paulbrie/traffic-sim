@@ -11,11 +11,13 @@ import { connectorPts, groundAt, hasHeights, isFullCircle, laneById, laneLength,
 import type { SimStats, SketchSim } from "@/lib/lane-sketch-sim";
 import { formatArea, zoneArea } from "@/lib/sketch-zones";
 import { shapeArea, shapeOpacity } from "@/lib/sketch-shapes";
+import { unproject } from "@/lib/osm/area";
+import { formatLatLon } from "@/lib/sketch-marks";
 import { lineCount, lineLength, NET_INFO, NODE_KINDS, nodeKind, sizeLabel } from "@/lib/sketch-utilities";
 import { BUMP_KINDS, bumpHeavySpeed, bumpSpeed } from "@/lib/sketch-bumps";
 import type { LaneTraffic, TrafficMatch } from "@/lib/tomtom";
 
-export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { bump: string } | { link: string } | { zone: string } | { shape: string } | { utility: string; /** (3D) the node of it under the pointer */ node?: string | null } | { car: number };
+export type HoverHit = { lane: string } | { connector: string } | { junction: string } | { crossing: string } | { bump: string } | { link: string } | { zone: string } | { shape: string } | { mark: string } | { utility: string; /** (3D) the node of it under the pointer */ node?: string | null } | { car: number };
 export interface HoverInfo { title: string; sub?: string; rows: [string, string][] }
 
 const m = (x: number) => (x >= 1000 ? `${(x / 1000).toFixed(2)} km` : `${x.toFixed(x < 10 ? 1 : 0)} m`);
@@ -114,6 +116,10 @@ export function describeHover(hit: HoverHit, sk: Sketch, contents: Map<string, J
   if ("shape" in hit) {
     const x = sk.shapes?.find(y => y.id === hit.shape);
     return x ? { title: x.name, sub: "Only drawn: the cars don't see it", rows: [["Area", formatArea(shapeArea(x))], ["Colour", `${x.color}${shapeOpacity(x) < 1 ? `, ${Math.round(shapeOpacity(x) * 100)}%` : ""}`]] } : null;
+  }
+  if ("mark" in hit) {
+    const x = sk.marks?.find(y => y.id === hit.mark);
+    return x ? { title: x.name, sub: "A mark: only drawn, the cars don't see it", rows: sk.geo ? [["Coordinates", formatLatLon(unproject(sk.geo, x.at))]] : [] } : null;
   }
   if ("utility" in hit) {
     const x = sk.utilityLines?.find(y => y.id === hit.utility);

@@ -59,6 +59,9 @@ import {
   NET_INFO, netShown, removeNodeFromLine, utilityLineAt, utilityNodeAt, utilityPoints, UTILITY_NETS, type UtilityDraftPt, type UtilityNet,
 } from "@/lib/sketch-utilities";
 import { paintShapeDraft, paintShapes } from "@/components/v2/shape-tools";
+import { paintMarks } from "@/components/v2/mark-tools";
+import { MarkPanel } from "@/components/v2/mark-panel";
+import { addMark, deleteMark, formatLatLon, markAt, parseCoordinates, updateMark, type LatLon, type SketchMark } from "@/lib/sketch-marks";
 import { ALIGN_BUTTONS, AlignLanes } from "@/components/v2/align-lanes";
 import { alignLanes, canAlign } from "@/lib/lane-align";
 import { FILL_GAP, fillAllJunctions, junctionSurfaceHoles, unfilledJunctions } from "@/lib/junction-fill";
@@ -123,7 +126,7 @@ const tip = (t: (typeof TOOLS)[number]) => `${t.label} (${t.key})`;
 interface View { cx: number; cy: number; /** px per metre */ scale: number }
 /** a live traffic incident (TomTom), as the `/api/plans/[planId]/traffic` route reports it */
 interface TrafficIncident { id: string; iconCategory: number; magnitudeOfDelay: number; delay: number | null; from: string | null; to: string | null; description: string | null; coordinates: { lat: number; lon: number }[] }
-type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { bump: string } | { zone: string } | { shape: string } | { utility: string } | { stop: string };
+type Hit = { lane: string } | { connector: string } | { junction: string } | { link: string } | { crossing: string } | { bump: string } | { zone: string } | { shape: string } | { utility: string } | { stop: string } | { mark: string };
 /** what is lit up under the pointer: something on the sketch, or (a traffic-light phase hovered in its panel) some connectors */
 type Hover = Hit | { conns: string[] } | { lanes: string[]; /** found from a panel (the live graph, ticket #109): lit up strongly, over the cars, with this label */ focus?: string };
 /** a road's or a junction's name as drawn on the map: what it names, and its pill (px on the canvas) */
@@ -158,6 +161,8 @@ type Drag =
   | { kind: "crossing"; base: Sketch; id: string; part: "move" | "a" | "b" | 0 | 1 | 2 | 3 | "stripes"; from: Pt }
   /** a speed bump: moved whole, or one kerb end */
   | { kind: "bump"; base: Sketch; id: string; part: "move" | "a" | "b"; from: Pt }
+  /** (ticket #289) a mark, moved */
+  | { kind: "mark"; base: Sketch; id: string; from: Pt }
   /** the Shape tool's press (ticket #268): dragged, a rectangle (a square) or a circle; let go where it was, a shape's first point */
   | { kind: "shapeBox"; a: Pt; b: Pt; moved: boolean; square: boolean; circle: boolean };
 
@@ -221,6 +226,7 @@ function prune(sel: Sel, sk: Sketch): Sel {
   const linkOk = !sel.link || !!sk.links?.some(k => k.id === sel.link), crossingOk = !sel.crossing || !!sk.crossings?.some(x => x.id === sel.crossing);
   if (!crossingOk) return { ...sel, crossing: null };
   if (sel.bump && !sk.bumps?.some(x => x.id === sel.bump)) return { ...sel, bump: null };
+  if (sel.mark && !sk.marks?.some(x => x.id === sel.mark)) return { ...sel, mark: null };
   const stopOk = !sel.stop || !!sk.stops?.some(x => x.id === sel.stop);
   if (!stopOk) return { ...sel, stop: null };
   // (a zone deleted, or undone away: let go)
@@ -509,6 +515,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
    */
   const pick = (p: Pt, { utilities = true }: { utilities?: boolean } = {}): Hit | null => {
     const sk = live.current.sketch, px = 1 / view.current.scale;
+    // (a mark (ticket #289): its pin, over everything; not while hidden)
+    const mk = live.current.layers.marks ? markAt(sk.marks, p, px) : null;
+    if (mk) return { mark: mk.id };
     // (a zebra crossing: over the lanes it crosses)
     for (const x of sk.crossings ?? []) if (onCrossing(x, p, 2 * px)) return { crossing: x.id };
     // (a speed bump: over its lanes too, under a zebra on a table)
@@ -1061,6 +1070,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (s.link) { const id = s.link; editSketch(sk => unlink(sk, id)); setSel(NO_SEL); return; }
     if (s.crossing) { const id = s.crossing; editSketch(sk => deleteCrossing(sk, id)); setSel(NO_SEL); return; }
     if (s.bump) { const id = s.bump; editSketch(sk => deleteBump(sk, id)); setSel(NO_SEL); return; }
+    if (s.mark) { const id = s.mark; editSketch(sk => deleteMark(sk, id)); setSel(NO_SEL); return; }
     if (s.stop) { const id = s.stop; editSketch(sk => deleteStop(sk, id)); setSel(NO_SEL); return; }
     // (a utility line's node picked, ticket #280: that node, out of each line through it)
     if (s.unode) { const id = s.unode; editSketch(sk => deleteUtilityNode(sk, id)); setSel({ ...s, unode: null }); return; }
@@ -1130,12 +1140,38 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     setSel({ ...r.piece, road: null });
     changeTool("select");
   };
-  /** the copied piece pasted at the cursor (or, with the cursor away, a little off the last one) */
+  /**
+   * (ticket #289) a mark put where these coordinates are, selected and brought into view; said why not if the plan
+   * isn't placed on the map (nowhere to put it) or can't be edited. True if put.
+   */
+  const markAtCoords = (g: LatLon, name?: string): boolean => {
+    const sk = live.current.sketch;
+    if (readOnly) { toast.error("This plan can't be edited here"); return false; }
+    if (!sk.geo) { toast.error("The plan isn't placed on the map", { description: `Place it from Background first, then paste ${formatLatLon(g)} again.` }); return false; }
+    const at = project(sk.geo, g.lat, g.lon);
+    let made: SketchMark | null = null;
+    editSketch(k => { const [next, m] = addMark(k, at, { name, color: k.marks?.at(-1)?.color }); made = m; return next; });
+    if (!made) return false;
+    const m = made as SketchMark;
+    setSel({ ...NO_SEL, mark: m.id }); setSelCar(null);
+    if (!live.current.layers.marks) setSketchLayers({ ...sketchLayers$.getValue(), marks: true });
+    changeTool("select");
+    centerOnPts([at]);
+    const off = Math.hypot(at.x, at.y);
+    toast.success(`${m.name} placed at ${formatLatLon(g)}`, off > 20000 ? { description: `${(off / 1000).toFixed(0)} km from the plan's middle` } : undefined);
+    return true;
+  };
+  /** the copied piece pasted at the cursor (or, with the cursor away, a little off the last one); coordinates on the clipboard: a mark there (ticket #289) */
   const paste = async () => {
     // (the system clipboard's piece if it is another than this tab's last copy (copied in another tab), else this tab's)
     const c = cursor.current?.p, mine = sketchClip();
     let k = mine;
-    try { const o = readClipText(await navigator.clipboard.readText()); if (o && o.stamp !== mine?.stamp) { setSketchClip(o); k = o; } } catch { /* not allowed: this tab's */ }
+    try {
+      const text = await navigator.clipboard.readText(), g = parseCoordinates(text);
+      if (g) { markAtCoords(g); return; }
+      const o = readClipText(text);
+      if (o && o.stamp !== mine?.stamp) { setSketchClip(o); k = o; }
+    } catch { /* not allowed: this tab's */ }
     if (!k) return;
     const at = c ? { x: Math.round(c.x * 2) / 2, y: Math.round(c.y * 2) / 2 } : null;
     k.pastes++;
@@ -1213,6 +1249,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
       case "link": { const k = sk.links?.find(x => x.id === to.id); if (k) { setSel({ ...NO_SEL, link: k.id }); centerOn(piece({ connectors: k.conns })); } break; }
       case "crossing": { const x = sk.crossings?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, crossing: x.id }); centerOnPts([x.a, x.b]); } break; }
       case "bump": { const x = sk.bumps?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, bump: x.id }); centerOnPts([x.a, x.b]); } break; }
+      case "mark": { const x = sk.marks?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, mark: x.id }); centerOnPts([x.at]); } break; }
       case "zone": { const z = sk.zones?.find(y => y.id === to.id); if (z) { setSel({ ...NO_SEL, zones: [z.id] }); centerOnPts(z.outline); } break; }
       case "shape": { const x = sk.shapes?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, shapes: [x.id] }); centerOnPts(x.outline); } break; }
       case "utility": { const x = sk.utilityLines?.find(y => y.id === to.id); if (x) { setSel({ ...NO_SEL, utilities: [x.id] }); centerOnPts(utilityPoints(sk, [x.id])); setLayers({ ...sketchLayers$.getValue(), [layerOfNet(x.net)]: true }); } break; }
@@ -1338,7 +1375,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
 
   /** an agent's select/goTo: { kind, id }, checked (a car's id a number, the others' a string) */
   const target = (a: Record<string, unknown>): SearchTarget => {
-    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "bump", "zone", "shape", "utility", "car"];
+    const kind = argOf(a, "kind", "string", true)!, kinds = ["road", "lane", "connector", "junction", "link", "crossing", "bump", "zone", "shape", "utility", "mark", "car"];
     if (!kinds.includes(kind)) throw new Error(`kind: one of ${kinds.join(", ")}`);
     const sk = live.current.sketch;
     if (kind === "car") {
@@ -1350,7 +1387,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     const id = argOf(a, "id", "string", true)!;
     const there = kind === "road" ? sk.roads.some(x => x.id === id) : kind === "lane" ? sk.lanes.some(x => x.id === id) : kind === "connector" ? sk.connectors.some(x => x.id === id)
       : kind === "junction" ? sk.junctions.some(x => x.id === id) : kind === "link" ? (sk.links ?? []).some(x => x.id === id)
-      : kind === "zone" ? (sk.zones ?? []).some(x => x.id === id) : kind === "shape" ? (sk.shapes ?? []).some(x => x.id === id) : kind === "utility" ? (sk.utilityLines ?? []).some(x => x.id === id) : kind === "bump" ? (sk.bumps ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
+      : kind === "mark" ? (sk.marks ?? []).some(x => x.id === id) : kind === "zone" ? (sk.zones ?? []).some(x => x.id === id) : kind === "shape" ? (sk.shapes ?? []).some(x => x.id === id) : kind === "utility" ? (sk.utilityLines ?? []).some(x => x.id === id) : kind === "bump" ? (sk.bumps ?? []).some(x => x.id === id) : (sk.crossings ?? []).some(x => x.id === id);
     if (!there) throw new Error(`no ${kind} ${id}`);
     return { kind: kind as Exclude<SearchTarget["kind"], "car">, id };
   };
@@ -1581,6 +1618,8 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         if ("crossing" in hit) { setSel({ ...NO_SEL, crossing: hit.crossing }); drag.current = { kind: "crossing", base: sk, id: hit.crossing, part: "move", from: raw }; return; }
         // (a speed bump: selected on its own, dragged whole)
         if ("bump" in hit) { setSel({ ...NO_SEL, bump: hit.bump }); drag.current = { kind: "bump", base: sk, id: hit.bump, part: "move", from: raw }; return; }
+        // (a mark: selected on its own, dragged)
+        if ("mark" in hit) { setSel({ ...NO_SEL, mark: hit.mark }); drag.current = { kind: "mark", base: sk, id: hit.mark, from: raw }; return; }
         // (a zone: selected on its own, dragged whole)
         if ("zone" in hit) {
           const zs = s.zones?.includes(hit.zone) ? s : { ...NO_SEL, zones: [hit.zone] };
@@ -1786,6 +1825,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     else if ("link" in hit) setSel({ ...NO_SEL, link: hit.link });
     else if ("crossing" in hit) setSel({ ...NO_SEL, crossing: hit.crossing });
     else if ("bump" in hit) setSel({ ...NO_SEL, bump: hit.bump });
+    else if ("mark" in hit) setSel({ ...NO_SEL, mark: hit.mark });
     else if ("stop" in hit) setSel({ ...NO_SEL, stop: hit.stop });
     else if ("shape" in hit) setSel({ ...NO_SEL, shapes: [hit.shape] });
     // (utility lines aren't picked in 3D: see pick)
@@ -1895,6 +1935,10 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
         const next = updateBump(g.base, g.id, patch), x1 = next.bumps!.find(x => x.id === g.id)!;
         if (dist(x1.a, x1.b) >= 1) dragShow(next);
       }
+    } else if (g?.kind === "mark") {
+      // (moved by as much as the pointer, to the centimetre: a mark is a place, not on the half-metre grid)
+      const x0 = g.base.marks?.find(x => x.id === g.id);
+      if (x0) dragShow(updateMark(g.base, g.id, { at: { x: x0.at.x + raw.x - g.from.x, y: x0.at.y + raw.y - g.from.y } }));
     } else if (g?.kind === "shapeBox") {
       g.b = snap(raw).p; g.square = e.shiftKey; g.circle = e.altKey;
       if (dist(g.a, g.b) * v.scale > 4) g.moved = true;
@@ -1951,7 +1995,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     }
     // a right click (not a right drag): the menu for the lane under it, or the lanes selected
     if (g?.kind === "pan" && g.right && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) { openMenu(e); return; }
-    if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || ((g?.kind === "crossing" || g?.kind === "bump") && store.sketch$.getValue() !== g.base)) recordSketch(g.base);
+    if (g?.kind === "move" || g?.kind === "handle" || g?.kind === "rotate" || ((g?.kind === "crossing" || g?.kind === "bump" || g?.kind === "mark") && store.sketch$.getValue() !== g.base)) recordSketch(g.base);
     // (an Automatic junction's corner moved, or put in: its surface Drawn now, said)
     if (g?.kind === "handle" && g.h.kind === "corner" && store.sketch$.getValue() !== g.base) { const j = g.base.junctions.find(x => x.id === (g.h as { id: string }).id); if (j?.shape === "auto") drawnNow(j.name); }
     if (g?.kind === "box" && dist(g.a, g.b) * view.current.scale > 3) {
@@ -2066,7 +2110,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
     if (k === "escape") {
       // (a menu or dialog took it already)
       if (e.defaultPrevented) return;
-      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.bump && !live.current.sel.stop && !live.current.sel.zones?.length && !live.current.sel.shapes?.length && !live.current.sel.utilities?.length && live.current.selCar === null;
+      const nothing = !hasSel(live.current.sel) && !live.current.sel.link && !live.current.sel.crossing && !live.current.sel.bump && !live.current.sel.stop && !live.current.sel.mark && !live.current.sel.zones?.length && !live.current.sel.shapes?.length && !live.current.sel.utilities?.length && live.current.selCar === null;
       if (d) draft.current = null;
       // (the Sketch window, a modal (T184), one thing a press: the selection, then a drawing tool (back to Select), then
       // the window closed)
@@ -2233,7 +2277,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
             <Button size="icon-sm" variant="ghost" className="ml-auto size-6" aria-label="Fold the structure away" title="Fold the structure away, for more map ([)" onClick={() => setStructureOpen(false)}><PanelLeftClose /></Button>
           </div>
           <StructureTree warnings={jw.byJunction} sketch={sketch} sel={sel} setSel={setSel} contents={contents} junctionSel={ids => junctionSel(sketch, ids)}
-            onHover={h => { hover.current = h; redraw(); }} onZoom={zoomTo} onCenter={centerOn} />
+            onHover={h => { hover.current = h; redraw(); }} onZoom={zoomTo} onCenter={centerOn} onCenterAt={p => centerOnPts([p])} />
         </aside>
         {!structureOpen && (
           <aside className="flex w-9 shrink-0 flex-col items-center border-r py-1" aria-label="Sketch structure (folded away)">
@@ -2336,6 +2380,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
                       <Earth /> Open in Google Earth
                     </a>
                   </DropdownMenuItem>
+                  {!readOnly && <DropdownMenuItem onSelect={() => { const g = menu.geo; if (g) markAtCoords(g); }}><MapPin /> Put a mark here</DropdownMenuItem>}
                   <div className="px-2 pb-1 font-mono text-[11px] text-muted-foreground tabular">{menu.geo.lat.toFixed(6)}, {menu.geo.lon.toFixed(6)}</div>
                   {/* the street names near the click, from OpenStreetMap: to name the road under it (ticket #48) */}
                   <DropdownMenuSeparator />
@@ -2379,7 +2424,7 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
           })()}
           {searchShown && <SketchSearch sketch={sketch} contents={contents} cars={searchCars}
             commands={canTest && hasSel(sel) ? [{ title: "Test in Sketch", sub: "the selection, on its own in the Sketch window · ⇧T", run: () => testInSketch() }] : []}
-            onGo={goTo} onClose={() => { setSearchShown(false); panel.current?.focus(); }} />}
+            onCoords={readOnly ? undefined : g => { markAtCoords(g); }} onGo={goTo} onClose={() => { setSearchShown(false); panel.current?.focus(); }} />}
           <SketchReplayBar kept={replayRange} t={replayT} start={startClock(sketch)} playing={replayPlaying} onPlaying={setReplayPlaying}
             onShow={showAt} onLive={goLive} onCopy={() => void copyMoment()} above={consoleOpen ? CONSOLE_HEIGHT : 0}
             sides={{ left: consoleOpen ? 0 : CONSOLE_BUTTON_ROOM, right: ZOOM_ROOM }} />
@@ -2422,6 +2467,9 @@ export function LaneSketch({ page = false }: { page?: boolean } = {}) {
               live={stats ? peds.find(q => q.id === sel.crossing) ?? null : null} />
           ) : sel.bump && sketch.bumps?.some(x => x.id === sel.bump) ? (
             <BumpPanel sketch={sketch} x={sketch.bumps.find(x => x.id === sel.bump)!} readOnly={readOnly} onDelete={deleteSel} />
+          ) : sel.mark && sketch.marks?.some(x => x.id === sel.mark) ? (
+            <MarkPanel sketch={sketch} mark={sketch.marks.find(x => x.id === sel.mark)!} readOnly={readOnly} onDelete={deleteSel}
+              onMoved={() => { const m = live.current.sketch.marks?.find(x => x.id === sel.mark); if (m) centerOnPts([m.at]); }} />
           ) : sel.stop && sketch.stops?.some(x => x.id === sel.stop) ? (
             <StopPanel sketch={sketch} stop={sketch.stops.find(x => x.id === sel.stop)!} readOnly={readOnly} onDelete={deleteSel} />
           ) : (
@@ -3687,11 +3735,13 @@ function DisplayOptionsPanel({ canSyncTraffic }: { canSyncTraffic: boolean }) {
  * and the lanes on them, and what is in neither. A click selects (⇧ adds to the selection) and centres it, a
  * double-click zooms to it, hovering lights it up on the sketch.
  */
-function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, onZoom, onCenter, warnings }: {
+function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, onZoom, onCenter, onCenterAt, warnings }: {
   sketch: Sketch; sel: Sel; setSel: (s: Sel) => void; contents: Map<string, JunctionContents>; junctionSel: (ids: string[]) => Sel;
   /** each junction's warnings (junction-warnings.ts), a badge on its row */
   warnings?: Map<string, JunctionWarning[]>;
   onHover: (h: Hit | null) => void; onZoom: (p: Piece) => void; onCenter: (p: Piece) => void;
+  /** (ticket #289) the view brought round a point (a mark's row) */
+  onCenterAt: (p: Pt) => void;
 }) {
   const [closed, setClosed] = useState<Set<string>>(() => new Set());
   // (ticket #93: a lane, road or junction locked or unlocked from its row)
@@ -3743,12 +3793,12 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
   const pick = (e: React.MouseEvent, s: Sel) => setSel(e.shiftKey ? { lanes: [...new Set([...sel.lanes, ...s.lanes])], connectors: [...new Set([...sel.connectors, ...s.connectors])], junctions: [...new Set([...sel.junctions, ...s.junctions])], road: null } : s);
 
   // (`lock`: what the row's lock locks, whether it is locked, and whether it is locked by its road (its own lock then not offered))
-  const row = (o: { key: string; depth: number; on: boolean; label: React.ReactNode; note?: React.ReactNode; title?: string; kids?: boolean; hit?: Hit; sel: Sel; zoom: Piece; tone?: string; lock?: { ids: LockIds; on: boolean; byRoad?: boolean } }) => (
+  const row = (o: { key: string; depth: number; on: boolean; label: React.ReactNode; note?: React.ReactNode; title?: string; kids?: boolean; hit?: Hit; sel: Sel; zoom: Piece; at?: Pt; tone?: string; lock?: { ids: LockIds; on: boolean; byRoad?: boolean } }) => (
     <div key={o.key} role="treeitem" aria-selected={o.on} aria-expanded={o.kids ? !closed.has(o.key) : undefined} data-on={o.on}
       className={cn("group flex cursor-default items-center gap-1 rounded py-0.5 pr-1.5 text-xs hover:bg-muted", o.on && "bg-primary/10 text-foreground", o.tone)}
       style={{ paddingLeft: 4 + o.depth * 12 }} title={o.title}
       onMouseEnter={() => onHover(o.hit ?? null)} onMouseLeave={() => onHover(null)}
-      onClick={e => { pick(e, o.sel); onCenter(o.zoom); }} onDoubleClick={() => onZoom(o.zoom)}>
+      onClick={e => { pick(e, o.sel); if (o.at) onCenterAt(o.at); else onCenter(o.zoom); }} onDoubleClick={() => (o.at ? onCenterAt(o.at) : onZoom(o.zoom))}>
       {o.kids
         ? <button className="grid size-4 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground" aria-label={closed.has(o.key) ? "Open" : "Close"}
             onClick={e => { e.stopPropagation(); fold(o.key); }}><ChevronRight className={cn("size-3 transition-transform", !closed.has(o.key) && "rotate-90")} /></button>
@@ -3896,6 +3946,16 @@ function StructureTree({ sketch, sel, setSel, contents, junctionSel, onHover, on
           key: `shape:${x.id}`, depth: 0, on: !!sel.shapes?.includes(x.id), hit: { shape: x.id }, sel: { ...NO_SEL, shapes: [x.id] }, zoom: { ...piece({}), shapes: [x.id] },
           label: <><span className="mr-1 inline-block size-2 rounded-sm border align-middle" style={{ background: x.color }} />{x.name}</>,
           note: formatArea(shapeArea(x)),
+        }))}
+      </>}
+      {/* marks (ticket #289): all of them */}
+      {!!sketch.marks?.length && <>
+        <div className="mt-2 border-t pt-1" />
+        {heading("h:marks", "Marks", sketch.marks.length)}
+        {open("h:marks") && sketch.marks.map(x => row({
+          key: `mark:${x.id}`, depth: 0, on: sel.mark === x.id, hit: { mark: x.id }, sel: { ...NO_SEL, mark: x.id }, zoom: piece({}), at: x.at,
+          label: <><MapPin className="mr-1 inline size-3 align-[-2px]" style={{ color: x.color }} />{x.name}</>,
+          note: sketch.geo ? formatLatLon(unproject(sketch.geo, x.at)) : undefined,
         }))}
       </>}
       {/* utility networks (ticket #280): each network's lines */}
@@ -4965,6 +5025,9 @@ function paint(c: HTMLCanvasElement, st: PaintState, part: "static" | "dynamic",
     const top = j.outline.reduce((a, p) => (p.y < a.y ? p : a), j.outline[0]);
     if (top) st.labels?.push({ kind: "junction", id: j.id, ...label(j.name, { x: top.x, y: top.y - 14 * px }, col.jText) });
   }
+  // marks (ticket #289): pins over everything, the cars too (drawn each frame, so with the dynamic part)
+  if (D && st.layers.marks && sk.marks?.length)
+    paintMarks(ctx, sk.marks, p => ({ x: (p.x - v.cx) * v.scale + w / 2, y: (p.y - v.cy) * v.scale + h / 2 }), dpr, s.mark ?? null, hv && "mark" in hv ? hv.mark : null, { sel: col.sel, pill: col.pill, fg: col.text });
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.font = "10px ui-monospace, monospace"; ctx.fillStyle = dark ? "#a1a1aa" : "#78716c"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
   // (where the pointer is: metres, and on Earth where the sketch has a place there)

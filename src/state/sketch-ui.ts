@@ -22,7 +22,7 @@ import { loadSatOptions, saveSatOptions, type SatOptions } from "@/state/sat-opt
 /** the drawing tools */
 export type Tool = "select" | "lane" | "bike" | "arc" | "circle" | "roundabout" | "connector" | "junction" | "slice" | "crossing" | "bump" | "zone" | "shape" | "utility" | "stop";
 /** what is selected: lanes, connectors and junctions (a road: its lanes, with its id), or a link, a zebra crossing, a speed bump, or a bus stop */
-export type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null; /** a speed bump, selected on its own */ bump?: string | null; /** a bus stop, selected on its own */ stop?: string | null;
+export type Sel = Piece & { road: string | null; link?: string | null; /** a zebra crossing, selected on its own */ crossing?: string | null; /** a speed bump, selected on its own */ bump?: string | null; /** a bus stop, selected on its own */ stop?: string | null; /** (ticket #289) a mark, selected on its own */ mark?: string | null;
   /** (ticket #280) a node of the utility lines selected (`utilities`), picked: its row in their panel, Delete deletes it */ unode?: string | null };
 export const NO_SEL: Sel = { lanes: [], connectors: [], junctions: [], road: null };
 

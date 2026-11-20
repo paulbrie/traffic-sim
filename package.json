@@ -32,6 +32,7 @@
     "agent:check": "tsx scripts/agent-login-check.ts",
     "zones:check": "tsx scripts/zones-check.ts",
     "shapes:check": "tsx scripts/shapes-check.ts",
+    "marks:check": "tsx scripts/marks-check.ts",
     "utilities:check": "tsx scripts/utilities-check.ts",
     "web:check": "tsx scripts/web-check.ts",
     "edit:check": "tsx scripts/sketch-edit-check.ts",
