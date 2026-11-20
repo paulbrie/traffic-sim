@@ -60,7 +60,7 @@ export default async function DlCityExperiment() {
           )}
           {report !== null && (
             <Button asChild variant="outline">
-              <a href={`${base}/report?download`} download="dl-city-277-report.html">
+              <a href={`${base}/report?download`} download="deep-learning-city-report.html">
                 <Download /> Download the report ({(report / 1e6).toFixed(1)} MB)
               </a>
             </Button>

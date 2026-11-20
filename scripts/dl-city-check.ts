@@ -15,7 +15,10 @@ import { runDesign, score } from "../src/lib/experiments/dl-city/evaluate";
 import { scoreOf, targets } from "../src/lib/experiments/dl-city/search";
 import { Ensemble, r2 } from "../src/lib/experiments/dl-city/mlp";
 import { analyse } from "../src/lib/experiments/dl-city/analysis";
+import { forDownload, ticketsIn } from "../src/lib/experiments/dl-city/download";
 import { demandWays } from "../src/lib/lane-sketch";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 
 let fails = 0;
 const check = (ok: boolean, what: string) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) fails++; };
@@ -88,6 +91,15 @@ check(a.curves.ga.length === 2 && a.curves.ga[0].best === 1 && a.curves.ga[1].be
 // the score worked out from the networks' targets is the score
 const mm = { ...fake, corridorTime: 410, centreVehKm: 900, trips: 4300, tripTime: 230, stuck: 90 };
 check(Math.abs(scoreOf(targets(mm, fake)) - score(mm, fake)) < 1e-9, `the score from the networks' targets is the score (${score(mm, fake).toFixed(4)})`);
+
+// the report as downloaded (ticket #279): every edit still finds its text, and no ticket is left
+const REPORT = join(__dirname, "../docs/experiments/dl-city-277/index.html");
+if (existsSync(REPORT)) {
+  const page = readFileSync(REPORT, "utf8"), dl = forDownload(page);
+  check(dl.missed.length === 0, `the download's edits all find their text in the report${dl.missed.length ? ` (not: ${dl.missed.join(" | ")})` : ""}`);
+  check(ticketsIn(dl.html).length === 0, `no ticket left in the download${ticketsIn(dl.html).length ? ` (${ticketsIn(dl.html).join(", ")})` : ""}, only in the page (${ticketsIn(page).length})`);
+  check(page.length - dl.html.length < 2000, `the download is the whole report otherwise (${page.length - dl.html.length} bytes shorter)`);
+}
 
 if (fails) { console.error(`dl-city:check: ${fails} failed`); process.exit(1); }
 console.log("dl-city:check: all passed");
