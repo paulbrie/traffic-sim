@@ -17,6 +17,7 @@ import { endsOf, gravityMatrix } from "../src/lib/experiments/tomtom-321/demand"
 import { deadLanes, laneEnds, lanesTurned, newEnds, movesOf, reach, streetsIn, turnLanes } from "../src/lib/experiments/tomtom-321/directions";
 import { inCentre } from "../src/lib/experiments/tomtom-321/centre";
 import { run, withMatrix } from "../src/lib/experiments/tomtom-321/sim";
+import { forDownload, ticketsIn } from "../src/lib/experiments/tomtom-321/download";
 
 let fails = 0;
 const check = (ok: boolean, what: string) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) fails++; };
@@ -117,6 +118,15 @@ const { ins, outs } = endsOf(sk);
   check(res.trips > 1000, `a design with ${pick.map(x => `${x.s.name} ${x.m.to}`).join(", ")} turned runs (${Math.round(res.trips)} trips an hour)`);
   const driven = turned.filter(id => [...res.ways.values()].some(w => w.km > 0 && sk.roads.some(r => r.lanes.includes(id) && w.id.startsWith(`${r.id}/`))));
   check(driven.length > 0, `cars drive the turned lanes (${driven.length} of ${turned.length} with traffic)`);
+}
+
+// ---------------------------------------------------------------- the printable report (scripts/tomtom-321-report.ts)
+{
+  const page = readFileSync(join(__dirname, "../docs/experiments/tomtom-321/index.html"), "utf8"), d = forDownload(page);
+  check(!/\bNaN\b|\bundefined\b|\$\{/.test(page), "the report has every number filled in (no NaN, undefined or ${…})");
+  check(ticketsIn(page).length > 0 && d.cut >= 2, `the report served names its ticket, marked for the download (${d.cut} pieces)`);
+  check(ticketsIn(d.html).length === 0 && !d.html.includes('href="?download"'), `the report downloaded: no ticket, no download link${ticketsIn(d.html).length ? ` (${ticketsIn(d.html).join(", ")})` : ""}`);
+  check(page.length - d.html.length < 1000 && d.html.includes("Print or save as PDF"), "the download keeps everything else");
 }
 
 if (fails) { console.error(`tomtom-321:check: ${fails} failed`); process.exit(1); }
