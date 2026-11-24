@@ -23,7 +23,7 @@ import { observed, PEAKS, type Observed } from "../src/lib/experiments/tomtom-32
 import { runAll, type JobOut } from "../src/lib/experiments/tomtom-321/pool";
 import { waysOf } from "../src/lib/traffic-history";
 import { CENTRE, centreRoads, inCentre } from "../src/lib/experiments/tomtom-321/centre";
-import { deadLanes, lanesTurned, movesOf, reach, streetsIn, turnLanes, type Move, type Street } from "../src/lib/experiments/tomtom-321/directions";
+import { deadLanes, lanesTurned, newEnds, movesOf, reach, streetsIn, turnLanes, type Move, type Street } from "../src/lib/experiments/tomtom-321/directions";
 import { demandWays, type DemandMatrix } from "../src/lib/lane-sketch";
 
 const PLAN = "b87c01a7-40ea-4aa3-a72a-7c917a58091b";
@@ -195,13 +195,15 @@ function candidates(sk: Sketch): Street[] {
 interface Design { moves: Move[] }
 const designKey = (d: Design) => d.moves.map(m => `${m.street}:${m.to}`).sort().join(" ") || "today";
 
-/** the plan with a design's streets turned; null if a trip would lose its way (a way in no longer reaching a way out it did) or a turned lane couldn't be driven */
+/** the plan with a design's streets turned; null if a trip would lose its way (a way in no longer reaching a way out it did), or any lane would be left with nothing onto it or off it */
 function designSketch(base: Sketch, streets: Street[], d: Design, idPrefix = "c"): Sketch | null {
   if (!d.moves.length) return base;
   const turn = d.moves.flatMap(m => lanesTurned(base, streets.find(s => s.id === m.street)!, m));
   const sk = turnLanes(base, turn, idPrefix);
   if (deadLanes(sk, turn).length) return null;
   const w = demandWays(base), ins = w.entries.flatMap(e => e.lanes), outs = w.exits.flatMap(e => e.lanes);
+  // (no lane anywhere left with nothing onto it or off it: a new way in or out is a street stub nobody can drive)
+  if (newEnds(base, sk).length) return null;
   const a = reach(base, ins, outs), b = reach(sk, ins, outs);
   for (const [e, set] of a) for (const x of set) if (!b.get(e)!.has(x)) return null;
   return sk;
@@ -254,7 +256,7 @@ async function optimize() {
     for (const s of streets) if (!used.has(s.id)) for (const m of movesOf(s)) {
       const d = { moves: [...cur.moves, m] }, sk = designSketch(base, streets, d);
       if (sk) tries.push({ d, file: "" });
-      else if (round === 1) console.log(`  ${s.name} ${m.to}: refused (a trip would lose its way, or a lane nobody could drive)`);
+      else if (round === 1) console.log(`  ${s.name} ${m.to}: refused (a trip would lose its way, or a lane left nobody could drive onto or off)`);
     }
     for (const t of tries) { t.file = fileOf(t.d); writeFileSync(t.file, JSON.stringify(designSketch(base, streets, t.d))); }
     // (today's layout too, every round, on the same seeds: what each is scored against)
@@ -302,9 +304,24 @@ async function final() {
 async function makePatch() {
   const base = loadPlan(), streets = candidates(base), mats = peakMatrices(base);
   const opt = JSON.parse(readFileSync(join(OUT, "optimize.json"), "utf8"));
-  const d: Design = arg("design") === "none" ? { moves: [] } : opt.best;
-  const sk = designSketch(base, streets, d, "c321-");
+  // (--steps n: the search's design after its first n steps, when the later ones didn't hold up on fresh seeds)
+  const d: Design = arg("design") === "none" ? { moves: [] } : { moves: opt.best.moves.slice(0, arg("steps") ? Number(arg("steps")) : undefined) };
+  const sk = designSketch(base, streets, d, arg("prefix", "c321-"));
   if (!sk) throw new Error("the design can't be made");
+  // (--against-db: the patch made against the plan as it is saved now, not as it was fetched; it must be this design's
+  // base, or a revision only an earlier patch of this ticket changed: --expect <revision>)
+  let cur: Sketch = base, curRev = JSON.parse(readFileSync(PLAN_FILE, "utf8")).revision as number;
+  if (argv.includes("--against-db")) {
+    const url = /^DATABASE_URL=(.*)$/m.exec(readFileSync(join(ROOT, ".env.local"), "utf8"))?.[1].trim().replace(/^"|"$/g, "");
+    const sql = postgres(url!, { max: 1 });
+    try {
+      const [{ d: db }] = await sql`select current_database() as d`;
+      if (db !== "railway") throw new Error(`database is ${db}, not railway`);
+      const [p] = await sql`select revision, sketch from plans where id = ${PLAN}`;
+      if (String(p.revision) !== arg("expect")) throw new Error(`the plan is at revision ${p.revision}, not ${arg("expect")}: look at what changed first`);
+      cur = sanitizeSketch(p.sketch)!; curRev = p.revision;
+    } finally { await sql.end(); }
+  }
   const changed = <T extends { id: string }>(was: T[], now: T[]) => {
     const old = new Map(was.map(x => [x.id, x]));
     return now.filter(x => JSON.stringify(old.get(x.id)) !== JSON.stringify(x)).map(x => {
@@ -316,14 +333,15 @@ async function makePatch() {
   };
   const nowIds = new Set(sk.connectors.map(c => c.id));
   const patch = {
-    lanes: changed(base.lanes, sk.lanes), roads: changed(base.roads, sk.roads), connectors: changed(base.connectors, sk.connectors),
-    matrices: mats,
-    remove: { connectors: base.connectors.filter(c => !nowIds.has(c.id)).map(c => c.id) },
+    lanes: changed(cur.lanes, sk.lanes), roads: changed(cur.roads, sk.roads), connectors: changed(cur.connectors, sk.connectors),
+    // (the matrices only where the plan hasn't them yet: an earlier patch of this ticket's may have added them)
+    matrices: mats.filter(m => !cur.matrices?.some(x => x.id === m.id)),
+    remove: { connectors: cur.connectors.filter(c => !nowIds.has(c.id)).map(c => c.id) },
   };
   writeFileSync(join(OUT, "patch.json"), JSON.stringify(patch, null, 1));
   const { checkPatch } = await import("../src/lib/agent-patch");
-  const r = checkPatch(JSON.stringify(patch), base, "check");
-  console.log(r.ok ? `patch.json: ${patch.lanes.length} lanes, ${patch.roads.length} roads, ${patch.connectors.length} connectors made, ${patch.remove.connectors.length} taken out, ${patch.matrices.length} matrices; applies to revision ${JSON.parse(readFileSync(PLAN_FILE, "utf8")).revision}` : `refused: ${r.errors.join("; ")}`);
+  const r = checkPatch(JSON.stringify(patch), cur, "check");
+  console.log(r.ok ? `patch.json: ${patch.lanes.length} lanes, ${patch.roads.length} roads, ${patch.connectors.length} connectors made, ${patch.remove.connectors.length} taken out, ${patch.matrices.length} matrices; applies to revision ${curRev}` : `refused: ${r.errors.join("; ")}`);
   if (!r.ok) process.exitCode = 1;
 }
 
@@ -352,7 +370,7 @@ async function mapOnly() { changesMap(); }
 /** the centre with the best design's turned streets: their lanes as they run now (red), the rest of the centre in grey */
 function changesMap(): void {
   const base = loadPlan(), streets = candidates(base), opt = JSON.parse(readFileSync(join(OUT, "optimize.json"), "utf8"));
-  const d: Design = opt.best, sk = designSketch(base, streets, d);
+  const d: Design = { moves: opt.best.moves.slice(0, arg("steps") ? Number(arg("steps")) : undefined) }, sk = designSketch(base, streets, d);
   if (!sk || !d.moves.length) return;
   const turned = new Set(d.moves.flatMap(m => lanesTurned(base, streets.find(s => s.id === m.street)!, m)));
   const moved = new Set(d.moves.flatMap(m => streets.find(s => s.id === m.street)!.roads.flatMap(r => base.roads.find(x => x.id === r)!.lanes)));

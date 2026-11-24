@@ -99,8 +99,10 @@ Titulescu and so on (`src/lib/experiments/tomtom-321/centre.ts`). It has no traf
 - a one-lane one-way street turned round.
 
 A change applies to a whole **street**: its road pieces of the same name, joined end to end and set out the same
-way. Turning round only half of a one-way street would point the halves at each other. The candidates are the
-centre's named streets, not the boulevards around it or unnamed pieces of junctions: **25 streets, 35 changes**.
+way, including pieces joined by connectors outside any drawn junction (those within 8 m of each other count as a
+junction of their own). Turning round only half of a one-way street would point the halves at each other. The
+candidates are the centre's named streets, not the boulevards around it or unnamed pieces of junctions:
+**33 streets**.
 
 **Making a change on the V2 plan** (`directions.ts`). The editor's "reverse lane" leaves a lane's connectors where
 they were, so the turns at both ends are made again, as one would draw them:
@@ -110,10 +112,15 @@ they were, so the turns at both ends are made again, as one would draw them:
 - a left turn goes from the leftmost lane to the leftmost lane;
 - a right turn goes from the rightmost lane to the rightmost lane.
 
-A turned lane's give-way or stop sign follows its street (none here had one). A change is **refused** when it would
-cut any trip off (some way in no longer reaching a way out it reaches today), or when it would leave a lane nobody
-can drive onto or off. Making Piața Centrală two-way is one example: it would run a lane back into a junction that
-every other road only leaves. **13 changes are sound**; `npm run tomtom-321:check` checks each one.
+A turned lane's give-way or stop sign follows its street (none here had one). A change is **refused** when it would:
+
+- cut any trip off (some way in no longer reaching a way out it reaches today);
+- leave a turned lane nobody can drive onto or off. Making Piața Centrală two-way is one example: it would run a
+  lane back into a junction that every other road only leaves;
+- leave **any** lane in the plan with nothing onto it or off it, a new way in or out.
+
+The last rule was added after the first patch (#7), which broke it (see below). `npm run tomtom-321:check` checks
+every change, and that case too.
 
 **The search** (`optimize`) is greedy. Each round tries every sound change on top of those already kept, in both
 peaks, on 2 seeds each, with today's layout run on the same seeds. The score is half the centre's delay
@@ -124,47 +131,61 @@ kept only if it beats the current design by more than 0.01, about the runs' nois
 
 | round | kept | score | runner-up |
 |---|---|---|---|
-| 1 | Str. Ecaterina Teodoroiu one-way (southbound) | 0.934 | Str. Liviu Rebreanu turned round, 0.935 |
-| 2 | + Str. Liviu Rebreanu turned round (south-west-bound) | 0.921 | + Str. M. Kogălniceanu one-way, 0.927 |
-| 3 | nothing better by 0.01 (best + Piața Unirii two-way, 0.917) | | |
-
-Making the two-lane one-way streets two-way never helped: Piața Unirii scored 1.002 and Str. Barbu Ș.
-Delavrancea 1.051.
-
-![The two streets changed](changes.svg)
+| 1 | Str. Ecaterina Teodoroiu one-way, southbound, along its whole length | 0.934 | its one-lane southern part turned round, 0.947 |
+| 2 | + Str. Dogarilor turned round | 0.901 | + Str. C. Dobrogeanu Gherea turned round, 0.913 |
+| 3 | nothing better by 0.01 (best + Str. Nicolae Titulescu turned round, 0.894) | | |
 
 **Checked on 6 fresh seeds per peak** (`final`):
 
-| | today | Ecaterina Teodoroiu one-way | + Liviu Rebreanu turned round |
+| | today | Ecaterina Teodoroiu one-way | + Dogarilor turned round |
 |---|---|---|---|
-| score | 1 | 0.955 | **0.933** |
-| morning: centre delay, vehicle-hours an hour | 8.17 | 7.03 | **6.69 (−16%)** |
-| evening: centre delay | 7.26 | 6.48 | **6.34 (−13%)** |
-| morning / evening: time per trip | 235 / 255 s | 241 / 260 s | 237 / 258 s |
-| morning / evening: trips an hour | 4,850 / 4,484 | 4,806 / 4,470 | 4,812 / 4,504 |
-| centre vehicle-km, morning / evening | 626 / 760 | 604 / 699 | 602 / 692 |
+| score | 1 | **0.955** | 0.945 |
+| morning: centre delay, vehicle-hours an hour | 8.17 | **7.03 (−12%)** | 7.17 (−6%) |
+| evening: centre delay | 7.26 | **6.48 (−11%)** | 6.13 (−16%) |
+| morning / evening: time per trip | 235 / 255 s | 241 / 260 s | 233 / 256 s |
+| morning / evening: trips an hour | 4,850 / 4,484 | 4,806 / 4,470 | 4,816 / 4,471 |
+| morning / evening: centre vehicle-km | 626 / 760 | 604 / 699 | 573 / 674 |
+| morning / evening: collisions a run | 9.3 / 3.3 | 8.5 / 6.2 | 5.8 / 4.7 |
+| morning / evening: deadlocks broken up a run | 1.3 / 3.7 | 12.2 / 9.2 | 1.2 / 10.8 |
 
-The evening gain shows on every seed (−10% to −16%). The morning is noisier: 0% to −35% by seed, −14% leaving
-out one run where Bd. Republicii × Str. Gării gridlocked. That junction is outside the centre and unchanged, and it
-is a weak spot today too. On three clean seeds the design sends no more traffic through it (705, 696, 616 cars
-against 746, 690, 641) and its delay per car is lower. Collisions are unchanged. Deadlocks broken up in the morning
-rise from 1.3 to 8.5 a run, mostly that one stall.
+**Delivered: Ecaterina Teodoroiu one-way only.**
 
-**What the two changes do.** Together they make a one-way loop on the centre's east side. Rebreanu brings
-traffic in from the ring (Bd. Gen. Grigore Bălan, Str. C. Roman Vivu), and Ecaterina Teodoroiu takes it south to
-Zorilor and Barbu Lăutaru on both lanes. That corner is then reached and left without crossing Piața Unirii, and
-the centre carries 4–9% fewer vehicle-km. The cost is a couple of seconds a trip for some longer ways round.
+- **The evening** gain shows on every seed (−7% to −15%).
+- **The morning** is noisier: −15, −5, +13, −10, −13 and −41% by seed. In one run, Bd. Republicii × Str. Gării
+  gridlocked. That junction is outside the centre and unchanged, it is a weak spot today too, and the change sends
+  no more traffic through it.
+- **Dogarilor turned round** on top improves the evening (−16%), but the morning gets worse and riskier: −6% on
+  average, with one run where the centre jammed (+79%). Its score gain, 0.01, is at the noise. It's a candidate to
+  look at, not a recommendation.
+- **The cost:** evening collisions rise from 3.3 to 6.2 a run, and deadlocks the simulation broke up itself rise in
+  both peaks. Look at the street's two ends before building it.
 
-## 4. Delivered
+![The street changed](changes.svg)
 
-**Agent patch #7** on the plan, for you to apply or reject:
+**What it does.** Str. Ecaterina Teodoroiu, on the centre's east side, carries two lanes south from Piața Unirii and
+Str. Liviu Rebreanu to Str. Zorilor and Str. Barbu Lăutaru. Northbound traffic takes the ring (Bd. Gen. Grigore
+Bălan) instead of crossing that corner. The centre carries 3–8% fewer vehicle-km, at a few seconds more a trip.
 
-- the two matrices, "Morning peak (TomTom)" (07:00–09:30) and "Evening peak (TomTom)" (15:30–18:30);
-- lanes l388 (Ecaterina Teodoroiu) and l2858 (Liviu Rebreanu) turned round;
-- 10 connectors out and 6 in (c321-1 … c321-6).
+## 4. Delivered, and the first patch's mistake
 
-The patch doesn't switch the demand in use: pick a matrix in Demand, or "By the time of day" with the clock at
-07:30 or 16:00. For this, agent patches can now carry demand matrices (`matrices` items; patch:check).
+- **Agent patch #7** (applied as revision 102): the two matrices, "Morning peak (TomTom)" (07:00–09:30) and
+  "Evening peak (TomTom)" (15:30–18:30), plus the first search's design, which was one piece of Ecaterina Teodoroiu
+  made one-way and Liviu Rebreanu turned round. **It was wrong.** The street goes on north in three short pieces,
+  joined by connectors outside any drawn junction, and those weren't taken as part of it. Two lanes were left with
+  nothing onto them (l395) or off them (l391), which the Demand panel shows as a new way in and out named "Strada
+  Ecaterina Teodoroiu". Under the matrices no cars were sent there, so the simulated results stood, but the plan got
+  two dead street stubs. The checks then only looked at the lanes turned round, not their neighbours.
+- **Agent patch #9** (it replaces #8, which had the same changes and understated the collisions), against revision
+  102:
+  - makes Ecaterina Teodoroiu one-way along its whole length (lanes l391, l393, l395 turned too);
+  - puts Liviu Rebreanu back as it was (its connectors c715, c1324, c1328, c5353);
+  - keeps the matrices.
+
+  Applied to revision 102 here, it leaves the plan with the same ways in and out as revision 101, no trip cut off,
+  and exactly the lanes and turns of the design simulated above.
+
+The patches don't switch the demand in use: pick a matrix in Demand, or "By the time of day" with the clock at 07:30
+or 16:00. For this, agent patches can now carry demand matrices (`matrices` items; patch:check).
 
 ## Limits
 
