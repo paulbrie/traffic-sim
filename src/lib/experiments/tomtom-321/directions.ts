@@ -11,7 +11,7 @@
  * it takes the sign the street had at its new end, or none (who goes first is then the simulation's rules: the main road,
  * left turns, from the right). Framework-free.
  */
-import { junctionContents, laneLength, pointAt, reverseLane, type Pt, type Sketch, type SketchConnector } from "../../lane-sketch";
+import { demandWays, junctionContents, laneLength, pointAt, reverseLane, type Pt, type Sketch, type SketchConnector } from "../../lane-sketch";
 
 export interface Street {
   id: string; name: string; roads: string[];
@@ -29,6 +29,18 @@ interface Ends { start: string | null; end: string | null }
 export function laneEnds(sk: Sketch): Map<string, Ends> {
   const jOf = new Map<string, string>();
   for (const j of sk.junctions) for (const c of junctionContents(sk, j).connectors) jOf.set(c, j.id);
+  // (connectors in no junction drawn, joining a road's pieces end to end: those within 8 m of each other, by where they
+  // leave their lane, count as one junction of their own, "at:<first connector's id>")
+  const loose = sk.connectors.filter(c => !jOf.has(c.id)).map(c => {
+    const l = sk.lanes.find(x => x.id === c.from.lane);
+    return { c, p: l ? pointAt(l.shape, Math.min(c.from.s, laneLength(l.shape))).p : null };
+  }).filter((x): x is { c: SketchConnector; p: Pt } => !!x.p);
+  const group = new Map<string, string>();
+  for (const x of loose) {
+    const near = loose.find(y => group.has(y.c.id) && Math.hypot(y.p.x - x.p.x, y.p.y - x.p.y) < 8);
+    group.set(x.c.id, near ? group.get(near.c.id)! : `at:${x.c.id}`);
+  }
+  for (const [c, g] of group) jOf.set(c, g);
   const out = new Map<string, Ends>(sk.lanes.map(l => [l.id, { start: null, end: null }]));
   const len = new Map(sk.lanes.map(l => [l.id, laneLength(l.shape)]));
   for (const c of sk.connectors) {
@@ -208,6 +220,17 @@ export function turnLanes(sk0: Sketch, turn: string[], idPrefix = "c"): Sketch {
 export function deadLanes(sk: Sketch, turned: string[]): string[] {
   const len = new Map(sk.lanes.map(l => [l.id, laneLength(l.shape)]));
   return turned.filter(id => !sk.connectors.some(c => c.to.lane === id && c.to.s < 0.5) || !sk.connectors.some(c => c.from.lane === id && c.from.s > len.get(id)! - 0.5));
+}
+
+/**
+ * The lanes a change leaves with nothing onto them or nothing off them that had both before: new ways in or out, which
+ * are stubs of street nobody can drive (a two-way street's other way, one piece on, left running out of a junction
+ * nothing now leads into). Not only the turned lanes: their neighbours too. A change leaving one is refused.
+ */
+export function newEnds(before: Sketch, after: Sketch): string[] {
+  const w0 = demandWays(before), w1 = demandWays(after);
+  const was = new Set([...w0.entries, ...w0.exits].flatMap(e => e.lanes));
+  return [...new Set([...w1.entries, ...w1.exits].flatMap(e => e.lanes))].filter(l => !was.has(l));
 }
 
 /** the ways out each way in reaches (lanes and connectors as a graph) */

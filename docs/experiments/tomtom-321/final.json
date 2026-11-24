@@ -26,7 +26,7 @@
      "to": "oneway1"
     },
     {
-     "street": "r1463",
+     "street": "r57",
      "to": "reverse"
     }
    ]
@@ -342,158 +342,158 @@
    "score": 0.955
   },
   {
-   "key": "r1463:reverse r218:oneway1",
+   "key": "r218:oneway1 r57:reverse",
    "peaks": {
     "tomtom-morning": [
      {
-      "trips": 4512,
-      "tripTime": 190,
-      "netTime": 256,
-      "centreDelay": 5.946,
-      "centreHours": 19.034,
-      "centreKm": 588,
-      "waiting": 76,
-      "deadlocks": 40,
-      "collisions": 5,
-      "onMap": 361
-     },
-     {
-      "trips": 4929,
-      "tripTime": 197,
-      "netTime": 231,
-      "centreDelay": 7.385,
-      "centreHours": 20.349,
-      "centreKm": 579,
+      "trips": 4716,
+      "tripTime": 187,
+      "netTime": 238,
+      "centreDelay": 6.407,
+      "centreHours": 18.046,
+      "centreKm": 539,
       "waiting": 0,
-      "deadlocks": 1,
-      "collisions": 8,
-      "onMap": 292
+      "deadlocks": 0,
+      "collisions": 10,
+      "onMap": 248
      },
      {
-      "trips": 4836,
-      "tripTime": 193,
-      "netTime": 235,
-      "centreDelay": 7.505,
-      "centreHours": 21.256,
-      "centreKm": 609,
+      "trips": 4725,
+      "tripTime": 192,
+      "netTime": 241,
+      "centreDelay": 5.919,
+      "centreHours": 18.722,
+      "centreKm": 579,
+      "waiting": 16,
+      "deadlocks": 7,
+      "collisions": 7,
+      "onMap": 257
+     },
+     {
+      "trips": 4737,
+      "tripTime": 186,
+      "netTime": 236,
+      "centreDelay": 8.071,
+      "centreHours": 20.959,
+      "centreKm": 596,
+      "waiting": 0,
+      "deadlocks": 0,
+      "collisions": 5,
+      "onMap": 249
+     },
+     {
+      "trips": 4932,
+      "tripTime": 196,
+      "netTime": 229,
+      "centreDelay": 11.237,
+      "centreHours": 23.857,
+      "centreKm": 570,
+      "waiting": 5,
+      "deadlocks": 0,
+      "collisions": 3,
+      "onMap": 267
+     },
+     {
+      "trips": 4830,
+      "tripTime": 186,
+      "netTime": 229,
+      "centreDelay": 5.53,
+      "centreHours": 17.714,
+      "centreKm": 570,
+      "waiting": 0,
+      "deadlocks": 0,
+      "collisions": 3,
+      "onMap": 280
+     },
+     {
+      "trips": 4956,
+      "tripTime": 194,
+      "netTime": 226,
+      "centreDelay": 5.876,
+      "centreHours": 18.998,
+      "centreKm": 585,
       "waiting": 0,
       "deadlocks": 0,
       "collisions": 7,
-      "onMap": 260
-     },
-     {
-      "trips": 4899,
-      "tripTime": 194,
-      "netTime": 231,
-      "centreDelay": 5.552,
-      "centreHours": 20.007,
-      "centreKm": 629,
-      "waiting": 0,
-      "deadlocks": 0,
-      "collisions": 8,
-      "onMap": 227
-     },
-     {
-      "trips": 4773,
-      "tripTime": 195,
-      "netTime": 241,
-      "centreDelay": 6.58,
-      "centreHours": 20.721,
-      "centreKm": 635,
-      "waiting": 1,
-      "deadlocks": 4,
-      "collisions": 12,
-      "onMap": 260
-     },
-     {
-      "trips": 4920,
-      "tripTime": 193,
-      "netTime": 228,
-      "centreDelay": 7.194,
-      "centreHours": 19.831,
-      "centreKm": 574,
-      "waiting": 0,
-      "deadlocks": 6,
-      "collisions": 8,
-      "onMap": 280
+      "onMap": 255
      }
     ],
     "tomtom-evening": [
      {
-      "trips": 4557,
-      "tripTime": 201,
-      "netTime": 254,
-      "centreDelay": 6.587,
-      "centreHours": 23.537,
-      "centreKm": 704,
-      "waiting": 13,
-      "deadlocks": 5,
-      "collisions": 5,
-      "onMap": 258
+      "trips": 4416,
+      "tripTime": 190,
+      "netTime": 256,
+      "centreDelay": 5.914,
+      "centreHours": 20.726,
+      "centreKm": 663,
+      "waiting": 0,
+      "deadlocks": 0,
+      "collisions": 10,
+      "onMap": 253
      },
      {
-      "trips": 4449,
-      "tripTime": 199,
-      "netTime": 261,
-      "centreDelay": 6.392,
-      "centreHours": 22.122,
-      "centreKm": 678,
+      "trips": 4422,
+      "tripTime": 189,
+      "netTime": 255,
+      "centreDelay": 6.382,
+      "centreHours": 22.558,
+      "centreKm": 697,
       "waiting": 1,
       "deadlocks": 0,
-      "collisions": 4,
-      "onMap": 282
+      "collisions": 3,
+      "onMap": 257
      },
      {
-      "trips": 4515,
-      "tripTime": 205,
-      "netTime": 261,
-      "centreDelay": 6.48,
-      "centreHours": 22.871,
-      "centreKm": 681,
+      "trips": 4500,
+      "tripTime": 196,
+      "netTime": 255,
+      "centreDelay": 5.953,
+      "centreHours": 20.721,
+      "centreKm": 640,
       "waiting": 0,
-      "deadlocks": 15,
-      "collisions": 6,
-      "onMap": 238
-     },
-     {
-      "trips": 4593,
-      "tripTime": 197,
-      "netTime": 248,
-      "centreDelay": 6.035,
-      "centreHours": 22.074,
-      "centreKm": 686,
-      "waiting": 2,
       "deadlocks": 0,
       "collisions": 1,
-      "onMap": 268
+      "onMap": 237
      },
      {
-      "trips": 4470,
-      "tripTime": 197,
-      "netTime": 257,
-      "centreDelay": 6.335,
-      "centreHours": 23.097,
-      "centreKm": 718,
+      "trips": 4632,
+      "tripTime": 198,
+      "netTime": 246,
+      "centreDelay": 6.367,
+      "centreHours": 22.462,
+      "centreKm": 710,
       "waiting": 0,
       "deadlocks": 0,
-      "collisions": 2,
-      "onMap": 242
+      "collisions": 3,
+      "onMap": 251
      },
      {
-      "trips": 4437,
-      "tripTime": 202,
-      "netTime": 264,
-      "centreDelay": 6.218,
-      "centreHours": 22.841,
-      "centreKm": 685,
-      "waiting": 9,
-      "deadlocks": 12,
-      "collisions": 8,
-      "onMap": 253
+      "trips": 4485,
+      "tripTime": 193,
+      "netTime": 253,
+      "centreDelay": 6.298,
+      "centreHours": 22.064,
+      "centreKm": 683,
+      "waiting": 0,
+      "deadlocks": 0,
+      "collisions": 6,
+      "onMap": 246
+     },
+     {
+      "trips": 4371,
+      "tripTime": 206,
+      "netTime": 273,
+      "centreDelay": 5.841,
+      "centreHours": 20.815,
+      "centreKm": 650,
+      "waiting": 84,
+      "deadlocks": 65,
+      "collisions": 5,
+      "onMap": 312
      }
     ]
    },
-   "score": 0.933
+   "score": 0.945
   }
  ]
 }

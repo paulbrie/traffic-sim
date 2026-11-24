@@ -1,6 +1,34 @@
 {
  "streets": [
   {
+   "id": "r304",
+   "name": "Pasajul XI",
+   "roads": [
+    "r304",
+    "r305"
+   ],
+   "kind": "1+1",
+   "cls": {
+    "l546": 0,
+    "l548": 0,
+    "l547": 1,
+    "l549": 1
+   },
+   "lengthM": 108
+  },
+  {
+   "id": "r53",
+   "name": "Piața Centrală",
+   "roads": [
+    "r53"
+   ],
+   "kind": "1",
+   "cls": {
+    "l105": 0
+   },
+   "lengthM": 133
+  },
+  {
    "id": "r62",
    "name": "Piața Centrală",
    "roads": [
@@ -25,6 +53,18 @@
     "l596": 1
    },
    "lengthM": 39
+  },
+  {
+   "id": "r341",
+   "name": "Piața Mică",
+   "roads": [
+    "r341"
+   ],
+   "kind": "1",
+   "cls": {
+    "l608": 0
+   },
+   "lengthM": 34
   },
   {
    "id": "r393",
@@ -68,13 +108,15 @@
    "id": "r1332",
    "name": "Strada Albert Berger",
    "roads": [
+    "r379",
     "r1332"
    ],
    "kind": "1",
    "cls": {
+    "l680": 0,
     "l2596": 0
    },
-   "lengthM": 74
+   "lengthM": 97
   },
   {
    "id": "r342",
@@ -141,28 +183,36 @@
    "lengthM": 13
   },
   {
-   "id": "r245",
-   "name": "Strada Constantin Dobrogeanu Gherea",
+   "id": "r460",
+   "name": "Strada Ciprian Porumbescu",
    "roads": [
-    "r245"
+    "r460",
+    "r461"
    ],
    "kind": "1",
    "cls": {
-    "l432": 0
+    "l821": 0,
+    "l822": 0
    },
-   "lengthM": 105
+   "lengthM": 94
   },
   {
-   "id": "r466",
+   "id": "r245",
    "name": "Strada Constantin Dobrogeanu Gherea",
    "roads": [
+    "r245",
+    "r246",
+    "r247",
     "r466"
    ],
    "kind": "1",
    "cls": {
+    "l432": 0,
+    "l433": 0,
+    "l434": 0,
     "l831": 0
    },
-   "lengthM": 36
+   "lengthM": 228
   },
   {
    "id": "r57",
@@ -170,31 +220,59 @@
    "roads": [
     "r57",
     "r58",
-    "r59"
+    "r59",
+    "r60",
+    "r61"
    ],
    "kind": "1",
    "cls": {
     "l111": 0,
     "l112": 0,
-    "l113": 0
+    "l113": 0,
+    "l115": 0,
+    "l114": 0
    },
-   "lengthM": 167
+   "lengthM": 244
+  },
+  {
+   "id": "r1487",
+   "name": "Strada Dogarilor",
+   "roads": [
+    "r1487",
+    "r1488",
+    "r1489",
+    "r1490"
+   ],
+   "kind": "1",
+   "cls": {
+    "l2901": 0,
+    "l2902": 0,
+    "l2903": 0,
+    "l2904": 0
+   },
+   "lengthM": 163
   },
   {
    "id": "r1415",
    "name": "Strada Dornei",
    "roads": [
+    "r55",
+    "r56",
     "r1415",
     "r1416"
    ],
    "kind": "2",
    "cls": {
-    "l2758": 0,
-    "l2760": 0,
+    "l107": 0,
+    "l109": 0,
+    "l108": 0,
+    "l110": 0,
+    "l2761": 0,
     "l2759": 0,
-    "l2761": 0
+    "l2760": 0,
+    "l2758": 0
    },
-   "lengthM": 84
+   "lengthM": 401
   },
   {
    "id": "r1419",
@@ -209,17 +287,40 @@
    "lengthM": 15
   },
   {
+   "id": "r74",
+   "name": "Strada Ecaterina Teodoroiu",
+   "roads": [
+    "r74",
+    "r76"
+   ],
+   "kind": "1",
+   "cls": {
+    "l139": 0,
+    "l141": 0
+   },
+   "lengthM": 287
+  },
+  {
    "id": "r218",
    "name": "Strada Ecaterina Teodoroiu",
    "roads": [
-    "r218"
+    "r218",
+    "r219",
+    "r220",
+    "r221"
    ],
    "kind": "1+1",
    "cls": {
     "l388": 0,
-    "l389": 1
+    "l395": 0,
+    "l389": 1,
+    "l394": 1,
+    "l392": 1,
+    "l390": 1,
+    "l393": 0,
+    "l391": 0
    },
-   "lengthM": 81
+   "lengthM": 184
   },
   {
    "id": "r1366",
@@ -250,18 +351,34 @@
    "lengthM": 91
   },
   {
-   "id": "r110",
-   "name": "Strada Mihail Kogălniceanu",
+   "id": "r1414",
+   "name": "Strada Mihai Eminescu",
    "roads": [
-    "r110",
-    "r111"
+    "r1414"
    ],
    "kind": "1",
    "cls": {
+    "l2757": 0
+   },
+   "lengthM": 68
+  },
+  {
+   "id": "r110",
+   "name": "Strada Mihail Kogălniceanu",
+   "roads": [
+    "r71",
+    "r110",
+    "r111",
+    "r1562"
+   ],
+   "kind": "1",
+   "cls": {
+    "l134": 0,
+    "l3058": 0,
     "l196": 0,
     "l197": 0
    },
-   "lengthM": 112
+   "lengthM": 213
   },
   {
    "id": "r462",
@@ -280,17 +397,33 @@
    "id": "r1379",
    "name": "Strada Nicolae Titulescu",
    "roads": [
+    "r347",
+    "r348",
     "r1379",
     "r1380",
     "r1506"
    ],
    "kind": "1",
    "cls": {
-    "l2684": 0,
+    "l618": 0,
+    "l619": 0,
+    "l2934": 0,
     "l2685": 0,
-    "l2934": 0
+    "l2684": 0
    },
-   "lengthM": 147
+   "lengthM": 259
+  },
+  {
+   "id": "r1485",
+   "name": "Strada Parcului",
+   "roads": [
+    "r1485"
+   ],
+   "kind": "1",
+   "cls": {
+    "l2899": 0
+   },
+   "lengthM": 47
   },
   {
    "id": "r1505",
@@ -318,6 +451,22 @@
     "l602": 0
    },
    "lengthM": 233
+  },
+  {
+   "id": "r339",
+   "name": "Strada Zorilor",
+   "roads": [
+    "r339",
+    "r340"
+   ],
+   "kind": "1+1",
+   "cls": {
+    "l604": 0,
+    "l606": 0,
+    "l605": 1,
+    "l607": 1
+   },
+   "lengthM": 210
   },
   {
    "id": "r1296",
@@ -404,61 +553,61 @@
      }
     },
     {
-     "key": "r1463:reverse",
-     "score": 0.935,
+     "key": "r74:reverse",
+     "score": 0.947,
      "eval": {
-      "key": "r1463:reverse",
+      "key": "r74:reverse",
       "peaks": {
        "tomtom-morning": [
         {
-         "trips": 4893,
+         "trips": 4881,
          "tripTime": 200,
-         "netTime": 236,
-         "centreDelay": 6.311,
-         "centreHours": 21.613,
+         "netTime": 237,
+         "centreDelay": 7.058,
+         "centreHours": 21.463,
          "centreKm": 663,
          "waiting": 0,
          "deadlocks": 0,
-         "collisions": 8,
-         "onMap": 246
+         "collisions": 11,
+         "onMap": 251
         },
         {
-         "trips": 4830,
-         "tripTime": 200,
-         "netTime": 241,
-         "centreDelay": 7.199,
-         "centreHours": 21.87,
-         "centreKm": 646,
-         "waiting": 3,
-         "deadlocks": 4,
+         "trips": 4671,
+         "tripTime": 210,
+         "netTime": 262,
+         "centreDelay": 5.891,
+         "centreHours": 19.662,
+         "centreKm": 631,
+         "waiting": 61,
+         "deadlocks": 42,
          "collisions": 8,
-         "onMap": 257
+         "onMap": 307
         }
        ],
        "tomtom-evening": [
         {
-         "trips": 4407,
-         "tripTime": 198,
-         "netTime": 263,
-         "centreDelay": 6.493,
-         "centreHours": 22.997,
-         "centreKm": 701,
+         "trips": 4413,
+         "tripTime": 200,
+         "netTime": 264,
+         "centreDelay": 6.796,
+         "centreHours": 22.118,
+         "centreKm": 692,
          "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 7,
-         "onMap": 234
+         "deadlocks": 5,
+         "collisions": 11,
+         "onMap": 236
         },
         {
-         "trips": 4545,
-         "tripTime": 195,
-         "netTime": 250,
-         "centreDelay": 5.757,
-         "centreHours": 21.236,
-         "centreKm": 668,
+         "trips": 4533,
+         "tripTime": 196,
+         "netTime": 252,
+         "centreDelay": 6.104,
+         "centreHours": 20.524,
+         "centreKm": 670,
          "waiting": 0,
-         "deadlocks": 4,
-         "collisions": 1,
-         "onMap": 248
+         "deadlocks": 0,
+         "collisions": 6,
+         "onMap": 251
         }
        ]
       }
@@ -526,67 +675,6 @@
      }
     },
     {
-     "key": "r1379:reverse",
-     "score": 0.958,
-     "eval": {
-      "key": "r1379:reverse",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4902,
-         "tripTime": 200,
-         "netTime": 236,
-         "centreDelay": 6.733,
-         "centreHours": 21.76,
-         "centreKm": 675,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 7,
-         "onMap": 245
-        },
-        {
-         "trips": 4800,
-         "tripTime": 199,
-         "netTime": 242,
-         "centreDelay": 7.249,
-         "centreHours": 21.655,
-         "centreKm": 650,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 7,
-         "onMap": 261
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4404,
-         "tripTime": 195,
-         "netTime": 261,
-         "centreDelay": 6.843,
-         "centreHours": 22.857,
-         "centreKm": 693,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 6,
-         "onMap": 235
-        },
-        {
-         "trips": 4455,
-         "tripTime": 199,
-         "netTime": 261,
-         "centreDelay": 6.027,
-         "centreHours": 20.97,
-         "centreKm": 667,
-         "waiting": 23,
-         "deadlocks": 30,
-         "collisions": 4,
-         "onMap": 277
-        }
-       ]
-      }
-     }
-    },
-    {
      "key": "r110:reverse",
      "score": 0.963,
      "eval": {
@@ -642,128 +730,6 @@
          "deadlocks": 0,
          "collisions": 2,
          "onMap": 244
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r218:oneway0",
-     "score": 0.976,
-     "eval": {
-      "key": "r218:oneway0",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4893,
-         "tripTime": 197,
-         "netTime": 234,
-         "centreDelay": 6.956,
-         "centreHours": 22.612,
-         "centreKm": 705,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 5,
-         "onMap": 251
-        },
-        {
-         "trips": 4848,
-         "tripTime": 199,
-         "netTime": 238,
-         "centreDelay": 7.344,
-         "centreHours": 22.62,
-         "centreKm": 696,
-         "waiting": 0,
-         "deadlocks": 4,
-         "collisions": 10,
-         "onMap": 249
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4356,
-         "tripTime": 198,
-         "netTime": 267,
-         "centreDelay": 7.212,
-         "centreHours": 24.32,
-         "centreKm": 753,
-         "waiting": 20,
-         "deadlocks": 11,
-         "collisions": 4,
-         "onMap": 253
-        },
-        {
-         "trips": 4530,
-         "tripTime": 193,
-         "netTime": 250,
-         "centreDelay": 6.66,
-         "centreHours": 22.841,
-         "centreKm": 728,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 3,
-         "onMap": 247
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r462:oneway0",
-     "score": 0.98,
-     "eval": {
-      "key": "r462:oneway0",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4911,
-         "tripTime": 199,
-         "netTime": 234,
-         "centreDelay": 7.998,
-         "centreHours": 23.399,
-         "centreKm": 697,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 8,
-         "onMap": 242
-        },
-        {
-         "trips": 4848,
-         "tripTime": 197,
-         "netTime": 237,
-         "centreDelay": 6.867,
-         "centreHours": 22.182,
-         "centreKm": 699,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 6,
-         "onMap": 250
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4410,
-         "tripTime": 195,
-         "netTime": 260,
-         "centreDelay": 7.151,
-         "centreHours": 24.454,
-         "centreKm": 765,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 5,
-         "onMap": 233
-        },
-        {
-         "trips": 4539,
-         "tripTime": 193,
-         "netTime": 248,
-         "centreDelay": 6.84,
-         "centreHours": 23.264,
-         "centreKm": 744,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 0,
-         "onMap": 246
         }
        ]
       }
@@ -892,6 +858,67 @@
      }
     },
     {
+     "key": "r339:oneway0",
+     "score": 0.999,
+     "eval": {
+      "key": "r339:oneway0",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4869,
+         "tripTime": 199,
+         "netTime": 237,
+         "centreDelay": 7.887,
+         "centreHours": 23.672,
+         "centreKm": 707,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 9,
+         "onMap": 249
+        },
+        {
+         "trips": 4746,
+         "tripTime": 204,
+         "netTime": 251,
+         "centreDelay": 7.766,
+         "centreHours": 22.982,
+         "centreKm": 693,
+         "waiting": 5,
+         "deadlocks": 20,
+         "collisions": 7,
+         "onMap": 278
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4413,
+         "tripTime": 197,
+         "netTime": 262,
+         "centreDelay": 7.163,
+         "centreHours": 24.366,
+         "centreKm": 757,
+         "waiting": 0,
+         "deadlocks": 5,
+         "collisions": 4,
+         "onMap": 234
+        },
+        {
+         "trips": 4533,
+         "tripTime": 193,
+         "netTime": 249,
+         "centreDelay": 6.553,
+         "centreHours": 22.843,
+         "centreKm": 733,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 2,
+         "onMap": 247
+        }
+       ]
+      }
+     }
+    },
+    {
      "key": "today",
      "score": 1,
      "eval": {
@@ -953,96 +980,35 @@
      }
     },
     {
-     "key": "r336:reverse",
-     "score": 1.001,
+     "key": "r460:reverse",
+     "score": 1,
      "eval": {
-      "key": "r336:reverse",
+      "key": "r460:reverse",
       "peaks": {
        "tomtom-morning": [
         {
-         "trips": 4881,
-         "tripTime": 200,
-         "netTime": 237,
-         "centreDelay": 8.382,
-         "centreHours": 23.504,
-         "centreKm": 710,
-         "waiting": 0,
-         "deadlocks": 2,
-         "collisions": 8,
-         "onMap": 255
-        },
-        {
-         "trips": 4800,
-         "tripTime": 207,
-         "netTime": 250,
-         "centreDelay": 7.183,
-         "centreHours": 22.778,
-         "centreKm": 714,
-         "waiting": 0,
-         "deadlocks": 12,
-         "collisions": 6,
-         "onMap": 261
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4392,
-         "tripTime": 194,
-         "netTime": 261,
-         "centreDelay": 7.435,
-         "centreHours": 24.139,
-         "centreKm": 771,
+         "trips": 4899,
+         "tripTime": 199,
+         "netTime": 235,
+         "centreDelay": 8.503,
+         "centreHours": 24.055,
+         "centreKm": 700,
          "waiting": 0,
          "deadlocks": 0,
-         "collisions": 4,
-         "onMap": 238
+         "collisions": 13,
+         "onMap": 248
         },
         {
-         "trips": 4554,
-         "tripTime": 193,
-         "netTime": 248,
-         "centreDelay": 6.629,
-         "centreHours": 22.886,
-         "centreKm": 745,
-         "waiting": 2,
-         "deadlocks": 0,
-         "collisions": 3,
-         "onMap": 246
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r393:twoway",
-     "score": 1.002,
-     "eval": {
-      "key": "r393:twoway",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4917,
-         "tripTime": 198,
-         "netTime": 232,
-         "centreDelay": 6.714,
-         "centreHours": 21.832,
-         "centreKm": 687,
+         "trips": 4713,
+         "tripTime": 205,
+         "netTime": 254,
+         "centreDelay": 7.121,
+         "centreHours": 22.133,
+         "centreKm": 684,
          "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 6,
-         "onMap": 241
-        },
-        {
-         "trips": 4647,
-         "tripTime": 212,
-         "netTime": 265,
-         "centreDelay": 8.305,
-         "centreHours": 22.978,
-         "centreKm": 668,
-         "waiting": 71,
-         "deadlocks": 49,
-         "collisions": 11,
-         "onMap": 319
+         "deadlocks": 22,
+         "collisions": 12,
+         "onMap": 289
         }
        ],
        "tomtom-evening": [
@@ -1050,85 +1016,85 @@
          "trips": 4416,
          "tripTime": 195,
          "netTime": 260,
-         "centreDelay": 7.415,
-         "centreHours": 24.189,
-         "centreKm": 743,
+         "centreDelay": 7.191,
+         "centreHours": 24.281,
+         "centreKm": 753,
          "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 3,
-         "onMap": 234
+         "deadlocks": 5,
+         "collisions": 7,
+         "onMap": 233
         },
         {
          "trips": 4539,
-         "tripTime": 195,
-         "netTime": 251,
-         "centreDelay": 6.635,
-         "centreHours": 22.58,
-         "centreKm": 722,
+         "tripTime": 193,
+         "netTime": 249,
+         "centreDelay": 6.722,
+         "centreHours": 23.041,
+         "centreKm": 734,
          "waiting": 0,
-         "deadlocks": 1,
-         "collisions": 3,
-         "onMap": 248
+         "deadlocks": 0,
+         "collisions": 2,
+         "onMap": 245
         }
        ]
       }
      }
     },
     {
-     "key": "r1332:reverse",
-     "score": 1.036,
+     "key": "r57:reverse",
+     "score": 1.017,
      "eval": {
-      "key": "r1332:reverse",
+      "key": "r57:reverse",
       "peaks": {
        "tomtom-morning": [
         {
-         "trips": 4875,
-         "tripTime": 197,
-         "netTime": 235,
-         "centreDelay": 8.214,
-         "centreHours": 23.932,
-         "centreKm": 710,
+         "trips": 4848,
+         "tripTime": 199,
+         "netTime": 239,
+         "centreDelay": 7.428,
+         "centreHours": 23.406,
+         "centreKm": 709,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 10,
+         "onMap": 254
+        },
+        {
+         "trips": 4827,
+         "tripTime": 198,
+         "netTime": 239,
+         "centreDelay": 9.165,
+         "centreHours": 24.29,
+         "centreKm": 687,
          "waiting": 2,
          "deadlocks": 1,
          "collisions": 6,
-         "onMap": 249
-        },
-        {
-         "trips": 4590,
-         "tripTime": 207,
-         "netTime": 265,
-         "centreDelay": 8.739,
-         "centreHours": 23.72,
-         "centreKm": 681,
-         "waiting": 37,
-         "deadlocks": 38,
-         "collisions": 8,
-         "onMap": 330
+         "onMap": 263
         }
        ],
        "tomtom-evening": [
         {
-         "trips": 4410,
-         "tripTime": 195,
-         "netTime": 261,
-         "centreDelay": 7.229,
-         "centreHours": 24.679,
-         "centreKm": 772,
-         "waiting": 0,
+         "trips": 4407,
+         "tripTime": 194,
+         "netTime": 260,
+         "centreDelay": 7.021,
+         "centreHours": 23.746,
+         "centreKm": 736,
+         "waiting": 5,
          "deadlocks": 0,
-         "collisions": 5,
-         "onMap": 235
+         "collisions": 8,
+         "onMap": 233
         },
         {
-         "trips": 4545,
-         "tripTime": 194,
+         "trips": 4536,
+         "tripTime": 193,
          "netTime": 249,
-         "centreDelay": 6.983,
-         "centreHours": 23.524,
-         "centreKm": 751,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 3,
+         "centreDelay": 6.988,
+         "centreHours": 22.95,
+         "centreKm": 718,
+         "waiting": 1,
+         "deadlocks": 1,
+         "collisions": 2,
          "onMap": 246
         }
        ]
@@ -1191,6 +1157,67 @@
          "deadlocks": 0,
          "collisions": 1,
          "onMap": 247
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r245:reverse",
+     "score": 1.076,
+     "eval": {
+      "key": "r245:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4893,
+         "tripTime": 198,
+         "netTime": 234,
+         "centreDelay": 7.437,
+         "centreHours": 22.941,
+         "centreKm": 699,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 7,
+         "onMap": 245
+        },
+        {
+         "trips": 4704,
+         "tripTime": 198,
+         "netTime": 249,
+         "centreDelay": 12.869,
+         "centreHours": 27.345,
+         "centreKm": 657,
+         "waiting": 34,
+         "deadlocks": 9,
+         "collisions": 10,
+         "onMap": 292
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4443,
+         "tripTime": 195,
+         "netTime": 258,
+         "centreDelay": 7.07,
+         "centreHours": 23.966,
+         "centreKm": 746,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 5,
+         "onMap": 230
+        },
+        {
+         "trips": 4542,
+         "tripTime": 194,
+         "netTime": 249,
+         "centreDelay": 6.567,
+         "centreHours": 22.599,
+         "centreKm": 724,
+         "waiting": 1,
+         "deadlocks": 0,
+         "collisions": 3,
+         "onMap": 245
         }
        ]
       }
@@ -1261,61 +1288,122 @@
    "currentScore": 0.934,
    "tried": [
     {
-     "key": "r1463:reverse r218:oneway1",
-     "score": 0.921,
+     "key": "r218:oneway1 r57:reverse",
+     "score": 0.901,
      "eval": {
-      "key": "r1463:reverse r218:oneway1",
+      "key": "r218:oneway1 r57:reverse",
       "peaks": {
        "tomtom-morning": [
         {
-         "trips": 4905,
+         "trips": 4947,
          "tripTime": 198,
-         "netTime": 234,
-         "centreDelay": 6.045,
-         "centreHours": 21.374,
-         "centreKm": 664,
+         "netTime": 231,
+         "centreDelay": 5.625,
+         "centreHours": 18.54,
+         "centreKm": 589,
          "waiting": 0,
          "deadlocks": 0,
-         "collisions": 7,
-         "onMap": 247
+         "collisions": 11,
+         "onMap": 253
         },
         {
-         "trips": 4839,
-         "tripTime": 201,
+         "trips": 4779,
+         "tripTime": 196,
          "netTime": 241,
-         "centreDelay": 6.733,
-         "centreHours": 21.37,
-         "centreKm": 644,
+         "centreDelay": 5.727,
+         "centreHours": 18.307,
+         "centreKm": 574,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 9,
+         "onMap": 213
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4650,
+         "tripTime": 199,
+         "netTime": 245,
+         "centreDelay": 6.694,
+         "centreHours": 21.844,
+         "centreKm": 674,
          "waiting": 0,
          "deadlocks": 10,
-         "collisions": 6,
+         "collisions": 9,
+         "onMap": 278
+        },
+        {
+         "trips": 4275,
+         "tripTime": 190,
+         "netTime": 267,
+         "centreDelay": 5.821,
+         "centreHours": 19.81,
+         "centreKm": 620,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 5,
+         "onMap": 247
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r218:oneway1 r245:reverse",
+     "score": 0.913,
+     "eval": {
+      "key": "r218:oneway1 r245:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4875,
+         "tripTime": 197,
+         "netTime": 235,
+         "centreDelay": 6.326,
+         "centreHours": 21.181,
+         "centreKm": 668,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 9,
+         "onMap": 249
+        },
+        {
+         "trips": 4842,
+         "tripTime": 198,
+         "netTime": 238,
+         "centreDelay": 6.393,
+         "centreHours": 20.691,
+         "centreKm": 650,
+         "waiting": 0,
+         "deadlocks": 4,
+         "collisions": 9,
          "onMap": 253
         }
        ],
        "tomtom-evening": [
         {
-         "trips": 4419,
-         "tripTime": 196,
-         "netTime": 261,
-         "centreDelay": 6.446,
-         "centreHours": 22.943,
-         "centreKm": 699,
+         "trips": 4410,
+         "tripTime": 197,
+         "netTime": 262,
+         "centreDelay": 6.227,
+         "centreHours": 21.962,
+         "centreKm": 688,
          "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 5,
+         "deadlocks": 5,
+         "collisions": 6,
          "onMap": 232
         },
         {
-         "trips": 4554,
-         "tripTime": 196,
-         "netTime": 250,
-         "centreDelay": 5.805,
-         "centreHours": 21.258,
-         "centreKm": 667,
+         "trips": 4545,
+         "tripTime": 194,
+         "netTime": 249,
+         "centreDelay": 5.75,
+         "centreHours": 20.323,
+         "centreKm": 654,
          "waiting": 0,
          "deadlocks": 0,
-         "collisions": 2,
-         "onMap": 249
+         "collisions": 1,
+         "onMap": 253
         }
        ]
       }
@@ -1566,6 +1654,128 @@
      }
     },
     {
+     "key": "r218:oneway1 r460:reverse",
+     "score": 0.934,
+     "eval": {
+      "key": "r218:oneway1 r460:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4887,
+         "tripTime": 198,
+         "netTime": 235,
+         "centreDelay": 6.35,
+         "centreHours": 21.187,
+         "centreKm": 670,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 6,
+         "onMap": 245
+        },
+        {
+         "trips": 4827,
+         "tripTime": 197,
+         "netTime": 239,
+         "centreDelay": 7.364,
+         "centreHours": 21.826,
+         "centreKm": 658,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 4,
+         "onMap": 258
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4416,
+         "tripTime": 195,
+         "netTime": 260,
+         "centreDelay": 6.378,
+         "centreHours": 22.276,
+         "centreKm": 697,
+         "waiting": 0,
+         "deadlocks": 2,
+         "collisions": 8,
+         "onMap": 229
+        },
+        {
+         "trips": 4524,
+         "tripTime": 192,
+         "netTime": 249,
+         "centreDelay": 5.824,
+         "centreHours": 20.572,
+         "centreKm": 663,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 5,
+         "onMap": 250
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r1463:reverse r218:oneway1",
+     "score": 0.938,
+     "eval": {
+      "key": "r1463:reverse r218:oneway1",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4893,
+         "tripTime": 200,
+         "netTime": 236,
+         "centreDelay": 6.037,
+         "centreHours": 21.36,
+         "centreKm": 665,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 10,
+         "onMap": 246
+        },
+        {
+         "trips": 4842,
+         "tripTime": 198,
+         "netTime": 238,
+         "centreDelay": 7.328,
+         "centreHours": 21.949,
+         "centreKm": 644,
+         "waiting": 0,
+         "deadlocks": 2,
+         "collisions": 6,
+         "onMap": 250
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4425,
+         "tripTime": 198,
+         "netTime": 262,
+         "centreDelay": 6.944,
+         "centreHours": 23.419,
+         "centreKm": 699,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 9,
+         "onMap": 232
+        },
+        {
+         "trips": 4548,
+         "tripTime": 197,
+         "netTime": 251,
+         "centreDelay": 5.675,
+         "centreHours": 21.198,
+         "centreKm": 670,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 2,
+         "onMap": 247
+        }
+       ]
+      }
+     }
+    },
+    {
      "key": "r218:oneway1 r72:oneway1",
      "score": 0.939,
      "eval": {
@@ -1627,244 +1837,122 @@
      }
     },
     {
-     "key": "r218:oneway1 r336:reverse",
-     "score": 0.939,
+     "key": "r218:oneway1 r339:oneway0",
+     "score": 0.942,
      "eval": {
-      "key": "r218:oneway1 r336:reverse",
+      "key": "r218:oneway1 r339:oneway0",
       "peaks": {
        "tomtom-morning": [
         {
-         "trips": 4914,
-         "tripTime": 201,
-         "netTime": 235,
-         "centreDelay": 7.521,
-         "centreHours": 22.219,
-         "centreKm": 690,
+         "trips": 4896,
+         "tripTime": 197,
+         "netTime": 233,
+         "centreDelay": 6.592,
+         "centreHours": 21.73,
+         "centreKm": 681,
          "waiting": 0,
-         "deadlocks": 1,
-         "collisions": 4,
-         "onMap": 238
+         "deadlocks": 0,
+         "collisions": 9,
+         "onMap": 242
         },
         {
-         "trips": 4755,
-         "tripTime": 204,
-         "netTime": 250,
-         "centreDelay": 6.263,
-         "centreHours": 21.058,
-         "centreKm": 676,
+         "trips": 4824,
+         "tripTime": 197,
+         "netTime": 239,
+         "centreDelay": 7.601,
+         "centreHours": 22.214,
+         "centreKm": 663,
          "waiting": 0,
-         "deadlocks": 18,
-         "collisions": 9,
-         "onMap": 278
+         "deadlocks": 4,
+         "collisions": 7,
+         "onMap": 254
         }
        ],
        "tomtom-evening": [
         {
-         "trips": 4398,
-         "tripTime": 194,
-         "netTime": 260,
-         "centreDelay": 6.428,
-         "centreHours": 21.904,
-         "centreKm": 712,
+         "trips": 4371,
+         "tripTime": 195,
+         "netTime": 263,
+         "centreDelay": 6.289,
+         "centreHours": 22.218,
+         "centreKm": 696,
+         "waiting": 2,
+         "deadlocks": 7,
+         "collisions": 8,
+         "onMap": 242
+        },
+        {
+         "trips": 4545,
+         "tripTime": 193,
+         "netTime": 249,
+         "centreDelay": 5.897,
+         "centreHours": 20.83,
+         "centreKm": 670,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 2,
+         "onMap": 247
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r218:oneway1 r74:reverse",
+     "score": 0.964,
+     "eval": {
+      "key": "r218:oneway1 r74:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4839,
+         "tripTime": 200,
+         "netTime": 240,
+         "centreDelay": 6.573,
+         "centreHours": 20.854,
+         "centreKm": 659,
+         "waiting": 2,
+         "deadlocks": 4,
+         "collisions": 8,
+         "onMap": 262
+        },
+        {
+         "trips": 4845,
+         "tripTime": 199,
+         "netTime": 239,
+         "centreDelay": 7.913,
+         "centreHours": 22.04,
+         "centreKm": 649,
+         "waiting": 0,
+         "deadlocks": 3,
+         "collisions": 3,
+         "onMap": 248
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4350,
+         "tripTime": 199,
+         "netTime": 269,
+         "centreDelay": 6.581,
+         "centreHours": 21.91,
+         "centreKm": 690,
+         "waiting": 9,
+         "deadlocks": 13,
+         "collisions": 7,
+         "onMap": 254
+        },
+        {
+         "trips": 4536,
+         "tripTime": 196,
+         "netTime": 252,
+         "centreDelay": 6.088,
+         "centreHours": 20.591,
+         "centreKm": 670,
          "waiting": 0,
          "deadlocks": 0,
          "collisions": 7,
-         "onMap": 237
-        },
-        {
-         "trips": 4557,
-         "tripTime": 193,
-         "netTime": 248,
-         "centreDelay": 5.853,
-         "centreHours": 20.791,
-         "centreKm": 681,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 4,
-         "onMap": 249
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r1379:reverse r218:oneway1",
-     "score": 0.954,
-     "eval": {
-      "key": "r1379:reverse r218:oneway1",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4914,
-         "tripTime": 198,
-         "netTime": 233,
-         "centreDelay": 6.819,
-         "centreHours": 21.396,
-         "centreKm": 657,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 10,
-         "onMap": 240
-        },
-        {
-         "trips": 4590,
-         "tripTime": 208,
-         "netTime": 266,
-         "centreDelay": 7.406,
-         "centreHours": 21.172,
-         "centreKm": 619,
-         "waiting": 67,
-         "deadlocks": 43,
-         "collisions": 10,
-         "onMap": 332
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4425,
-         "tripTime": 197,
-         "netTime": 261,
-         "centreDelay": 6.35,
-         "centreHours": 21.85,
-         "centreKm": 667,
-         "waiting": 0,
-         "deadlocks": 5,
-         "collisions": 8,
-         "onMap": 230
-        },
-        {
-         "trips": 4551,
-         "tripTime": 193,
-         "netTime": 248,
-         "centreDelay": 5.842,
-         "centreHours": 20.42,
-         "centreKm": 643,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 1,
-         "onMap": 242
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r218:oneway1 r462:oneway0",
-     "score": 0.955,
-     "eval": {
-      "key": "r218:oneway1 r462:oneway0",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4887,
-         "tripTime": 198,
-         "netTime": 235,
-         "centreDelay": 7.524,
-         "centreHours": 22.593,
-         "centreKm": 676,
-         "waiting": 0,
-         "deadlocks": 2,
-         "collisions": 8,
-         "onMap": 245
-        },
-        {
-         "trips": 4779,
-         "tripTime": 202,
-         "netTime": 247,
-         "centreDelay": 6.863,
-         "centreHours": 21.565,
-         "centreKm": 669,
-         "waiting": 0,
-         "deadlocks": 21,
-         "collisions": 9,
-         "onMap": 273
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4410,
-         "tripTime": 196,
-         "netTime": 261,
-         "centreDelay": 6.731,
-         "centreHours": 22.924,
-         "centreKm": 709,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 8,
-         "onMap": 235
-        },
-        {
-         "trips": 4551,
-         "tripTime": 194,
-         "netTime": 249,
-         "centreDelay": 5.911,
-         "centreHours": 20.946,
-         "centreKm": 676,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 3,
-         "onMap": 243
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r1332:reverse r218:oneway1",
-     "score": 0.958,
-     "eval": {
-      "key": "r1332:reverse r218:oneway1",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4908,
-         "tripTime": 201,
-         "netTime": 236,
-         "centreDelay": 7.768,
-         "centreHours": 22.831,
-         "centreKm": 681,
-         "waiting": 0,
-         "deadlocks": 2,
-         "collisions": 10,
-         "onMap": 243
-        },
-        {
-         "trips": 4836,
-         "tripTime": 199,
-         "netTime": 240,
-         "centreDelay": 6.97,
-         "centreHours": 21.661,
-         "centreKm": 668,
-         "waiting": 0,
-         "deadlocks": 6,
-         "collisions": 8,
-         "onMap": 250
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4413,
-         "tripTime": 195,
-         "netTime": 261,
-         "centreDelay": 6.635,
-         "centreHours": 22.873,
-         "centreKm": 713,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 6,
-         "onMap": 234
-        },
-        {
-         "trips": 4551,
-         "tripTime": 194,
-         "netTime": 249,
-         "centreDelay": 6.038,
-         "centreHours": 21.165,
-         "centreKm": 682,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 4,
-         "onMap": 240
+         "onMap": 248
         }
        ]
       }
@@ -1992,488 +2080,427 @@
   },
   {
    "round": 3,
-   "current": "r1463:reverse r218:oneway1",
-   "currentScore": 0.921,
+   "current": "r218:oneway1 r57:reverse",
+   "currentScore": 0.901,
    "tried": [
     {
-     "key": "r1463:reverse r218:oneway1 r393:twoway",
-     "score": 0.917,
+     "key": "r1379:reverse r218:oneway1 r57:reverse",
+     "score": 0.894,
      "eval": {
-      "key": "r1463:reverse r218:oneway1 r393:twoway",
+      "key": "r1379:reverse r218:oneway1 r57:reverse",
       "peaks": {
        "tomtom-morning": [
         {
-         "trips": 4914,
-         "tripTime": 199,
-         "netTime": 234,
-         "centreDelay": 6.071,
-         "centreHours": 21.454,
-         "centreKm": 667,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 14,
-         "onMap": 244
-        },
-        {
-         "trips": 4314,
-         "tripTime": 204,
-         "netTime": 282,
-         "centreDelay": 5.539,
-         "centreHours": 19.687,
-         "centreKm": 620,
-         "waiting": 75,
-         "deadlocks": 59,
-         "collisions": 10,
-         "onMap": 425
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4434,
+         "trips": 4980,
          "tripTime": 197,
-         "netTime": 260,
-         "centreDelay": 6.365,
-         "centreHours": 22.807,
-         "centreKm": 698,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 5,
-         "onMap": 232
-        },
-        {
-         "trips": 4542,
-         "tripTime": 196,
-         "netTime": 251,
-         "centreDelay": 5.656,
-         "centreHours": 21.141,
-         "centreKm": 668,
-         "waiting": 1,
-         "deadlocks": 0,
-         "collisions": 3,
-         "onMap": 247
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r110:reverse r1463:reverse r218:oneway1",
-     "score": 0.92,
-     "eval": {
-      "key": "r110:reverse r1463:reverse r218:oneway1",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4860,
-         "tripTime": 201,
-         "netTime": 240,
-         "centreDelay": 6.32,
-         "centreHours": 21.386,
-         "centreKm": 650,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 9,
-         "onMap": 258
-        },
-        {
-         "trips": 4500,
-         "tripTime": 216,
-         "netTime": 279,
-         "centreDelay": 5.591,
-         "centreHours": 19.532,
-         "centreKm": 608,
-         "waiting": 56,
-         "deadlocks": 45,
-         "collisions": 6,
-         "onMap": 367
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4422,
-         "tripTime": 197,
-         "netTime": 261,
-         "centreDelay": 6.303,
-         "centreHours": 22.24,
-         "centreKm": 668,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 6,
-         "onMap": 234
-        },
-        {
-         "trips": 4539,
-         "tripTime": 197,
-         "netTime": 252,
-         "centreDelay": 5.508,
-         "centreHours": 20.271,
-         "centreKm": 631,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 1,
-         "onMap": 250
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r1463:reverse r218:oneway1",
-     "score": 0.921,
-     "eval": {
-      "key": "r1463:reverse r218:oneway1",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4905,
-         "tripTime": 198,
-         "netTime": 234,
-         "centreDelay": 6.045,
-         "centreHours": 21.374,
-         "centreKm": 664,
+         "netTime": 227,
+         "centreDelay": 5.391,
+         "centreHours": 18.568,
+         "centreKm": 598,
          "waiting": 0,
          "deadlocks": 0,
          "collisions": 7,
-         "onMap": 247
+         "onMap": 254
         },
         {
-         "trips": 4839,
-         "tripTime": 201,
-         "netTime": 241,
-         "centreDelay": 6.733,
-         "centreHours": 21.37,
-         "centreKm": 644,
+         "trips": 4731,
+         "tripTime": 196,
+         "netTime": 244,
+         "centreDelay": 5.447,
+         "centreHours": 18.077,
+         "centreKm": 570,
          "waiting": 0,
-         "deadlocks": 10,
+         "deadlocks": 0,
          "collisions": 6,
-         "onMap": 253
+         "onMap": 222
         }
        ],
        "tomtom-evening": [
         {
-         "trips": 4419,
-         "tripTime": 196,
-         "netTime": 261,
-         "centreDelay": 6.446,
-         "centreHours": 22.943,
-         "centreKm": 699,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 5,
-         "onMap": 232
-        },
-        {
-         "trips": 4554,
-         "tripTime": 196,
-         "netTime": 250,
-         "centreDelay": 5.805,
-         "centreHours": 21.258,
-         "centreKm": 667,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 2,
-         "onMap": 249
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r1463:reverse r218:oneway1 r72:oneway1",
-     "score": 0.922,
-     "eval": {
-      "key": "r1463:reverse r218:oneway1 r72:oneway1",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4893,
-         "tripTime": 200,
-         "netTime": 236,
-         "centreDelay": 5.912,
-         "centreHours": 21.358,
-         "centreKm": 670,
-         "waiting": 2,
-         "deadlocks": 0,
-         "collisions": 5,
-         "onMap": 253
-        },
-        {
-         "trips": 4827,
+         "trips": 4653,
          "tripTime": 197,
-         "netTime": 238,
-         "centreDelay": 6.732,
-         "centreHours": 21.608,
-         "centreKm": 654,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 11,
-         "onMap": 261
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4410,
-         "tripTime": 196,
-         "netTime": 261,
-         "centreDelay": 6.609,
-         "centreHours": 23.308,
-         "centreKm": 709,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 8,
-         "onMap": 236
-        },
-        {
-         "trips": 4539,
-         "tripTime": 196,
-         "netTime": 251,
-         "centreDelay": 5.799,
-         "centreHours": 21.467,
-         "centreKm": 676,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 1,
-         "onMap": 249
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r1463:reverse r218:oneway1 r342:reverse",
-     "score": 0.923,
-     "eval": {
-      "key": "r1463:reverse r218:oneway1 r342:reverse",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4905,
-         "tripTime": 198,
-         "netTime": 234,
-         "centreDelay": 6.045,
-         "centreHours": 21.374,
-         "centreKm": 664,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 7,
-         "onMap": 247
-        },
-        {
-         "trips": 4839,
-         "tripTime": 201,
-         "netTime": 241,
-         "centreDelay": 6.733,
-         "centreHours": 21.37,
-         "centreKm": 644,
-         "waiting": 0,
-         "deadlocks": 10,
-         "collisions": 6,
-         "onMap": 253
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4398,
-         "tripTime": 198,
-         "netTime": 264,
-         "centreDelay": 6.608,
-         "centreHours": 23.098,
-         "centreKm": 698,
-         "waiting": 0,
-         "deadlocks": 5,
-         "collisions": 3,
-         "onMap": 237
-        },
-        {
-         "trips": 4551,
-         "tripTime": 196,
-         "netTime": 250,
-         "centreDelay": 5.687,
-         "centreHours": 21.131,
-         "centreKm": 666,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 2,
-         "onMap": 249
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r1463:reverse r218:oneway1 r336:reverse",
-     "score": 0.927,
-     "eval": {
-      "key": "r1463:reverse r218:oneway1 r336:reverse",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4896,
-         "tripTime": 199,
-         "netTime": 235,
-         "centreDelay": 6.314,
-         "centreHours": 21.034,
+         "netTime": 244,
+         "centreDelay": 6.957,
+         "centreHours": 22.612,
          "centreKm": 690,
          "waiting": 0,
          "deadlocks": 0,
          "collisions": 6,
-         "onMap": 242
+         "onMap": 273
         },
         {
-         "trips": 4854,
-         "tripTime": 201,
-         "netTime": 240,
-         "centreDelay": 6.814,
-         "centreHours": 21.63,
-         "centreKm": 677,
+         "trips": 4323,
+         "tripTime": 192,
+         "netTime": 265,
+         "centreDelay": 5.747,
+         "centreHours": 19.844,
+         "centreKm": 622,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 1,
+         "onMap": 242
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r218:oneway1 r339:oneway0 r57:reverse",
+     "score": 0.895,
+     "eval": {
+      "key": "r218:oneway1 r339:oneway0 r57:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4764,
+         "tripTime": 194,
+         "netTime": 241,
+         "centreDelay": 5.188,
+         "centreHours": 18.013,
+         "centreKm": 583,
+         "waiting": 84,
+         "deadlocks": 38,
+         "collisions": 11,
+         "onMap": 321
+        },
+        {
+         "trips": 4770,
+         "tripTime": 199,
+         "netTime": 245,
+         "centreDelay": 5.441,
+         "centreHours": 18.123,
+         "centreKm": 578,
          "waiting": 0,
          "deadlocks": 4,
-         "collisions": 8,
-         "onMap": 255
+         "collisions": 10,
+         "onMap": 215
         }
        ],
        "tomtom-evening": [
         {
-         "trips": 4425,
+         "trips": 4641,
          "tripTime": 196,
-         "netTime": 260,
-         "centreDelay": 6.446,
-         "centreHours": 22.096,
-         "centreKm": 720,
+         "netTime": 243,
+         "centreDelay": 6.834,
+         "centreHours": 22.04,
+         "centreKm": 678,
+         "waiting": 0,
+         "deadlocks": 5,
+         "collisions": 7,
+         "onMap": 280
+        },
+        {
+         "trips": 4317,
+         "tripTime": 191,
+         "netTime": 264,
+         "centreDelay": 5.71,
+         "centreHours": 19.628,
+         "centreKm": 618,
          "waiting": 0,
          "deadlocks": 0,
          "collisions": 7,
-         "onMap": 230
-        },
-        {
-         "trips": 4539,
-         "tripTime": 194,
-         "netTime": 249,
-         "centreDelay": 5.866,
-         "centreHours": 21.058,
-         "centreKm": 691,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 3,
-         "onMap": 249
+         "onMap": 238
         }
        ]
       }
      }
     },
     {
-     "key": "r1379:reverse r1463:reverse r218:oneway1",
-     "score": 0.934,
+     "key": "r218:oneway1 r462:oneway1 r57:reverse",
+     "score": 0.896,
      "eval": {
-      "key": "r1379:reverse r1463:reverse r218:oneway1",
+      "key": "r218:oneway1 r462:oneway1 r57:reverse",
       "peaks": {
        "tomtom-morning": [
         {
-         "trips": 4866,
+         "trips": 4869,
          "tripTime": 201,
          "netTime": 239,
-         "centreDelay": 5.938,
-         "centreHours": 20.968,
-         "centreKm": 643,
-         "waiting": 0,
-         "deadlocks": 0,
+         "centreDelay": 5.295,
+         "centreHours": 17.963,
+         "centreKm": 573,
+         "waiting": 45,
+         "deadlocks": 19,
          "collisions": 8,
-         "onMap": 253
+         "onMap": 282
         },
         {
-         "trips": 4824,
-         "tripTime": 200,
+         "trips": 4755,
+         "tripTime": 195,
          "netTime": 242,
-         "centreDelay": 7.553,
-         "centreHours": 21.706,
-         "centreKm": 616,
+         "centreDelay": 5.603,
+         "centreHours": 18.159,
+         "centreKm": 568,
          "waiting": 0,
          "deadlocks": 0,
-         "collisions": 6,
-         "onMap": 261
+         "collisions": 9,
+         "onMap": 223
         }
        ],
        "tomtom-evening": [
         {
-         "trips": 4413,
-         "tripTime": 199,
-         "netTime": 263,
-         "centreDelay": 6.437,
-         "centreHours": 22.331,
-         "centreKm": 653,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 4,
-         "onMap": 237
-        },
-        {
-         "trips": 4530,
+         "trips": 4668,
          "tripTime": 198,
-         "netTime": 254,
-         "centreDelay": 5.489,
-         "centreHours": 20.133,
-         "centreKm": 623,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 4,
-         "onMap": 252
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r1463:reverse r218:oneway1 r462:oneway0",
-     "score": 0.938,
-     "eval": {
-      "key": "r1463:reverse r218:oneway1 r462:oneway0",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4893,
-         "tripTime": 198,
-         "netTime": 234,
-         "centreDelay": 6.108,
-         "centreHours": 21.544,
+         "netTime": 244,
+         "centreDelay": 6.762,
+         "centreHours": 21.858,
          "centreKm": 670,
          "waiting": 0,
          "deadlocks": 0,
-         "collisions": 6,
-         "onMap": 249
+         "collisions": 9,
+         "onMap": 277
         },
         {
-         "trips": 4812,
-         "tripTime": 203,
-         "netTime": 245,
-         "centreDelay": 7.366,
-         "centreHours": 22.254,
-         "centreKm": 655,
+         "trips": 4299,
+         "tripTime": 192,
+         "netTime": 266,
+         "centreDelay": 5.665,
+         "centreHours": 19.437,
+         "centreKm": 601,
          "waiting": 0,
-         "deadlocks": 5,
-         "collisions": 8,
-         "onMap": 262
+         "deadlocks": 0,
+         "collisions": 5,
+         "onMap": 245
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r218:oneway1 r342:reverse r57:reverse",
+     "score": 0.897,
+     "eval": {
+      "key": "r218:oneway1 r342:reverse r57:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4935,
+         "tripTime": 200,
+         "netTime": 233,
+         "centreDelay": 5.628,
+         "centreHours": 18.61,
+         "centreKm": 592,
+         "waiting": 0,
+         "deadlocks": 6,
+         "collisions": 12,
+         "onMap": 258
+        },
+        {
+         "trips": 4734,
+         "tripTime": 193,
+         "netTime": 242,
+         "centreDelay": 5.438,
+         "centreHours": 18.041,
+         "centreKm": 575,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 6,
+         "onMap": 225
         }
        ],
        "tomtom-evening": [
         {
-         "trips": 4416,
-         "tripTime": 196,
-         "netTime": 261,
-         "centreDelay": 6.563,
-         "centreHours": 23.266,
-         "centreKm": 708,
-         "waiting": 2,
+         "trips": 4662,
+         "tripTime": 197,
+         "netTime": 243,
+         "centreDelay": 6.695,
+         "centreHours": 21.852,
+         "centreKm": 675,
+         "waiting": 0,
          "deadlocks": 0,
-         "collisions": 6,
-         "onMap": 237
+         "collisions": 8,
+         "onMap": 274
         },
         {
-         "trips": 4560,
+         "trips": 4275,
+         "tripTime": 190,
+         "netTime": 267,
+         "centreDelay": 5.821,
+         "centreHours": 19.81,
+         "centreKm": 620,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 5,
+         "onMap": 247
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r218:oneway1 r57:reverse",
+     "score": 0.901,
+     "eval": {
+      "key": "r218:oneway1 r57:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4947,
+         "tripTime": 198,
+         "netTime": 231,
+         "centreDelay": 5.625,
+         "centreHours": 18.54,
+         "centreKm": 589,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 11,
+         "onMap": 253
+        },
+        {
+         "trips": 4779,
+         "tripTime": 196,
+         "netTime": 241,
+         "centreDelay": 5.727,
+         "centreHours": 18.307,
+         "centreKm": 574,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 9,
+         "onMap": 213
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4650,
+         "tripTime": 199,
+         "netTime": 245,
+         "centreDelay": 6.694,
+         "centreHours": 21.844,
+         "centreKm": 674,
+         "waiting": 0,
+         "deadlocks": 10,
+         "collisions": 9,
+         "onMap": 278
+        },
+        {
+         "trips": 4275,
+         "tripTime": 190,
+         "netTime": 267,
+         "centreDelay": 5.821,
+         "centreHours": 19.81,
+         "centreKm": 620,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 5,
+         "onMap": 247
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r218:oneway1 r460:reverse r57:reverse",
+     "score": 0.901,
+     "eval": {
+      "key": "r218:oneway1 r460:reverse r57:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4947,
+         "tripTime": 198,
+         "netTime": 231,
+         "centreDelay": 5.625,
+         "centreHours": 18.54,
+         "centreKm": 589,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 11,
+         "onMap": 253
+        },
+        {
+         "trips": 4779,
+         "tripTime": 196,
+         "netTime": 241,
+         "centreDelay": 5.727,
+         "centreHours": 18.307,
+         "centreKm": 574,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 9,
+         "onMap": 213
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4650,
+         "tripTime": 199,
+         "netTime": 245,
+         "centreDelay": 6.694,
+         "centreHours": 21.844,
+         "centreKm": 674,
+         "waiting": 0,
+         "deadlocks": 10,
+         "collisions": 9,
+         "onMap": 278
+        },
+        {
+         "trips": 4275,
+         "tripTime": 190,
+         "netTime": 267,
+         "centreDelay": 5.821,
+         "centreHours": 19.81,
+         "centreKm": 620,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 5,
+         "onMap": 247
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r218:oneway1 r245:reverse r57:reverse",
+     "score": 0.904,
+     "eval": {
+      "key": "r218:oneway1 r245:reverse r57:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4968,
+         "tripTime": 196,
+         "netTime": 227,
+         "centreDelay": 5.255,
+         "centreHours": 18.034,
+         "centreKm": 582,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 6,
+         "onMap": 253
+        },
+        {
+         "trips": 4758,
+         "tripTime": 196,
+         "netTime": 242,
+         "centreDelay": 6.525,
+         "centreHours": 19.019,
+         "centreKm": 569,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 4,
+         "onMap": 221
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4650,
          "tripTime": 195,
-         "netTime": 249,
-         "centreDelay": 5.878,
-         "centreHours": 21.645,
-         "centreKm": 681,
+         "netTime": 242,
+         "centreDelay": 6.575,
+         "centreHours": 21.862,
+         "centreKm": 679,
+         "waiting": 0,
+         "deadlocks": 1,
+         "collisions": 3,
+         "onMap": 275
+        },
+        {
+         "trips": 4290,
+         "tripTime": 191,
+         "netTime": 266,
+         "centreDelay": 5.808,
+         "centreHours": 19.697,
+         "centreKm": 615,
          "waiting": 0,
          "deadlocks": 0,
          "collisions": 4,
@@ -2484,183 +2511,305 @@
      }
     },
     {
-     "key": "r1463:reverse r218:oneway1 r462:oneway1",
-     "score": 0.949,
+     "key": "r110:reverse r218:oneway1 r57:reverse",
+     "score": 0.909,
      "eval": {
-      "key": "r1463:reverse r218:oneway1 r462:oneway1",
+      "key": "r110:reverse r218:oneway1 r57:reverse",
       "peaks": {
        "tomtom-morning": [
         {
-         "trips": 4878,
+         "trips": 4941,
          "tripTime": 200,
-         "netTime": 237,
-         "centreDelay": 6.168,
-         "centreHours": 21.278,
-         "centreKm": 652,
+         "netTime": 233,
+         "centreDelay": 5.182,
+         "centreHours": 18.014,
+         "centreKm": 581,
          "waiting": 2,
+         "deadlocks": 7,
+         "collisions": 7,
+         "onMap": 259
+        },
+        {
+         "trips": 4410,
+         "tripTime": 210,
+         "netTime": 280,
+         "centreDelay": 5.671,
+         "centreHours": 17.81,
+         "centreKm": 552,
+         "waiting": 95,
+         "deadlocks": 56,
+         "collisions": 5,
+         "onMap": 335
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4659,
+         "tripTime": 199,
+         "netTime": 245,
+         "centreDelay": 6.635,
+         "centreHours": 21.755,
+         "centreKm": 671,
+         "waiting": 0,
+         "deadlocks": 4,
+         "collisions": 4,
+         "onMap": 279
+        },
+        {
+         "trips": 4299,
+         "tripTime": 192,
+         "netTime": 266,
+         "centreDelay": 5.665,
+         "centreHours": 19.437,
+         "centreKm": 601,
+         "waiting": 0,
          "deadlocks": 0,
-         "collisions": 9,
+         "collisions": 5,
+         "onMap": 245
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r218:oneway1 r57:reverse r72:oneway1",
+     "score": 0.912,
+     "eval": {
+      "key": "r218:oneway1 r57:reverse r72:oneway1",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4956,
+         "tripTime": 197,
+         "netTime": 229,
+         "centreDelay": 5.537,
+         "centreHours": 18.695,
+         "centreKm": 600,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 1,
          "onMap": 252
         },
         {
-         "trips": 4836,
-         "tripTime": 199,
-         "netTime": 239,
-         "centreDelay": 7.487,
-         "centreHours": 21.829,
-         "centreKm": 626,
-         "waiting": 0,
-         "deadlocks": 1,
-         "collisions": 13,
-         "onMap": 257
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4386,
-         "tripTime": 198,
-         "netTime": 265,
-         "centreDelay": 6.601,
-         "centreHours": 22.561,
-         "centreKm": 669,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 5,
-         "onMap": 240
-        },
-        {
-         "trips": 4260,
-         "tripTime": 212,
-         "netTime": 285,
-         "centreDelay": 5.291,
-         "centreHours": 19.744,
-         "centreKm": 617,
-         "waiting": 28,
-         "deadlocks": 52,
-         "collisions": 5,
-         "onMap": 338
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r1332:reverse r1463:reverse r218:oneway1",
-     "score": 0.951,
-     "eval": {
-      "key": "r1332:reverse r1463:reverse r218:oneway1",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4887,
-         "tripTime": 200,
-         "netTime": 237,
-         "centreDelay": 6.345,
-         "centreHours": 21.893,
-         "centreKm": 676,
-         "waiting": 0,
-         "deadlocks": 2,
-         "collisions": 4,
-         "onMap": 250
-        },
-        {
-         "trips": 4623,
-         "tripTime": 208,
-         "netTime": 263,
-         "centreDelay": 6.999,
-         "centreHours": 21.594,
-         "centreKm": 640,
-         "waiting": 23,
-         "deadlocks": 27,
-         "collisions": 9,
-         "onMap": 326
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4410,
-         "tripTime": 197,
-         "netTime": 262,
-         "centreDelay": 6.62,
-         "centreHours": 23.37,
-         "centreKm": 713,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 5,
-         "onMap": 239
-        },
-        {
-         "trips": 4518,
-         "tripTime": 196,
-         "netTime": 253,
-         "centreDelay": 6.013,
-         "centreHours": 21.818,
-         "centreKm": 685,
-         "waiting": 0,
-         "deadlocks": 0,
-         "collisions": 4,
-         "onMap": 253
-        }
-       ]
-      }
-     }
-    },
-    {
-     "key": "r1463:reverse r218:oneway1 r248:twoway",
-     "score": 0.97,
-     "eval": {
-      "key": "r1463:reverse r218:oneway1 r248:twoway",
-      "peaks": {
-       "tomtom-morning": [
-        {
-         "trips": 4914,
-         "tripTime": 200,
-         "netTime": 234,
-         "centreDelay": 7.491,
-         "centreHours": 23.457,
-         "centreKm": 696,
-         "waiting": 0,
-         "deadlocks": 1,
-         "collisions": 6,
-         "onMap": 244
-        },
-        {
-         "trips": 4821,
-         "tripTime": 196,
-         "netTime": 238,
-         "centreDelay": 7.41,
-         "centreHours": 22.682,
-         "centreKm": 677,
-         "waiting": 0,
-         "deadlocks": 6,
-         "collisions": 3,
-         "onMap": 258
-        }
-       ],
-       "tomtom-evening": [
-        {
-         "trips": 4419,
-         "tripTime": 198,
-         "netTime": 262,
-         "centreDelay": 7.021,
-         "centreHours": 24.081,
-         "centreKm": 727,
+         "trips": 4755,
+         "tripTime": 195,
+         "netTime": 242,
+         "centreDelay": 5.929,
+         "centreHours": 18.647,
+         "centreKm": 580,
          "waiting": 0,
          "deadlocks": 0,
          "collisions": 7,
-         "onMap": 233
+         "onMap": 221
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4650,
+         "tripTime": 205,
+         "netTime": 251,
+         "centreDelay": 6.827,
+         "centreHours": 22.295,
+         "centreKm": 685,
+         "waiting": 0,
+         "deadlocks": 23,
+         "collisions": 6,
+         "onMap": 276
         },
         {
-         "trips": 4557,
-         "tripTime": 196,
-         "netTime": 250,
-         "centreDelay": 6.181,
-         "centreHours": 22.096,
-         "centreKm": 691,
-         "waiting": 1,
+         "trips": 4302,
+         "tripTime": 193,
+         "netTime": 267,
+         "centreDelay": 6.025,
+         "centreHours": 20.321,
+         "centreKm": 634,
+         "waiting": 0,
          "deadlocks": 0,
-         "collisions": 2,
-         "onMap": 251
+         "collisions": 4,
+         "onMap": 247
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r1463:reverse r218:oneway1 r57:reverse",
+     "score": 0.913,
+     "eval": {
+      "key": "r1463:reverse r218:oneway1 r57:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4974,
+         "tripTime": 200,
+         "netTime": 231,
+         "centreDelay": 6.246,
+         "centreHours": 19.409,
+         "centreKm": 587,
+         "waiting": 1,
+         "deadlocks": 4,
+         "collisions": 7,
+         "onMap": 255
+        },
+        {
+         "trips": 4770,
+         "tripTime": 197,
+         "netTime": 242,
+         "centreDelay": 5.829,
+         "centreHours": 18.607,
+         "centreKm": 570,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 6,
+         "onMap": 220
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4656,
+         "tripTime": 200,
+         "netTime": 246,
+         "centreDelay": 6.851,
+         "centreHours": 22.468,
+         "centreKm": 666,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 8,
+         "onMap": 282
+        },
+        {
+         "trips": 4293,
+         "tripTime": 195,
+         "netTime": 270,
+         "centreDelay": 5.602,
+         "centreHours": 19.743,
+         "centreKm": 607,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 7,
+         "onMap": 248
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r218:oneway1 r248:twoway r57:reverse",
+     "score": 0.937,
+     "eval": {
+      "key": "r218:oneway1 r248:twoway r57:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4962,
+         "tripTime": 198,
+         "netTime": 229,
+         "centreDelay": 6.765,
+         "centreHours": 19.536,
+         "centreKm": 581,
+         "waiting": 3,
+         "deadlocks": 5,
+         "collisions": 5,
+         "onMap": 255
+        },
+        {
+         "trips": 4737,
+         "tripTime": 199,
+         "netTime": 247,
+         "centreDelay": 6.391,
+         "centreHours": 18.885,
+         "centreKm": 571,
+         "waiting": 0,
+         "deadlocks": 1,
+         "collisions": 6,
+         "onMap": 231
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4638,
+         "tripTime": 203,
+         "netTime": 250,
+         "centreDelay": 6.988,
+         "centreHours": 21.903,
+         "centreKm": 666,
+         "waiting": 0,
+         "deadlocks": 4,
+         "collisions": 16,
+         "onMap": 282
+        },
+        {
+         "trips": 4302,
+         "tripTime": 195,
+         "netTime": 269,
+         "centreDelay": 5.671,
+         "centreHours": 19.3,
+         "centreKm": 605,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 3,
+         "onMap": 249
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "r218:oneway1 r57:reverse r74:reverse",
+     "score": 0.96,
+     "eval": {
+      "key": "r218:oneway1 r57:reverse r74:reverse",
+      "peaks": {
+       "tomtom-morning": [
+        {
+         "trips": 4989,
+         "tripTime": 194,
+         "netTime": 223,
+         "centreDelay": 9.045,
+         "centreHours": 23.611,
+         "centreKm": 673,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 8,
+         "onMap": 276
+        },
+        {
+         "trips": 4734,
+         "tripTime": 189,
+         "netTime": 239,
+         "centreDelay": 5.386,
+         "centreHours": 18.321,
+         "centreKm": 591,
+         "waiting": 0,
+         "deadlocks": 0,
+         "collisions": 12,
+         "onMap": 254
+        }
+       ],
+       "tomtom-evening": [
+        {
+         "trips": 4116,
+         "tripTime": 201,
+         "netTime": 288,
+         "centreDelay": 6.181,
+         "centreHours": 20.488,
+         "centreKm": 638,
+         "waiting": 196,
+         "deadlocks": 74,
+         "collisions": 4,
+         "onMap": 430
+        },
+        {
+         "trips": 4464,
+         "tripTime": 194,
+         "netTime": 256,
+         "centreDelay": 6.578,
+         "centreHours": 20.825,
+         "centreKm": 639,
+         "waiting": 0,
+         "deadlocks": 5,
+         "collisions": 8,
+         "onMap": 234
         }
        ]
       }
@@ -2733,7 +2882,7 @@
     "to": "oneway1"
    },
    {
-    "street": "r1463",
+    "street": "r57",
     "to": "reverse"
    }
   ]

@@ -14,7 +14,7 @@ import { join } from "path";
 import { demandWays, laneLength, pointAt, sanitizeSketch, type Sketch } from "../src/lib/lane-sketch";
 import { observed, type Peak } from "../src/lib/experiments/tomtom-321/observed";
 import { endsOf, gravityMatrix } from "../src/lib/experiments/tomtom-321/demand";
-import { deadLanes, laneEnds, lanesTurned, movesOf, reach, streetsIn, turnLanes } from "../src/lib/experiments/tomtom-321/directions";
+import { deadLanes, laneEnds, lanesTurned, newEnds, movesOf, reach, streetsIn, turnLanes } from "../src/lib/experiments/tomtom-321/directions";
 import { inCentre } from "../src/lib/experiments/tomtom-321/centre";
 import { run, withMatrix } from "../src/lib/experiments/tomtom-321/sim";
 
@@ -77,7 +77,7 @@ const { ins, outs } = endsOf(sk);
     let lost = 0;
     for (const [e, set] of before) for (const x of set) if (!r.get(e)!.has(x)) lost++;
     // (refused: a trip cut off, or a turned lane nobody could drive; the rest must be sound)
-    if (lost || deadLanes(after, turned).length) { refused++; continue; }
+    if (lost || deadLanes(after, turned).length || newEnds(sk, after).length) { refused++; continue; }
     if (after.connectors.length !== sanitizeSketch(after)!.connectors.length) bad.push(`${what}: connectors dropped by the sketch's checks`);
     const len = new Map(after.lanes.map(l => [l.id, laneLength(l.shape)]));
     for (const id of turned) {
@@ -91,13 +91,21 @@ const { ins, outs } = endsOf(sk);
     }
     for (const c of after.connectors) if ((T.has(c.from.lane) && c.from.s < len.get(c.from.lane)! - 0.5) || (T.has(c.to.lane) && c.to.s > 0.5)) bad.push(`${what}: connector ${c.id} not end to start`);
   }
-  check(bad.length === 0, `every move accepted: its turned lanes run the other way with turns at both ends, end to start, signs only where their street had them (${moves} moves)${bad.length ? `: ${bad.slice(0, 5).join("; ")}` : ""}`);
+  check(bad.length === 0, `every move accepted (no trip cut off, no lane anywhere left dangling): its turned lanes run the other way with turns at both ends, end to start, signs only where their street had them (${moves} moves)${bad.length ? `: ${bad.slice(0, 5).join("; ")}` : ""}`);
+  {
+    // (ticket #321's first patch: Ecaterina Teodoroiu made one-way left the next piece north running out of a junction nothing led into)
+    // (its lane l388 alone turned: the street's next pieces, joined in no junction drawn, weren't taken as part of it then)
+    const after = turnLanes(sk, ["l388"]);
+    check(newEnds(sk, after).length > 0, `a change leaving a neighbouring lane with nothing onto or off it is found (${newEnds(sk, after).join(", ")})`);
+    const e = streets.find(x => x.name === "Strada Ecaterina Teodoroiu" && x.kind === "1+1");
+    check(!!e && ["r218", "r219", "r220", "r221"].every(r => e.roads.includes(r)), `a street's pieces joined in no junction drawn are one street (Ecaterina Teodoroiu: ${e?.roads.join(", ")})`);
+  }
   check(refused > 0 && refused < moves, `moves that would cut a trip off or leave a lane nobody could drive are refused (${refused} of ${moves})`);
 
   // (a design of several turned streets, run: cars come in, finish trips and drive the turned streets)
   const ok = streets.flatMap(s => movesOf(s).map(m => ({ s, m }))).filter(({ s, m }) => {
     const t = lanesTurned(sk, s, m), after = turnLanes(sk, t), r = reach(after, entries, exits);
-    if (deadLanes(after, t).length || /^Bulevardul/.test(s.name)) return false;
+    if (deadLanes(after, t).length || newEnds(sk, after).length || /^Bulevardul/.test(s.name)) return false;
     for (const [e, set] of before) for (const x of set) if (!r.get(e)!.has(x)) return false;
     return true;
   });
