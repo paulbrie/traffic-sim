@@ -56,6 +56,10 @@ export default async function Home() {
               <p className="mb-1 flex items-center gap-2 font-medium"><FlaskConical className="size-4" /> Deep-learning city <span className="text-xs text-muted-foreground">#277</span></p>
               <p className="text-sm text-muted-foreground">Can neural networks find a better street layout than a genetic algorithm? A video and the full report.</p>
             </Link>
+            <Link href="/experiments/tomtom-321" className="rounded-xl border bg-card p-4 transition-colors hover:bg-accent/50">
+              <p className="mb-1 flex items-center gap-2 font-medium"><FlaskConical className="size-4" /> Traffic from TomTom <span className="text-xs text-muted-foreground">#321</span></p>
+              <p className="text-sm text-muted-foreground">Bistrița’s peak-hour traffic inferred from TomTom’s speeds, and which of the centre’s streets to make one-way. A printable report.</p>
+            </Link>
           </div>
         </section>
       </main>

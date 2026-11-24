@@ -49,8 +49,8 @@ matched TomTom's.
    fast on average). TomTom's free flow is the night's, and by day parking, people crossing, buses and bikes slow
    town streets whatever the traffic; the simulator models none of that. So one network-wide factor φ scales the
    simulated shares. It is the least-squares fit, kept between 0.75 and 1, and the demand has to explain the rest.
-   It settled at the bottom of its range, **φ = 0.75**: a quarter of TomTom's peak slowdown is put down to friction,
-   not traffic. In the same spirit, a round where the simulator gridlocks (more than 3 deadlocks or 40 cars stood
+   It settled at the bottom of its range, **φ = 0.75**: by day a street is taken to run at 75% of its night-time
+   speed before any traffic slows it further. In the same spirit, a round where the simulator gridlocks (more than 3 deadlocks or 40 cars stood
    still per run, on average) takes 15% off every way in, since Bistrița doesn't gridlock every day. The demand
    settles where the simulator stops coping, about **5,300 vehicles an hour coming in**.
 5. **Is it real, or just fitted? Held-out roads.** The roads were split in two by id. The calibration was run on
