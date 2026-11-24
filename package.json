@@ -72,6 +72,7 @@
     "tomtom:check": "tsx scripts/tomtom-check.ts",
     "traffic:collect": "tsx scripts/traffic-collect.ts",
     "traffic:export": "tsx scripts/traffic-export.ts",
+    "tomtom-321:check": "tsx scripts/tomtom-321-check.ts",
     "traffic-history:check": "tsx scripts/traffic-history-check.ts",
     "engine:baseline": "tsx scripts/engine-baseline.ts",
     "audit": "tsx scripts/junction-audit.ts"

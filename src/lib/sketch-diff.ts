@@ -20,7 +20,7 @@ import { addToSketchWindow, type WindowAdd } from "./sketch-window-add";
 export const SKETCH_FILE_MAX_BYTES = 40 * 1024 * 1024;
 
 /** the lists compared item by item (by id) */
-export const SKETCH_KINDS = ["lanes", "connectors", "junctions", "roads", "links", "crossings", "bumps", "zones", "shapes", "marks", "utilityNodes", "utilityLines"] as const;
+export const SKETCH_KINDS = ["lanes", "connectors", "junctions", "roads", "links", "crossings", "bumps", "zones", "shapes", "marks", "utilityNodes", "utilityLines", "matrices"] as const;
 export type SketchKind = (typeof SKETCH_KINDS)[number];
 type Item = { id: string };
 
@@ -163,7 +163,7 @@ function applyMain(cur: Sketch | null, patch: SketchPatch): { sketch: Sketch | n
   }
 }
 
-const KIND_ONE: Record<SketchKind, string> = { lanes: "lane", connectors: "connector", junctions: "junction", roads: "road", links: "link", crossings: "crossing", bumps: "speed bump", zones: "zone", shapes: "shape", marks: "mark", utilityNodes: "utility node", utilityLines: "utility line" };
+const KIND_ONE: Record<SketchKind, string> = { lanes: "lane", connectors: "connector", junctions: "junction", roads: "road", links: "link", crossings: "crossing", bumps: "speed bump", zones: "zone", shapes: "shape", marks: "mark", utilityNodes: "utility node", utilityLines: "utility line", matrices: "demand matrix" };
 export function applyPatch(cur: Sketch | null, patch: SketchPatch): Sketch | null {
   return applyPatchDetail(cur, patch).sketch;
 }
@@ -253,6 +253,7 @@ export function shapeOf(kind: SketchKind, x: unknown): string {
     case "marks": return "a point";
     case "utilityNodes": return "a point in 3D";
     case "utilityLines": return `${n(o.nodes)} nodes`;
+    case "matrices": { const od = (o.od ?? {}) as Record<string, Record<string, unknown>>; return `${Object.values(od).reduce((a, r) => a + Object.keys(r ?? {}).length, 0)} cells`; }
   }
 }
 
@@ -331,7 +332,7 @@ export type FileOptions = { allowRemove?: boolean; allowSketchWindow?: boolean;
  */
 export function fileResult(raw: unknown, mode: FileMode, cur: Sketch | null, opts: FileOptions = {}): FileResult {
   const patch = pickPatch(raw);
-  if (!patch) return { ok: false, error: "The file has no sketch items (lanes, connectors, roads, junctions, links, crossings, speed bumps, zones, shapes, marks, utility nodes or utility lines, each with an id)." };
+  if (!patch) return { ok: false, error: "The file has no sketch items (lanes, connectors, roads, junctions, links, crossings, speed bumps, zones, shapes, marks, utility nodes, utility lines or demand matrices, each with an id)." };
   if (mode === "apply") {
     if (patch.remove && !opts.allowRemove) return { ok: false, error: "The file asks to remove items: only agent patches may remove (Apply changes from file never removes anything)." };
     if (patch.sketchWindowAdd && !opts.allowSketchWindow) return { ok: false, error: "The file asks to add to the Sketch window: only agent patches may (Apply changes from file changes the main plan only)." };
