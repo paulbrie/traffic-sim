@@ -264,6 +264,21 @@ async function main() {
     assert.deepEqual(m.saves[0].restore, { note: "Agent patch #9 (T148, Bob): J696 v1 (a new sketch)", kind: "patch" });
   });
 
+  await t("matrices (ticket #321): a patch adds a demand matrix, changes one by its id, and with lanes in the same patch", () => {
+    const m = { id: "tt-am", name: "Morning peak", od: { a: { b: 120 } }, start: 420, end: 570 };
+    const r = checkPatch(JSON.stringify({ matrices: [m] }), cur);
+    assert.ok(r.ok, r.ok ? "" : r.errors.join("; "));
+    assert.deepEqual(r.ok && r.summary.items, [{ kind: "matrices", id: "tt-am", change: "added", after: "1 cells" }]);
+    assert.deepEqual(r.ok && r.summary.sketch.matrices, [m]);
+    const withM = sanitizeSketch({ ...base, matrices: [m] })!;
+    const c = checkPatch(JSON.stringify({ matrices: [{ id: "tt-am", od: { a: { b: 300 } } }], lanes: [{ id: "a", width: 4 }] }), withM);
+    assert.ok(c.ok, c.ok ? "" : c.errors.join("; "));
+    assert.deepEqual(c.ok && c.summary.sketch.matrices, [{ ...m, od: { a: { b: 300 } } }]);
+    assert.deepEqual(c.ok && c.summary.items.map(x => [x.kind, x.id, x.change]), [["lanes", "a", "changed"], ["matrices", "tt-am", "changed"]]);
+    const gone = checkPatch(JSON.stringify({ remove: { matrices: ["tt-am"] } }), withM);
+    assert.ok(gone.ok && !gone.summary.sketch.matrices?.length, "removed");
+  });
+
   console.log(`agent-patch: ${ok} checks passed`);
 }
 main().catch(e => { console.error(e); process.exit(1); });

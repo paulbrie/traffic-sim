@@ -1,0 +1,266 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 520" width="520" height="520" font-family="system-ui, sans-serif" font-size="12">
+<rect width="520" height="520" fill="#fcfcfb"/>
+<text x="56" y="22" font-size="14" font-weight="600" fill="#0b0b0b">Evening peak (TomTom): each road one way</text>
+<line x1="56" x2="56" y1="40" y2="464" stroke="#e1e0d9"/><line x1="56" x2="504" y1="464" y2="464" stroke="#e1e0d9"/><text x="56" y="480" text-anchor="middle" fill="#52514d">0</text><text x="48" y="468" text-anchor="end" fill="#52514d">0</text>
+<line x1="137.45454545454544" x2="137.45454545454544" y1="40" y2="464" stroke="#e1e0d9"/><line x1="56" x2="504" y1="386.9090909090909" y2="386.9090909090909" stroke="#e1e0d9"/><text x="137.45454545454544" y="480" text-anchor="middle" fill="#52514d">0.2</text><text x="48" y="390.9090909090909" text-anchor="end" fill="#52514d">0.2</text>
+<line x1="218.9090909090909" x2="218.9090909090909" y1="40" y2="464" stroke="#e1e0d9"/><line x1="56" x2="504" y1="309.8181818181818" y2="309.8181818181818" stroke="#e1e0d9"/><text x="218.9090909090909" y="480" text-anchor="middle" fill="#52514d">0.4</text><text x="48" y="313.8181818181818" text-anchor="end" fill="#52514d">0.4</text>
+<line x1="300.3636363636364" x2="300.3636363636364" y1="40" y2="464" stroke="#e1e0d9"/><line x1="56" x2="504" y1="232.72727272727275" y2="232.72727272727275" stroke="#e1e0d9"/><text x="300.3636363636364" y="480" text-anchor="middle" fill="#52514d">0.6</text><text x="48" y="236.72727272727275" text-anchor="end" fill="#52514d">0.6</text>
+<line x1="381.8181818181818" x2="381.8181818181818" y1="40" y2="464" stroke="#e1e0d9"/><line x1="56" x2="504" y1="155.63636363636363" y2="155.63636363636363" stroke="#e1e0d9"/><text x="381.8181818181818" y="480" text-anchor="middle" fill="#52514d">0.8</text><text x="48" y="159.63636363636363" text-anchor="end" fill="#52514d">0.8</text>
+<line x1="463.27272727272725" x2="463.27272727272725" y1="40" y2="464" stroke="#e1e0d9"/><line x1="56" x2="504" y1="78.54545454545456" y2="78.54545454545456" stroke="#e1e0d9"/><text x="463.27272727272725" y="480" text-anchor="middle" fill="#52514d">1</text><text x="48" y="82.54545454545456" text-anchor="end" fill="#52514d">1</text>
+<line x1="56" y1="464" x2="504" y2="40" stroke="#898781" stroke-dasharray="4 4"/>
+<circle cx="272.7" cy="186.9" r="3.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Republicii: TomTom 0.5320833333333334, simulated 0.719</title></circle>
+<circle cx="390.1" cy="190.7" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Nicolae Titulescu: TomTom 0.8204166666666667, simulated 0.709</title></circle>
+<circle cx="315.9" cy="184.9" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Nicolae Titulescu: TomTom 0.6380833333333333, simulated 0.724</title></circle>
+<circle cx="463.3" cy="174.9" r="3.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada George Coșbuc: TomTom 1, simulated 0.75</title></circle>
+<circle cx="334.1" cy="181.8" r="4.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Dornei: TomTom 0.6829166666666666, simulated 0.732</title></circle>
+<circle cx="304.3" cy="186.1" r="4.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Dornei: TomTom 0.6095833333333334, simulated 0.721</title></circle>
+<circle cx="416.4" cy="170.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Dogarilor: TomTom 0.885, simulated 0.762</title></circle>
+<circle cx="416.4" cy="183.0" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Dogarilor: TomTom 0.885, simulated 0.729</title></circle>
+<circle cx="416.4" cy="178.4" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Dogarilor: TomTom 0.885, simulated 0.741</title></circle>
+<circle cx="364.0" cy="186.9" r="3.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Piața Centrală: TomTom 0.7562499999999999, simulated 0.719</title></circle>
+<circle cx="311.6" cy="178.8" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Mihail Kogălniceanu: TomTom 0.6275833333333334, simulated 0.74</title></circle>
+<circle cx="281.4" cy="182.2" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Albert Berger: TomTom 0.5533333333333332, simulated 0.731</title></circle>
+<circle cx="279.0" cy="178.4" r="5.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ecaterina Teodoroiu: TomTom 0.5475, simulated 0.741</title></circle>
+<circle cx="144.8" cy="190.3" r="4.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Barbu Lăutaru: TomTom 0.2179166666666667, simulated 0.71</title></circle>
+<circle cx="348.9" cy="178.4" r="4.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Barbu Lăutaru: TomTom 0.7191666666666665, simulated 0.741</title></circle>
+<circle cx="358.6" cy="186.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Constantin Roman Vivu: TomTom 0.7430833333333333, simulated 0.721</title></circle>
+<circle cx="463.3" cy="190.7" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Constantin Roman Vivu: TomTom 1, simulated 0.709</title></circle>
+<circle cx="358.6" cy="177.2" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Constantin Roman Vivu: TomTom 0.7430833333333333, simulated 0.744</title></circle>
+<circle cx="463.3" cy="178.8" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Constantin Roman Vivu: TomTom 1, simulated 0.74</title></circle>
+<circle cx="311.6" cy="176.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Mihail Kogălniceanu: TomTom 0.6275833333333334, simulated 0.747</title></circle>
+<circle cx="311.6" cy="178.0" r="3.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Mihail Kogălniceanu: TomTom 0.6275833333333334, simulated 0.742</title></circle>
+<circle cx="463.3" cy="176.8" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Bistricioarei: TomTom 1, simulated 0.745</title></circle>
+<circle cx="354.2" cy="188.0" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.7320833333333334, simulated 0.716</title></circle>
+<circle cx="336.2" cy="179.5" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.6880000000000001, simulated 0.738</title></circle>
+<circle cx="302.6" cy="185.3" r="3.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.6054166666666667, simulated 0.723</title></circle>
+<circle cx="336.2" cy="179.9" r="3.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.6880000000000001, simulated 0.737</title></circle>
+<circle cx="237.9" cy="184.9" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.44666666666666666, simulated 0.724</title></circle>
+<circle cx="336.2" cy="191.5" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.6880000000000001, simulated 0.707</title></circle>
+<circle cx="310.0" cy="199.2" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.6237499999999999, simulated 0.687</title></circle>
+<circle cx="204.8" cy="205.7" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.36541666666666667, simulated 0.67</title></circle>
+<circle cx="310.0" cy="211.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.6237499999999999, simulated 0.656</title></circle>
+<circle cx="204.8" cy="235.8" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.36541666666666667, simulated 0.592</title></circle>
+<circle cx="310.0" cy="176.8" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.6237499999999999, simulated 0.745</title></circle>
+<circle cx="219.1" cy="220.4" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Rodnei: TomTom 0.4004166666666667, simulated 0.632</title></circle>
+<circle cx="334.6" cy="181.8" r="6.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Arțarilor: TomTom 0.6840833333333334, simulated 0.732</title></circle>
+<circle cx="370.6" cy="183.4" r="6.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Arțarilor: TomTom 0.7725000000000002, simulated 0.728</title></circle>
+<circle cx="370.8" cy="180.7" r="4.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Arțarilor: TomTom 0.7729166666666668, simulated 0.735</title></circle>
+<circle cx="352.5" cy="181.8" r="4.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Arțarilor: TomTom 0.7279166666666667, simulated 0.732</title></circle>
+<circle cx="304.8" cy="173.8" r="4.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Arțarilor: TomTom 0.6108333333333333, simulated 0.753</title></circle>
+<circle cx="350.1" cy="177.2" r="4.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Arțarilor: TomTom 0.7220833333333334, simulated 0.744</title></circle>
+<circle cx="143.1" cy="189.2" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ioan Slavici: TomTom 0.21375000000000005, simulated 0.713</title></circle>
+<circle cx="222.0" cy="194.6" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ioan Slavici: TomTom 0.4076666666666667, simulated 0.699</title></circle>
+<circle cx="237.6" cy="187.2" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ioan Slavici: TomTom 0.44583333333333336, simulated 0.718</title></circle>
+<circle cx="143.1" cy="179.5" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ioan Slavici: TomTom 0.21375000000000005, simulated 0.738</title></circle>
+<circle cx="400.0" cy="187.2" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.8445833333333332, simulated 0.718</title></circle>
+<circle cx="378.4" cy="192.3" r="3.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.7916666666666666, simulated 0.705</title></circle>
+<circle cx="401.3" cy="188.8" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.8479166666666667, simulated 0.714</title></circle>
+<circle cx="380.0" cy="175.3" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.7954166666666667, simulated 0.749</title></circle>
+<circle cx="395.7" cy="173.8" r="3.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.8341666666666667, simulated 0.753</title></circle>
+<circle cx="415.7" cy="176.5" r="3.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.8830833333333334, simulated 0.746</title></circle>
+<circle cx="395.7" cy="195.0" r="4.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.8341666666666667, simulated 0.698</title></circle>
+<circle cx="415.9" cy="179.9" r="4.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.8836666666666667, simulated 0.737</title></circle>
+<circle cx="376.4" cy="174.9" r="3.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.7866666666666666, simulated 0.75</title></circle>
+<circle cx="395.4" cy="175.3" r="3.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.8333333333333333, simulated 0.749</title></circle>
+<circle cx="395.4" cy="174.5" r="3.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.8333333333333333, simulated 0.751</title></circle>
+<circle cx="376.4" cy="179.1" r="3.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Colibiței: TomTom 0.7866666666666666, simulated 0.739</title></circle>
+<circle cx="302.9" cy="200.0" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.60625, simulated 0.685</title></circle>
+<circle cx="331.9" cy="182.6" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.6775, simulated 0.73</title></circle>
+<circle cx="302.9" cy="184.2" r="3.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.60625, simulated 0.726</title></circle>
+<circle cx="331.9" cy="180.7" r="3.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.6775, simulated 0.735</title></circle>
+<circle cx="254.7" cy="296.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.48791666666666667, simulated 0.435</title></circle>
+<circle cx="259.5" cy="186.9" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.49958333333333327, simulated 0.719</title></circle>
+<circle cx="254.7" cy="224.6" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.48791666666666667, simulated 0.621</title></circle>
+<circle cx="259.5" cy="229.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.49958333333333327, simulated 0.609</title></circle>
+<circle cx="254.9" cy="210.8" r="2.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.4883333333333334, simulated 0.657</title></circle>
+<circle cx="259.3" cy="189.9" r="2.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.4991666666666666, simulated 0.711</title></circle>
+<circle cx="259.1" cy="245.4" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.4987499999999999, simulated 0.567</title></circle>
+<circle cx="254.9" cy="182.2" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.4883333333333334, simulated 0.731</title></circle>
+<circle cx="317.7" cy="198.4" r="3.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ursului: TomTom 0.6425, simulated 0.689</title></circle>
+<circle cx="317.7" cy="260.9" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ursului: TomTom 0.6425, simulated 0.527</title></circle>
+<circle cx="234.4" cy="211.1" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Crinilor: TomTom 0.4379166666666666, simulated 0.656</title></circle>
+<circle cx="219.8" cy="210.4" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Crinilor: TomTom 0.40208333333333335, simulated 0.658</title></circle>
+<circle cx="180.0" cy="204.6" r="3.3" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Crinilor: TomTom 0.3045833333333333, simulated 0.673</title></circle>
+<circle cx="341.6" cy="172.6" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Cuza Vodă: TomTom 0.7013333333333334, simulated 0.756</title></circle>
+<circle cx="281.4" cy="213.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Cuza Vodă: TomTom 0.5533333333333333, simulated 0.651</title></circle>
+<circle cx="342.0" cy="183.4" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Cuza Vodă: TomTom 0.7023333333333333, simulated 0.728</title></circle>
+<circle cx="280.8" cy="184.5" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Cuza Vodă: TomTom 0.5520833333333334, simulated 0.725</title></circle>
+<circle cx="320.2" cy="174.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Eroilor: TomTom 0.64875, simulated 0.752</title></circle>
+<circle cx="337.9" cy="197.7" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Eroilor: TomTom 0.6920833333333334, simulated 0.691</title></circle>
+<circle cx="288.3" cy="184.2" r="3.0" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ecaterina Teodoroiu: TomTom 0.5704166666666667, simulated 0.726</title></circle>
+<circle cx="419.9" cy="178.0" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ecaterina Teodoroiu: TomTom 0.8934166666666665, simulated 0.742</title></circle>
+<circle cx="288.3" cy="194.6" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ecaterina Teodoroiu: TomTom 0.5704166666666667, simulated 0.699</title></circle>
+<circle cx="424.3" cy="181.5" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ecaterina Teodoroiu: TomTom 0.9042500000000001, simulated 0.733</title></circle>
+<circle cx="288.3" cy="181.8" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ecaterina Teodoroiu: TomTom 0.5704166666666667, simulated 0.732</title></circle>
+<circle cx="424.9" cy="180.7" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Împăratul Traian: TomTom 0.9058333333333333, simulated 0.735</title></circle>
+<circle cx="424.9" cy="174.9" r="4.0" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Împăratul Traian: TomTom 0.9058333333333333, simulated 0.75</title></circle>
+<circle cx="304.1" cy="191.5" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Barbu Ștefănescu Delavrancea: TomTom 0.6091666666666667, simulated 0.707</title></circle>
+<circle cx="456.5" cy="176.1" r="4.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Vasile Alecsandri: TomTom 0.9833333333333334, simulated 0.747</title></circle>
+<circle cx="434.8" cy="196.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Piața Mică: TomTom 0.9299999999999999, simulated 0.695</title></circle>
+<circle cx="390.3" cy="183.4" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Nicolae Titulescu: TomTom 0.8208333333333334, simulated 0.728</title></circle>
+<circle cx="390.3" cy="189.9" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Nicolae Titulescu: TomTom 0.8208333333333334, simulated 0.711</title></circle>
+<circle cx="434.9" cy="175.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Albert Berger: TomTom 0.9304166666666667, simulated 0.749</title></circle>
+<circle cx="377.2" cy="195.7" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Piața Unirii: TomTom 0.7887500000000001, simulated 0.696</title></circle>
+<circle cx="404.7" cy="178.4" r="4.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Sucevei: TomTom 0.85625, simulated 0.741</title></circle>
+<circle cx="463.3" cy="189.2" r="3.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Vasile Lupu: TomTom 1, simulated 0.713</title></circle>
+<circle cx="387.6" cy="198.4" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Doctor Ioan Rațiu: TomTom 0.8141666666666667, simulated 0.689</title></circle>
+<circle cx="460.8" cy="175.3" r="5.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Grănicerilor: TomTom 0.994, simulated 0.749</title></circle>
+<circle cx="391.8" cy="176.1" r="5.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Grănicerilor: TomTom 0.8245833333333332, simulated 0.747</title></circle>
+<circle cx="228.9" cy="180.7" r="5.0" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Zimbrului: TomTom 0.4245833333333333, simulated 0.735</title></circle>
+<circle cx="228.6" cy="267.0" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Zimbrului: TomTom 0.42374999999999996, simulated 0.511</title></circle>
+<circle cx="311.6" cy="184.5" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Mihail Kogălniceanu: TomTom 0.6275833333333334, simulated 0.725</title></circle>
+<circle cx="325.6" cy="177.6" r="3.3" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Mihail Kogălniceanu: TomTom 0.6620833333333334, simulated 0.743</title></circle>
+<circle cx="277.6" cy="190.7" r="3.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Republicii: TomTom 0.5441666666666667, simulated 0.709</title></circle>
+<circle cx="345.5" cy="175.7" r="3.0" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Piața Petru Rareș: TomTom 0.7108333333333332, simulated 0.748</title></circle>
+<circle cx="362.4" cy="171.8" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Alexandru Odobescu (2): TomTom 0.7524166666666666, simulated 0.758</title></circle>
+<circle cx="390.7" cy="178.0" r="5.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Independenței (2): TomTom 0.8218333333333333, simulated 0.742</title></circle>
+<circle cx="284.4" cy="182.6" r="6.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Republicii: TomTom 0.5608333333333334, simulated 0.73</title></circle>
+<circle cx="277.6" cy="196.5" r="3.0" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Gării: TomTom 0.5441666666666667, simulated 0.694</title></circle>
+<circle cx="277.6" cy="215.0" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Gării: TomTom 0.5441666666666667, simulated 0.646</title></circle>
+<circle cx="320.9" cy="188.8" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Gării: TomTom 0.6504166666666666, simulated 0.714</title></circle>
+<circle cx="304.8" cy="165.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Gării: TomTom 0.6108333333333333, simulated 0.775</title></circle>
+<circle cx="333.6" cy="172.6" r="5.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Andrei Mureșanu: TomTom 0.6816666666666666, simulated 0.756</title></circle>
+<circle cx="362.8" cy="193.8" r="5.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Andrei Mureșanu: TomTom 0.7533333333333333, simulated 0.701</title></circle>
+<circle cx="355.5" cy="173.4" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Andrei Mureșanu: TomTom 0.7354166666666666, simulated 0.754</title></circle>
+<circle cx="333.6" cy="176.5" r="2.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Andrei Mureșanu: TomTom 0.6816666666666666, simulated 0.746</title></circle>
+<circle cx="302.2" cy="174.9" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Calea Moldovei: TomTom 0.6045833333333333, simulated 0.75</title></circle>
+<circle cx="315.6" cy="176.8" r="3.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1028 (2): TomTom 0.6375, simulated 0.745</title></circle>
+<circle cx="335.4" cy="177.2" r="3.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1028 (2): TomTom 0.6859166666666667, simulated 0.744</title></circle>
+<circle cx="335.4" cy="223.5" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1029: TomTom 0.6859166666666667, simulated 0.624</title></circle>
+<circle cx="253.5" cy="179.1" r="4.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Năsăudului: TomTom 0.4850000000000001, simulated 0.739</title></circle>
+<circle cx="304.3" cy="142.1" r="4.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Năsăudului: TomTom 0.6095833333333334, simulated 0.835</title></circle>
+<circle cx="253.5" cy="189.9" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Năsăudului: TomTom 0.4850000000000001, simulated 0.711</title></circle>
+<circle cx="323.2" cy="183.8" r="4.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.6561666666666666, simulated 0.727</title></circle>
+<circle cx="240.6" cy="198.0" r="4.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.45333333333333337, simulated 0.69</title></circle>
+<circle cx="324.3" cy="196.5" r="3.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.65875, simulated 0.694</title></circle>
+<circle cx="250.6" cy="196.1" r="3.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.4779166666666667, simulated 0.695</title></circle>
+<circle cx="269.3" cy="197.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.5237499999999999, simulated 0.692</title></circle>
+<circle cx="321.7" cy="200.7" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.6524166666666666, simulated 0.683</title></circle>
+<circle cx="321.7" cy="185.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.6524166666666666, simulated 0.723</title></circle>
+<circle cx="293.7" cy="185.7" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.58375, simulated 0.722</title></circle>
+<circle cx="463.3" cy="182.6" r="3.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Piața Centrală: TomTom 1, simulated 0.73</title></circle>
+<circle cx="209.6" cy="228.1" r="4.3" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Republicii: TomTom 0.3770833333333333, simulated 0.612</title></circle>
+<circle cx="214.8" cy="412.7" r="3.0" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Republicii: TomTom 0.39, simulated 0.133</title></circle>
+<circle cx="237.9" cy="283.2" r="3.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Calea Moldovei: TomTom 0.44666666666666677, simulated 0.469</title></circle>
+<circle cx="463.3" cy="206.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Doctor Ioan Rațiu: TomTom 1, simulated 0.669</title></circle>
+<circle cx="383.7" cy="178.4" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Doctor Ioan Rațiu: TomTom 0.8045833333333333, simulated 0.741</title></circle>
+<circle cx="224.0" cy="410.8" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Gării: TomTom 0.4125, simulated 0.138</title></circle>
+<circle cx="299.1" cy="190.3" r="4.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul General Grigore Bălan: TomTom 0.5969166666666667, simulated 0.71</title></circle>
+<circle cx="331.1" cy="180.3" r="4.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul General Grigore Bălan: TomTom 0.6754166666666668, simulated 0.736</title></circle>
+<circle cx="341.8" cy="179.9" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul General Grigore Bălan: TomTom 0.7016666666666667, simulated 0.737</title></circle>
+<circle cx="316.1" cy="181.5" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul General Grigore Bălan: TomTom 0.6387499999999999, simulated 0.733</title></circle>
+<circle cx="281.9" cy="178.8" r="5.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ioan Slavici: TomTom 0.5545833333333333, simulated 0.74</title></circle>
+<circle cx="236.9" cy="183.4" r="5.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ioan Slavici: TomTom 0.44416666666666665, simulated 0.728</title></circle>
+<circle cx="434.9" cy="181.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Zorilor: TomTom 0.9304166666666667, simulated 0.734</title></circle>
+<circle cx="463.3" cy="195.7" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Bistricioarei: TomTom 1, simulated 0.696</title></circle>
+<circle cx="304.3" cy="185.3" r="3.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Republicii: TomTom 0.6095833333333333, simulated 0.723</title></circle>
+<circle cx="302.9" cy="247.4" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.60625, simulated 0.562</title></circle>
+<circle cx="331.9" cy="176.8" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.6775, simulated 0.745</title></circle>
+<circle cx="434.9" cy="191.9" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Albert Berger: TomTom 0.9304166666666667, simulated 0.706</title></circle>
+<circle cx="242.8" cy="179.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Calea Moldovei: TomTom 0.45875, simulated 0.739</title></circle>
+<circle cx="319.7" cy="187.6" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Gării: TomTom 0.6475, simulated 0.717</title></circle>
+<circle cx="304.8" cy="220.0" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Gării: TomTom 0.6108333333333333, simulated 0.633</title></circle>
+<circle cx="362.4" cy="193.0" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Alexandru Odobescu: TomTom 0.7524166666666666, simulated 0.703</title></circle>
+<circle cx="463.3" cy="191.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Alexandru Odobescu: TomTom 1, simulated 0.708</title></circle>
+<circle cx="362.4" cy="193.0" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Alexandru Odobescu: TomTom 0.7524166666666666, simulated 0.703</title></circle>
+<circle cx="463.3" cy="175.3" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Alexandru Odobescu: TomTom 1, simulated 0.749</title></circle>
+<circle cx="300.4" cy="181.1" r="4.3" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Avram Iancu: TomTom 0.6, simulated 0.734</title></circle>
+<circle cx="236.0" cy="186.1" r="4.3" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Avram Iancu: TomTom 0.4420833333333334, simulated 0.721</title></circle>
+<circle cx="300.4" cy="177.6" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Avram Iancu: TomTom 0.6, simulated 0.743</title></circle>
+<circle cx="236.0" cy="213.5" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Avram Iancu: TomTom 0.4420833333333334, simulated 0.65</title></circle>
+<circle cx="390.1" cy="183.4" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Nicolae Titulescu: TomTom 0.8204166666666667, simulated 0.728</title></circle>
+<circle cx="324.8" cy="182.6" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Andrei Mureșanu: TomTom 0.66, simulated 0.73</title></circle>
+<circle cx="278.1" cy="173.8" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Andrei Mureșanu: TomTom 0.5454166666666667, simulated 0.753</title></circle>
+<circle cx="324.8" cy="175.7" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Andrei Mureșanu: TomTom 0.66, simulated 0.748</title></circle>
+<circle cx="278.0" cy="173.4" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Andrei Mureșanu: TomTom 0.5449999999999999, simulated 0.754</title></circle>
+<circle cx="206.4" cy="206.9" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.3691666666666667, simulated 0.667</title></circle>
+<circle cx="306.0" cy="259.7" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.61375, simulated 0.53</title></circle>
+<circle cx="233.7" cy="183.8" r="3.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.43625, simulated 0.727</title></circle>
+<circle cx="306.0" cy="183.8" r="3.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.61375, simulated 0.727</title></circle>
+<circle cx="198.2" cy="317.1" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal (2): TomTom 0.3491666666666667, simulated 0.381</title></circle>
+<circle cx="265.9" cy="181.5" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal (2): TomTom 0.5154166666666666, simulated 0.733</title></circle>
+<circle cx="463.3" cy="175.7" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Dornei: TomTom 1, simulated 0.748</title></circle>
+<circle cx="463.3" cy="181.8" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Dornei: TomTom 1, simulated 0.732</title></circle>
+<circle cx="304.3" cy="185.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Barbu Ștefănescu Delavrancea: TomTom 0.6095833333333334, simulated 0.723</title></circle>
+<circle cx="238.9" cy="225.8" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Republicii: TomTom 0.4490833333333334, simulated 0.618</title></circle>
+<circle cx="311.7" cy="227.3" r="4.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.6279166666666667, simulated 0.614</title></circle>
+<circle cx="249.1" cy="232.0" r="4.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.4741666666666666, simulated 0.602</title></circle>
+<circle cx="307.5" cy="198.4" r="3.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.6174999999999999, simulated 0.689</title></circle>
+<circle cx="290.9" cy="256.6" r="3.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Decebal: TomTom 0.5767500000000001, simulated 0.538</title></circle>
+<circle cx="334.5" cy="174.1" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Drumul Dumitrei Vechi: TomTom 0.68375, simulated 0.752</title></circle>
+<circle cx="394.4" cy="179.1" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Drumul Dumitrei Vechi: TomTom 0.8308333333333333, simulated 0.739</title></circle>
+<circle cx="334.5" cy="174.5" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Drumul Dumitrei Vechi: TomTom 0.68375, simulated 0.751</title></circle>
+<circle cx="334.6" cy="126.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Drumul Dumitrei Vechi: TomTom 0.6841666666666666, simulated 0.876</title></circle>
+<circle cx="306.1" cy="177.6" r="4.0" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Republicii: TomTom 0.6141666666666667, simulated 0.743</title></circle>
+<circle cx="463.3" cy="173.0" r="3.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada George Coșbuc: TomTom 1, simulated 0.755</title></circle>
+<circle cx="377.2" cy="185.3" r="3.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Liviu Rebreanu: TomTom 0.7887500000000001, simulated 0.723</title></circle>
+<circle cx="463.3" cy="186.5" r="3.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Constantin Roman Vivu: TomTom 1, simulated 0.72</title></circle>
+<circle cx="358.6" cy="178.0" r="3.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Constantin Roman Vivu: TomTom 0.7430833333333333, simulated 0.742</title></circle>
+<circle cx="218.2" cy="203.8" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ioan Slavici: TomTom 0.3983333333333333, simulated 0.675</title></circle>
+<circle cx="150.9" cy="184.5" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ioan Slavici: TomTom 0.23291666666666666, simulated 0.725</title></circle>
+<circle cx="317.7" cy="219.2" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Ursului: TomTom 0.6425, simulated 0.635</title></circle>
+<circle cx="377.2" cy="171.8" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Piața Unirii: TomTom 0.7887500000000001, simulated 0.758</title></circle>
+<circle cx="330.6" cy="174.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Dogarilor: TomTom 0.6741666666666666, simulated 0.752</title></circle>
+<circle cx="330.7" cy="174.9" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Dogarilor: TomTom 0.6745833333333333, simulated 0.75</title></circle>
+<circle cx="316.7" cy="174.9" r="4.3" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Dogarilor: TomTom 0.6401666666666667, simulated 0.75</title></circle>
+<circle cx="435.2" cy="176.1" r="4.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Grănicerilor: TomTom 0.9309999999999999, simulated 0.747</title></circle>
+<circle cx="311.2" cy="196.5" r="4.1" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Grănicerilor: TomTom 0.6266666666666667, simulated 0.694</title></circle>
+<circle cx="435.2" cy="174.5" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Grănicerilor: TomTom 0.9309999999999999, simulated 0.751</title></circle>
+<circle cx="317.5" cy="176.5" r="3.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Grănicerilor: TomTom 0.6420833333333333, simulated 0.746</title></circle>
+<circle cx="277.8" cy="188.8" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Gării: TomTom 0.5445833333333334, simulated 0.714</title></circle>
+<circle cx="230.8" cy="191.5" r="6.2" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Republicii: TomTom 0.4291666666666667, simulated 0.707</title></circle>
+<circle cx="289.2" cy="181.1" r="5.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul Independenței: TomTom 0.5726666666666667, simulated 0.734</title></circle>
+<circle cx="304.8" cy="193.4" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Gării: TomTom 0.6108333333333333, simulated 0.702</title></circle>
+<circle cx="320.7" cy="199.2" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Gării: TomTom 0.6499999999999999, simulated 0.687</title></circle>
+<circle cx="271.2" cy="202.7" r="5.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada 1 Decembrie: TomTom 0.5283333333333333, simulated 0.678</title></circle>
+<circle cx="288.7" cy="189.2" r="5.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada 1 Decembrie: TomTom 0.57125, simulated 0.713</title></circle>
+<circle cx="311.6" cy="174.9" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Mihail Kogălniceanu: TomTom 0.6275833333333334, simulated 0.75</title></circle>
+<circle cx="463.3" cy="210.4" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Constantin Roman Vivu: TomTom 1, simulated 0.658</title></circle>
+<circle cx="372.4" cy="174.5" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Constantin Roman Vivu: TomTom 0.7768333333333333, simulated 0.751</title></circle>
+<circle cx="281.4" cy="281.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Cuza Vodă: TomTom 0.5533333333333333, simulated 0.474</title></circle>
+<circle cx="341.6" cy="169.5" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Cuza Vodă: TomTom 0.7013333333333334, simulated 0.764</title></circle>
+<circle cx="331.9" cy="193.8" r="3.3" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.6775, simulated 0.701</title></circle>
+<circle cx="302.9" cy="178.4" r="3.3" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Petre Ispirescu: TomTom 0.60625, simulated 0.741</title></circle>
+<circle cx="277.1" cy="194.6" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul General Grigore Bălan: TomTom 0.5429166666666666, simulated 0.699</title></circle>
+<circle cx="341.8" cy="175.7" r="2.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul General Grigore Bălan: TomTom 0.7016666666666667, simulated 0.748</title></circle>
+<circle cx="253.5" cy="249.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Năsăudului: TomTom 0.4850000000000001, simulated 0.557</title></circle>
+<circle cx="304.3" cy="191.9" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Strada Năsăudului: TomTom 0.6095833333333334, simulated 0.706</title></circle>
+<circle cx="282.2" cy="182.2" r="4.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul General Grigore Bălan: TomTom 0.5554166666666667, simulated 0.731</title></circle>
+<circle cx="277.6" cy="183.4" r="4.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul General Grigore Bălan: TomTom 0.5441666666666667, simulated 0.728</title></circle>
+<circle cx="347.9" cy="188.0" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul General Grigore Bălan: TomTom 0.7166666666666668, simulated 0.716</title></circle>
+<circle cx="298.8" cy="182.2" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Bulevardul General Grigore Bălan: TomTom 0.5960833333333333, simulated 0.731</title></circle>
+<circle cx="328.8" cy="217.3" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1628: TomTom 0.66975, simulated 0.64</title></circle>
+<circle cx="180.0" cy="278.6" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1630: TomTom 0.3045833333333333, simulated 0.481</title></circle>
+<circle cx="268.4" cy="331.4" r="3.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1633: TomTom 0.5215000000000001, simulated 0.344</title></circle>
+<circle cx="463.3" cy="193.4" r="3.7" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1634: TomTom 1, simulated 0.702</title></circle>
+<circle cx="341.8" cy="178.0" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1644: TomTom 0.7016666666666667, simulated 0.742</title></circle>
+<circle cx="341.8" cy="226.2" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1646: TomTom 0.7016666666666667, simulated 0.617</title></circle>
+<circle cx="315.5" cy="216.9" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1648: TomTom 0.6370833333333334, simulated 0.641</title></circle>
+<circle cx="302.6" cy="182.2" r="3.0" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1650: TomTom 0.6054166666666666, simulated 0.731</title></circle>
+<circle cx="328.2" cy="220.0" r="4.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1662: TomTom 0.6683333333333334, simulated 0.633</title></circle>
+<circle cx="314.6" cy="202.7" r="4.8" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1662: TomTom 0.635, simulated 0.678</title></circle>
+<circle cx="240.0" cy="238.5" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1663: TomTom 0.45166666666666666, simulated 0.585</title></circle>
+<circle cx="308.8" cy="241.2" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1670: TomTom 0.6208333333333333, simulated 0.578</title></circle>
+<circle cx="274.1" cy="199.2" r="6.3" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1672: TomTom 0.5354166666666667, simulated 0.687</title></circle>
+<circle cx="230.6" cy="236.2" r="6.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1673: TomTom 0.42874999999999996, simulated 0.591</title></circle>
+<circle cx="359.7" cy="185.7" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1674: TomTom 0.7455833333333333, simulated 0.722</title></circle>
+<circle cx="244.0" cy="177.6" r="3.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1675: TomTom 0.4616666666666667, simulated 0.743</title></circle>
+<circle cx="274.7" cy="203.4" r="3.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1675: TomTom 0.5370833333333334, simulated 0.676</title></circle>
+<circle cx="322.4" cy="197.3" r="4.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1676: TomTom 0.6541666666666667, simulated 0.692</title></circle>
+<circle cx="324.5" cy="176.1" r="4.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1676: TomTom 0.6591666666666667, simulated 0.747</title></circle>
+<circle cx="229.0" cy="203.0" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1677: TomTom 0.4248333333333333, simulated 0.677</title></circle>
+<circle cx="241.8" cy="181.5" r="5.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1679: TomTom 0.45624999999999993, simulated 0.733</title></circle>
+<circle cx="304.9" cy="205.0" r="3.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1680: TomTom 0.61125, simulated 0.672</title></circle>
+<circle cx="240.1" cy="212.3" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1684: TomTom 0.4520833333333334, simulated 0.653</title></circle>
+<circle cx="238.8" cy="292.1" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1626: TomTom 0.4487499999999999, simulated 0.446</title></circle>
+<circle cx="331.6" cy="186.1" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1626: TomTom 0.6766666666666667, simulated 0.721</title></circle>
+<circle cx="235.2" cy="353.4" r="2.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1692: TomTom 0.43999999999999995, simulated 0.287</title></circle>
+<circle cx="223.7" cy="188.8" r="4.6" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1693: TomTom 0.4116666666666666, simulated 0.714</title></circle>
+<circle cx="271.3" cy="185.7" r="4.4" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1694: TomTom 0.52875, simulated 0.722</title></circle>
+<circle cx="237.7" cy="206.9" r="3.0" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1695: TomTom 0.4462499999999999, simulated 0.667</title></circle>
+<circle cx="204.7" cy="182.6" r="3.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1696: TomTom 0.3650833333333333, simulated 0.73</title></circle>
+<circle cx="247.2" cy="263.9" r="2.9" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1698: TomTom 0.46958333333333335, simulated 0.519</title></circle>
+<circle cx="316.7" cy="186.1" r="2.5" fill="#2a78d6" fill-opacity="0.45" stroke="#fcfcfb" stroke-width="1"><title>Road 1700: TomTom 0.6399999999999999, simulated 0.721</title></circle>
+<text x="280" y="506" text-anchor="middle" fill="#0b0b0b">TomTom: speed as a share of free flow (weekday median)</text>
+<text transform="translate(16 252) rotate(-90)" text-anchor="middle" fill="#0b0b0b">Simulated (× daytime friction)</text>
+<text x="504" y="54" text-anchor="end" fill="#52514d">253 roads · r 0.366 · RMSE 0.171</text></svg>

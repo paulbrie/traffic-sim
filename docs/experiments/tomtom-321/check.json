@@ -1,0 +1,3606 @@
+{
+ "morning": {
+  "phi": 0.75,
+  "total": 5382,
+  "fit": {
+   "loss": 0.179,
+   "corr": 0.409,
+   "n": 253,
+   "bias": 0.036
+  },
+  "heldOut": {
+   "start": {
+    "loss": 0.202,
+    "corr": 0.253,
+    "n": 125,
+    "bias": 0.079
+   },
+   "best": {
+    "loss": 0.193,
+    "corr": 0.318,
+    "n": 125,
+    "bias": 0.061
+   },
+   "round": 12
+  },
+  "stats": {
+   "trips": 4875,
+   "deadlocks": 2.25
+  },
+  "pts": [
+   {
+    "id": "r5/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.33666666666666667,
+    "sim": 0.672,
+    "w": 115
+   },
+   {
+    "id": "r50/a",
+    "name": "Strada Nicolae Titulescu",
+    "tomtom": 0.9612499999999999,
+    "sim": 0.734,
+    "w": 70
+   },
+   {
+    "id": "r50/b",
+    "name": "Strada Nicolae Titulescu",
+    "tomtom": 0.6833333333333335,
+    "sim": 0.695,
+    "w": 69
+   },
+   {
+    "id": "r51/a",
+    "name": "Strada George Coșbuc",
+    "tomtom": 1,
+    "sim": 0.749,
+    "w": 131
+   },
+   {
+    "id": "r55/a",
+    "name": "Strada Dornei",
+    "tomtom": 0.6066666666666666,
+    "sim": 0.731,
+    "w": 160
+   },
+   {
+    "id": "r56/a",
+    "name": "Strada Dornei",
+    "tomtom": 0.5808333333333333,
+    "sim": 0.727,
+    "w": 157
+   },
+   {
+    "id": "r59/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.8962500000000002,
+    "sim": 0.747,
+    "w": 58
+   },
+   {
+    "id": "r60/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.8962500000000002,
+    "sim": 0.739,
+    "w": 31
+   },
+   {
+    "id": "r61/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.8962500000000002,
+    "sim": 0.778,
+    "w": 47
+   },
+   {
+    "id": "r62/a",
+    "name": "Piața Centrală",
+    "tomtom": 0.7458333333333333,
+    "sim": 0.735,
+    "w": 122
+   },
+   {
+    "id": "r71/a",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.8920833333333333,
+    "sim": 0.749,
+    "w": 69
+   },
+   {
+    "id": "r72/b",
+    "name": "Strada Albert Berger",
+    "tomtom": 0.8129166666666667,
+    "sim": 0.75,
+    "w": 23
+   },
+   {
+    "id": "r76/a",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.8204166666666666,
+    "sim": 0.747,
+    "w": 268
+   },
+   {
+    "id": "r80/a",
+    "name": "Strada Barbu Lăutaru",
+    "tomtom": 0.7837500000000002,
+    "sim": 0.715,
+    "w": 173
+   },
+   {
+    "id": "r80/b",
+    "name": "Strada Barbu Lăutaru",
+    "tomtom": 0.8391666666666667,
+    "sim": 0.758,
+    "w": 173
+   },
+   {
+    "id": "r81/a",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.9558333333333333,
+    "sim": 0.757,
+    "w": 21
+   },
+   {
+    "id": "r81/b",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.8004166666666667,
+    "sim": 0.704,
+    "w": 21
+   },
+   {
+    "id": "r82/a",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.9558333333333333,
+    "sim": 0.745,
+    "w": 106
+   },
+   {
+    "id": "r82/b",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.8004166666666667,
+    "sim": 0.722,
+    "w": 105
+   },
+   {
+    "id": "r110/a",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.8920833333333333,
+    "sim": 0.744,
+    "w": 20
+   },
+   {
+    "id": "r111/a",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.8920833333333333,
+    "sim": 0.748,
+    "w": 93
+   },
+   {
+    "id": "r119/a",
+    "name": "Strada Bistricioarei",
+    "tomtom": 0.8004166666666667,
+    "sim": 0.675,
+    "w": 78
+   },
+   {
+    "id": "r132/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.5495833333333333,
+    "sim": 0.725,
+    "w": 89
+   },
+   {
+    "id": "r132/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.7420833333333332,
+    "sim": 0.737,
+    "w": 89
+   },
+   {
+    "id": "r133/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.52625,
+    "sim": 0.733,
+    "w": 92
+   },
+   {
+    "id": "r133/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.7420833333333332,
+    "sim": 0.738,
+    "w": 92
+   },
+   {
+    "id": "r134/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.4604166666666666,
+    "sim": 0.731,
+    "w": 70
+   },
+   {
+    "id": "r134/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.7420833333333332,
+    "sim": 0.696,
+    "w": 70
+   },
+   {
+    "id": "r135/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.61375,
+    "sim": 0.713,
+    "w": 59
+   },
+   {
+    "id": "r135/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.42874999999999996,
+    "sim": 0.67,
+    "w": 59
+   },
+   {
+    "id": "r136/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.61375,
+    "sim": 0.676,
+    "w": 54
+   },
+   {
+    "id": "r136/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.42874999999999996,
+    "sim": 0.649,
+    "w": 54
+   },
+   {
+    "id": "r137/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.61375,
+    "sim": 0.747,
+    "w": 88
+   },
+   {
+    "id": "r137/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.42874999999999996,
+    "sim": 0.659,
+    "w": 88
+   },
+   {
+    "id": "r143/a",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.68625,
+    "sim": 0.744,
+    "w": 347
+   },
+   {
+    "id": "r143/b",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.8041666666666667,
+    "sim": 0.734,
+    "w": 347
+   },
+   {
+    "id": "r144/a",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.8041666666666667,
+    "sim": 0.712,
+    "w": 185
+   },
+   {
+    "id": "r144/b",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.71625,
+    "sim": 0.737,
+    "w": 185
+   },
+   {
+    "id": "r145/a",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.6950000000000001,
+    "sim": 0.75,
+    "w": 179
+   },
+   {
+    "id": "r145/b",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.8041666666666667,
+    "sim": 0.759,
+    "w": 179
+   },
+   {
+    "id": "r146/a",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.2033333333333333,
+    "sim": 0.711,
+    "w": 75
+   },
+   {
+    "id": "r146/b",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.29208333333333336,
+    "sim": 0.706,
+    "w": 75
+   },
+   {
+    "id": "r147/a",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.3141666666666667,
+    "sim": 0.708,
+    "w": 56
+   },
+   {
+    "id": "r147/b",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.2129166666666667,
+    "sim": 0.755,
+    "w": 56
+   },
+   {
+    "id": "r150/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.9616666666666667,
+    "sim": 0.716,
+    "w": 85
+   },
+   {
+    "id": "r150/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.6929166666666666,
+    "sim": 0.66,
+    "w": 115
+   },
+   {
+    "id": "r151/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.9616666666666667,
+    "sim": 0.648,
+    "w": 87
+   },
+   {
+    "id": "r151/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.74125,
+    "sim": 0.705,
+    "w": 87
+   },
+   {
+    "id": "r152/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.7433333333333333,
+    "sim": 0.755,
+    "w": 109
+   },
+   {
+    "id": "r152/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.9616666666666667,
+    "sim": 0.75,
+    "w": 109
+   },
+   {
+    "id": "r153/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.7433333333333333,
+    "sim": 0.683,
+    "w": 161
+   },
+   {
+    "id": "r153/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.93875,
+    "sim": 0.75,
+    "w": 161
+   },
+   {
+    "id": "r154/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.9237499999999998,
+    "sim": 0.75,
+    "w": 120
+   },
+   {
+    "id": "r154/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.7433333333333333,
+    "sim": 0.751,
+    "w": 120
+   },
+   {
+    "id": "r155/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.7437499999999999,
+    "sim": 0.748,
+    "w": 131
+   },
+   {
+    "id": "r155/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.9237499999999998,
+    "sim": 0.75,
+    "w": 131
+   },
+   {
+    "id": "r161/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.7329166666666667,
+    "sim": 0.669,
+    "w": 47
+   },
+   {
+    "id": "r161/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.7875000000000001,
+    "sim": 0.722,
+    "w": 47
+   },
+   {
+    "id": "r163/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.7329166666666667,
+    "sim": 0.742,
+    "w": 108
+   },
+   {
+    "id": "r163/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.7875000000000001,
+    "sim": 0.719,
+    "w": 108
+   },
+   {
+    "id": "r164/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.52125,
+    "sim": 0.421,
+    "w": 40
+   },
+   {
+    "id": "r164/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.5475,
+    "sim": 0.717,
+    "w": 40
+   },
+   {
+    "id": "r165/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.52125,
+    "sim": 0.642,
+    "w": 47
+   },
+   {
+    "id": "r165/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.5279166666666667,
+    "sim": 0.543,
+    "w": 47
+   },
+   {
+    "id": "r166/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.52125,
+    "sim": 0.645,
+    "w": 66
+   },
+   {
+    "id": "r166/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.5245833333333334,
+    "sim": 0.678,
+    "w": 66
+   },
+   {
+    "id": "r167/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.5245833333333334,
+    "sim": 0.584,
+    "w": 63
+   },
+   {
+    "id": "r167/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.52125,
+    "sim": 0.734,
+    "w": 61
+   },
+   {
+    "id": "r168/a",
+    "name": "Strada Ursului",
+    "tomtom": 0.42833333333333334,
+    "sim": 0.652,
+    "w": 130
+   },
+   {
+    "id": "r169/a",
+    "name": "Strada Ursului",
+    "tomtom": 0.42833333333333334,
+    "sim": 0.243,
+    "w": 85
+   },
+   {
+    "id": "r177/a",
+    "name": "Strada Crinilor",
+    "tomtom": 0.3466666666666667,
+    "sim": 0.585,
+    "w": 88
+   },
+   {
+    "id": "r177/b",
+    "name": "Strada Crinilor",
+    "tomtom": 0.3504166666666667,
+    "sim": 0.671,
+    "w": 88
+   },
+   {
+    "id": "r178/a",
+    "name": "Strada Crinilor",
+    "tomtom": 0.2758333333333334,
+    "sim": 0.66,
+    "w": 101
+   },
+   {
+    "id": "r188/a",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.6895833333333334,
+    "sim": 0.735,
+    "w": 30
+   },
+   {
+    "id": "r188/b",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.54125,
+    "sim": 0.707,
+    "w": 30
+   },
+   {
+    "id": "r189/a",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.6891666666666667,
+    "sim": 0.715,
+    "w": 106
+   },
+   {
+    "id": "r189/b",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.5408333333333333,
+    "sim": 0.721,
+    "w": 106
+   },
+   {
+    "id": "r196/a",
+    "name": "Strada Eroilor",
+    "tomtom": 0.7725,
+    "sim": 0.748,
+    "w": 55
+   },
+   {
+    "id": "r196/b",
+    "name": "Strada Eroilor",
+    "tomtom": 0.7562499999999999,
+    "sim": 0.695,
+    "w": 55
+   },
+   {
+    "id": "r218/a",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.8179166666666666,
+    "sim": 0.723,
+    "w": 81
+   },
+   {
+    "id": "r219/a",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.9979166666666667,
+    "sim": 0.741,
+    "w": 24
+   },
+   {
+    "id": "r219/b",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.8179166666666666,
+    "sim": 0.725,
+    "w": 26
+   },
+   {
+    "id": "r221/a",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 1,
+    "sim": 0.739,
+    "w": 61
+   },
+   {
+    "id": "r221/b",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.8179166666666666,
+    "sim": 0.742,
+    "w": 62
+   },
+   {
+    "id": "r226/a",
+    "name": "Strada Împăratul Traian",
+    "tomtom": 0.8929166666666666,
+    "sim": 0.74,
+    "w": 41
+   },
+   {
+    "id": "r228/a",
+    "name": "Strada Împăratul Traian",
+    "tomtom": 0.8633333333333333,
+    "sim": 0.754,
+    "w": 141
+   },
+   {
+    "id": "r248/a",
+    "name": "Strada Barbu Ștefănescu Delavrancea",
+    "tomtom": 0.67125,
+    "sim": 0.707,
+    "w": 63
+   },
+   {
+    "id": "r337/a",
+    "name": "Strada Vasile Alecsandri",
+    "tomtom": 1,
+    "sim": 0.749,
+    "w": 214
+   },
+   {
+    "id": "r341/a",
+    "name": "Piața Mică",
+    "tomtom": 1,
+    "sim": 0.703,
+    "w": 34
+   },
+   {
+    "id": "r347/a",
+    "name": "Strada Nicolae Titulescu",
+    "tomtom": 0.9612499999999999,
+    "sim": 0.718,
+    "w": 60
+   },
+   {
+    "id": "r348/a",
+    "name": "Strada Nicolae Titulescu",
+    "tomtom": 0.9612499999999999,
+    "sim": 0.775,
+    "w": 52
+   },
+   {
+    "id": "r379/a",
+    "name": "Strada Albert Berger",
+    "tomtom": 1,
+    "sim": 0.748,
+    "w": 23
+   },
+   {
+    "id": "r393/a",
+    "name": "Piața Unirii",
+    "tomtom": 0.9737499999999999,
+    "sim": 0.723,
+    "w": 37
+   },
+   {
+    "id": "r409/b",
+    "name": "Strada Sucevei",
+    "tomtom": 0.9195833333333334,
+    "sim": 0.734,
+    "w": 149
+   },
+   {
+    "id": "r434/b",
+    "name": "Strada Vasile Lupu",
+    "tomtom": 0.9645833333333333,
+    "sim": 0.697,
+    "w": 130
+   },
+   {
+    "id": "r439/b",
+    "name": "Strada Doctor Ioan Rațiu",
+    "tomtom": 0.9737500000000001,
+    "sim": 0.599,
+    "w": 30
+   },
+   {
+    "id": "r442/a",
+    "name": "Strada Grănicerilor",
+    "tomtom": 1,
+    "sim": 0.749,
+    "w": 243
+   },
+   {
+    "id": "r442/b",
+    "name": "Strada Grănicerilor",
+    "tomtom": 0.9816666666666667,
+    "sim": 0.745,
+    "w": 243
+   },
+   {
+    "id": "r443/a",
+    "name": "Strada Zimbrului",
+    "tomtom": 0.2875000000000001,
+    "sim": 0.724,
+    "w": 228
+   },
+   {
+    "id": "r444/a",
+    "name": "Strada Zimbrului",
+    "tomtom": 0.28708333333333336,
+    "sim": 0.493,
+    "w": 31
+   },
+   {
+    "id": "r462/a",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.8925000000000001,
+    "sim": 0.743,
+    "w": 102
+   },
+   {
+    "id": "r462/b",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.8125,
+    "sim": 0.757,
+    "w": 101
+   },
+   {
+    "id": "r472/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.6545833333333334,
+    "sim": 0.707,
+    "w": 92
+   },
+   {
+    "id": "r487/a",
+    "name": "Piața Petru Rareș",
+    "tomtom": 0.6941666666666666,
+    "sim": 0.748,
+    "w": 81
+   },
+   {
+    "id": "r1678/a",
+    "name": "Strada Alexandru Odobescu (2)",
+    "tomtom": 0.9737500000000001,
+    "sim": 0.781,
+    "w": 107
+   },
+   {
+    "id": "r1624/a",
+    "name": "Bulevardul Independenței (2)",
+    "tomtom": 0.8279166666666667,
+    "sim": 0.743,
+    "w": 309
+   },
+   {
+    "id": "r495/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.45958333333333334,
+    "sim": 0.724,
+    "w": 349
+   },
+   {
+    "id": "r496/a",
+    "name": "Strada Gării",
+    "tomtom": 0.6545833333333334,
+    "sim": 0.703,
+    "w": 80
+   },
+   {
+    "id": "r497/a",
+    "name": "Strada Gării",
+    "tomtom": 0.6545833333333334,
+    "sim": 0.665,
+    "w": 42
+   },
+   {
+    "id": "r871/a",
+    "name": "Strada Gării",
+    "tomtom": 0.6975,
+    "sim": 0.701,
+    "w": 39
+   },
+   {
+    "id": "r871/b",
+    "name": "Strada Gării",
+    "tomtom": 0.6950000000000001,
+    "sim": 0.756,
+    "w": 39
+   },
+   {
+    "id": "r933/a",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.6950000000000001,
+    "sim": 0.753,
+    "w": 306
+   },
+   {
+    "id": "r933/b",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.6304166666666667,
+    "sim": 0.702,
+    "w": 306
+   },
+   {
+    "id": "r934/a",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.61,
+    "sim": 0.754,
+    "w": 72
+   },
+   {
+    "id": "r934/b",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.6783333333333335,
+    "sim": 0.75,
+    "w": 64
+   },
+   {
+    "id": "r1022/a",
+    "name": "Calea Moldovei",
+    "tomtom": 0.5008333333333332,
+    "sim": 0.735,
+    "w": 36
+   },
+   {
+    "id": "r1640/a",
+    "name": "Road 1028 (2)",
+    "tomtom": 0.6029166666666667,
+    "sim": 0.743,
+    "w": 94
+   },
+   {
+    "id": "r1640/b",
+    "name": "Road 1028 (2)",
+    "tomtom": 0.5825,
+    "sim": 0.743,
+    "w": 95
+   },
+   {
+    "id": "r1029/b",
+    "name": "Road 1029",
+    "tomtom": 0.5825,
+    "sim": 0.634,
+    "w": 55
+   },
+   {
+    "id": "r1033/a",
+    "name": "Strada Năsăudului",
+    "tomtom": 0.45541666666666664,
+    "sim": 0.732,
+    "w": 160
+   },
+   {
+    "id": "r1033/b",
+    "name": "Strada Năsăudului",
+    "tomtom": 0.62875,
+    "sim": 0.75,
+    "w": 160
+   },
+   {
+    "id": "r1034/b",
+    "name": "Strada Năsăudului",
+    "tomtom": 0.45541666666666664,
+    "sim": 0.752,
+    "w": 104
+   },
+   {
+    "id": "r1095/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6958333333333333,
+    "sim": 0.726,
+    "w": 150
+   },
+   {
+    "id": "r1095/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6595833333333334,
+    "sim": 0.681,
+    "w": 150
+   },
+   {
+    "id": "r1096/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6666666666666666,
+    "sim": 0.68,
+    "w": 113
+   },
+   {
+    "id": "r1096/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6595833333333334,
+    "sim": 0.671,
+    "w": 113
+   },
+   {
+    "id": "r1097/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6458333333333334,
+    "sim": 0.602,
+    "w": 44
+   },
+   {
+    "id": "r1097/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.64625,
+    "sim": 0.63,
+    "w": 44
+   },
+   {
+    "id": "r1098/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6300000000000001,
+    "sim": 0.707,
+    "w": 38
+   },
+   {
+    "id": "r1098/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6633333333333333,
+    "sim": 0.681,
+    "w": 38
+   },
+   {
+    "id": "r1219/a",
+    "name": "Piața Centrală",
+    "tomtom": 1,
+    "sim": 0.735,
+    "w": 87
+   },
+   {
+    "id": "r1237/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.3495833333333333,
+    "sim": 0.661,
+    "w": 163
+   },
+   {
+    "id": "r1238/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.39375000000000004,
+    "sim": 0.578,
+    "w": 82
+   },
+   {
+    "id": "r1251/a",
+    "name": "Calea Moldovei",
+    "tomtom": 0.4325,
+    "sim": 0.39,
+    "w": 121
+   },
+   {
+    "id": "r1252/a",
+    "name": "Strada Doctor Ioan Rațiu",
+    "tomtom": 0.78,
+    "sim": 0.709,
+    "w": 24
+   },
+   {
+    "id": "r1252/b",
+    "name": "Strada Doctor Ioan Rațiu",
+    "tomtom": 0.9737500000000001,
+    "sim": 0.714,
+    "w": 24
+   },
+   {
+    "id": "r1258/a",
+    "name": "Strada Gării",
+    "tomtom": 0.5075000000000001,
+    "sim": 0.569,
+    "w": 107
+   },
+   {
+    "id": "r1286/a",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.5625,
+    "sim": 0.705,
+    "w": 154
+   },
+   {
+    "id": "r1286/b",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.69,
+    "sim": 0.736,
+    "w": 154
+   },
+   {
+    "id": "r1287/a",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.5587500000000001,
+    "sim": 0.712,
+    "w": 32
+   },
+   {
+    "id": "r1287/b",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.6208333333333335,
+    "sim": 0.731,
+    "w": 32
+   },
+   {
+    "id": "r1294/a",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.5666666666666667,
+    "sim": 0.738,
+    "w": 232
+   },
+   {
+    "id": "r1294/b",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.4225,
+    "sim": 0.726,
+    "w": 232
+   },
+   {
+    "id": "r1296/a",
+    "name": "Strada Zorilor",
+    "tomtom": 1,
+    "sim": 0.736,
+    "w": 45
+   },
+   {
+    "id": "r1299/a",
+    "name": "Strada Bistricioarei",
+    "tomtom": 0.8004166666666667,
+    "sim": 0.442,
+    "w": 46
+   },
+   {
+    "id": "r1303/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.4425,
+    "sim": 0.71,
+    "w": 91
+   },
+   {
+    "id": "r1306/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.7329166666666667,
+    "sim": 0.515,
+    "w": 21
+   },
+   {
+    "id": "r1306/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.7875000000000001,
+    "sim": 0.741,
+    "w": 21
+   },
+   {
+    "id": "r1332/a",
+    "name": "Strada Albert Berger",
+    "tomtom": 1,
+    "sim": 0.746,
+    "w": 74
+   },
+   {
+    "id": "r1338/a",
+    "name": "Calea Moldovei",
+    "tomtom": 0.3866666666666667,
+    "sim": 0.736,
+    "w": 37
+   },
+   {
+    "id": "r1343/a",
+    "name": "Strada Gării",
+    "tomtom": 0.705,
+    "sim": 0.715,
+    "w": 56
+   },
+   {
+    "id": "r1343/b",
+    "name": "Strada Gării",
+    "tomtom": 0.6950000000000001,
+    "sim": 0.649,
+    "w": 56
+   },
+   {
+    "id": "r1367/a",
+    "name": "Strada Alexandru Odobescu",
+    "tomtom": 0.9737500000000001,
+    "sim": 0.711,
+    "w": 42
+   },
+   {
+    "id": "r1367/b",
+    "name": "Strada Alexandru Odobescu",
+    "tomtom": 0.79625,
+    "sim": 0.716,
+    "w": 42
+   },
+   {
+    "id": "r1368/a",
+    "name": "Strada Alexandru Odobescu",
+    "tomtom": 0.9737500000000001,
+    "sim": 0.717,
+    "w": 103
+   },
+   {
+    "id": "r1368/b",
+    "name": "Strada Alexandru Odobescu",
+    "tomtom": 0.7945833333333334,
+    "sim": 0.749,
+    "w": 102
+   },
+   {
+    "id": "r1370/a",
+    "name": "Strada Avram Iancu",
+    "tomtom": 0.6487499999999999,
+    "sim": 0.733,
+    "w": 164
+   },
+   {
+    "id": "r1370/b",
+    "name": "Strada Avram Iancu",
+    "tomtom": 0.39291666666666675,
+    "sim": 0.724,
+    "w": 164
+   },
+   {
+    "id": "r1371/a",
+    "name": "Strada Avram Iancu",
+    "tomtom": 0.6487499999999999,
+    "sim": 0.738,
+    "w": 59
+   },
+   {
+    "id": "r1371/b",
+    "name": "Strada Avram Iancu",
+    "tomtom": 0.39291666666666675,
+    "sim": 0.699,
+    "w": 59
+   },
+   {
+    "id": "r1379/a",
+    "name": "Strada Nicolae Titulescu",
+    "tomtom": 0.9612499999999999,
+    "sim": 0.754,
+    "w": 49
+   },
+   {
+    "id": "r1399/a",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.8095833333333334,
+    "sim": 0.749,
+    "w": 40
+   },
+   {
+    "id": "r1399/b",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.6241666666666666,
+    "sim": 0.743,
+    "w": 69
+   },
+   {
+    "id": "r1400/a",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.8095833333333334,
+    "sim": 0.743,
+    "w": 48
+   },
+   {
+    "id": "r1400/b",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.62375,
+    "sim": 0.748,
+    "w": 48
+   },
+   {
+    "id": "r1405/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.4475,
+    "sim": 0.672,
+    "w": 73
+   },
+   {
+    "id": "r1405/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6029166666666667,
+    "sim": 0.553,
+    "w": 73
+   },
+   {
+    "id": "r1406/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.4908333333333334,
+    "sim": 0.716,
+    "w": 114
+   },
+   {
+    "id": "r1406/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6029166666666667,
+    "sim": 0.724,
+    "w": 114
+   },
+   {
+    "id": "r1687/a",
+    "name": "Bulevardul Decebal (2)",
+    "tomtom": 0.42166666666666675,
+    "sim": 0.442,
+    "w": 69
+   },
+   {
+    "id": "r1687/b",
+    "name": "Bulevardul Decebal (2)",
+    "tomtom": 0.49250000000000005,
+    "sim": 0.714,
+    "w": 69
+   },
+   {
+    "id": "r1415/a",
+    "name": "Strada Dornei",
+    "tomtom": 0.8004166666666667,
+    "sim": 0.747,
+    "w": 30
+   },
+   {
+    "id": "r1416/a",
+    "name": "Strada Dornei",
+    "tomtom": 0.8016666666666667,
+    "sim": 0.754,
+    "w": 54
+   },
+   {
+    "id": "r1417/a",
+    "name": "Strada Barbu Ștefănescu Delavrancea",
+    "tomtom": 0.68625,
+    "sim": 0.712,
+    "w": 42
+   },
+   {
+    "id": "r1418/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.49291666666666667,
+    "sim": 0.539,
+    "w": 106
+   },
+   {
+    "id": "r1427/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6491666666666667,
+    "sim": 0.615,
+    "w": 203
+   },
+   {
+    "id": "r1427/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.47458333333333336,
+    "sim": 0.614,
+    "w": 203
+   },
+   {
+    "id": "r1428/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6633333333333333,
+    "sim": 0.677,
+    "w": 94
+   },
+   {
+    "id": "r1428/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.5679166666666667,
+    "sim": 0.533,
+    "w": 94
+   },
+   {
+    "id": "r1446/a",
+    "name": "Drumul Dumitrei Vechi",
+    "tomtom": 0.6862499999999999,
+    "sim": 0.752,
+    "w": 76
+   },
+   {
+    "id": "r1446/b",
+    "name": "Drumul Dumitrei Vechi",
+    "tomtom": 0.67125,
+    "sim": 0.737,
+    "w": 76
+   },
+   {
+    "id": "r1448/b",
+    "name": "Drumul Dumitrei Vechi",
+    "tomtom": 0.6841666666666666,
+    "sim": 0.75,
+    "w": 39
+   },
+   {
+    "id": "r1449/a",
+    "name": "Drumul Dumitrei Vechi",
+    "tomtom": 0.6841666666666668,
+    "sim": 0.75,
+    "w": 21
+   },
+   {
+    "id": "r1458/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.3716666666666667,
+    "sim": 0.736,
+    "w": 144
+   },
+   {
+    "id": "r1461/a",
+    "name": "Strada George Coșbuc",
+    "tomtom": 1,
+    "sim": 0.738,
+    "w": 125
+   },
+   {
+    "id": "r1463/a",
+    "name": "Strada Liviu Rebreanu",
+    "tomtom": 0.9737499999999999,
+    "sim": 0.754,
+    "w": 91
+   },
+   {
+    "id": "r1465/a",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.8004166666666667,
+    "sim": 0.732,
+    "w": 135
+   },
+   {
+    "id": "r1465/b",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.9558333333333333,
+    "sim": 0.754,
+    "w": 135
+   },
+   {
+    "id": "r1473/a",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.32833333333333337,
+    "sim": 0.705,
+    "w": 32
+   },
+   {
+    "id": "r1473/b",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.22666666666666666,
+    "sim": 0.713,
+    "w": 32
+   },
+   {
+    "id": "r1479/a",
+    "name": "Strada Ursului",
+    "tomtom": 0.5216666666666666,
+    "sim": 0.582,
+    "w": 29
+   },
+   {
+    "id": "r1484/a",
+    "name": "Piața Unirii",
+    "tomtom": 0.9737499999999999,
+    "sim": 0.766,
+    "w": 58
+   },
+   {
+    "id": "r1488/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.7983333333333333,
+    "sim": 0.75,
+    "w": 48
+   },
+   {
+    "id": "r1489/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.7983333333333333,
+    "sim": 0.75,
+    "w": 78
+   },
+   {
+    "id": "r1491/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.6958333333333334,
+    "sim": 0.745,
+    "w": 166
+   },
+   {
+    "id": "r1507/a",
+    "name": "Strada Grănicerilor",
+    "tomtom": 1,
+    "sim": 0.747,
+    "w": 149
+   },
+   {
+    "id": "r1507/b",
+    "name": "Strada Grănicerilor",
+    "tomtom": 0.9624999999999999,
+    "sim": 0.704,
+    "w": 149
+   },
+   {
+    "id": "r1508/a",
+    "name": "Strada Grănicerilor",
+    "tomtom": 1,
+    "sim": 0.749,
+    "w": 105
+   },
+   {
+    "id": "r1508/b",
+    "name": "Strada Grănicerilor",
+    "tomtom": 0.9624999999999999,
+    "sim": 0.75,
+    "w": 106
+   },
+   {
+    "id": "r1514/a",
+    "name": "Strada Gării",
+    "tomtom": 0.6545833333333334,
+    "sim": 0.683,
+    "w": 73
+   },
+   {
+    "id": "r1516/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.48625,
+    "sim": 0.699,
+    "w": 348
+   },
+   {
+    "id": "r1517/a",
+    "name": "Bulevardul Independenței",
+    "tomtom": 0.52875,
+    "sim": 0.738,
+    "w": 310
+   },
+   {
+    "id": "r1537/a",
+    "name": "Strada Gării",
+    "tomtom": 0.6950000000000001,
+    "sim": 0.701,
+    "w": 52
+   },
+   {
+    "id": "r1537/b",
+    "name": "Strada Gării",
+    "tomtom": 0.7566666666666666,
+    "sim": 0.693,
+    "w": 63
+   },
+   {
+    "id": "r1559/a",
+    "name": "Strada 1 Decembrie",
+    "tomtom": 0.58,
+    "sim": 0.703,
+    "w": 288
+   },
+   {
+    "id": "r1559/b",
+    "name": "Strada 1 Decembrie",
+    "tomtom": 0.6154166666666667,
+    "sim": 0.672,
+    "w": 287
+   },
+   {
+    "id": "r1562/a",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.8920833333333333,
+    "sim": 0.749,
+    "w": 32
+   },
+   {
+    "id": "r1563/a",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.8004166666666667,
+    "sim": 0.647,
+    "w": 35
+   },
+   {
+    "id": "r1563/b",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.9675,
+    "sim": 0.748,
+    "w": 35
+   },
+   {
+    "id": "r1564/a",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.54125,
+    "sim": 0.49,
+    "w": 46
+   },
+   {
+    "id": "r1564/b",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.6895833333333334,
+    "sim": 0.725,
+    "w": 46
+   },
+   {
+    "id": "r1569/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.7883333333333333,
+    "sim": 0.723,
+    "w": 99
+   },
+   {
+    "id": "r1569/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.7329166666666667,
+    "sim": 0.745,
+    "w": 98
+   },
+   {
+    "id": "r1590/a",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.6816666666666666,
+    "sim": 0.697,
+    "w": 69
+   },
+   {
+    "id": "r1590/b",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.5754166666666667,
+    "sim": 0.745,
+    "w": 69
+   },
+   {
+    "id": "r1592/a",
+    "name": "Strada Năsăudului",
+    "tomtom": 0.45541666666666664,
+    "sim": 0.433,
+    "w": 50
+   },
+   {
+    "id": "r1592/b",
+    "name": "Strada Năsăudului",
+    "tomtom": 0.62875,
+    "sim": 0.71,
+    "w": 50
+   },
+   {
+    "id": "r1594/a",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.57625,
+    "sim": 0.732,
+    "w": 206
+   },
+   {
+    "id": "r1594/b",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.5725,
+    "sim": 0.73,
+    "w": 205
+   },
+   {
+    "id": "r1595/a",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.74625,
+    "sim": 0.72,
+    "w": 40
+   },
+   {
+    "id": "r1595/b",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.5625,
+    "sim": 0.739,
+    "w": 40
+   },
+   {
+    "id": "r1628/a",
+    "name": "Road 1628",
+    "tomtom": 0.5912499999999999,
+    "sim": 0.571,
+    "w": 58
+   },
+   {
+    "id": "r1630/a",
+    "name": "Road 1630",
+    "tomtom": 0.29875,
+    "sim": 0.46,
+    "w": 49
+   },
+   {
+    "id": "r1633/a",
+    "name": "Road 1633",
+    "tomtom": 0.49458333333333326,
+    "sim": 0.63,
+    "w": 108
+   },
+   {
+    "id": "r1634/a",
+    "name": "Road 1634",
+    "tomtom": 0.79625,
+    "sim": 0.741,
+    "w": 120
+   },
+   {
+    "id": "r1644/a",
+    "name": "Road 1644",
+    "tomtom": 0.53,
+    "sim": 0.737,
+    "w": 75
+   },
+   {
+    "id": "r1646/a",
+    "name": "Road 1646",
+    "tomtom": 0.5229166666666667,
+    "sim": 0.668,
+    "w": 20
+   },
+   {
+    "id": "r1648/a",
+    "name": "Road 1648",
+    "tomtom": 0.6070833333333333,
+    "sim": 0.62,
+    "w": 47
+   },
+   {
+    "id": "r1650/a",
+    "name": "Road 1650",
+    "tomtom": 0.5008333333333332,
+    "sim": 0.726,
+    "w": 82
+   },
+   {
+    "id": "r1662/a",
+    "name": "Road 1662",
+    "tomtom": 0.6629166666666667,
+    "sim": 0.634,
+    "w": 210
+   },
+   {
+    "id": "r1662/b",
+    "name": "Road 1662",
+    "tomtom": 0.4654166666666666,
+    "sim": 0.374,
+    "w": 210
+   },
+   {
+    "id": "r1663/a",
+    "name": "Road 1663",
+    "tomtom": 0.4379166666666667,
+    "sim": 0.509,
+    "w": 56
+   },
+   {
+    "id": "r1670/a",
+    "name": "Road 1670",
+    "tomtom": 0.6804166666666667,
+    "sim": 0.552,
+    "w": 49
+   },
+   {
+    "id": "r1672/a",
+    "name": "Road 1672",
+    "tomtom": 0.5266666666666666,
+    "sim": 0.646,
+    "w": 362
+   },
+   {
+    "id": "r1673/a",
+    "name": "Road 1673",
+    "tomtom": 0.52875,
+    "sim": 0.623,
+    "w": 365
+   },
+   {
+    "id": "r1674/a",
+    "name": "Road 1674",
+    "tomtom": 0.7941666666666666,
+    "sim": 0.715,
+    "w": 55
+   },
+   {
+    "id": "r1675/a",
+    "name": "Road 1675",
+    "tomtom": 0.3866666666666667,
+    "sim": 0.737,
+    "w": 114
+   },
+   {
+    "id": "r1675/b",
+    "name": "Road 1675",
+    "tomtom": 0.45125000000000004,
+    "sim": 0.7,
+    "w": 114
+   },
+   {
+    "id": "r1676/a",
+    "name": "Road 1676",
+    "tomtom": 0.6512500000000001,
+    "sim": 0.687,
+    "w": 186
+   },
+   {
+    "id": "r1676/b",
+    "name": "Road 1676",
+    "tomtom": 0.9275,
+    "sim": 0.75,
+    "w": 186
+   },
+   {
+    "id": "r1677/a",
+    "name": "Road 1677",
+    "tomtom": 0.40791666666666665,
+    "sim": 0.692,
+    "w": 52
+   },
+   {
+    "id": "r1679/a",
+    "name": "Road 1679",
+    "tomtom": 0.6304166666666666,
+    "sim": 0.735,
+    "w": 272
+   },
+   {
+    "id": "r1680/a",
+    "name": "Road 1680",
+    "tomtom": 0.5066666666666667,
+    "sim": 0.635,
+    "w": 108
+   },
+   {
+    "id": "r1684/a",
+    "name": "Road 1684",
+    "tomtom": 0.42083333333333334,
+    "sim": 0.645,
+    "w": 74
+   },
+   {
+    "id": "r1691/a",
+    "name": "Road 1626",
+    "tomtom": 0.4354166666666666,
+    "sim": 0.195,
+    "w": 77
+   },
+   {
+    "id": "r1691/b",
+    "name": "Road 1626",
+    "tomtom": 0.5375000000000001,
+    "sim": 0.705,
+    "w": 77
+   },
+   {
+    "id": "r1692/a",
+    "name": "Road 1692",
+    "tomtom": 0.47958333333333336,
+    "sim": 0.574,
+    "w": 61
+   },
+   {
+    "id": "r1693/a",
+    "name": "Road 1693",
+    "tomtom": 0.2554166666666667,
+    "sim": 0.66,
+    "w": 194
+   },
+   {
+    "id": "r1694/a",
+    "name": "Road 1694",
+    "tomtom": 0.47375000000000006,
+    "sim": 0.666,
+    "w": 177
+   },
+   {
+    "id": "r1695/a",
+    "name": "Road 1695",
+    "tomtom": 0.6304166666666666,
+    "sim": 0.687,
+    "w": 79
+   },
+   {
+    "id": "r1696/a",
+    "name": "Road 1696",
+    "tomtom": 0.4175,
+    "sim": 0.725,
+    "w": 108
+   },
+   {
+    "id": "r1698/a",
+    "name": "Road 1698",
+    "tomtom": 0.5116666666666667,
+    "sim": 0.747,
+    "w": 78
+   },
+   {
+    "id": "r1700/a",
+    "name": "Road 1700",
+    "tomtom": 0.6645833333333333,
+    "sim": 0.688,
+    "w": 57
+   }
+  ]
+ },
+ "evening": {
+  "phi": 0.75,
+  "total": 5261,
+  "fit": {
+   "loss": 0.171,
+   "corr": 0.366,
+   "n": 253,
+   "bias": 0.061
+  },
+  "heldOut": {
+   "start": {
+    "loss": 0.187,
+    "corr": 0.226,
+    "n": 125,
+    "bias": 0.092
+   },
+   "best": {
+    "loss": 0.177,
+    "corr": 0.291,
+    "n": 125,
+    "bias": 0.068
+   },
+   "round": 14
+  },
+  "stats": {
+   "trips": 4368,
+   "deadlocks": 18
+  },
+  "pts": [
+   {
+    "id": "r5/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.5320833333333334,
+    "sim": 0.719,
+    "w": 115
+   },
+   {
+    "id": "r50/a",
+    "name": "Strada Nicolae Titulescu",
+    "tomtom": 0.8204166666666667,
+    "sim": 0.709,
+    "w": 70
+   },
+   {
+    "id": "r50/b",
+    "name": "Strada Nicolae Titulescu",
+    "tomtom": 0.6380833333333333,
+    "sim": 0.724,
+    "w": 69
+   },
+   {
+    "id": "r51/a",
+    "name": "Strada George Coșbuc",
+    "tomtom": 1,
+    "sim": 0.75,
+    "w": 131
+   },
+   {
+    "id": "r55/a",
+    "name": "Strada Dornei",
+    "tomtom": 0.6829166666666666,
+    "sim": 0.732,
+    "w": 160
+   },
+   {
+    "id": "r56/a",
+    "name": "Strada Dornei",
+    "tomtom": 0.6095833333333334,
+    "sim": 0.721,
+    "w": 157
+   },
+   {
+    "id": "r59/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.885,
+    "sim": 0.762,
+    "w": 58
+   },
+   {
+    "id": "r60/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.885,
+    "sim": 0.729,
+    "w": 31
+   },
+   {
+    "id": "r61/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.885,
+    "sim": 0.741,
+    "w": 47
+   },
+   {
+    "id": "r62/a",
+    "name": "Piața Centrală",
+    "tomtom": 0.7562499999999999,
+    "sim": 0.719,
+    "w": 122
+   },
+   {
+    "id": "r71/a",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.6275833333333334,
+    "sim": 0.74,
+    "w": 69
+   },
+   {
+    "id": "r72/b",
+    "name": "Strada Albert Berger",
+    "tomtom": 0.5533333333333332,
+    "sim": 0.731,
+    "w": 23
+   },
+   {
+    "id": "r76/a",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.5475,
+    "sim": 0.741,
+    "w": 268
+   },
+   {
+    "id": "r80/a",
+    "name": "Strada Barbu Lăutaru",
+    "tomtom": 0.2179166666666667,
+    "sim": 0.71,
+    "w": 173
+   },
+   {
+    "id": "r80/b",
+    "name": "Strada Barbu Lăutaru",
+    "tomtom": 0.7191666666666665,
+    "sim": 0.741,
+    "w": 173
+   },
+   {
+    "id": "r81/a",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.7430833333333333,
+    "sim": 0.721,
+    "w": 21
+   },
+   {
+    "id": "r81/b",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 1,
+    "sim": 0.709,
+    "w": 21
+   },
+   {
+    "id": "r82/a",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.7430833333333333,
+    "sim": 0.744,
+    "w": 106
+   },
+   {
+    "id": "r82/b",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 1,
+    "sim": 0.74,
+    "w": 105
+   },
+   {
+    "id": "r110/a",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.6275833333333334,
+    "sim": 0.747,
+    "w": 20
+   },
+   {
+    "id": "r111/a",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.6275833333333334,
+    "sim": 0.742,
+    "w": 93
+   },
+   {
+    "id": "r119/a",
+    "name": "Strada Bistricioarei",
+    "tomtom": 1,
+    "sim": 0.745,
+    "w": 78
+   },
+   {
+    "id": "r132/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.7320833333333334,
+    "sim": 0.716,
+    "w": 89
+   },
+   {
+    "id": "r132/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.6880000000000001,
+    "sim": 0.738,
+    "w": 89
+   },
+   {
+    "id": "r133/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.6054166666666667,
+    "sim": 0.723,
+    "w": 92
+   },
+   {
+    "id": "r133/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.6880000000000001,
+    "sim": 0.737,
+    "w": 92
+   },
+   {
+    "id": "r134/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.44666666666666666,
+    "sim": 0.724,
+    "w": 70
+   },
+   {
+    "id": "r134/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.6880000000000001,
+    "sim": 0.707,
+    "w": 70
+   },
+   {
+    "id": "r135/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.6237499999999999,
+    "sim": 0.687,
+    "w": 59
+   },
+   {
+    "id": "r135/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.36541666666666667,
+    "sim": 0.67,
+    "w": 59
+   },
+   {
+    "id": "r136/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.6237499999999999,
+    "sim": 0.656,
+    "w": 54
+   },
+   {
+    "id": "r136/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.36541666666666667,
+    "sim": 0.592,
+    "w": 54
+   },
+   {
+    "id": "r137/a",
+    "name": "Strada Rodnei",
+    "tomtom": 0.6237499999999999,
+    "sim": 0.745,
+    "w": 88
+   },
+   {
+    "id": "r137/b",
+    "name": "Strada Rodnei",
+    "tomtom": 0.4004166666666667,
+    "sim": 0.632,
+    "w": 88
+   },
+   {
+    "id": "r143/a",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.6840833333333334,
+    "sim": 0.732,
+    "w": 347
+   },
+   {
+    "id": "r143/b",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.7725000000000002,
+    "sim": 0.728,
+    "w": 347
+   },
+   {
+    "id": "r144/a",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.7729166666666668,
+    "sim": 0.735,
+    "w": 185
+   },
+   {
+    "id": "r144/b",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.7279166666666667,
+    "sim": 0.732,
+    "w": 185
+   },
+   {
+    "id": "r145/a",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.6108333333333333,
+    "sim": 0.753,
+    "w": 179
+   },
+   {
+    "id": "r145/b",
+    "name": "Strada Arțarilor",
+    "tomtom": 0.7220833333333334,
+    "sim": 0.744,
+    "w": 179
+   },
+   {
+    "id": "r146/a",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.21375000000000005,
+    "sim": 0.713,
+    "w": 75
+   },
+   {
+    "id": "r146/b",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.4076666666666667,
+    "sim": 0.699,
+    "w": 75
+   },
+   {
+    "id": "r147/a",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.44583333333333336,
+    "sim": 0.718,
+    "w": 56
+   },
+   {
+    "id": "r147/b",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.21375000000000005,
+    "sim": 0.738,
+    "w": 56
+   },
+   {
+    "id": "r150/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.8445833333333332,
+    "sim": 0.718,
+    "w": 85
+   },
+   {
+    "id": "r150/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.7916666666666666,
+    "sim": 0.705,
+    "w": 115
+   },
+   {
+    "id": "r151/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.8479166666666667,
+    "sim": 0.714,
+    "w": 87
+   },
+   {
+    "id": "r151/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.7954166666666667,
+    "sim": 0.749,
+    "w": 87
+   },
+   {
+    "id": "r152/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.8341666666666667,
+    "sim": 0.753,
+    "w": 109
+   },
+   {
+    "id": "r152/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.8830833333333334,
+    "sim": 0.746,
+    "w": 109
+   },
+   {
+    "id": "r153/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.8341666666666667,
+    "sim": 0.698,
+    "w": 161
+   },
+   {
+    "id": "r153/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.8836666666666667,
+    "sim": 0.737,
+    "w": 161
+   },
+   {
+    "id": "r154/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.7866666666666666,
+    "sim": 0.75,
+    "w": 120
+   },
+   {
+    "id": "r154/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.8333333333333333,
+    "sim": 0.749,
+    "w": 120
+   },
+   {
+    "id": "r155/a",
+    "name": "Strada Colibiței",
+    "tomtom": 0.8333333333333333,
+    "sim": 0.751,
+    "w": 131
+   },
+   {
+    "id": "r155/b",
+    "name": "Strada Colibiței",
+    "tomtom": 0.7866666666666666,
+    "sim": 0.739,
+    "w": 131
+   },
+   {
+    "id": "r161/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.60625,
+    "sim": 0.685,
+    "w": 47
+   },
+   {
+    "id": "r161/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.6775,
+    "sim": 0.73,
+    "w": 47
+   },
+   {
+    "id": "r163/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.60625,
+    "sim": 0.726,
+    "w": 108
+   },
+   {
+    "id": "r163/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.6775,
+    "sim": 0.735,
+    "w": 108
+   },
+   {
+    "id": "r164/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.48791666666666667,
+    "sim": 0.435,
+    "w": 40
+   },
+   {
+    "id": "r164/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.49958333333333327,
+    "sim": 0.719,
+    "w": 40
+   },
+   {
+    "id": "r165/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.48791666666666667,
+    "sim": 0.621,
+    "w": 47
+   },
+   {
+    "id": "r165/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.49958333333333327,
+    "sim": 0.609,
+    "w": 47
+   },
+   {
+    "id": "r166/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.4883333333333334,
+    "sim": 0.657,
+    "w": 66
+   },
+   {
+    "id": "r166/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.4991666666666666,
+    "sim": 0.711,
+    "w": 66
+   },
+   {
+    "id": "r167/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.4987499999999999,
+    "sim": 0.567,
+    "w": 63
+   },
+   {
+    "id": "r167/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.4883333333333334,
+    "sim": 0.731,
+    "w": 61
+   },
+   {
+    "id": "r168/a",
+    "name": "Strada Ursului",
+    "tomtom": 0.6425,
+    "sim": 0.689,
+    "w": 130
+   },
+   {
+    "id": "r169/a",
+    "name": "Strada Ursului",
+    "tomtom": 0.6425,
+    "sim": 0.527,
+    "w": 85
+   },
+   {
+    "id": "r177/a",
+    "name": "Strada Crinilor",
+    "tomtom": 0.4379166666666666,
+    "sim": 0.656,
+    "w": 88
+   },
+   {
+    "id": "r177/b",
+    "name": "Strada Crinilor",
+    "tomtom": 0.40208333333333335,
+    "sim": 0.658,
+    "w": 88
+   },
+   {
+    "id": "r178/a",
+    "name": "Strada Crinilor",
+    "tomtom": 0.3045833333333333,
+    "sim": 0.673,
+    "w": 101
+   },
+   {
+    "id": "r188/a",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.7013333333333334,
+    "sim": 0.756,
+    "w": 30
+   },
+   {
+    "id": "r188/b",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.5533333333333333,
+    "sim": 0.651,
+    "w": 30
+   },
+   {
+    "id": "r189/a",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.7023333333333333,
+    "sim": 0.728,
+    "w": 106
+   },
+   {
+    "id": "r189/b",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.5520833333333334,
+    "sim": 0.725,
+    "w": 106
+   },
+   {
+    "id": "r196/a",
+    "name": "Strada Eroilor",
+    "tomtom": 0.64875,
+    "sim": 0.752,
+    "w": 55
+   },
+   {
+    "id": "r196/b",
+    "name": "Strada Eroilor",
+    "tomtom": 0.6920833333333334,
+    "sim": 0.691,
+    "w": 55
+   },
+   {
+    "id": "r218/a",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.5704166666666667,
+    "sim": 0.726,
+    "w": 81
+   },
+   {
+    "id": "r219/a",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.8934166666666665,
+    "sim": 0.742,
+    "w": 24
+   },
+   {
+    "id": "r219/b",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.5704166666666667,
+    "sim": 0.699,
+    "w": 26
+   },
+   {
+    "id": "r221/a",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.9042500000000001,
+    "sim": 0.733,
+    "w": 61
+   },
+   {
+    "id": "r221/b",
+    "name": "Strada Ecaterina Teodoroiu",
+    "tomtom": 0.5704166666666667,
+    "sim": 0.732,
+    "w": 62
+   },
+   {
+    "id": "r226/a",
+    "name": "Strada Împăratul Traian",
+    "tomtom": 0.9058333333333333,
+    "sim": 0.735,
+    "w": 41
+   },
+   {
+    "id": "r228/a",
+    "name": "Strada Împăratul Traian",
+    "tomtom": 0.9058333333333333,
+    "sim": 0.75,
+    "w": 141
+   },
+   {
+    "id": "r248/a",
+    "name": "Strada Barbu Ștefănescu Delavrancea",
+    "tomtom": 0.6091666666666667,
+    "sim": 0.707,
+    "w": 63
+   },
+   {
+    "id": "r337/a",
+    "name": "Strada Vasile Alecsandri",
+    "tomtom": 0.9833333333333334,
+    "sim": 0.747,
+    "w": 214
+   },
+   {
+    "id": "r341/a",
+    "name": "Piața Mică",
+    "tomtom": 0.9299999999999999,
+    "sim": 0.695,
+    "w": 34
+   },
+   {
+    "id": "r347/a",
+    "name": "Strada Nicolae Titulescu",
+    "tomtom": 0.8208333333333334,
+    "sim": 0.728,
+    "w": 60
+   },
+   {
+    "id": "r348/a",
+    "name": "Strada Nicolae Titulescu",
+    "tomtom": 0.8208333333333334,
+    "sim": 0.711,
+    "w": 52
+   },
+   {
+    "id": "r379/a",
+    "name": "Strada Albert Berger",
+    "tomtom": 0.9304166666666667,
+    "sim": 0.749,
+    "w": 23
+   },
+   {
+    "id": "r393/a",
+    "name": "Piața Unirii",
+    "tomtom": 0.7887500000000001,
+    "sim": 0.696,
+    "w": 37
+   },
+   {
+    "id": "r409/b",
+    "name": "Strada Sucevei",
+    "tomtom": 0.85625,
+    "sim": 0.741,
+    "w": 149
+   },
+   {
+    "id": "r434/b",
+    "name": "Strada Vasile Lupu",
+    "tomtom": 1,
+    "sim": 0.713,
+    "w": 130
+   },
+   {
+    "id": "r439/b",
+    "name": "Strada Doctor Ioan Rațiu",
+    "tomtom": 0.8141666666666667,
+    "sim": 0.689,
+    "w": 30
+   },
+   {
+    "id": "r442/a",
+    "name": "Strada Grănicerilor",
+    "tomtom": 0.994,
+    "sim": 0.749,
+    "w": 243
+   },
+   {
+    "id": "r442/b",
+    "name": "Strada Grănicerilor",
+    "tomtom": 0.8245833333333332,
+    "sim": 0.747,
+    "w": 243
+   },
+   {
+    "id": "r443/a",
+    "name": "Strada Zimbrului",
+    "tomtom": 0.4245833333333333,
+    "sim": 0.735,
+    "w": 228
+   },
+   {
+    "id": "r444/a",
+    "name": "Strada Zimbrului",
+    "tomtom": 0.42374999999999996,
+    "sim": 0.511,
+    "w": 31
+   },
+   {
+    "id": "r462/a",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.6275833333333334,
+    "sim": 0.725,
+    "w": 102
+   },
+   {
+    "id": "r462/b",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.6620833333333334,
+    "sim": 0.743,
+    "w": 101
+   },
+   {
+    "id": "r472/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.5441666666666667,
+    "sim": 0.709,
+    "w": 92
+   },
+   {
+    "id": "r487/a",
+    "name": "Piața Petru Rareș",
+    "tomtom": 0.7108333333333332,
+    "sim": 0.748,
+    "w": 81
+   },
+   {
+    "id": "r1678/a",
+    "name": "Strada Alexandru Odobescu (2)",
+    "tomtom": 0.7524166666666666,
+    "sim": 0.758,
+    "w": 107
+   },
+   {
+    "id": "r1624/a",
+    "name": "Bulevardul Independenței (2)",
+    "tomtom": 0.8218333333333333,
+    "sim": 0.742,
+    "w": 309
+   },
+   {
+    "id": "r495/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.5608333333333334,
+    "sim": 0.73,
+    "w": 349
+   },
+   {
+    "id": "r496/a",
+    "name": "Strada Gării",
+    "tomtom": 0.5441666666666667,
+    "sim": 0.694,
+    "w": 80
+   },
+   {
+    "id": "r497/a",
+    "name": "Strada Gării",
+    "tomtom": 0.5441666666666667,
+    "sim": 0.646,
+    "w": 42
+   },
+   {
+    "id": "r871/a",
+    "name": "Strada Gării",
+    "tomtom": 0.6504166666666666,
+    "sim": 0.714,
+    "w": 39
+   },
+   {
+    "id": "r871/b",
+    "name": "Strada Gării",
+    "tomtom": 0.6108333333333333,
+    "sim": 0.775,
+    "w": 39
+   },
+   {
+    "id": "r933/a",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.6816666666666666,
+    "sim": 0.756,
+    "w": 306
+   },
+   {
+    "id": "r933/b",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.7533333333333333,
+    "sim": 0.701,
+    "w": 306
+   },
+   {
+    "id": "r934/a",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.7354166666666666,
+    "sim": 0.754,
+    "w": 72
+   },
+   {
+    "id": "r934/b",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.6816666666666666,
+    "sim": 0.746,
+    "w": 64
+   },
+   {
+    "id": "r1022/a",
+    "name": "Calea Moldovei",
+    "tomtom": 0.6045833333333333,
+    "sim": 0.75,
+    "w": 36
+   },
+   {
+    "id": "r1640/a",
+    "name": "Road 1028 (2)",
+    "tomtom": 0.6375,
+    "sim": 0.745,
+    "w": 94
+   },
+   {
+    "id": "r1640/b",
+    "name": "Road 1028 (2)",
+    "tomtom": 0.6859166666666667,
+    "sim": 0.744,
+    "w": 95
+   },
+   {
+    "id": "r1029/b",
+    "name": "Road 1029",
+    "tomtom": 0.6859166666666667,
+    "sim": 0.624,
+    "w": 55
+   },
+   {
+    "id": "r1033/a",
+    "name": "Strada Năsăudului",
+    "tomtom": 0.4850000000000001,
+    "sim": 0.739,
+    "w": 160
+   },
+   {
+    "id": "r1033/b",
+    "name": "Strada Năsăudului",
+    "tomtom": 0.6095833333333334,
+    "sim": 0.835,
+    "w": 160
+   },
+   {
+    "id": "r1034/b",
+    "name": "Strada Năsăudului",
+    "tomtom": 0.4850000000000001,
+    "sim": 0.711,
+    "w": 104
+   },
+   {
+    "id": "r1095/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6561666666666666,
+    "sim": 0.727,
+    "w": 150
+   },
+   {
+    "id": "r1095/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.45333333333333337,
+    "sim": 0.69,
+    "w": 150
+   },
+   {
+    "id": "r1096/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.65875,
+    "sim": 0.694,
+    "w": 113
+   },
+   {
+    "id": "r1096/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.4779166666666667,
+    "sim": 0.695,
+    "w": 113
+   },
+   {
+    "id": "r1097/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.5237499999999999,
+    "sim": 0.692,
+    "w": 44
+   },
+   {
+    "id": "r1097/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6524166666666666,
+    "sim": 0.683,
+    "w": 44
+   },
+   {
+    "id": "r1098/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6524166666666666,
+    "sim": 0.723,
+    "w": 38
+   },
+   {
+    "id": "r1098/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.58375,
+    "sim": 0.722,
+    "w": 38
+   },
+   {
+    "id": "r1219/a",
+    "name": "Piața Centrală",
+    "tomtom": 1,
+    "sim": 0.73,
+    "w": 87
+   },
+   {
+    "id": "r1237/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.3770833333333333,
+    "sim": 0.612,
+    "w": 163
+   },
+   {
+    "id": "r1238/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.39,
+    "sim": 0.133,
+    "w": 82
+   },
+   {
+    "id": "r1251/a",
+    "name": "Calea Moldovei",
+    "tomtom": 0.44666666666666677,
+    "sim": 0.469,
+    "w": 121
+   },
+   {
+    "id": "r1252/a",
+    "name": "Strada Doctor Ioan Rațiu",
+    "tomtom": 1,
+    "sim": 0.669,
+    "w": 24
+   },
+   {
+    "id": "r1252/b",
+    "name": "Strada Doctor Ioan Rațiu",
+    "tomtom": 0.8045833333333333,
+    "sim": 0.741,
+    "w": 24
+   },
+   {
+    "id": "r1258/a",
+    "name": "Strada Gării",
+    "tomtom": 0.4125,
+    "sim": 0.138,
+    "w": 107
+   },
+   {
+    "id": "r1286/a",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.5969166666666667,
+    "sim": 0.71,
+    "w": 154
+   },
+   {
+    "id": "r1286/b",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.6754166666666668,
+    "sim": 0.736,
+    "w": 154
+   },
+   {
+    "id": "r1287/a",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.7016666666666667,
+    "sim": 0.737,
+    "w": 32
+   },
+   {
+    "id": "r1287/b",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.6387499999999999,
+    "sim": 0.733,
+    "w": 32
+   },
+   {
+    "id": "r1294/a",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.5545833333333333,
+    "sim": 0.74,
+    "w": 232
+   },
+   {
+    "id": "r1294/b",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.44416666666666665,
+    "sim": 0.728,
+    "w": 232
+   },
+   {
+    "id": "r1296/a",
+    "name": "Strada Zorilor",
+    "tomtom": 0.9304166666666667,
+    "sim": 0.734,
+    "w": 45
+   },
+   {
+    "id": "r1299/a",
+    "name": "Strada Bistricioarei",
+    "tomtom": 1,
+    "sim": 0.696,
+    "w": 46
+   },
+   {
+    "id": "r1303/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.6095833333333333,
+    "sim": 0.723,
+    "w": 91
+   },
+   {
+    "id": "r1306/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.60625,
+    "sim": 0.562,
+    "w": 21
+   },
+   {
+    "id": "r1306/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.6775,
+    "sim": 0.745,
+    "w": 21
+   },
+   {
+    "id": "r1332/a",
+    "name": "Strada Albert Berger",
+    "tomtom": 0.9304166666666667,
+    "sim": 0.706,
+    "w": 74
+   },
+   {
+    "id": "r1338/a",
+    "name": "Calea Moldovei",
+    "tomtom": 0.45875,
+    "sim": 0.739,
+    "w": 37
+   },
+   {
+    "id": "r1343/a",
+    "name": "Strada Gării",
+    "tomtom": 0.6475,
+    "sim": 0.717,
+    "w": 56
+   },
+   {
+    "id": "r1343/b",
+    "name": "Strada Gării",
+    "tomtom": 0.6108333333333333,
+    "sim": 0.633,
+    "w": 56
+   },
+   {
+    "id": "r1367/a",
+    "name": "Strada Alexandru Odobescu",
+    "tomtom": 0.7524166666666666,
+    "sim": 0.703,
+    "w": 42
+   },
+   {
+    "id": "r1367/b",
+    "name": "Strada Alexandru Odobescu",
+    "tomtom": 1,
+    "sim": 0.708,
+    "w": 42
+   },
+   {
+    "id": "r1368/a",
+    "name": "Strada Alexandru Odobescu",
+    "tomtom": 0.7524166666666666,
+    "sim": 0.703,
+    "w": 103
+   },
+   {
+    "id": "r1368/b",
+    "name": "Strada Alexandru Odobescu",
+    "tomtom": 1,
+    "sim": 0.749,
+    "w": 102
+   },
+   {
+    "id": "r1370/a",
+    "name": "Strada Avram Iancu",
+    "tomtom": 0.6,
+    "sim": 0.734,
+    "w": 164
+   },
+   {
+    "id": "r1370/b",
+    "name": "Strada Avram Iancu",
+    "tomtom": 0.4420833333333334,
+    "sim": 0.721,
+    "w": 164
+   },
+   {
+    "id": "r1371/a",
+    "name": "Strada Avram Iancu",
+    "tomtom": 0.6,
+    "sim": 0.743,
+    "w": 59
+   },
+   {
+    "id": "r1371/b",
+    "name": "Strada Avram Iancu",
+    "tomtom": 0.4420833333333334,
+    "sim": 0.65,
+    "w": 59
+   },
+   {
+    "id": "r1379/a",
+    "name": "Strada Nicolae Titulescu",
+    "tomtom": 0.8204166666666667,
+    "sim": 0.728,
+    "w": 49
+   },
+   {
+    "id": "r1399/a",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.66,
+    "sim": 0.73,
+    "w": 40
+   },
+   {
+    "id": "r1399/b",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.5454166666666667,
+    "sim": 0.753,
+    "w": 69
+   },
+   {
+    "id": "r1400/a",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.66,
+    "sim": 0.748,
+    "w": 48
+   },
+   {
+    "id": "r1400/b",
+    "name": "Strada Andrei Mureșanu",
+    "tomtom": 0.5449999999999999,
+    "sim": 0.754,
+    "w": 48
+   },
+   {
+    "id": "r1405/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.3691666666666667,
+    "sim": 0.667,
+    "w": 73
+   },
+   {
+    "id": "r1405/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.61375,
+    "sim": 0.53,
+    "w": 73
+   },
+   {
+    "id": "r1406/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.43625,
+    "sim": 0.727,
+    "w": 114
+   },
+   {
+    "id": "r1406/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.61375,
+    "sim": 0.727,
+    "w": 114
+   },
+   {
+    "id": "r1687/a",
+    "name": "Bulevardul Decebal (2)",
+    "tomtom": 0.3491666666666667,
+    "sim": 0.381,
+    "w": 69
+   },
+   {
+    "id": "r1687/b",
+    "name": "Bulevardul Decebal (2)",
+    "tomtom": 0.5154166666666666,
+    "sim": 0.733,
+    "w": 69
+   },
+   {
+    "id": "r1415/a",
+    "name": "Strada Dornei",
+    "tomtom": 1,
+    "sim": 0.748,
+    "w": 30
+   },
+   {
+    "id": "r1416/a",
+    "name": "Strada Dornei",
+    "tomtom": 1,
+    "sim": 0.732,
+    "w": 54
+   },
+   {
+    "id": "r1417/a",
+    "name": "Strada Barbu Ștefănescu Delavrancea",
+    "tomtom": 0.6095833333333334,
+    "sim": 0.723,
+    "w": 42
+   },
+   {
+    "id": "r1418/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.4490833333333334,
+    "sim": 0.618,
+    "w": 106
+   },
+   {
+    "id": "r1427/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6279166666666667,
+    "sim": 0.614,
+    "w": 203
+   },
+   {
+    "id": "r1427/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.4741666666666666,
+    "sim": 0.602,
+    "w": 203
+   },
+   {
+    "id": "r1428/a",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.6174999999999999,
+    "sim": 0.689,
+    "w": 94
+   },
+   {
+    "id": "r1428/b",
+    "name": "Bulevardul Decebal",
+    "tomtom": 0.5767500000000001,
+    "sim": 0.538,
+    "w": 94
+   },
+   {
+    "id": "r1446/a",
+    "name": "Drumul Dumitrei Vechi",
+    "tomtom": 0.68375,
+    "sim": 0.752,
+    "w": 76
+   },
+   {
+    "id": "r1446/b",
+    "name": "Drumul Dumitrei Vechi",
+    "tomtom": 0.8308333333333333,
+    "sim": 0.739,
+    "w": 76
+   },
+   {
+    "id": "r1448/b",
+    "name": "Drumul Dumitrei Vechi",
+    "tomtom": 0.68375,
+    "sim": 0.751,
+    "w": 39
+   },
+   {
+    "id": "r1449/a",
+    "name": "Drumul Dumitrei Vechi",
+    "tomtom": 0.6841666666666666,
+    "sim": 0.876,
+    "w": 21
+   },
+   {
+    "id": "r1458/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.6141666666666667,
+    "sim": 0.743,
+    "w": 144
+   },
+   {
+    "id": "r1461/a",
+    "name": "Strada George Coșbuc",
+    "tomtom": 1,
+    "sim": 0.755,
+    "w": 125
+   },
+   {
+    "id": "r1463/a",
+    "name": "Strada Liviu Rebreanu",
+    "tomtom": 0.7887500000000001,
+    "sim": 0.723,
+    "w": 91
+   },
+   {
+    "id": "r1465/a",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 1,
+    "sim": 0.72,
+    "w": 135
+   },
+   {
+    "id": "r1465/b",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.7430833333333333,
+    "sim": 0.742,
+    "w": 135
+   },
+   {
+    "id": "r1473/a",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.3983333333333333,
+    "sim": 0.675,
+    "w": 32
+   },
+   {
+    "id": "r1473/b",
+    "name": "Strada Ioan Slavici",
+    "tomtom": 0.23291666666666666,
+    "sim": 0.725,
+    "w": 32
+   },
+   {
+    "id": "r1479/a",
+    "name": "Strada Ursului",
+    "tomtom": 0.6425,
+    "sim": 0.635,
+    "w": 29
+   },
+   {
+    "id": "r1484/a",
+    "name": "Piața Unirii",
+    "tomtom": 0.7887500000000001,
+    "sim": 0.758,
+    "w": 58
+   },
+   {
+    "id": "r1488/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.6741666666666666,
+    "sim": 0.752,
+    "w": 48
+   },
+   {
+    "id": "r1489/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.6745833333333333,
+    "sim": 0.75,
+    "w": 78
+   },
+   {
+    "id": "r1491/a",
+    "name": "Strada Dogarilor",
+    "tomtom": 0.6401666666666667,
+    "sim": 0.75,
+    "w": 166
+   },
+   {
+    "id": "r1507/a",
+    "name": "Strada Grănicerilor",
+    "tomtom": 0.9309999999999999,
+    "sim": 0.747,
+    "w": 149
+   },
+   {
+    "id": "r1507/b",
+    "name": "Strada Grănicerilor",
+    "tomtom": 0.6266666666666667,
+    "sim": 0.694,
+    "w": 149
+   },
+   {
+    "id": "r1508/a",
+    "name": "Strada Grănicerilor",
+    "tomtom": 0.9309999999999999,
+    "sim": 0.751,
+    "w": 105
+   },
+   {
+    "id": "r1508/b",
+    "name": "Strada Grănicerilor",
+    "tomtom": 0.6420833333333333,
+    "sim": 0.746,
+    "w": 106
+   },
+   {
+    "id": "r1514/a",
+    "name": "Strada Gării",
+    "tomtom": 0.5445833333333334,
+    "sim": 0.714,
+    "w": 73
+   },
+   {
+    "id": "r1516/a",
+    "name": "Bulevardul Republicii",
+    "tomtom": 0.4291666666666667,
+    "sim": 0.707,
+    "w": 348
+   },
+   {
+    "id": "r1517/a",
+    "name": "Bulevardul Independenței",
+    "tomtom": 0.5726666666666667,
+    "sim": 0.734,
+    "w": 310
+   },
+   {
+    "id": "r1537/a",
+    "name": "Strada Gării",
+    "tomtom": 0.6108333333333333,
+    "sim": 0.702,
+    "w": 52
+   },
+   {
+    "id": "r1537/b",
+    "name": "Strada Gării",
+    "tomtom": 0.6499999999999999,
+    "sim": 0.687,
+    "w": 63
+   },
+   {
+    "id": "r1559/a",
+    "name": "Strada 1 Decembrie",
+    "tomtom": 0.5283333333333333,
+    "sim": 0.678,
+    "w": 288
+   },
+   {
+    "id": "r1559/b",
+    "name": "Strada 1 Decembrie",
+    "tomtom": 0.57125,
+    "sim": 0.713,
+    "w": 287
+   },
+   {
+    "id": "r1562/a",
+    "name": "Strada Mihail Kogălniceanu",
+    "tomtom": 0.6275833333333334,
+    "sim": 0.75,
+    "w": 32
+   },
+   {
+    "id": "r1563/a",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 1,
+    "sim": 0.658,
+    "w": 35
+   },
+   {
+    "id": "r1563/b",
+    "name": "Strada Constantin Roman Vivu",
+    "tomtom": 0.7768333333333333,
+    "sim": 0.751,
+    "w": 35
+   },
+   {
+    "id": "r1564/a",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.5533333333333333,
+    "sim": 0.474,
+    "w": 46
+   },
+   {
+    "id": "r1564/b",
+    "name": "Strada Cuza Vodă",
+    "tomtom": 0.7013333333333334,
+    "sim": 0.764,
+    "w": 46
+   },
+   {
+    "id": "r1569/a",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.6775,
+    "sim": 0.701,
+    "w": 99
+   },
+   {
+    "id": "r1569/b",
+    "name": "Strada Petre Ispirescu",
+    "tomtom": 0.60625,
+    "sim": 0.741,
+    "w": 98
+   },
+   {
+    "id": "r1590/a",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.5429166666666666,
+    "sim": 0.699,
+    "w": 69
+   },
+   {
+    "id": "r1590/b",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.7016666666666667,
+    "sim": 0.748,
+    "w": 69
+   },
+   {
+    "id": "r1592/a",
+    "name": "Strada Năsăudului",
+    "tomtom": 0.4850000000000001,
+    "sim": 0.557,
+    "w": 50
+   },
+   {
+    "id": "r1592/b",
+    "name": "Strada Năsăudului",
+    "tomtom": 0.6095833333333334,
+    "sim": 0.706,
+    "w": 50
+   },
+   {
+    "id": "r1594/a",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.5554166666666667,
+    "sim": 0.731,
+    "w": 206
+   },
+   {
+    "id": "r1594/b",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.5441666666666667,
+    "sim": 0.728,
+    "w": 205
+   },
+   {
+    "id": "r1595/a",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.7166666666666668,
+    "sim": 0.716,
+    "w": 40
+   },
+   {
+    "id": "r1595/b",
+    "name": "Bulevardul General Grigore Bălan",
+    "tomtom": 0.5960833333333333,
+    "sim": 0.731,
+    "w": 40
+   },
+   {
+    "id": "r1628/a",
+    "name": "Road 1628",
+    "tomtom": 0.66975,
+    "sim": 0.64,
+    "w": 58
+   },
+   {
+    "id": "r1630/a",
+    "name": "Road 1630",
+    "tomtom": 0.3045833333333333,
+    "sim": 0.481,
+    "w": 49
+   },
+   {
+    "id": "r1633/a",
+    "name": "Road 1633",
+    "tomtom": 0.5215000000000001,
+    "sim": 0.344,
+    "w": 108
+   },
+   {
+    "id": "r1634/a",
+    "name": "Road 1634",
+    "tomtom": 1,
+    "sim": 0.702,
+    "w": 120
+   },
+   {
+    "id": "r1644/a",
+    "name": "Road 1644",
+    "tomtom": 0.7016666666666667,
+    "sim": 0.742,
+    "w": 75
+   },
+   {
+    "id": "r1646/a",
+    "name": "Road 1646",
+    "tomtom": 0.7016666666666667,
+    "sim": 0.617,
+    "w": 20
+   },
+   {
+    "id": "r1648/a",
+    "name": "Road 1648",
+    "tomtom": 0.6370833333333334,
+    "sim": 0.641,
+    "w": 47
+   },
+   {
+    "id": "r1650/a",
+    "name": "Road 1650",
+    "tomtom": 0.6054166666666666,
+    "sim": 0.731,
+    "w": 82
+   },
+   {
+    "id": "r1662/a",
+    "name": "Road 1662",
+    "tomtom": 0.6683333333333334,
+    "sim": 0.633,
+    "w": 210
+   },
+   {
+    "id": "r1662/b",
+    "name": "Road 1662",
+    "tomtom": 0.635,
+    "sim": 0.678,
+    "w": 210
+   },
+   {
+    "id": "r1663/a",
+    "name": "Road 1663",
+    "tomtom": 0.45166666666666666,
+    "sim": 0.585,
+    "w": 56
+   },
+   {
+    "id": "r1670/a",
+    "name": "Road 1670",
+    "tomtom": 0.6208333333333333,
+    "sim": 0.578,
+    "w": 49
+   },
+   {
+    "id": "r1672/a",
+    "name": "Road 1672",
+    "tomtom": 0.5354166666666667,
+    "sim": 0.687,
+    "w": 362
+   },
+   {
+    "id": "r1673/a",
+    "name": "Road 1673",
+    "tomtom": 0.42874999999999996,
+    "sim": 0.591,
+    "w": 365
+   },
+   {
+    "id": "r1674/a",
+    "name": "Road 1674",
+    "tomtom": 0.7455833333333333,
+    "sim": 0.722,
+    "w": 55
+   },
+   {
+    "id": "r1675/a",
+    "name": "Road 1675",
+    "tomtom": 0.4616666666666667,
+    "sim": 0.743,
+    "w": 114
+   },
+   {
+    "id": "r1675/b",
+    "name": "Road 1675",
+    "tomtom": 0.5370833333333334,
+    "sim": 0.676,
+    "w": 114
+   },
+   {
+    "id": "r1676/a",
+    "name": "Road 1676",
+    "tomtom": 0.6541666666666667,
+    "sim": 0.692,
+    "w": 186
+   },
+   {
+    "id": "r1676/b",
+    "name": "Road 1676",
+    "tomtom": 0.6591666666666667,
+    "sim": 0.747,
+    "w": 186
+   },
+   {
+    "id": "r1677/a",
+    "name": "Road 1677",
+    "tomtom": 0.4248333333333333,
+    "sim": 0.677,
+    "w": 52
+   },
+   {
+    "id": "r1679/a",
+    "name": "Road 1679",
+    "tomtom": 0.45624999999999993,
+    "sim": 0.733,
+    "w": 272
+   },
+   {
+    "id": "r1680/a",
+    "name": "Road 1680",
+    "tomtom": 0.61125,
+    "sim": 0.672,
+    "w": 108
+   },
+   {
+    "id": "r1684/a",
+    "name": "Road 1684",
+    "tomtom": 0.4520833333333334,
+    "sim": 0.653,
+    "w": 74
+   },
+   {
+    "id": "r1691/a",
+    "name": "Road 1626",
+    "tomtom": 0.4487499999999999,
+    "sim": 0.446,
+    "w": 77
+   },
+   {
+    "id": "r1691/b",
+    "name": "Road 1626",
+    "tomtom": 0.6766666666666667,
+    "sim": 0.721,
+    "w": 77
+   },
+   {
+    "id": "r1692/a",
+    "name": "Road 1692",
+    "tomtom": 0.43999999999999995,
+    "sim": 0.287,
+    "w": 61
+   },
+   {
+    "id": "r1693/a",
+    "name": "Road 1693",
+    "tomtom": 0.4116666666666666,
+    "sim": 0.714,
+    "w": 194
+   },
+   {
+    "id": "r1694/a",
+    "name": "Road 1694",
+    "tomtom": 0.52875,
+    "sim": 0.722,
+    "w": 177
+   },
+   {
+    "id": "r1695/a",
+    "name": "Road 1695",
+    "tomtom": 0.4462499999999999,
+    "sim": 0.667,
+    "w": 79
+   },
+   {
+    "id": "r1696/a",
+    "name": "Road 1696",
+    "tomtom": 0.3650833333333333,
+    "sim": 0.73,
+    "w": 108
+   },
+   {
+    "id": "r1698/a",
+    "name": "Road 1698",
+    "tomtom": 0.46958333333333335,
+    "sim": 0.519,
+    "w": 78
+   },
+   {
+    "id": "r1700/a",
+    "name": "Road 1700",
+    "tomtom": 0.6399999999999999,
+    "sim": 0.721,
+    "w": 57
+   }
+  ]
+ }
+}
