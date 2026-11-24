@@ -183,7 +183,8 @@ export function turnLanes(sk0: Sketch, turn: string[], idPrefix = "c"): Sketch {
   const kept = sk.connectors.filter(c => !T.has(c.from.lane) && !T.has(c.to.lane));
   // (new connectors' ids: the prefix and the next number free after it)
   let n = 0;
-  const re = new RegExp(`^${idPrefix.replace(/[^\\w]/g, "\\$&")}(\\d+)$`);
+  // (the prefix escaped for a RegExp: every character not a word character gets a backslash)
+  const re = new RegExp(`^${idPrefix.replace(/\W/g, "\\$&")}(\\d+)$`);
   for (const c of sk.connectors) { const m = re.exec(c.id); if (m) n = Math.max(n, Number(m[1])); }
   const made: SketchConnector[] = [];
   const len = new Map(sk.lanes.map(l => [l.id, laneLength(l.shape)]));

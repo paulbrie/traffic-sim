@@ -90,6 +90,8 @@ const { ins, outs } = endsOf(sk);
       const ends = laneEnds(sk).get(id)!, sign = now.control;
       if (sign && !sk.lanes.some(l => l.control === sign && !T.has(l.id) && laneEnds(sk).get(l.id)!.end === ends.start)) bad.push(`${what}: ${id} has a sign its street didn't have there`);
     }
+    const ids = after.connectors.map(c => c.id);
+    if (new Set(ids).size !== ids.length) bad.push(`${what}: connector ids made twice (${ids.filter((x, i) => ids.indexOf(x) !== i).slice(0, 3).join(", ")})`);
     for (const c of after.connectors) if ((T.has(c.from.lane) && c.from.s < len.get(c.from.lane)! - 0.5) || (T.has(c.to.lane) && c.to.s > 0.5)) bad.push(`${what}: connector ${c.id} not end to start`);
   }
   check(bad.length === 0, `every move accepted (no trip cut off, no lane anywhere left dangling): its turned lanes run the other way with turns at both ends, end to start, signs only where their street had them (${moves} moves)${bad.length ? `: ${bad.slice(0, 5).join("; ")}` : ""}`);
@@ -100,6 +102,16 @@ const { ins, outs } = endsOf(sk);
     check(newEnds(sk, after).length > 0, `a change leaving a neighbouring lane with nothing onto or off it is found (${newEnds(sk, after).join(", ")})`);
     const e = streets.find(x => x.name === "Strada Ecaterina Teodoroiu" && x.kind === "1+1");
     check(!!e && ["r218", "r219", "r220", "r221"].every(r => e.roads.includes(r)), `a street's pieces joined in no junction drawn are one street (Ecaterina Teodoroiu: ${e?.roads.join(", ")})`);
+  }
+  {
+    // (new connectors numbered after the prefix's ids already in the plan: the escaping once matched none, so a design
+    // making 16 or more took c16, c17, … that the plan already had, and two streets turned together did: Dogarilor's search)
+    const two = streets.filter(s => (s.id === "r218" && s.kind === "1+1") || s.id === "r57");
+    const after = turnLanes(sk, two.flatMap(s => lanesTurned(sk, s, movesOf(s).find(m => m.to === (s.id === "r57" ? "reverse" : "oneway1"))!)));
+    const ids = after.connectors.map(c => c.id), made = after.connectors.filter(c => !sk.connectors.some(d => d.id === c.id && d.from.lane === c.from.lane && d.to.lane === c.to.lane)).length;
+    check(new Set(ids).size === ids.length && made >= 16, `new connectors' ids never taken already (${made} made turning Ecaterina Teodoroiu and Dogarilor round)`);
+    const p = turnLanes({ ...sk, connectors: [...sk.connectors, { ...sk.connectors[0], id: "c321b-7" }] }, ["l388"], "c321b-");
+    check(p.connectors.every(c => c.id === "c321b-7" || !/^c321b-[1-7]$/.test(c.id)), "a prefix with a hyphen: numbered after its ids already there");
   }
   check(refused > 0 && refused < moves, `moves that would cut a trip off or leave a lane nobody could drive are refused (${refused} of ${moves})`);
 
